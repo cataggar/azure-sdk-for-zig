@@ -370,3 +370,4 @@ CMakeUserPresets.json
 # Generated Rust source file
 **/rust_amqp_wrapper.h
 **/Cargo.lock
+.zig-cache/
