@@ -121,6 +121,38 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    _ = b.addModule("azure_core_amqp", .{
+        .root_source_file = b.path("src/azure/core/amqp/root.zig"),
+        .target = target,
+    });
+
+    _ = b.addModule("azure_messaging_eventhubs", .{
+        .root_source_file = b.path("src/azure/messaging/eventhubs/root.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_identity", .module = identity_mod },
+        },
+    });
+
+    _ = b.addModule("azure_core_tracing", .{
+        .root_source_file = b.path("src/azure/core/tracing/root.zig"),
+        .target = target,
+    });
+
+    _ = b.addModule("azure_core_testing", .{
+        .root_source_file = b.path("src/azure/core/testing/root.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "azure_core", .module = core_mod },
+        },
+    });
+
+    _ = b.addModule("azure_core_perf", .{
+        .root_source_file = b.path("src/azure/core/perf/root.zig"),
+        .target = target,
+    });
+
     // -- Tests --
 
     const core_tests = b.addTest(.{
@@ -201,6 +233,7 @@ pub fn build(b: *std.Build) void {
         "src/azure/storage/files/datalake/root.zig",
         "src/azure/data/appconfiguration/root.zig",
         "src/azure/attestation/root.zig",
+        "src/azure/messaging/eventhubs/root.zig",
     };
     for (service_test_sources_ci) |src| {
         const t = b.addTest(.{
@@ -211,6 +244,38 @@ pub fn build(b: *std.Build) void {
                 .imports = &.{
                     .{ .name = "azure_core", .module = core_mod },
                     .{ .name = "azure_identity", .module = identity_mod },
+                },
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(t).step);
+    }
+
+    // Core infrastructure tests — core dep only
+    const core_infra_sources = [_][]const u8{
+        "src/azure/core/amqp/root.zig",
+        "src/azure/core/tracing/root.zig",
+        "src/azure/core/perf/root.zig",
+    };
+    for (core_infra_sources) |src| {
+        const t = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(src),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(t).step);
+    }
+
+    // Testing framework tests — needs azure_core
+    {
+        const t = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/azure/core/testing/root.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "azure_core", .module = core_mod },
                 },
             }),
         });
