@@ -14,6 +14,7 @@
 // Re-export sub-modules for `@import("azure_core").http`, etc.
 pub const http = @import("http/transport.zig");
 pub const pipeline = @import("http/pipeline.zig");
+pub const decompression = @import("http/decompression.zig");
 pub const credentials = @import("credentials/token.zig");
 pub const context = @import("context.zig");
 pub const url = @import("url.zig");
