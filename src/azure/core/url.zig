@@ -41,10 +41,10 @@ pub const Url = struct {
 
     /// Render the URL to an allocated string.
     pub fn toString(self: Url, allocator: std.mem.Allocator) ![]u8 {
-        var buf = std.ArrayList(u8).init(allocator);
-        defer buf.deinit();
-        try self.format(buf.writer());
-        return try buf.toOwnedSlice();
+        var buf: std.ArrayList(u8) = .empty;
+        defer buf.deinit(allocator);
+        try self.format(buf.writer(allocator));
+        return try buf.toOwnedSlice(allocator);
     }
 };
 

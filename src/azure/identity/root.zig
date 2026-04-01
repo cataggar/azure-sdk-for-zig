@@ -9,12 +9,21 @@ pub const TokenCredential = core.credentials.TokenCredential;
 pub const AccessToken = core.credentials.AccessToken;
 pub const TokenRequestContext = core.credentials.TokenRequestContext;
 
-// Individual credentials will be added in Phase 2:
-// pub const client_secret = @import("client_secret.zig");
-// pub const environment = @import("environment.zig");
-// pub const managed_identity = @import("managed_identity.zig");
-// pub const azure_cli = @import("azure_cli.zig");
-// pub const default_azure_credential = @import("default_azure_credential.zig");
+pub const client_secret = @import("client_secret.zig");
+pub const environment = @import("environment.zig");
+pub const managed_identity = @import("managed_identity.zig");
+pub const azure_cli = @import("azure_cli.zig");
+pub const workload_identity = @import("workload_identity.zig");
+pub const default_azure_credential = @import("default_azure_credential.zig");
+
+// Convenience aliases.
+pub const ClientSecretCredential = client_secret.ClientSecretCredential;
+pub const EnvironmentCredential = environment.EnvironmentCredential;
+pub const ManagedIdentityCredential = managed_identity.ManagedIdentityCredential;
+pub const AzureCliCredential = azure_cli.AzureCliCredential;
+pub const WorkloadIdentityCredential = workload_identity.WorkloadIdentityCredential;
+pub const ChainedTokenCredential = default_azure_credential.ChainedTokenCredential;
+pub const DefaultAzureCredential = default_azure_credential.DefaultAzureCredential;
 
 test {
     @import("std").testing.refAllDecls(@This());

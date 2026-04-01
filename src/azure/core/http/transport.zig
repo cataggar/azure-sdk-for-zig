@@ -107,15 +107,15 @@ pub const StdHttpTransport = struct {
         var client: std.http.Client = .{ .allocator = allocator, .io = self.io };
         defer client.deinit();
 
-        var response_body = std.ArrayList(u8).init(allocator);
-        errdefer response_body.deinit();
+        var response_body: std.ArrayList(u8) = .empty;
+        errdefer response_body.deinit(allocator);
 
         const result = try client.fetch(.{
             .location = .{ .url = request.url },
             .method = request.method.toStd(),
             .payload = request.body,
             .extra_headers = &.{},
-            .response_writer = response_body.writer().any(),
+            .response_writer = response_body.writer(allocator).any(),
         });
 
         const resp_headers = std.StringHashMap([]const u8).init(allocator);
@@ -123,7 +123,7 @@ pub const StdHttpTransport = struct {
         return .{
             .status_code = @intFromEnum(result.status),
             .headers = resp_headers,
-            .body = try response_body.toOwnedSlice(),
+            .body = try response_body.toOwnedSlice(allocator),
             .allocator = allocator,
         };
     }
@@ -136,7 +136,7 @@ pub const MockTransport = struct {
     allocator: std.mem.Allocator,
     transport: HttpTransport,
     last_method: ?Method = null,
-    last_url: ?[]const u8 = null,
+    last_url: ?[]u8 = null,
 
     pub fn init(allocator: std.mem.Allocator, status: u16, body: []const u8) MockTransport {
         return .{
@@ -153,10 +153,15 @@ pub const MockTransport = struct {
         return &self.transport;
     }
 
+    pub fn deinit(self: *MockTransport) void {
+        if (self.last_url) |u| self.allocator.free(u);
+    }
+
     fn sendImpl(transport: *HttpTransport, request: *Request) !Response {
         const self: *MockTransport = @fieldParentPtr("transport", transport);
         self.last_method = request.method;
-        self.last_url = request.url;
+        if (self.last_url) |old| self.allocator.free(old);
+        self.last_url = try self.allocator.dupe(u8, request.url);
 
         const body_copy = try self.allocator.dupe(u8, self.response_body);
         const headers = std.StringHashMap([]const u8).init(self.allocator);
@@ -191,7 +196,7 @@ test "response isSuccess" {
 test "mock transport" {
     const allocator = std.testing.allocator;
     var mock = MockTransport.init(allocator, 200, "{\"status\":\"ok\"}");
-    var req = Request.init(allocator, .POST, "https://vault.azure.net/secrets/mysecret");
+    defer mock.deinit();    var req = Request.init(allocator, .POST, "https://vault.azure.net/secrets/mysecret");
     defer req.deinit();
     var resp = try mock.asTransport().send(&req);
     defer resp.deinit();

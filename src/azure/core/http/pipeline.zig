@@ -189,6 +189,7 @@ pub const BearerTokenAuthPolicy = struct {
 test "pipeline with telemetry and mock transport" {
     const allocator = std.testing.allocator;
     var mock = transport.MockTransport.init(allocator, 200, "ok");
+    defer mock.deinit();
     var telemetry = TelemetryPolicy.init("azsdk-zig-test/0.1.0");
     var policy_ptrs = [_]*HttpPolicy{telemetry.asPolicy()};
     var pipeline_inst = HttpPipeline{
@@ -206,6 +207,7 @@ test "pipeline with telemetry and mock transport" {
 test "pipeline with no policies" {
     const allocator = std.testing.allocator;
     var mock = transport.MockTransport.init(allocator, 404, "not found");
+    defer mock.deinit();
     var empty = [_]*HttpPolicy{};
     var pipeline_inst = HttpPipeline{
         .policies = &empty,
@@ -221,6 +223,7 @@ test "pipeline with no policies" {
 test "pipeline with multiple policies" {
     const allocator = std.testing.allocator;
     var mock = transport.MockTransport.init(allocator, 200, "ok");
+    defer mock.deinit();
     var telemetry = TelemetryPolicy.init("azsdk-zig-test/0.1.0");
     var logging = LoggingPolicy.init();
     var policy_ptrs = [_]*HttpPolicy{ telemetry.asPolicy(), logging.asPolicy() };
