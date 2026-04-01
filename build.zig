@@ -54,6 +54,73 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    _ = b.addModule("azure_keyvault_keys", .{
+        .root_source_file = b.path("src/azure/keyvault/keys/root.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_identity", .module = identity_mod },
+        },
+    });
+
+    _ = b.addModule("azure_keyvault_certificates", .{
+        .root_source_file = b.path("src/azure/keyvault/certificates/root.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_identity", .module = identity_mod },
+        },
+    });
+
+    _ = b.addModule("azure_keyvault_admin", .{
+        .root_source_file = b.path("src/azure/keyvault/administration/root.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_identity", .module = identity_mod },
+        },
+    });
+
+    _ = b.addModule("azure_storage_queues", .{
+        .root_source_file = b.path("src/azure/storage/queues/root.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "azure_core", .module = core_mod },
+        },
+    });
+
+    _ = b.addModule("azure_storage_files_shares", .{
+        .root_source_file = b.path("src/azure/storage/files/shares/root.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "azure_core", .module = core_mod },
+        },
+    });
+
+    _ = b.addModule("azure_storage_files_datalake", .{
+        .root_source_file = b.path("src/azure/storage/files/datalake/root.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "azure_core", .module = core_mod },
+        },
+    });
+
+    _ = b.addModule("azure_data_appconfiguration", .{
+        .root_source_file = b.path("src/azure/data/appconfiguration/root.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "azure_core", .module = core_mod },
+        },
+    });
+
+    _ = b.addModule("azure_attestation", .{
+        .root_source_file = b.path("src/azure/attestation/root.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "azure_core", .module = core_mod },
+        },
+    });
+
     // -- Tests --
 
     const core_tests = b.addTest(.{
@@ -122,6 +189,33 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_storage_common_tests.step);
     test_step.dependOn(&run_kv_secrets_tests.step);
     test_step.dependOn(&run_tables_tests.step);
+
+    // Service SDK tests — core + identity deps
+    const service_test_sources_ci = [_][]const u8{
+        "src/azure/keyvault/keys/root.zig",
+        "src/azure/keyvault/certificates/root.zig",
+        "src/azure/keyvault/administration/root.zig",
+        "src/azure/storage/blobs/root.zig",
+        "src/azure/storage/queues/root.zig",
+        "src/azure/storage/files/shares/root.zig",
+        "src/azure/storage/files/datalake/root.zig",
+        "src/azure/data/appconfiguration/root.zig",
+        "src/azure/attestation/root.zig",
+    };
+    for (service_test_sources_ci) |src| {
+        const t = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(src),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "azure_core", .module = core_mod },
+                    .{ .name = "azure_identity", .module = identity_mod },
+                },
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(t).step);
+    }
 
     // -- Example executable --
 
