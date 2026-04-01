@@ -4,11 +4,19 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // -- Dependencies --
+
+    const xml_dep = b.dependency("xml", .{});
+    const xml_mod = xml_dep.module("xml");
+
     // -- Modules (libraries exposed to consumers) --
 
     const core_mod = b.addModule("azure_core", .{
         .root_source_file = b.path("src/azure/core/root.zig"),
         .target = target,
+        .imports = &.{
+            .{ .name = "xml", .module = xml_mod },
+        },
     });
 
     const identity_mod = b.addModule("azure_identity", .{
@@ -160,6 +168,9 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/azure/core/root.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{ .name = "xml", .module = xml_mod },
+            },
         }),
     });
 

@@ -7,7 +7,7 @@
 ///!   HTTP  → std.http.Client
 ///!   TLS   → std.crypto.tls
 ///!   JSON  → std.json
-///!   XML   → std.xml (Zig 0.14+)
+///!   XML   → zig-xml (github.com/cataggar/zig-xml)
 ///!   Crypto → std.crypto (HMAC-SHA256, SHA-256, MD5)
 ///!   Base64 → std.base64
 
@@ -24,6 +24,7 @@ pub const errors = @import("errors.zig");
 pub const response = @import("response.zig");
 pub const case_insensitive_map = @import("case_insensitive_map.zig");
 pub const base64 = @import("base64.zig");
+pub const xml = @import("xml.zig");
 
 pub const version: []const u8 = "0.1.0";
 pub const user_agent_prefix: []const u8 = "azsdk-zig-core/" ++ version;
