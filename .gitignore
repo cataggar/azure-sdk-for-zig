@@ -371,3 +371,5 @@ CMakeUserPresets.json
 **/rust_amqp_wrapper.h
 **/Cargo.lock
 .zig-cache/
+
+zig-out/

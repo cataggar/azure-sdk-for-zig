@@ -9,6 +9,19 @@ pub const Method = enum {
     PATCH,
     HEAD,
     OPTIONS,
+
+    /// Map to std.http.Method for the standard-library HTTP client.
+    pub fn toStd(self: Method) std.http.Method {
+        return switch (self) {
+            .GET => .GET,
+            .POST => .POST,
+            .PUT => .PUT,
+            .DELETE => .DELETE,
+            .PATCH => .PATCH,
+            .HEAD => .HEAD,
+            .OPTIONS => .OPTIONS,
+        };
+    }
 };
 
 /// An outgoing HTTP request.
@@ -45,6 +58,10 @@ pub const Response = struct {
     body: []const u8,
     allocator: std.mem.Allocator,
 
+    pub fn isSuccess(self: Response) bool {
+        return self.status_code >= 200 and self.status_code < 300;
+    }
+
     pub fn deinit(self: *Response) void {
         self.allocator.free(self.body);
         self.headers.deinit();
@@ -64,13 +81,17 @@ pub const HttpTransport = struct {
 };
 
 /// Default transport backed by `std.http.Client`.
+///
+/// Requires `std.Io` (threaded or evented) for TLS, DNS, and socket I/O.
 pub const StdHttpTransport = struct {
     allocator: std.mem.Allocator,
+    io: std.Io,
     transport: HttpTransport,
 
-    pub fn init(allocator: std.mem.Allocator) StdHttpTransport {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io) StdHttpTransport {
         return .{
             .allocator = allocator,
+            .io = io,
             .transport = .{ .sendFn = &sendImpl },
         };
     }
@@ -83,63 +104,67 @@ pub const StdHttpTransport = struct {
         const self: *StdHttpTransport = @fieldParentPtr("transport", transport);
         const allocator = self.allocator;
 
-        const uri = try std.Uri.parse(request.url);
-
-        var client: std.http.Client = .{ .allocator = allocator };
+        var client: std.http.Client = .{ .allocator = allocator, .io = self.io };
         defer client.deinit();
 
-        var header_buf: [16 * 1024]u8 = undefined;
+        var response_body = std.ArrayList(u8).init(allocator);
+        errdefer response_body.deinit();
 
-        const method: std.http.Method = switch (request.method) {
-            .GET => .GET,
-            .POST => .POST,
-            .PUT => .PUT,
-            .DELETE => .DELETE,
-            .PATCH => .PATCH,
-            .HEAD => .HEAD,
-            .OPTIONS => .OPTIONS,
-        };
-
-        var extra_headers = std.ArrayList(std.http.Header).init(allocator);
-        defer extra_headers.deinit();
-
-        var it = request.headers.iterator();
-        while (it.next()) |entry| {
-            try extra_headers.append(.{
-                .name = entry.key_ptr.*,
-                .value = entry.value_ptr.*,
-            });
-        }
-
-        var req = try client.open(method, uri, .{
-            .server_header_buffer = &header_buf,
-            .extra_headers = extra_headers.items,
+        const result = try client.fetch(.{
+            .location = .{ .url = request.url },
+            .method = request.method.toStd(),
+            .payload = request.body,
+            .extra_headers = &.{},
+            .response_writer = response_body.writer().any(),
         });
-        defer req.deinit();
-
-        if (request.body) |body| {
-            req.transfer_encoding = .{ .content_length = body.len };
-        }
-
-        try req.send();
-
-        if (request.body) |body| {
-            try req.writer().writeAll(body);
-            try req.finish();
-        }
-
-        try req.wait();
-
-        const body = try req.reader().readAllAlloc(allocator, 10 * 1024 * 1024);
 
         const resp_headers = std.StringHashMap([]const u8).init(allocator);
-        // Response headers could be parsed from header_buf if needed.
 
         return .{
-            .status_code = @intFromEnum(req.status),
+            .status_code = @intFromEnum(result.status),
             .headers = resp_headers,
-            .body = body,
+            .body = try response_body.toOwnedSlice(),
             .allocator = allocator,
+        };
+    }
+};
+
+/// A transport that returns canned responses — for unit tests.
+pub const MockTransport = struct {
+    response_status: u16,
+    response_body: []const u8,
+    allocator: std.mem.Allocator,
+    transport: HttpTransport,
+    last_method: ?Method = null,
+    last_url: ?[]const u8 = null,
+
+    pub fn init(allocator: std.mem.Allocator, status: u16, body: []const u8) MockTransport {
+        return .{
+            .response_status = status,
+            .response_body = body,
+            .allocator = allocator,
+            .transport = .{ .sendFn = &sendImpl },
+            .last_method = null,
+            .last_url = null,
+        };
+    }
+
+    pub fn asTransport(self: *MockTransport) *HttpTransport {
+        return &self.transport;
+    }
+
+    fn sendImpl(transport: *HttpTransport, request: *Request) !Response {
+        const self: *MockTransport = @fieldParentPtr("transport", transport);
+        self.last_method = request.method;
+        self.last_url = request.url;
+
+        const body_copy = try self.allocator.dupe(u8, self.response_body);
+        const headers = std.StringHashMap([]const u8).init(self.allocator);
+        return .{
+            .status_code = self.response_status,
+            .headers = headers,
+            .body = body_copy,
+            .allocator = self.allocator,
         };
     }
 };
@@ -151,3 +176,27 @@ test "request init and set header" {
     try req.setHeader("Accept", "application/json");
     try std.testing.expectEqualStrings("application/json", req.headers.get("Accept").?);
 }
+
+test "response isSuccess" {
+    var resp = Response{
+        .status_code = 200,
+        .headers = std.StringHashMap([]const u8).init(std.testing.allocator),
+        .body = try std.testing.allocator.dupe(u8, "ok"),
+        .allocator = std.testing.allocator,
+    };
+    defer resp.deinit();
+    try std.testing.expect(resp.isSuccess());
+}
+
+test "mock transport" {
+    const allocator = std.testing.allocator;
+    var mock = MockTransport.init(allocator, 200, "{\"status\":\"ok\"}");
+    var req = Request.init(allocator, .POST, "https://vault.azure.net/secrets/mysecret");
+    defer req.deinit();
+    var resp = try mock.asTransport().send(&req);
+    defer resp.deinit();
+    try std.testing.expectEqual(@as(u16, 200), resp.status_code);
+    try std.testing.expectEqualStrings("{\"status\":\"ok\"}", resp.body);
+    try std.testing.expectEqual(Method.POST, mock.last_method.?);
+}
+

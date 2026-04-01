@@ -12,11 +12,15 @@
 
 // Re-export sub-modules for `@import("azure_core").http`, etc.
 pub const http = @import("http/transport.zig");
+pub const pipeline = @import("http/pipeline.zig");
 pub const credentials = @import("credentials/token.zig");
 pub const context = @import("context.zig");
 pub const url = @import("url.zig");
 pub const uuid = @import("uuid.zig");
 pub const datetime = @import("datetime.zig");
+pub const errors = @import("errors.zig");
+pub const response = @import("response.zig");
+pub const case_insensitive_map = @import("case_insensitive_map.zig");
 
 pub const version: []const u8 = "0.1.0";
 pub const user_agent_prefix: []const u8 = "azsdk-zig-core/" ++ version;
