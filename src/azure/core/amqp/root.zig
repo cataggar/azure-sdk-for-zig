@@ -1,153 +1,42 @@
-///! AMQP 1.0 core — connection, session, link, and message primitives.
+///! Azure AMQP Core — wraps azure-uamqp-zig for AMQP 1.0 protocol support.
 ///!
-///! Built over `std.net.Stream` + TLS. Provides the framing layer that
-///! Event Hubs and Service Bus use for messaging.
+///! Re-exports the uamqp library types and provides Azure-specific
+///! convenience wrappers for Connection, Session, Link, and Message.
 
 const std = @import("std");
+pub const uamqp = @import("uamqp");
 
-// ─────────────────────── AMQP Type System ───────────────────────
+// Re-export core protocol types.
+pub const Connection = uamqp.connection.Connection;
+pub const Session = uamqp.session.Session;
+pub const Link = uamqp.link.Link;
+pub const Message = uamqp.message.Message;
 
-/// AMQP 1.0 primitive value (subset).
-pub const Value = union(enum) {
-    null_val: void,
-    boolean: bool,
-    ubyte: u8,
-    uint: u32,
-    ulong: u64,
-    int: i32,
-    long: i64,
-    string: []const u8,
-    binary: []const u8,
-    list: []Value,
-    map: []MapEntry,
+// Re-export AMQP type system.
+pub const AmqpValue = uamqp.AmqpValue;
+pub const Described = uamqp.Described;
+pub const MapEntry = uamqp.MapEntry;
+pub const encoder = uamqp.encoder;
+pub const decoder = uamqp.decoder;
 
-    pub const MapEntry = struct { key: Value, value: Value };
-};
+// Re-export protocol definitions (performatives, states, enums).
+pub const definitions = uamqp.definitions;
 
-// ─────────────────────── Message Model ───────────────────────
+// Re-export SASL mechanisms.
+pub const SaslPlain = uamqp.sasl.plain.Plain;
+pub const SaslAnonymous = uamqp.sasl.anonymous.Anonymous;
+pub const SaslMechanism = uamqp.sasl.mechanism.Mechanism;
 
-pub const MessageProperties = struct {
-    message_id: ?[]const u8 = null,
-    correlation_id: ?[]const u8 = null,
-    content_type: ?[]const u8 = null,
-    subject: ?[]const u8 = null,
-    reply_to: ?[]const u8 = null,
-    to: ?[]const u8 = null,
-};
+// Re-export CBS (Claims-Based Security).
+pub const Cbs = uamqp.cbs.Cbs;
 
-pub const MessageHeader = struct {
-    durable: bool = false,
-    priority: u8 = 4,
-    ttl: ?u32 = null,
-    first_acquirer: bool = false,
-    delivery_count: u32 = 0,
-};
+// Re-export management operations.
+pub const Management = uamqp.management.Management;
 
-pub const AmqpMessage = struct {
-    header: MessageHeader = .{},
-    properties: MessageProperties = .{},
-    application_properties: std.StringHashMap([]const u8),
-    body: []const u8 = "",
-    allocator: std.mem.Allocator,
+// Re-export messaging helpers.
+pub const messaging = uamqp.messaging;
 
-    pub fn init(allocator: std.mem.Allocator) AmqpMessage {
-        return .{
-            .application_properties = std.StringHashMap([]const u8).init(allocator),
-            .allocator = allocator,
-        };
-    }
-
-    pub fn deinit(self: *AmqpMessage) void {
-        self.application_properties.deinit();
-    }
-};
-
-// ─────────────────────── Connection / Session / Link ───────────────────────
-
-pub const SaslMechanism = enum { plain, anonymous, external };
-
-pub const ConnectionOptions = struct {
-    host: []const u8,
-    port: u16 = 5671,
-    use_tls: bool = true,
-    sasl: SaslMechanism = .plain,
-    container_id: []const u8 = "azure-sdk-zig",
-    max_frame_size: u32 = 65536,
-    idle_timeout_ms: u32 = 120_000,
-};
-
-/// Represents an AMQP 1.0 connection (stub — actual TCP/TLS in future).
-pub const Connection = struct {
-    options: ConnectionOptions,
-    state: State = .start,
-
-    pub const State = enum { start, opened, close_sent, closed };
-
-    pub fn init(options: ConnectionOptions) Connection {
-        return .{ .options = options };
-    }
-
-    pub fn open(self: *Connection) !void {
-        // In production: TCP connect → TLS handshake → SASL → AMQP Open frame.
-        self.state = .opened;
-    }
-
-    pub fn close(self: *Connection) void {
-        self.state = .closed;
-    }
-};
-
-/// An AMQP session multiplexed over a connection.
-pub const Session = struct {
-    connection: *Connection,
-    channel: u16 = 0,
-
-    pub fn init(connection: *Connection) Session {
-        return .{ .connection = connection };
-    }
-};
-
-/// A unidirectional link (sender or receiver) on a session.
-pub const Link = struct {
-    session: *Session,
-    name: []const u8,
-    role: Role,
-    target: []const u8,
-
-    pub const Role = enum { sender, receiver };
-
-    pub fn init(session: *Session, name: []const u8, role: Role, target: []const u8) Link {
-        return .{ .session = session, .name = name, .role = role, .target = target };
-    }
-};
-
-/// Send messages over a link.
-pub const MessageSender = struct {
-    link: Link,
-
-    pub fn init(session: *Session, target: []const u8) MessageSender {
-        return .{ .link = Link.init(session, "sender", .sender, target) };
-    }
-
-    pub fn send(self: *MessageSender, message: AmqpMessage) !void {
-        _ = self;
-        _ = message;
-        // Stub: encode AMQP transfer frame + message payload.
-    }
-};
-
-/// Receive messages from a link.
-pub const MessageReceiver = struct {
-    link: Link,
-
-    pub fn init(session: *Session, source: []const u8) MessageReceiver {
-        return .{ .link = Link.init(session, "receiver", .receiver, source) };
-    }
-};
-
-// ─────────────────────── CBS (Claims-Based Security) ───────────────────────
-
-/// Token types for CBS authentication.
+/// CBS token types used by Azure services.
 pub const CbsTokenType = enum {
     sas,
     jwt,
@@ -162,37 +51,46 @@ pub const CbsTokenType = enum {
 
 // ─────────────────────── Tests ───────────────────────
 
-test "AmqpMessage init and deinit" {
+test "Connection init and deinit" {
     const allocator = std.testing.allocator;
-    var msg = AmqpMessage.init(allocator);
+    var conn = Connection.init(allocator, "azure-sdk-zig", "mynamespace.servicebus.windows.net", .{});
+    defer conn.deinit();
+    try std.testing.expectEqualStrings("azure-sdk-zig", conn.container_id);
+}
+
+test "Session init" {
+    const allocator = std.testing.allocator;
+    var conn = Connection.init(allocator, "test", null, .{});
+    defer conn.deinit();
+    var session = Session.init(allocator, &conn, .{});
+    defer session.deinit();
+    try std.testing.expectEqual(@as(u32, 0), session.next_outgoing_id);
+}
+
+test "Message create and add body data" {
+    const allocator = std.testing.allocator;
+    var msg = Message.init(allocator);
     defer msg.deinit();
-    msg.body = "hello";
-    try msg.application_properties.put("key", "val");
-    try std.testing.expectEqualStrings("hello", msg.body);
-    try std.testing.expectEqualStrings("val", msg.application_properties.get("key").?);
+    try msg.addBodyData("hello, event hub!");
+    try std.testing.expectEqual(@as(usize, 1), msg.bodyDataCount());
 }
 
-test "Connection lifecycle" {
-    var conn = Connection.init(.{ .host = "mynamespace.servicebus.windows.net" });
-    try std.testing.expectEqual(Connection.State.start, conn.state);
-    try conn.open();
-    try std.testing.expectEqual(Connection.State.opened, conn.state);
-    conn.close();
-    try std.testing.expectEqual(Connection.State.closed, conn.state);
+test "SASL Plain mechanism" {
+    const allocator = std.testing.allocator;
+    var plain = SaslPlain.init(allocator, "user", "pass", null);
+    defer plain.deinit();
+    const mech = plain.mechanism();
+    try std.testing.expectEqualStrings("PLAIN", mech.getMechanismName());
+    const init_bytes = mech.getInitBytes();
+    try std.testing.expect(init_bytes != null);
 }
 
-test "Session and Link" {
-    var conn = Connection.init(.{ .host = "localhost" });
-    try conn.open();
-    var session = Session.init(&conn);
-    const link = Link.init(&session, "my-link", .sender, "my-queue");
-    try std.testing.expectEqualStrings("my-link", link.name);
-    try std.testing.expectEqual(Link.Role.sender, link.role);
-}
-
-test "Value union" {
-    const v = Value{ .string = "hello" };
+test "AmqpValue string" {
+    const v = AmqpValue{ .string = "hello" };
     try std.testing.expectEqualStrings("hello", v.string);
-    const b = Value{ .boolean = true };
-    try std.testing.expect(b.boolean);
+}
+
+test "CbsTokenType" {
+    try std.testing.expectEqualStrings("servicebus.windows.net:sastoken", CbsTokenType.sas.toString());
+    try std.testing.expectEqualStrings("jwt", CbsTokenType.jwt.toString());
 }

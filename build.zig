@@ -9,6 +9,12 @@ pub fn build(b: *std.Build) void {
     const xml_dep = b.dependency("xml", .{});
     const xml_mod = xml_dep.module("xml");
 
+    const uamqp_dep = b.dependency("uamqp", .{});
+    const uamqp_mod = b.createModule(.{
+        .root_source_file = uamqp_dep.path("src/zig/uamqp.zig"),
+        .target = target,
+    });
+
     // -- Modules (libraries exposed to consumers) --
 
     const core_mod = b.addModule("azure_core", .{
@@ -132,6 +138,9 @@ pub fn build(b: *std.Build) void {
     _ = b.addModule("azure_core_amqp", .{
         .root_source_file = b.path("src/azure/core/amqp/root.zig"),
         .target = target,
+        .imports = &.{
+            .{ .name = "uamqp", .module = uamqp_mod },
+        },
     });
 
     _ = b.addModule("azure_messaging_eventhubs", .{
@@ -140,6 +149,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
             .{ .name = "azure_identity", .module = identity_mod },
+            .{ .name = "uamqp", .module = uamqp_mod },
         },
     });
 
@@ -261,9 +271,8 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
 
-    // Core infrastructure tests — core dep only
+    // Core infrastructure tests — no deps
     const core_infra_sources = [_][]const u8{
-        "src/azure/core/amqp/root.zig",
         "src/azure/core/tracing/root.zig",
         "src/azure/core/perf/root.zig",
     };
@@ -273,6 +282,21 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path(src),
                 .target = target,
                 .optimize = optimize,
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(t).step);
+    }
+
+    // AMQP tests — needs uamqp dep
+    {
+        const t = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/azure/core/amqp/root.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "uamqp", .module = uamqp_mod },
+                },
             }),
         });
         test_step.dependOn(&b.addRunArtifact(t).step);
