@@ -100,7 +100,7 @@ pub const LoggingPolicy = struct {
     }
 };
 
-/// Retries failed requests with exponential back-off.
+/// Retries failed requests with exponential back-off and jitter.
 pub const RetryPolicy = struct {
     max_retries: u32 = 3,
     initial_delay_ms: u64 = 800,
@@ -125,6 +125,7 @@ pub const RetryPolicy = struct {
     ) !Response {
         const self: *RetryPolicy = @fieldParentPtr("policy", policy);
         var attempt: u32 = 0;
+        var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
         while (true) {
             const result = callNext(request, next, final_transport);
             if (result) |resp| {
@@ -135,10 +136,13 @@ pub const RetryPolicy = struct {
                 if (attempt >= self.max_retries) return err;
             }
             attempt += 1;
-            const delay = @min(
+            const base_delay = @min(
                 self.initial_delay_ms * (@as(u64, 1) << @intCast(attempt - 1)),
                 self.max_delay_ms,
             );
+            // Add jitter: random value in [0, base_delay) to avoid thundering herd.
+            const jitter = prng.random().uintLessThan(u64, @max(base_delay, 1));
+            const delay = base_delay / 2 + jitter / 2;
             std.time.sleep(delay * std.time.ns_per_ms);
         }
     }
@@ -182,6 +186,34 @@ pub const BearerTokenAuthPolicy = struct {
             .{token.token},
         );
         try request.setHeader("Authorization", auth_value);
+        return callNext(request, next, final_transport);
+    }
+};
+
+/// Injects `x-ms-client-request-id` with a unique UUID per request.
+pub const RequestIdPolicy = struct {
+    policy: HttpPolicy,
+
+    pub fn init() RequestIdPolicy {
+        return .{ .policy = .{ .processFn = &processImpl } };
+    }
+
+    pub fn asPolicy(self: *RequestIdPolicy) *HttpPolicy {
+        return &self.policy;
+    }
+
+    fn processImpl(
+        _: *HttpPolicy,
+        request: *Request,
+        next: []*HttpPolicy,
+        final_transport: *HttpTransport,
+    ) !Response {
+        const uuid_mod = @import("../uuid.zig");
+        var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
+        const id = uuid_mod.Uuid.init(prng.random());
+        const id_str = id.toString();
+        const id_owned = try request.allocator.dupe(u8, &id_str);
+        try request.setHeader("x-ms-client-request-id", id_owned);
         return callNext(request, next, final_transport);
     }
 };
@@ -236,4 +268,25 @@ test "pipeline with multiple policies" {
     var resp = try pipeline_inst.send(&req);
     defer resp.deinit();
     try std.testing.expectEqual(@as(u16, 200), resp.status_code);
+}
+
+test "RequestIdPolicy injects x-ms-client-request-id" {
+    const allocator = std.testing.allocator;
+    var mock = transport.MockTransport.init(allocator, 200, "ok");
+    defer mock.deinit();
+    var rid = RequestIdPolicy.init();
+    var policy_ptrs = [_]*HttpPolicy{rid.asPolicy()};
+    var pipeline_inst = HttpPipeline{
+        .policies = &policy_ptrs,
+        .transport_impl = mock.asTransport(),
+    };
+    var req = Request.init(allocator, .GET, "https://example.com");
+    defer req.deinit();
+    var resp = try pipeline_inst.send(&req);
+    defer resp.deinit();
+    const request_id = req.headers.get("x-ms-client-request-id").?;
+    defer allocator.free(request_id);
+    // UUID format: 8-4-4-4-12 = 36 chars.
+    try std.testing.expectEqual(@as(usize, 36), request_id.len);
+    try std.testing.expectEqual(@as(u8, '-'), request_id[8]);
 }
