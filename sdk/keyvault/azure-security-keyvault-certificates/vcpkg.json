@@ -1,7 +1,0 @@
-{
-    "name": "azure-security-keyvault-certificates",
-    "version-string": "1.0.0",
-    "dependencies": [
-        "azure-core-cpp"        
-    ]
-}
