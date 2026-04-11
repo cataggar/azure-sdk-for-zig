@@ -6,6 +6,10 @@ const TokenCredential = core.credentials.TokenCredential;
 const TokenRequestContext = core.credentials.TokenRequestContext;
 const Context = core.context.Context;
 
+fn envGet(env: anytype, key: []const u8) ?[]const u8 {
+    return env.get(key);
+}
+
 /// Tries a chain of credentials in order, returning the first success.
 pub const ChainedTokenCredential = struct {
     sources: []Source,
@@ -56,9 +60,10 @@ pub const DefaultAzureCredential = struct {
     chain: ChainedTokenCredential,
     // Storage for the individual credentials.
     env_cred: ?@import("environment.zig").EnvironmentCredential = null,
+    wi_cred: ?@import("workload_identity.zig").WorkloadIdentityCredential = null,
     mi_cred: @import("managed_identity.zig").ManagedIdentityCredential,
     cli_cred: @import("azure_cli.zig").AzureCliCredential,
-    sources_buf: [4]ChainedTokenCredential.Source = undefined,
+    sources_buf: [5]ChainedTokenCredential.Source = undefined,
     num_sources: usize = 0,
 
     pub fn init(
@@ -77,13 +82,30 @@ pub const DefaultAzureCredential = struct {
             self.env_cred = ec;
         } else |_| {}
 
+        // 2. WorkloadIdentityCredential (if federated token file is configured).
+        const wi_tenant = envGet(env, "AZURE_TENANT_ID");
+        const wi_client = envGet(env, "AZURE_CLIENT_ID");
+        const wi_file = envGet(env, "AZURE_FEDERATED_TOKEN_FILE");
+        if (wi_tenant != null and wi_client != null and wi_file != null) {
+            self.wi_cred = @import("workload_identity.zig").WorkloadIdentityCredential.init(
+                allocator,
+                transport,
+                wi_tenant.?,
+                wi_client.?,
+                wi_file.?,
+            );
+        }
+
         // Build sources list.
         var n: usize = 0;
         if (self.env_cred != null) {
             self.sources_buf[n] = .{ .name = "EnvironmentCredential", .cred = self.env_cred.?.asCredential() };
             n += 1;
         }
-        // WorkloadIdentityCredential omitted here until token file reading is implemented.
+        if (self.wi_cred != null) {
+            self.sources_buf[n] = .{ .name = "WorkloadIdentityCredential", .cred = self.wi_cred.?.asCredential() };
+            n += 1;
+        }
         self.sources_buf[n] = .{ .name = "ManagedIdentityCredential", .cred = self.mi_cred.asCredential() };
         n += 1;
         self.sources_buf[n] = .{ .name = "AzureCliCredential", .cred = self.cli_cred.asCredential() };
