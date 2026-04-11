@@ -2,6 +2,10 @@ const std = @import("std");
 const core = @import("azure_core");
 
 const Context = core.context.Context;
+const PagedResponse = core.response.PagedResponse;
+
+/// A page of secret names from listSecrets.
+pub const SecretListPage = PagedResponse([]const u8);
 
 // ─────────────────────────── Models ───────────────────────────
 
@@ -203,6 +207,29 @@ pub const SecretClient = struct {
         @memcpy(buf[pos..][0..self.api_version.len], self.api_version);
         return buf;
     }
+
+    /// GET /secrets?api-version=... — returns a paged list of secret names.
+    pub fn listSecrets(
+        self: *SecretClient,
+        allocator: std.mem.Allocator,
+    ) !SecretListPage {
+        const url = try self.buildUrl(allocator, &.{"secrets"}, null);
+        defer allocator.free(url);
+
+        var req = core.http.Request.init(allocator, .GET, url);
+        defer req.deinit();
+        try req.setHeader("Accept", "application/json");
+
+        var resp = try self.pipeline.send(&req);
+        defer resp.deinit();
+
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.ListSecretsFailed;
+        }
+
+        return parseSecretList(allocator, resp.body);
+    }
 };
 
 /// Parse a JSON secret response into a KeyVaultSecret.
@@ -245,6 +272,49 @@ fn parseSecret(allocator: std.mem.Allocator, name: []const u8, body: []const u8)
     }
 
     return secret;
+}
+
+/// Parse a JSON list-secrets response.
+/// Format: {"value":[{"id":"https://.../secrets/name1"}, ...], "nextLink":"https://..."}
+fn parseSecretList(allocator: std.mem.Allocator, body: []const u8) !SecretListPage {
+    const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{}) catch
+        return .{ .items = try allocator.alloc([]const u8, 0), .allocator = allocator };
+    defer parsed.deinit();
+
+    const obj = if (parsed.value == .object) parsed.value.object else
+        return .{ .items = try allocator.alloc([]const u8, 0), .allocator = allocator };
+
+    // Extract next_link for pagination.
+    var next_link: ?[]const u8 = null;
+    if (obj.get("nextLink")) |nl| {
+        if (nl == .string and nl.string.len > 0) {
+            next_link = try allocator.dupe(u8, nl.string);
+        }
+    }
+
+    // Extract secret IDs/names from the "value" array.
+    const values_arr = if (obj.get("value")) |v| (if (v == .array) v.array.items else null) else null;
+    const items_slice = values_arr orelse
+        return .{ .items = try allocator.alloc([]const u8, 0), .next_link = next_link, .allocator = allocator };
+
+    var names = try allocator.alloc([]const u8, items_slice.len);
+    for (items_slice, 0..) |item, i| {
+        if (item == .object) {
+            if (item.object.get("id")) |id_val| {
+                if (id_val == .string) {
+                    // Extract name from ID: https://.../secrets/{name}
+                    const id_str = id_val.string;
+                    if (std.mem.lastIndexOfScalar(u8, id_str, '/')) |slash| {
+                        names[i] = try allocator.dupe(u8, id_str[slash + 1 ..]);
+                        continue;
+                    }
+                }
+            }
+        }
+        names[i] = try allocator.dupe(u8, "");
+    }
+
+    return .{ .items = names, .next_link = next_link, .allocator = allocator };
 }
 
 // ─────────────────────────── Tests ───────────────────────────
@@ -359,4 +429,39 @@ test "SecretClient setSecret failure" {
 
     const result = client.setSecret(allocator, "s", "val");
     try std.testing.expectError(error.SetSecretFailed, result);
+}
+
+test "SecretClient listSecrets" {
+    const allocator = std.testing.allocator;
+    const body =
+        \\{"value":[{"id":"https://v.vault.azure.net/secrets/secret1"},{"id":"https://v.vault.azure.net/secrets/secret2"}],"nextLink":"https://v.vault.azure.net/secrets?$skiptoken=abc"}
+    ;
+    var mock = core.http.MockTransport.init(allocator, 200, body);
+    defer mock.deinit();
+
+    const identity5 = @import("azure_identity");
+    var cred_mock = core.http.MockTransport.init(allocator, 200,
+        \\{"access_token":"t","expires_in":3600}
+    );
+    defer cred_mock.deinit();
+    var cred = identity5.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
+
+    var client = SecretClient.init(
+        "https://v.vault.azure.net",
+        cred.asCredential(),
+        mock.asTransport(),
+        .{},
+    );
+
+    var page = try client.listSecrets(allocator);
+    defer {
+        for (page.items) |name| allocator.free(name);
+        allocator.free(page.items);
+        if (page.next_link) |nl| allocator.free(nl);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), page.items.len);
+    try std.testing.expectEqualStrings("secret1", page.items[0]);
+    try std.testing.expectEqualStrings("secret2", page.items[1]);
+    try std.testing.expect(page.hasMore());
 }

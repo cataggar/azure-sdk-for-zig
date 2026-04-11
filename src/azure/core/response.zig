@@ -1,5 +1,6 @@
 const std = @import("std");
 const http = @import("http/transport.zig");
+const pipeline_mod = @import("http/pipeline.zig");
 
 /// Generic response wrapper — parsed value `T` + raw HTTP response metadata.
 pub fn AzureResponse(comptime T: type) type {
@@ -28,6 +29,30 @@ pub fn PagedResponse(comptime T: type) type {
 
         pub fn hasMore(self: Self) bool {
             return self.next_link != null;
+        }
+
+        /// Fetch the next page using the stored next_link URL.
+        ///
+        /// `parseFn` receives the allocator and response body, and must return
+        /// a new `Self` (items + optional next_link for further pages).
+        pub fn fetchNextPage(
+            self: *Self,
+            pipeline: *pipeline_mod.HttpPipeline,
+            parseFn: *const fn (std.mem.Allocator, []const u8) anyerror!Self,
+        ) !Self {
+            const link = self.next_link orelse return error.NoMorePages;
+            const allocator = self.allocator;
+
+            var req = http.Request.init(allocator, .GET, link);
+            defer req.deinit();
+            try req.setHeader("Accept", "application/json");
+
+            var resp = try pipeline.send(&req);
+            defer resp.deinit();
+
+            if (!resp.isSuccess()) return error.PageFetchFailed;
+
+            return parseFn(allocator, resp.body);
         }
 
         pub fn deinit(self: *Self) void {
