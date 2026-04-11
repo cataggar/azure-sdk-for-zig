@@ -309,3 +309,54 @@ test "SecretClient setSecret" {
     try std.testing.expectEqualStrings("new-val", secret.value.?);
     try std.testing.expectEqual(core.http.Method.PUT, mock.last_method.?);
 }
+
+test "SecretClient getSecret 404" {
+    const allocator = std.testing.allocator;
+    const body =
+        \\{"error":{"code":"SecretNotFound","message":"Secret not found"}}
+    ;
+    var mock = core.http.MockTransport.init(allocator, 404, body);
+    defer mock.deinit();
+
+    const identity3 = @import("azure_identity");
+    var cred_mock = core.http.MockTransport.init(allocator, 200,
+        \\{"access_token":"t","expires_in":3600}
+    );
+    defer cred_mock.deinit();
+    var cred = identity3.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
+
+    var client = SecretClient.init(
+        "https://myvault.vault.azure.net",
+        cred.asCredential(),
+        mock.asTransport(),
+        .{},
+    );
+
+    const result = client.getSecret(allocator, "nonexistent");
+    try std.testing.expectError(error.SecretNotFound, result);
+}
+
+test "SecretClient setSecret failure" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 403,
+        \\{"error":{"code":"Forbidden","message":"Access denied"}}
+    );
+    defer mock.deinit();
+
+    const identity4 = @import("azure_identity");
+    var cred_mock = core.http.MockTransport.init(allocator, 200,
+        \\{"access_token":"t","expires_in":3600}
+    );
+    defer cred_mock.deinit();
+    var cred = identity4.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
+
+    var client = SecretClient.init(
+        "https://myvault.vault.azure.net",
+        cred.asCredential(),
+        mock.asTransport(),
+        .{},
+    );
+
+    const result = client.setSecret(allocator, "s", "val");
+    try std.testing.expectError(error.SetSecretFailed, result);
+}
