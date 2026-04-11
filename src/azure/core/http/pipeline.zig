@@ -182,12 +182,17 @@ pub const RetryPolicy = struct {
 };
 
 /// Injects `Authorization: Bearer <token>` using a `TokenCredential`.
+///
+/// Caches the token and only refreshes when within 5 minutes of expiry.
 pub const BearerTokenAuthPolicy = struct {
     const creds = @import("../credentials/token.zig");
 
     credential: *creds.TokenCredential,
     scopes: []const []const u8,
     policy: HttpPolicy,
+    cached_token: ?[]const u8 = null,
+    cached_expires_on: i64 = 0,
+    allocator: ?std.mem.Allocator = null,
 
     pub fn init(credential: *creds.TokenCredential, scopes: []const []const u8) BearerTokenAuthPolicy {
         return .{
@@ -201,6 +206,12 @@ pub const BearerTokenAuthPolicy = struct {
         return &self.policy;
     }
 
+    pub fn deinit(self: *BearerTokenAuthPolicy) void {
+        if (self.cached_token) |t| {
+            if (self.allocator) |a| a.free(t);
+        }
+    }
+
     fn processImpl(
         policy: *HttpPolicy,
         request: *Request,
@@ -208,15 +219,33 @@ pub const BearerTokenAuthPolicy = struct {
         final_transport: *HttpTransport,
     ) !Response {
         const self: *BearerTokenAuthPolicy = @fieldParentPtr("policy", policy);
-        const ctx = @import("../context.zig").Context.none;
-        const token = try self.credential.getToken(
-            .{ .scopes = self.scopes },
-            ctx,
-        );
+        const now = std.time.timestamp();
+        const refresh_buffer: i64 = 300; // 5 minutes before expiry
+
+        // Use cached token if still valid.
+        var token_str = self.cached_token;
+        if (token_str == null or now >= self.cached_expires_on - refresh_buffer) {
+            const ctx = @import("../context.zig").Context.none;
+            const fresh = try self.credential.getToken(
+                .{ .scopes = self.scopes },
+                ctx,
+            );
+            // Cache the token.
+            if (self.cached_token) |old| {
+                if (self.allocator) |a| a.free(old);
+            }
+            self.cached_token = try request.allocator.dupe(u8, fresh.token);
+            self.cached_expires_on = fresh.expires_on;
+            self.allocator = request.allocator;
+            // Free the original from the credential.
+            request.allocator.free(fresh.token);
+            token_str = self.cached_token;
+        }
+
         const auth_value = try std.fmt.allocPrint(
             request.allocator,
             "Bearer {s}",
-            .{token.token},
+            .{token_str.?},
         );
         try request.setHeader("Authorization", auth_value);
         return callNext(request, next, final_transport);
