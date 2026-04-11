@@ -165,11 +165,19 @@ pub const StdHttpTransport = struct {
             try resp_headers.put(name, value);
         }
 
-        // Read body.
+        // Read body with decompression support.
         var response_body: std.ArrayList(u8) = .empty;
         errdefer response_body.deinit(allocator);
         var transfer_buffer: [64]u8 = undefined;
-        const reader = response.reader(&transfer_buffer);
+        var decompress: std.http.Decompress = undefined;
+        const decompress_buffer: []u8 = switch (response.head.content_encoding) {
+            .identity => &.{},
+            .zstd => try allocator.alloc(u8, std.compress.zstd.default_window_len),
+            .deflate, .gzip => try allocator.alloc(u8, std.compress.flate.max_window_len),
+            .compress => return error.UnsupportedCompressionMethod,
+        };
+        defer if (decompress_buffer.len > 0) allocator.free(decompress_buffer);
+        const reader = response.readerDecompressing(&transfer_buffer, &decompress, decompress_buffer);
         _ = reader.streamRemaining(response_body.writer(allocator).any()) catch |err| switch (err) {
             error.ReadFailed => return response.bodyErr().?,
             else => |e| return e,
@@ -222,6 +230,44 @@ pub const MockTransport = struct {
         const headers = std.StringHashMap([]const u8).init(self.allocator);
         return .{
             .status_code = self.response_status,
+            .headers = headers,
+            .body = body_copy,
+            .allocator = self.allocator,
+        };
+    }
+};
+
+/// A transport that returns a sequence of canned responses — for retry testing.
+pub const SequenceMockTransport = struct {
+    pub const CannedResponse = struct { status: u16, body: []const u8 };
+
+    responses: []const CannedResponse,
+    call_count: usize = 0,
+    allocator: std.mem.Allocator,
+    transport: HttpTransport,
+
+    pub fn init(allocator: std.mem.Allocator, responses: []const CannedResponse) SequenceMockTransport {
+        return .{
+            .responses = responses,
+            .allocator = allocator,
+            .transport = .{ .sendFn = &sendImpl },
+        };
+    }
+
+    pub fn asTransport(self: *SequenceMockTransport) *HttpTransport {
+        return &self.transport;
+    }
+
+    fn sendImpl(transport: *HttpTransport, request: *Request) !Response {
+        const self: *SequenceMockTransport = @fieldParentPtr("transport", transport);
+        _ = request;
+        const idx = @min(self.call_count, self.responses.len - 1);
+        self.call_count += 1;
+        const r = self.responses[idx];
+        const body_copy = try self.allocator.dupe(u8, r.body);
+        const headers = std.StringHashMap([]const u8).init(self.allocator);
+        return .{
+            .status_code = r.status,
             .headers = headers,
             .body = body_copy,
             .allocator = self.allocator,

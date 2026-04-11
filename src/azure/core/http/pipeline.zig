@@ -101,6 +101,9 @@ pub const LoggingPolicy = struct {
 };
 
 /// Retries failed requests with exponential back-off and jitter.
+///
+/// Retries on server errors (5xx) and throttling (429). Honors the
+/// `Retry-After` response header when present.
 pub const RetryPolicy = struct {
     max_retries: u32 = 3,
     initial_delay_ms: u64 = 800,
@@ -117,6 +120,11 @@ pub const RetryPolicy = struct {
         return &self.policy;
     }
 
+    fn isRetryable(status: u16) bool {
+        return status == 429 or status == 408 or status == 500 or
+            status == 502 or status == 503 or status == 504;
+    }
+
     fn processImpl(
         policy: *HttpPolicy,
         request: *Request,
@@ -129,22 +137,47 @@ pub const RetryPolicy = struct {
         while (true) {
             const result = callNext(request, next, final_transport);
             if (result) |resp| {
-                if (resp.status_code < 500 or attempt >= self.max_retries) return resp;
+                if (!isRetryable(resp.status_code) or attempt >= self.max_retries) return resp;
+
+                // Check for Retry-After header (seconds).
+                const retry_after_ms = parseRetryAfter(resp) orelse 0;
+
                 var r = resp;
                 r.deinit();
+
+                attempt += 1;
+                if (retry_after_ms > 0) {
+                    // Honor server's Retry-After, capped at max_delay.
+                    const delay = @min(retry_after_ms, self.max_delay_ms);
+                    std.Thread.sleep(delay * std.time.ns_per_ms);
+                } else {
+                    const base_delay = @min(
+                        self.initial_delay_ms * (@as(u64, 1) << @intCast(attempt - 1)),
+                        self.max_delay_ms,
+                    );
+                    const jitter = prng.random().uintLessThan(u64, @max(base_delay, 1));
+                    const delay = base_delay / 2 + jitter / 2;
+                    std.Thread.sleep(delay * std.time.ns_per_ms);
+                }
             } else |err| {
                 if (attempt >= self.max_retries) return err;
+                attempt += 1;
+                const base_delay = @min(
+                    self.initial_delay_ms * (@as(u64, 1) << @intCast(attempt - 1)),
+                    self.max_delay_ms,
+                );
+                const jitter = prng.random().uintLessThan(u64, @max(base_delay, 1));
+                const delay = base_delay / 2 + jitter / 2;
+                std.Thread.sleep(delay * std.time.ns_per_ms);
             }
-            attempt += 1;
-            const base_delay = @min(
-                self.initial_delay_ms * (@as(u64, 1) << @intCast(attempt - 1)),
-                self.max_delay_ms,
-            );
-            // Add jitter: random value in [0, base_delay) to avoid thundering herd.
-            const jitter = prng.random().uintLessThan(u64, @max(base_delay, 1));
-            const delay = base_delay / 2 + jitter / 2;
-            std.time.sleep(delay * std.time.ns_per_ms);
         }
+    }
+
+    fn parseRetryAfter(resp: Response) ?u64 {
+        const value = resp.headers.get("Retry-After") orelse
+            resp.headers.get("retry-after") orelse
+            return null;
+        return std.fmt.parseInt(u64, value, 10) catch null;
     }
 };
 
@@ -289,4 +322,101 @@ test "RequestIdPolicy injects x-ms-client-request-id" {
     // UUID format: 8-4-4-4-12 = 36 chars.
     try std.testing.expectEqual(@as(usize, 36), request_id.len);
     try std.testing.expectEqual(@as(u8, '-'), request_id[8]);
+}
+
+test "RetryPolicy passes through 200 without retry" {
+    const allocator = std.testing.allocator;
+    var mock = transport.MockTransport.init(allocator, 200, "ok");
+    defer mock.deinit();
+    var retry = RetryPolicy.init();
+    var policy_ptrs = [_]*HttpPolicy{retry.asPolicy()};
+    var pip = HttpPipeline{ .policies = &policy_ptrs, .transport_impl = mock.asTransport() };
+    var req = Request.init(allocator, .GET, "https://example.com");
+    defer req.deinit();
+    var resp = try pip.send(&req);
+    defer resp.deinit();
+    try std.testing.expectEqual(@as(u16, 200), resp.status_code);
+}
+
+test "RetryPolicy passes through 404 without retry" {
+    const allocator = std.testing.allocator;
+    var mock = transport.MockTransport.init(allocator, 404, "not found");
+    defer mock.deinit();
+    var retry = RetryPolicy.init();
+    var policy_ptrs = [_]*HttpPolicy{retry.asPolicy()};
+    var pip = HttpPipeline{ .policies = &policy_ptrs, .transport_impl = mock.asTransport() };
+    var req = Request.init(allocator, .GET, "https://example.com");
+    defer req.deinit();
+    var resp = try pip.send(&req);
+    defer resp.deinit();
+    try std.testing.expectEqual(@as(u16, 404), resp.status_code);
+}
+
+test "RetryPolicy retries 500 then succeeds" {
+    const allocator = std.testing.allocator;
+    var seq = transport.SequenceMockTransport.init(allocator, &.{
+        .{ .status = 500, .body = "error" },
+        .{ .status = 200, .body = "ok" },
+    });
+    // Retry with zero delay for test speed.
+    var retry = RetryPolicy.init();
+    retry.initial_delay_ms = 0;
+    var policy_ptrs = [_]*HttpPolicy{retry.asPolicy()};
+    var pip = HttpPipeline{ .policies = &policy_ptrs, .transport_impl = seq.asTransport() };
+    var req = Request.init(allocator, .GET, "https://example.com");
+    defer req.deinit();
+    var resp = try pip.send(&req);
+    defer resp.deinit();
+    try std.testing.expectEqual(@as(u16, 200), resp.status_code);
+    try std.testing.expectEqual(@as(usize, 2), seq.call_count);
+}
+
+test "RetryPolicy retries 429 then succeeds" {
+    const allocator = std.testing.allocator;
+    var seq = transport.SequenceMockTransport.init(allocator, &.{
+        .{ .status = 429, .body = "throttled" },
+        .{ .status = 200, .body = "ok" },
+    });
+    var retry = RetryPolicy.init();
+    retry.initial_delay_ms = 0;
+    var policy_ptrs = [_]*HttpPolicy{retry.asPolicy()};
+    var pip = HttpPipeline{ .policies = &policy_ptrs, .transport_impl = seq.asTransport() };
+    var req = Request.init(allocator, .GET, "https://example.com");
+    defer req.deinit();
+    var resp = try pip.send(&req);
+    defer resp.deinit();
+    try std.testing.expectEqual(@as(u16, 200), resp.status_code);
+    try std.testing.expectEqual(@as(usize, 2), seq.call_count);
+}
+
+test "RetryPolicy gives up after max retries" {
+    const allocator = std.testing.allocator;
+    var seq = transport.SequenceMockTransport.init(allocator, &.{
+        .{ .status = 503, .body = "unavailable" },
+    });
+    var retry = RetryPolicy.init();
+    retry.initial_delay_ms = 0;
+    retry.max_retries = 2;
+    var policy_ptrs = [_]*HttpPolicy{retry.asPolicy()};
+    var pip = HttpPipeline{ .policies = &policy_ptrs, .transport_impl = seq.asTransport() };
+    var req = Request.init(allocator, .GET, "https://example.com");
+    defer req.deinit();
+    var resp = try pip.send(&req);
+    defer resp.deinit();
+    // After 2 retries (3 total attempts), returns the last 503.
+    try std.testing.expectEqual(@as(u16, 503), resp.status_code);
+    try std.testing.expectEqual(@as(usize, 3), seq.call_count);
+}
+
+test "isRetryable status codes" {
+    try std.testing.expect(RetryPolicy.isRetryable(429));
+    try std.testing.expect(RetryPolicy.isRetryable(500));
+    try std.testing.expect(RetryPolicy.isRetryable(502));
+    try std.testing.expect(RetryPolicy.isRetryable(503));
+    try std.testing.expect(RetryPolicy.isRetryable(504));
+    try std.testing.expect(RetryPolicy.isRetryable(408));
+    try std.testing.expect(!RetryPolicy.isRetryable(200));
+    try std.testing.expect(!RetryPolicy.isRetryable(400));
+    try std.testing.expect(!RetryPolicy.isRetryable(401));
+    try std.testing.expect(!RetryPolicy.isRetryable(404));
 }
