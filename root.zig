@@ -114,7 +114,6 @@ pub const QueueClient = struct {
 
         var req = core.http.Request.init(allocator, .GET, url);
         defer req.deinit();
-        try req.setHeader("Accept", "application/json");
 
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
@@ -192,15 +191,6 @@ pub const QueueServiceClient = struct {
 // ─────────────────────────── Parsing ──────────────────────────
 
 fn parseMessages(allocator: std.mem.Allocator, body: []const u8) ![]QueueMessage {
-    // Azure Queue Storage returns XML like:
-    // <QueueMessagesList>
-    //   <QueueMessage>
-    //     <MessageId>...</MessageId>
-    //     <MessageText>...</MessageText>
-    //     <InsertionTime>...</InsertionTime>
-    //     <ExpirationTime>...</ExpirationTime>
-    //   </QueueMessage>
-    // </QueueMessagesList>
     const xml = core.xml;
 
     const ids = try xml.findAllText(allocator, body, "MessageId");
@@ -215,12 +205,26 @@ fn parseMessages(allocator: std.mem.Allocator, body: []const u8) ![]QueueMessage
         allocator.free(texts);
     }
 
+    const ins_times = try xml.findAllText(allocator, body, "InsertionTime");
+    defer {
+        for (ins_times) |t| allocator.free(t);
+        allocator.free(ins_times);
+    }
+
+    const exp_times = try xml.findAllText(allocator, body, "ExpirationTime");
+    defer {
+        for (exp_times) |t| allocator.free(t);
+        allocator.free(exp_times);
+    }
+
     const count = ids.len;
     var result = try allocator.alloc(QueueMessage, count);
     for (0..count) |i| {
         result[i] = .{
             .message_id = try allocator.dupe(u8, ids[i]),
             .message_text = if (i < texts.len) try allocator.dupe(u8, texts[i]) else null,
+            .insertion_time = if (i < ins_times.len) try allocator.dupe(u8, ins_times[i]) else null,
+            .expiration_time = if (i < exp_times.len) try allocator.dupe(u8, exp_times[i]) else null,
         };
     }
     return result;
@@ -281,6 +285,8 @@ test "QueueClient receiveMessages" {
         for (messages) |m| {
             if (m.message_id) |v| allocator.free(v);
             if (m.message_text) |v| allocator.free(v);
+            if (m.insertion_time) |v| allocator.free(v);
+            if (m.expiration_time) |v| allocator.free(v);
         }
         allocator.free(messages);
     }
@@ -288,4 +294,6 @@ test "QueueClient receiveMessages" {
     try std.testing.expectEqual(@as(usize, 1), messages.len);
     try std.testing.expectEqualStrings("msg-001", messages[0].message_id.?);
     try std.testing.expectEqualStrings("Hello", messages[0].message_text.?);
+    try std.testing.expectEqualStrings("2025-01-01T00:00:00Z", messages[0].insertion_time.?);
+    try std.testing.expectEqualStrings("2025-01-08T00:00:00Z", messages[0].expiration_time.?);
 }
