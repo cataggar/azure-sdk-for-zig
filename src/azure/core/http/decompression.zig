@@ -1,6 +1,6 @@
 ///! HTTP response decompression support.
 ///!
-///! In Zig 0.16, `std.http.Client` handles response decompression natively
+///! In Zig, `std.http.Client` handles response decompression natively
 ///! via `response.readerDecompressing()` which supports gzip, deflate, and
 ///! zstd using `std.compress.flate` and `std.compress.zstd` internally.
 ///!
