@@ -373,3 +373,4 @@ CMakeUserPresets.json
 .zig-cache/
 
 zig-out/
+zig-pkg/
