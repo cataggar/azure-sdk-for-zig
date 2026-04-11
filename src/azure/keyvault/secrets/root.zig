@@ -75,8 +75,7 @@ pub const SecretClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            const err = core.errors.errorFromResponse(resp);
-            _ = err;
+            _ = core.errors.errorFromResponse(resp);
             return error.SecretNotFound;
         }
 
@@ -106,7 +105,7 @@ pub const SecretClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.SetSecretFailed;
+        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.SetSecretFailed; }
 
         return parseSecret(allocator, name, resp.body);
     }
@@ -127,7 +126,7 @@ pub const SecretClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.DeleteSecretFailed;
+        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.DeleteSecretFailed; }
 
         return .{ .name = name };
     }
@@ -166,7 +165,7 @@ pub const SecretClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.RecoverFailed;
+        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.RecoverFailed; }
 
         return parseSecret(allocator, name, resp.body);
     }

@@ -56,7 +56,7 @@ pub const BackupClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.BeginBackupFailed;
+        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.BeginBackupFailed; }
 
         return parseOperationId(allocator, resp.body);
     }
@@ -91,7 +91,7 @@ pub const BackupClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.BeginRestoreFailed;
+        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.BeginRestoreFailed; }
 
         return parseOperationId(allocator, resp.body);
     }
@@ -137,7 +137,7 @@ pub const SettingsClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.GetSettingFailed;
+        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.GetSettingFailed; }
 
         return parseSettingValue(allocator, resp.body);
     }
@@ -168,7 +168,7 @@ pub const SettingsClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.UpdateSettingFailed;
+        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.UpdateSettingFailed; }
     }
 };
 

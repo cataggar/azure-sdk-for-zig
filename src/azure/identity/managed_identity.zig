@@ -77,7 +77,7 @@ pub const ManagedIdentityCredential = struct {
         var resp = try self.transport.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.AuthenticationFailed;
+        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.AuthenticationFailed; }
 
         const parse = @import("client_secret.zig");
         return parse.parseTokenResponse(allocator, resp.body);

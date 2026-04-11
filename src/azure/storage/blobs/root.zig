@@ -58,7 +58,10 @@ pub const BlobContainerClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.CreateContainerFailed;
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.CreateContainerFailed;
+        }
     }
 
     /// DELETE /container?restype=container
@@ -76,7 +79,10 @@ pub const BlobContainerClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.DeleteContainerFailed;
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.DeleteContainerFailed;
+        }
     }
 
     /// GET /container?restype=container&comp=list
@@ -95,7 +101,10 @@ pub const BlobContainerClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.ListBlobsFailed;
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.ListBlobsFailed;
+        }
 
         return parseBlobList(allocator, resp.body);
     }
@@ -153,7 +162,10 @@ pub const BlobClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.DownloadFailed;
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.DownloadFailed;
+        }
 
         return allocator.dupe(u8, resp.body);
     }
@@ -172,7 +184,10 @@ pub const BlobClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.UploadFailed;
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.UploadFailed;
+        }
     }
 
     /// DELETE /container/blob
@@ -186,7 +201,10 @@ pub const BlobClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.DeleteBlobFailed;
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.DeleteBlobFailed;
+        }
     }
 
     /// HEAD /container/blob
@@ -200,7 +218,10 @@ pub const BlobClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.GetPropertiesFailed;
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.GetPropertiesFailed;
+        }
 
         return .{};
     }

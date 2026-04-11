@@ -22,6 +22,7 @@ pub const AzureError = struct {
 /// ```json
 /// { "error": { "code": "...", "message": "..." } }
 /// ```
+/// Logs error details via `std.log.err` for diagnostics.
 pub fn errorFromResponse(response: http.Response) ?AzureError {
     if (response.isSuccess()) return null;
     var err = AzureError{ .status_code = response.status_code };

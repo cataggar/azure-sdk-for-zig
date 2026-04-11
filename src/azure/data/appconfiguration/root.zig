@@ -65,7 +65,7 @@ pub const ConfigurationClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.SettingNotFound;
+        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.SettingNotFound; }
 
         return parseSetting(allocator, key, resp.body);
     }
@@ -100,7 +100,7 @@ pub const ConfigurationClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.SetSettingFailed;
+        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.SetSettingFailed; }
 
         return parseSetting(allocator, key, resp.body);
     }
@@ -124,7 +124,7 @@ pub const ConfigurationClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.DeleteSettingFailed;
+        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.DeleteSettingFailed; }
     }
 
     /// GET /kv?key={filter}&api-version=...
@@ -154,7 +154,7 @@ pub const ConfigurationClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.ListSettingsFailed;
+        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.ListSettingsFailed; }
 
         return parseSettingList(allocator, resp.body);
     }

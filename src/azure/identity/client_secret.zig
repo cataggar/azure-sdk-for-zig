@@ -79,7 +79,7 @@ pub const ClientSecretCredential = struct {
         var resp = try self.transport.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.AuthenticationFailed;
+        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.AuthenticationFailed; }
 
         return parseTokenResponse(allocator, resp.body);
     }
