@@ -62,7 +62,7 @@ pub const QueueClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.SendMessageFailed;
+        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.SendMessageFailed; }
     }
 
     /// GET /queue/messages
@@ -81,7 +81,7 @@ pub const QueueClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.ReceiveMessagesFailed;
+        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.ReceiveMessagesFailed; }
 
         return parseMessages(allocator, resp.body);
     }
@@ -101,7 +101,7 @@ pub const QueueClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.DeleteMessageFailed;
+        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.DeleteMessageFailed; }
     }
 
     /// GET /queue/messages?peekonly=true
@@ -120,7 +120,7 @@ pub const QueueClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.PeekMessagesFailed;
+        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.PeekMessagesFailed; }
 
         return parseMessages(allocator, resp.body);
     }
@@ -164,7 +164,7 @@ pub const QueueServiceClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.CreateQueueFailed;
+        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.CreateQueueFailed; }
     }
 
     /// DELETE /queue
@@ -182,7 +182,7 @@ pub const QueueServiceClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.DeleteQueueFailed;
+        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.DeleteQueueFailed; }
     }
 
     pub fn getQueueClient(self: *QueueServiceClient, queue_name: []const u8) QueueClient {
