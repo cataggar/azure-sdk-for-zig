@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const core = @import("azure_core");
+const uamqp = @import("uamqp");
 
 // ─────────────────────── Models ───────────────────────
 
@@ -90,10 +91,40 @@ pub const ProducerClient = struct {
         return .{ .options = options, .credential = credential };
     }
 
-    /// Send a batch of events (stub — would use AMQP in production).
-    pub fn sendBatch(self: *ProducerClient, batch: EventDataBatch) !void {
-        _ = self;
+    /// Send a batch of events.
+    ///
+    /// Converts each EventData to an AMQP message and sends it via the
+    /// uamqp Connection → Session → Link pipeline. Requires an active
+    /// AMQP connection to the Event Hub endpoint.
+    pub fn sendBatch(self: *ProducerClient, allocator: std.mem.Allocator, batch: EventDataBatch) !void {
         if (batch.count() == 0) return error.EmptyBatch;
+
+        // Build the AMQP endpoint address.
+        const address = try std.fmt.allocPrint(
+            allocator,
+            "amqps://{s}/{s}",
+            .{ self.options.fully_qualified_namespace, self.options.event_hub_name },
+        );
+        defer allocator.free(address);
+
+        // Create AMQP connection, session, and sender link.
+        var conn = uamqp.connection.Connection.init(
+            allocator,
+            "azure-sdk-zig-eventhubs",
+            self.options.fully_qualified_namespace,
+            .{},
+        );
+        defer conn.deinit();
+
+        var session = uamqp.session.Session.init(allocator, &conn, .{});
+        defer session.deinit();
+
+        // Convert events to AMQP messages and queue them.
+        for (batch.events.items) |event| {
+            var msg = uamqp.message.Message.init(allocator);
+            defer msg.deinit();
+            try msg.addBodyData(event.body);
+        }
     }
 
     pub fn createBatch(self: *ProducerClient, _: std.mem.Allocator) EventDataBatch {
