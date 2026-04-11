@@ -2,7 +2,7 @@
 
 Pure Zig implementation of the Azure SDK with **zero C dependencies**.
 
-**39 source files · ~6,500 lines · 102 tests · Zig 0.15.2+**
+**40 source files · ~6,800 lines · 106 tests · Zig 0.15.2+**
 
 ## Quick Start
 
@@ -29,7 +29,7 @@ const secret = try client.getSecret(allocator, "my-secret");
 
 ```bash
 zig build           # compile SDK + example
-zig build test      # run all 102 tests
+zig build test      # run all 106 tests
 zig build run       # run the example app
 ```
 
@@ -66,6 +66,7 @@ azure-core-amqp: azure-uamqp-zig (pure Zig AMQP 1.0)
 | `url` | URL parsing, percent-encode/decode (RFC 3986) |
 | `xml` | XML pull-parser helpers (via zig-xml) |
 | `errors` | Azure error JSON parsing |
+| `lro` | Long-running operation poller (poll until Succeeded/Failed) |
 
 ### Identity (`azure_identity`)
 | Credential | Auth method |

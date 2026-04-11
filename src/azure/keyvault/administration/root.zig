@@ -95,6 +95,24 @@ pub const BackupClient = struct {
 
         return parseOperationId(allocator, resp.body);
     }
+
+    /// Wait for a backup operation to complete by polling the operation URL.
+    pub fn waitForBackup(
+        self: *BackupClient,
+        allocator: std.mem.Allocator,
+        operation_url: []const u8,
+    ) !core.lro.PollResult {
+        return core.lro.pollUntilDone(allocator, &self.pipeline, operation_url, 2000, 60);
+    }
+
+    /// Wait for a restore operation to complete by polling the operation URL.
+    pub fn waitForRestore(
+        self: *BackupClient,
+        allocator: std.mem.Allocator,
+        operation_url: []const u8,
+    ) !core.lro.PollResult {
+        return core.lro.pollUntilDone(allocator, &self.pipeline, operation_url, 2000, 60);
+    }
 };
 
 // ──────────────────────── SettingsClient ──────────────────────
