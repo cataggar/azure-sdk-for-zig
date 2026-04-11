@@ -73,3 +73,46 @@ test "errorFromResponse 404" {
     try std.testing.expectEqualStrings("SecretNotFound", err.error_code.?);
     try std.testing.expectEqualStrings("Secret not found", err.message.?);
 }
+
+test "errorFromResponse 500 no body" {
+    var resp = http.Response{
+        .status_code = 500,
+        .headers = std.StringHashMap([]const u8).init(std.testing.allocator),
+        .body = try std.testing.allocator.dupe(u8, ""),
+        .allocator = std.testing.allocator,
+    };
+    defer resp.deinit();
+    const err = errorFromResponse(resp).?;
+    try std.testing.expectEqual(@as(u16, 500), err.status_code);
+    try std.testing.expect(err.error_code == null);
+    try std.testing.expect(err.message == null);
+}
+
+test "errorFromResponse malformed JSON" {
+    var resp = http.Response{
+        .status_code = 400,
+        .headers = std.StringHashMap([]const u8).init(std.testing.allocator),
+        .body = try std.testing.allocator.dupe(u8, "not json at all"),
+        .allocator = std.testing.allocator,
+    };
+    defer resp.deinit();
+    const err = errorFromResponse(resp).?;
+    try std.testing.expectEqual(@as(u16, 400), err.status_code);
+    try std.testing.expect(err.error_code == null);
+}
+
+test "errorFromResponse 429 throttled" {
+    const body =
+        \\{"error":{"code":"TooManyRequests","message":"Rate limit exceeded"}}
+    ;
+    var resp = http.Response{
+        .status_code = 429,
+        .headers = std.StringHashMap([]const u8).init(std.testing.allocator),
+        .body = try std.testing.allocator.dupe(u8, body),
+        .allocator = std.testing.allocator,
+    };
+    defer resp.deinit();
+    const err = errorFromResponse(resp).?;
+    try std.testing.expectEqual(@as(u16, 429), err.status_code);
+    try std.testing.expectEqualStrings("TooManyRequests", err.error_code.?);
+}

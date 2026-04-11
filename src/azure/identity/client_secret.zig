@@ -147,3 +147,33 @@ test "ClientSecretCredential init" {
     try std.testing.expectEqual(@as(i64, 3600), token.expires_on);
     try std.testing.expectEqual(core.http.Method.POST, mock.last_method.?);
 }
+
+test "ClientSecretCredential auth failure" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 401,
+        \\{"error":"invalid_client","error_description":"Invalid client secret"}
+    );
+    defer mock.deinit();
+    var cred = ClientSecretCredential.init(
+        allocator,
+        mock.asTransport(),
+        "tenant-123",
+        "client-456",
+        "bad-secret",
+    );
+    const result = cred.asCredential().getToken(
+        .{ .scopes = &.{"https://vault.azure.net/.default"} },
+        Context.none,
+    );
+    try std.testing.expectError(error.AuthenticationFailed, result);
+}
+
+test "parseTokenResponse malformed JSON" {
+    const result = parseTokenResponse(std.testing.allocator, "not json");
+    try std.testing.expectError(error.SyntaxError, result);
+}
+
+test "parseTokenResponse missing access_token" {
+    const result = parseTokenResponse(std.testing.allocator, "{}");
+    try std.testing.expectError(error.InvalidTokenResponse, result);
+}

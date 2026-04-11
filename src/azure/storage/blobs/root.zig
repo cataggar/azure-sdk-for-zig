@@ -349,3 +349,30 @@ test "BlobClient download and upload" {
     defer allocator.free(content);
     try std.testing.expectEqualStrings("hello world", content);
 }
+
+test "BlobClient download 404" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 404,
+        \\{"error":{"code":"BlobNotFound","message":"The specified blob does not exist."}}
+    );
+    defer mock.deinit();
+
+    const identity3 = @import("azure_identity");
+    var cred_mock = core.http.MockTransport.init(allocator, 200,
+        \\{"access_token":"t","expires_in":3600}
+    );
+    defer cred_mock.deinit();
+    var cred = identity3.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
+
+    var client = BlobClient.init(
+        "https://myaccount.blob.core.windows.net",
+        "mycontainer",
+        "missing.txt",
+        cred.asCredential(),
+        mock.asTransport(),
+        .{},
+    );
+
+    const result = client.download(allocator);
+    try std.testing.expectError(error.DownloadFailed, result);
+}
