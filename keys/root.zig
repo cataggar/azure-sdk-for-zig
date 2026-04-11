@@ -65,7 +65,7 @@ pub const KeyClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.CreateKeyFailed;
+        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.CreateKeyFailed; }
 
         return parseKey(allocator, name, resp.body);
     }
@@ -86,7 +86,7 @@ pub const KeyClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.KeyNotFound;
+        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.KeyNotFound; }
 
         return parseKey(allocator, name, resp.body);
     }
@@ -106,7 +106,7 @@ pub const KeyClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.DeleteKeyFailed;
+        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.DeleteKeyFailed; }
     }
 
     /// GET /keys?api-version=...
@@ -124,7 +124,7 @@ pub const KeyClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.ListKeysFailed;
+        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.ListKeysFailed; }
 
         return parseKeyList(allocator, resp.body);
     }
@@ -231,7 +231,7 @@ pub const CryptographyClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) return error.CryptoOperationFailed;
+        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.CryptoOperationFailed; }
 
         return allocator.dupe(u8, resp.body);
     }
