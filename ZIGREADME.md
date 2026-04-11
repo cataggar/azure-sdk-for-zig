@@ -2,7 +2,7 @@
 
 Pure Zig implementation of the Azure SDK with **zero C dependencies**.
 
-**39 source files · ~6,200 lines · 95 tests · Zig 0.15.2+**
+**39 source files · ~6,500 lines · 102 tests · Zig 0.15.2+**
 
 ## Quick Start
 
@@ -29,7 +29,7 @@ const secret = try client.getSecret(allocator, "my-secret");
 
 ```bash
 zig build           # compile SDK + example
-zig build test      # run all 95 tests
+zig build test      # run all 102 tests
 zig build run       # run the example app
 ```
 
@@ -54,15 +54,16 @@ azure-core-amqp: azure-uamqp-zig (pure Zig AMQP 1.0)
 |--------|-------------|
 | `http.StdHttpTransport` | HTTP client via `std.http.Client` |
 | `http.MockTransport` | Canned responses for unit tests |
+| `http.SequenceMockTransport` | Multi-response sequences for retry testing |
 | `pipeline.HttpPipeline` | Ordered chain of policies → transport |
 | `pipeline.TelemetryPolicy` | Injects `User-Agent` header |
 | `pipeline.LoggingPolicy` | Logs requests via `std.log` |
-| `pipeline.RetryPolicy` | Exponential backoff with jitter |
-| `pipeline.BearerTokenAuthPolicy` | `Authorization: Bearer` injection |
+| `pipeline.RetryPolicy` | Exponential backoff with jitter, 429/5xx retry, Retry-After |
+| `pipeline.BearerTokenAuthPolicy` | `Authorization: Bearer` with token caching |
 | `pipeline.RequestIdPolicy` | `x-ms-client-request-id` UUID |
 | `credentials.CachedTokenCredential` | In-memory token cache with TTL |
 | `base64` | Base64 + HMAC-SHA256, SHA-256, MD5 helpers |
-| `url` | URL parsing, percent-encode/decode |
+| `url` | URL parsing, percent-encode/decode (RFC 3986) |
 | `xml` | XML pull-parser helpers (via zig-xml) |
 | `errors` | Azure error JSON parsing |
 
