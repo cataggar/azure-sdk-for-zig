@@ -215,10 +215,15 @@ pub const CryptographyClient = struct {
         );
         defer allocator.free(url);
 
+        // Azure KV requires base64url-encoded values for crypto operations.
+        const base64 = core.base64;
+        const encoded_value = try base64.encode(allocator, value);
+        defer allocator.free(encoded_value);
+
         const body = try std.fmt.allocPrint(
             allocator,
             "{{\"alg\":\"{s}\",\"value\":\"{s}\"}}",
-            .{ algorithm, value },
+            .{ algorithm, encoded_value },
         );
         defer allocator.free(body);
 
