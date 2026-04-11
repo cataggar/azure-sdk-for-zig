@@ -110,14 +110,33 @@ pub const StdHttpTransport = struct {
         var response_body: std.ArrayList(u8) = .empty;
         errdefer response_body.deinit(allocator);
 
+        // Convert request headers to std.http.Header slices.
+        // Authorization goes into privileged_headers (stripped on cross-domain redirect).
+        var extra = std.ArrayList(std.http.Header).empty;
+        defer extra.deinit(allocator);
+        var privileged = std.ArrayList(std.http.Header).empty;
+        defer privileged.deinit(allocator);
+
+        var it = request.headers.iterator();
+        while (it.next()) |entry| {
+            const header = std.http.Header{ .name = entry.key_ptr.*, .value = entry.value_ptr.* };
+            if (std.mem.eql(u8, entry.key_ptr.*, "Authorization")) {
+                try privileged.append(allocator, header);
+            } else {
+                try extra.append(allocator, header);
+            }
+        }
+
         const result = try client.fetch(.{
             .location = .{ .url = request.url },
             .method = request.method.toStd(),
             .payload = request.body,
-            .extra_headers = &.{},
+            .extra_headers = extra.items,
+            .privileged_headers = privileged.items,
             .response_writer = response_body.writer(allocator).any(),
         });
 
+        // Response headers are not available via the fetch() API.
         const resp_headers = std.StringHashMap([]const u8).init(allocator);
 
         return .{
