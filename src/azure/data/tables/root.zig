@@ -86,17 +86,22 @@ pub const TableClient = struct {
         );
         defer allocator.free(url);
 
-        // Build JSON body.
+        // Build JSON body with proper escaping.
         var body_buf: std.ArrayList(u8) = .empty;
         defer body_buf.deinit(allocator);
         const writer = body_buf.writer(allocator);
-        try writer.print("{{\"PartitionKey\":\"{s}\",\"RowKey\":\"{s}\"", .{
-            entity.partition_key,
-            entity.row_key,
-        });
+        try writer.writeAll("{\"PartitionKey\":\"");
+        try writeJsonEscaped(writer, entity.partition_key);
+        try writer.writeAll("\",\"RowKey\":\"");
+        try writeJsonEscaped(writer, entity.row_key);
+        try writer.writeByte('"');
         var it = entity.properties.iterator();
         while (it.next()) |entry| {
-            try writer.print(",\"{s}\":\"{s}\"", .{ entry.key_ptr.*, entry.value_ptr.* });
+            try writer.writeAll(",\"");
+            try writeJsonEscaped(writer, entry.key_ptr.*);
+            try writer.writeAll("\":\"");
+            try writeJsonEscaped(writer, entry.value_ptr.*);
+            try writer.writeByte('"');
         }
         try writer.writeAll("}");
 
@@ -151,6 +156,29 @@ pub const TableServiceClient = struct {
         return TableClient.init(self.endpoint, table_name, self.credential, self.transport, .{});
     }
 };
+
+/// Write a JSON-escaped string (without surrounding quotes).
+fn writeJsonEscaped(writer: anytype, s: []const u8) !void {
+    for (s) |c| {
+        switch (c) {
+            '"' => try writer.writeAll("\\\""),
+            '\\' => try writer.writeAll("\\\\"),
+            '\n' => try writer.writeAll("\\n"),
+            '\r' => try writer.writeAll("\\r"),
+            '\t' => try writer.writeAll("\\t"),
+            else => {
+                if (c < 0x20) {
+                    const hex = "0123456789abcdef";
+                    try writer.writeAll("\\u00");
+                    try writer.writeByte(hex[c >> 4]);
+                    try writer.writeByte(hex[c & 0x0f]);
+                } else {
+                    try writer.writeByte(c);
+                }
+            },
+        }
+    }
+}
 
 test "TableEntity init and put" {
     const allocator = std.testing.allocator;

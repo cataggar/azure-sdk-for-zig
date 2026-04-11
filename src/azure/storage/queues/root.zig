@@ -76,7 +76,6 @@ pub const QueueClient = struct {
 
         var req = core.http.Request.init(allocator, .GET, url);
         defer req.deinit();
-        try req.setHeader("Accept", "application/json");
 
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
@@ -193,34 +192,36 @@ pub const QueueServiceClient = struct {
 // ─────────────────────────── Parsing ──────────────────────────
 
 fn parseMessages(allocator: std.mem.Allocator, body: []const u8) ![]QueueMessage {
-    const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{}) catch
-        return allocator.alloc(QueueMessage, 0);
-    defer parsed.deinit();
+    // Azure Queue Storage returns XML like:
+    // <QueueMessagesList>
+    //   <QueueMessage>
+    //     <MessageId>...</MessageId>
+    //     <MessageText>...</MessageText>
+    //     <InsertionTime>...</InsertionTime>
+    //     <ExpirationTime>...</ExpirationTime>
+    //   </QueueMessage>
+    // </QueueMessagesList>
+    const xml = core.xml;
 
-    const obj = if (parsed.value == .object) parsed.value.object else
-        return allocator.alloc(QueueMessage, 0);
+    const ids = try xml.findAllText(allocator, body, "MessageId");
+    defer {
+        for (ids) |id| allocator.free(id);
+        allocator.free(ids);
+    }
 
-    const msgs = if (obj.get("messages")) |v| (if (v == .array) v.array.items else null) else null;
-    const items = msgs orelse return allocator.alloc(QueueMessage, 0);
+    const texts = try xml.findAllText(allocator, body, "MessageText");
+    defer {
+        for (texts) |t| allocator.free(t);
+        allocator.free(texts);
+    }
 
-    var result = try allocator.alloc(QueueMessage, items.len);
-    for (items, 0..) |item, i| {
-        var msg = QueueMessage{};
-        if (item == .object) {
-            if (item.object.get("messageId")) |v| {
-                if (v == .string) msg.message_id = try allocator.dupe(u8, v.string);
-            }
-            if (item.object.get("messageText")) |v| {
-                if (v == .string) msg.message_text = try allocator.dupe(u8, v.string);
-            }
-            if (item.object.get("insertionTime")) |v| {
-                if (v == .string) msg.insertion_time = try allocator.dupe(u8, v.string);
-            }
-            if (item.object.get("expirationTime")) |v| {
-                if (v == .string) msg.expiration_time = try allocator.dupe(u8, v.string);
-            }
-        }
-        result[i] = msg;
+    const count = ids.len;
+    var result = try allocator.alloc(QueueMessage, count);
+    for (0..count) |i| {
+        result[i] = .{
+            .message_id = try allocator.dupe(u8, ids[i]),
+            .message_text = if (i < texts.len) try allocator.dupe(u8, texts[i]) else null,
+        };
     }
     return result;
 }
@@ -255,7 +256,7 @@ test "QueueClient sendMessage" {
 test "QueueClient receiveMessages" {
     const allocator = std.testing.allocator;
     const body =
-        \\{"messages":[{"messageId":"msg-001","messageText":"Hello","insertionTime":"2025-01-01T00:00:00Z","expirationTime":"2025-01-08T00:00:00Z"}]}
+        \\<QueueMessagesList><QueueMessage><MessageId>msg-001</MessageId><MessageText>Hello</MessageText><InsertionTime>2025-01-01T00:00:00Z</InsertionTime><ExpirationTime>2025-01-08T00:00:00Z</ExpirationTime></QueueMessage></QueueMessagesList>
     ;
     var mock = core.http.MockTransport.init(allocator, 200, body);
     defer mock.deinit();
@@ -280,8 +281,6 @@ test "QueueClient receiveMessages" {
         for (messages) |m| {
             if (m.message_id) |v| allocator.free(v);
             if (m.message_text) |v| allocator.free(v);
-            if (m.insertion_time) |v| allocator.free(v);
-            if (m.expiration_time) |v| allocator.free(v);
         }
         allocator.free(messages);
     }

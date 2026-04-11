@@ -133,7 +133,7 @@ pub const RetryPolicy = struct {
     ) !Response {
         const self: *RetryPolicy = @fieldParentPtr("policy", policy);
         var attempt: u32 = 0;
-        var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
+        var prng = std.Random.DefaultPrng.init(@truncate(@as(u128, @bitCast(std.time.nanoTimestamp()))));
         while (true) {
             const result = callNext(request, next, final_transport);
             if (result) |resp| {
@@ -190,12 +190,17 @@ pub const BearerTokenAuthPolicy = struct {
     credential: *creds.TokenCredential,
     scopes: []const []const u8,
     policy: HttpPolicy,
+    allocator: std.mem.Allocator,
     cached_token: ?[]const u8 = null,
     cached_expires_on: i64 = 0,
-    allocator: ?std.mem.Allocator = null,
 
-    pub fn init(credential: *creds.TokenCredential, scopes: []const []const u8) BearerTokenAuthPolicy {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        credential: *creds.TokenCredential,
+        scopes: []const []const u8,
+    ) BearerTokenAuthPolicy {
         return .{
+            .allocator = allocator,
             .credential = credential,
             .scopes = scopes,
             .policy = .{ .processFn = &processImpl },
@@ -207,9 +212,7 @@ pub const BearerTokenAuthPolicy = struct {
     }
 
     pub fn deinit(self: *BearerTokenAuthPolicy) void {
-        if (self.cached_token) |t| {
-            if (self.allocator) |a| a.free(t);
-        }
+        if (self.cached_token) |t| self.allocator.free(t);
     }
 
     fn processImpl(
@@ -230,15 +233,11 @@ pub const BearerTokenAuthPolicy = struct {
                 .{ .scopes = self.scopes },
                 ctx,
             );
-            // Cache the token.
-            if (self.cached_token) |old| {
-                if (self.allocator) |a| a.free(old);
-            }
-            self.cached_token = try request.allocator.dupe(u8, fresh.token);
+            // Cache the token — free old cache, dupe fresh, free original.
+            if (self.cached_token) |old| self.allocator.free(old);
+            self.cached_token = try self.allocator.dupe(u8, fresh.token);
             self.cached_expires_on = fresh.expires_on;
-            self.allocator = request.allocator;
-            // Free the original from the credential.
-            request.allocator.free(fresh.token);
+            self.allocator.free(fresh.token);
             token_str = self.cached_token;
         }
 
@@ -271,7 +270,8 @@ pub const RequestIdPolicy = struct {
         final_transport: *HttpTransport,
     ) !Response {
         const uuid_mod = @import("../uuid.zig");
-        var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
+        const seed: u64 = @truncate(@as(u128, @bitCast(std.time.nanoTimestamp())));
+        var prng = std.Random.DefaultPrng.init(seed);
         const id = uuid_mod.Uuid.init(prng.random());
         const id_str = id.toString();
         const id_owned = try request.allocator.dupe(u8, &id_str);
