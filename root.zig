@@ -96,7 +96,6 @@ pub const BlobContainerClient = struct {
 
         var req = core.http.Request.init(allocator, .GET, url);
         defer req.deinit();
-        try req.setHeader("Accept", "application/json");
 
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
@@ -238,32 +237,34 @@ pub const BlobClient = struct {
 // ─────────────────────────── Parsing ──────────────────────────
 
 fn parseBlobList(allocator: std.mem.Allocator, body: []const u8) ![]BlobItem {
-    const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{}) catch
-        return allocator.alloc(BlobItem, 0);
-    defer parsed.deinit();
+    // Azure Blob Storage returns XML:
+    // <EnumerationResults>
+    //   <Blobs>
+    //     <Blob><Name>file1.txt</Name><Properties><Content-Type>text/plain</Content-Type></Properties></Blob>
+    //   </Blobs>
+    // </EnumerationResults>
+    const xml = core.xml;
 
-    const obj = if (parsed.value == .object) parsed.value.object else
-        return allocator.alloc(BlobItem, 0);
+    const names = try xml.findAllText(allocator, body, "Name");
+    defer {
+        for (names) |n| allocator.free(n);
+        allocator.free(names);
+    }
 
-    const blobs_arr = if (obj.get("blobs")) |v| (if (v == .array) v.array.items else null) else null;
-    const items = blobs_arr orelse return allocator.alloc(BlobItem, 0);
+    const content_types = try xml.findAllText(allocator, body, "Content-Type");
+    defer {
+        for (content_types) |ct| allocator.free(ct);
+        allocator.free(content_types);
+    }
 
-    var result = try allocator.alloc(BlobItem, items.len);
-    for (items, 0..) |item, i| {
-        var blob_item = BlobItem{ .name = "" };
-        if (item == .object) {
-            if (item.object.get("name")) |n| {
-                if (n == .string) blob_item.name = try allocator.dupe(u8, n.string);
-            }
-            if (item.object.get("properties")) |p| {
-                if (p == .object) {
-                    if (p.object.get("Content-Type")) |ct| {
-                        if (ct == .string) blob_item.properties.content_type = try allocator.dupe(u8, ct.string);
-                    }
-                }
-            }
-        }
-        result[i] = blob_item;
+    var result = try allocator.alloc(BlobItem, names.len);
+    for (names, 0..) |name, i| {
+        result[i] = .{
+            .name = try allocator.dupe(u8, name),
+            .properties = .{
+                .content_type = if (i < content_types.len) try allocator.dupe(u8, content_types[i]) else null,
+            },
+        };
     }
     return result;
 }
@@ -273,7 +274,7 @@ fn parseBlobList(allocator: std.mem.Allocator, body: []const u8) ![]BlobItem {
 test "BlobContainerClient create and listBlobs" {
     const allocator = std.testing.allocator;
     const list_body =
-        \\{"blobs":[{"name":"file1.txt","properties":{"Content-Type":"text/plain"}},{"name":"file2.bin","properties":{"Content-Type":"application/octet-stream"}}]}
+        \\<EnumerationResults><Blobs><Blob><Name>file1.txt</Name><Properties><Content-Type>text/plain</Content-Type></Properties></Blob><Blob><Name>file2.bin</Name><Properties><Content-Type>application/octet-stream</Content-Type></Properties></Blob></Blobs></EnumerationResults>
     ;
     var mock_create = core.http.MockTransport.init(allocator, 201, "");
     defer mock_create.deinit();
