@@ -39,22 +39,7 @@ pub const AzureCliCredential = struct {
         else
             return error.NoScopesProvided;
 
-        // Build command.
-        const base_cmd = try std.fmt.allocPrint(
-            allocator,
-            "az account get-access-token --output json --scope \"{s}\"",
-            .{scope},
-        );
-        defer allocator.free(base_cmd);
-
-        const cmd = if (self.tenant_id) |tid|
-            try std.fmt.allocPrint(allocator, "{s} --tenant \"{s}\"", .{ base_cmd, tid })
-        else
-            try allocator.dupe(u8, base_cmd);
-        defer allocator.free(cmd);
-
-        // Execute.
-        const result = try runCommand(allocator, cmd);
+        const result = try runCommand(allocator, scope, self.tenant_id);
         defer allocator.free(result);
 
         return parseCliResponse(allocator, result);
@@ -95,13 +80,53 @@ fn parseCliResponse(allocator: std.mem.Allocator, body: []const u8) !AccessToken
     return .{ .token = token, .expires_on = expires_on };
 }
 
-/// Run a shell command and capture stdout (platform-aware).
-fn runCommand(allocator: std.mem.Allocator, cmd: []const u8) ![]u8 {
-    _ = allocator;
-    _ = cmd;
-    // In production this would use std.process.Child.
-    // For now, return an error — actual CLI exec requires std.Io.
-    return error.AzureCliNotAvailable;
+/// Run the Azure CLI command and capture stdout.
+fn runCommand(allocator: std.mem.Allocator, scope: []const u8, tenant_id: ?[]const u8) ![]u8 {
+    // Build argv for std.process.Child.
+    var argv_buf: [8][]const u8 = undefined;
+    var argc: usize = 0;
+
+    argv_buf[argc] = "az";
+    argc += 1;
+    argv_buf[argc] = "account";
+    argc += 1;
+    argv_buf[argc] = "get-access-token";
+    argc += 1;
+    argv_buf[argc] = "--output";
+    argc += 1;
+    argv_buf[argc] = "json";
+    argc += 1;
+    argv_buf[argc] = "--scope";
+    argc += 1;
+    argv_buf[argc] = scope;
+    argc += 1;
+
+    // Optionally add --tenant.
+    const tenant_args: [2][]const u8 = .{ "--tenant", tenant_id orelse "" };
+    if (tenant_id != null) {
+        argv_buf[argc] = tenant_args[0];
+        argc += 1;
+        argv_buf[argc] = tenant_args[1];
+        argc += 1;
+    }
+
+    var child = std.process.Child.init(argv_buf[0..argc], allocator);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+
+    try child.spawn();
+
+    var stdout_buf: std.ArrayList(u8) = .empty;
+    defer stdout_buf.deinit(allocator);
+    var stderr_buf: std.ArrayList(u8) = .empty;
+    defer stderr_buf.deinit(allocator);
+
+    try child.collectOutput(allocator, &stdout_buf, &stderr_buf, 1024 * 1024);
+    const term = try child.wait();
+
+    if (term.Exited != 0) return error.AzureCliNotAvailable;
+
+    return stdout_buf.toOwnedSlice(allocator);
 }
 
 test "parseCliResponse" {

@@ -91,10 +91,16 @@ pub const WorkloadIdentityCredential = struct {
     }
 };
 
-fn readTokenFile(_: []const u8) ![]const u8 {
-    // In production, use std.Io.File to read the token.
-    // Stub for now.
-    return error.WorkloadTokenFileNotFound;
+fn readTokenFile(path: []const u8) ![]const u8 {
+    const file = std.fs.openFileAbsolute(path, .{}) catch
+        return error.WorkloadTokenFileNotFound;
+    defer file.close();
+    // Token files are small (typically < 4KB JWT).
+    var buf: [8192]u8 = undefined;
+    const n = file.readAll(&buf) catch return error.WorkloadTokenFileNotFound;
+    // Trim trailing whitespace/newlines.
+    const trimmed = std.mem.trimRight(u8, buf[0..n], " \t\r\n");
+    return trimmed;
 }
 
 test "WorkloadIdentityCredential fields" {
