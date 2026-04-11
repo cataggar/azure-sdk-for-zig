@@ -64,6 +64,12 @@ pub const Response = struct {
 
     pub fn deinit(self: *Response) void {
         self.allocator.free(self.body);
+        // Free heap-allocated header keys/values from StdHttpTransport.
+        var it = self.headers.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
         self.headers.deinit();
     }
 };
@@ -107,11 +113,7 @@ pub const StdHttpTransport = struct {
         var client: std.http.Client = .{ .allocator = allocator, .io = self.io };
         defer client.deinit();
 
-        var response_body: std.ArrayList(u8) = .empty;
-        errdefer response_body.deinit(allocator);
-
         // Convert request headers to std.http.Header slices.
-        // Authorization goes into privileged_headers (stripped on cross-domain redirect).
         var extra = std.ArrayList(std.http.Header).empty;
         defer extra.deinit(allocator);
         var privileged = std.ArrayList(std.http.Header).empty;
@@ -127,20 +129,54 @@ pub const StdHttpTransport = struct {
             }
         }
 
-        const result = try client.fetch(.{
-            .location = .{ .url = request.url },
-            .method = request.method.toStd(),
-            .payload = request.body,
+        const uri = try std.Uri.parse(request.url);
+
+        // Use lower-level API to access response headers.
+        var req = try client.request(request.method.toStd(), uri, .{
             .extra_headers = extra.items,
             .privileged_headers = privileged.items,
-            .response_writer = response_body.writer(allocator).any(),
         });
+        defer req.deinit();
 
-        // Response headers are not available via the fetch() API.
-        const resp_headers = std.StringHashMap([]const u8).init(allocator);
+        // Send body if present.
+        if (request.body) |payload| {
+            req.transfer_encoding = .{ .content_length = payload.len };
+            var body_writer = try req.sendBodyUnflushed(&.{});
+            try body_writer.writer.writeAll(payload);
+            try body_writer.end();
+            try req.connection.?.flush();
+        } else {
+            try req.sendBodiless();
+        }
+
+        // Receive response head.
+        const redirect_buf = try allocator.alloc(u8, 8 * 1024);
+        defer allocator.free(redirect_buf);
+        var response = try req.receiveHead(redirect_buf);
+
+        // Capture response headers before reading body (body invalidates head strings).
+        var resp_headers = std.StringHashMap([]const u8).init(allocator);
+        errdefer resp_headers.deinit();
+        var header_it = response.head.iterateHeaders();
+        while (header_it.next()) |hdr| {
+            const name = try allocator.dupe(u8, hdr.name);
+            errdefer allocator.free(name);
+            const value = try allocator.dupe(u8, hdr.value);
+            try resp_headers.put(name, value);
+        }
+
+        // Read body.
+        var response_body: std.ArrayList(u8) = .empty;
+        errdefer response_body.deinit(allocator);
+        var transfer_buffer: [64]u8 = undefined;
+        const reader = response.reader(&transfer_buffer);
+        _ = reader.streamRemaining(response_body.writer(allocator).any()) catch |err| switch (err) {
+            error.ReadFailed => return response.bodyErr().?,
+            else => |e| return e,
+        };
 
         return .{
-            .status_code = @intFromEnum(result.status),
+            .status_code = @intFromEnum(response.head.status),
             .headers = resp_headers,
             .body = try response_body.toOwnedSlice(allocator),
             .allocator = allocator,
