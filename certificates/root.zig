@@ -3,6 +3,9 @@ const core = @import("azure_core");
 
 // ─────────────────────────── Models ───────────────────────────
 
+/// Pager type returned by `listCertificates`.
+pub const CertificatePager = core.pager.PipelinePager(KeyVaultCertificate);
+
 pub const CertificateProperties = struct {
     enabled: ?bool = null,
     not_before: ?i64 = null,
@@ -57,7 +60,10 @@ pub const CertificateClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.CertificateNotFound; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.CertificateNotFound;
+        }
 
         return parseCertificate(allocator, name, resp.body);
     }
@@ -89,7 +95,10 @@ pub const CertificateClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.CreateCertificateFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.CreateCertificateFailed;
+        }
 
         return parseCertificate(allocator, name, resp.body);
     }
@@ -109,7 +118,27 @@ pub const CertificateClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.DeleteCertificateFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.DeleteCertificateFailed;
+        }
+    }
+
+    /// GET /certificates?api-version=... — returns a pager over certificates.
+    pub fn listCertificates(
+        self: *CertificateClient,
+        allocator: std.mem.Allocator,
+    ) !CertificatePager {
+        const url = try self.buildUrl(allocator, &.{"certificates"});
+        defer allocator.free(url);
+
+        return CertificatePager.init(
+            self.pipeline,
+            url,
+            allocator,
+            &parseCertificateListPage,
+            "application/json",
+        );
     }
 
     fn buildUrl(self: *CertificateClient, allocator: std.mem.Allocator, path_segments: []const []const u8) ![]u8 {
@@ -170,6 +199,35 @@ fn parseCertificate(allocator: std.mem.Allocator, name: []const u8, body: []cons
     }
 
     return cert;
+}
+
+fn parseCertificateListPage(allocator: std.mem.Allocator, body: []const u8) !core.pager.PageResult(KeyVaultCertificate) {
+    const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{}) catch
+        return .{ .items = try allocator.alloc(KeyVaultCertificate, 0) };
+    defer parsed.deinit();
+
+    const obj = if (parsed.value == .object) parsed.value.object else return .{ .items = try allocator.alloc(KeyVaultCertificate, 0) };
+
+    var next_link: ?[]u8 = null;
+    if (obj.get("nextLink")) |nl| {
+        if (nl == .string and nl.string.len > 0)
+            next_link = try allocator.dupe(u8, nl.string);
+    }
+
+    const values = if (obj.get("value")) |v| (if (v == .array) v.array.items else null) else null;
+    const items = values orelse return .{ .items = try allocator.alloc(KeyVaultCertificate, 0), .next_link = next_link };
+
+    var result = try allocator.alloc(KeyVaultCertificate, items.len);
+    for (items, 0..) |item, i| {
+        var cert = KeyVaultCertificate{ .name = "" };
+        if (item == .object) {
+            if (item.object.get("id")) |id| {
+                if (id == .string) cert.id = try allocator.dupe(u8, id.string);
+            }
+        }
+        result[i] = cert;
+    }
+    return .{ .items = result, .next_link = next_link };
 }
 
 // ─────────────────────────── Tests ────────────────────────────
