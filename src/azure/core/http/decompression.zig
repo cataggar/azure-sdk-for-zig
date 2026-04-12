@@ -7,7 +7,6 @@
 ///! This policy adds `Accept-Encoding` to requests so servers know they
 ///! may compress responses. The actual decompression is handled by the
 ///! `StdHttpTransport` (std.http.Client).
-
 const std = @import("std");
 const transport = @import("transport.zig");
 const pipeline_mod = @import("pipeline.zig");
@@ -67,4 +66,3 @@ test "DecompressionPolicy sets Accept-Encoding" {
     defer resp.deinit();
     try std.testing.expectEqualStrings("gzip, deflate", req.headers.get("Accept-Encoding").?);
 }
-

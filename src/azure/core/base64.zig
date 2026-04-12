@@ -1,7 +1,6 @@
 ///! Base64 encoding/decoding utilities for Azure SDK.
 ///!
 ///! Wraps `std.base64.standard` with allocator-aware helpers.
-
 const std = @import("std");
 
 const encoder = std.base64.standard.Encoder;

@@ -79,7 +79,10 @@ pub const ClientSecretCredential = struct {
         var resp = try self.transport.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.AuthenticationFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.AuthenticationFailed;
+        }
 
         return parseTokenResponse(allocator, resp.body);
     }
@@ -125,9 +128,7 @@ test "parseTokenResponse" {
 
 test "ClientSecretCredential init" {
     const allocator = std.testing.allocator;
-    var mock = core.http.MockTransport.init(
-        allocator,
-        200,
+    var mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"mock-token","expires_in":3600}
     );
     defer mock.deinit();

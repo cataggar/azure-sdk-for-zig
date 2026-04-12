@@ -1,7 +1,6 @@
 ///! Azure SDK Performance Framework — benchmark harness.
 ///!
 ///! Provides a lightweight framework for throughput and latency benchmarks.
-
 const std = @import("std");
 const builtin = @import("builtin");
 

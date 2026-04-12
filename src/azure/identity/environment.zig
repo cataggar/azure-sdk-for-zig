@@ -100,7 +100,8 @@ const TestEnv = struct {
 test "EnvironmentCredential missing vars" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 200, "{}");
-    defer mock.deinit();    var env = TestEnv.init(allocator);
+    defer mock.deinit();
+    var env = TestEnv.init(allocator);
     defer env.deinit();
     // No vars set → should fail.
     const result = EnvironmentCredential.init(allocator, mock.asTransport(), env);
@@ -109,9 +110,7 @@ test "EnvironmentCredential missing vars" {
 
 test "EnvironmentCredential with secret" {
     const allocator = std.testing.allocator;
-    var mock = core.http.MockTransport.init(
-        allocator,
-        200,
+    var mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"env-token","expires_in":1800}
     );
     defer mock.deinit();

@@ -3,6 +3,9 @@ const core = @import("azure_core");
 
 // ─────────────────────────── Models ───────────────────────────
 
+/// Pager type returned by `listKeys`.
+pub const KeyPager = core.pager.PipelinePager(KeyVaultKey);
+
 pub const KeyProperties = struct {
     key_type: ?[]const u8 = null,
     key_ops: ?[]const []const u8 = null,
@@ -65,7 +68,10 @@ pub const KeyClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.CreateKeyFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.CreateKeyFailed;
+        }
 
         return parseKey(allocator, name, resp.body);
     }
@@ -86,7 +92,10 @@ pub const KeyClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.KeyNotFound; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.KeyNotFound;
+        }
 
         return parseKey(allocator, name, resp.body);
     }
@@ -106,27 +115,35 @@ pub const KeyClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.DeleteKeyFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.DeleteKeyFailed;
+        }
     }
 
-    /// GET /keys?api-version=...
+    /// GET /keys?api-version=... — returns a pager over keys.
+    ///
+    /// Usage:
+    ///   var pager = try client.listKeys(allocator);
+    ///   defer pager.deinit();
+    ///   while (try pager.next()) |keys| {
+    ///       defer allocator.free(keys);
+    ///       for (keys) |key| { if (key.id) |id| allocator.free(id); }
+    ///   }
     pub fn listKeys(
         self: *KeyClient,
         allocator: std.mem.Allocator,
-    ) ![]KeyVaultKey {
+    ) !KeyPager {
         const url = try self.buildUrl(allocator, &.{"keys"});
         defer allocator.free(url);
 
-        var req = core.http.Request.init(allocator, .GET, url);
-        defer req.deinit();
-        try req.setHeader("Accept", "application/json");
-
-        var resp = try self.pipeline.send(&req);
-        defer resp.deinit();
-
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.ListKeysFailed; }
-
-        return parseKeyList(allocator, resp.body);
+        return KeyPager.init(
+            self.pipeline,
+            url,
+            allocator,
+            &parseKeyListPage,
+            "application/json",
+        );
     }
 
     fn buildUrl(self: *KeyClient, allocator: std.mem.Allocator, path_segments: []const []const u8) ![]u8 {
@@ -236,7 +253,10 @@ pub const CryptographyClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.CryptoOperationFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.CryptoOperationFailed;
+        }
 
         return allocator.dupe(u8, resp.body);
     }
@@ -280,16 +300,21 @@ fn parseKey(allocator: std.mem.Allocator, name: []const u8, body: []const u8) !K
     return key;
 }
 
-fn parseKeyList(allocator: std.mem.Allocator, body: []const u8) ![]KeyVaultKey {
+fn parseKeyListPage(allocator: std.mem.Allocator, body: []const u8) !core.pager.PageResult(KeyVaultKey) {
     const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{}) catch
-        return allocator.alloc(KeyVaultKey, 0);
+        return .{ .items = try allocator.alloc(KeyVaultKey, 0) };
     defer parsed.deinit();
 
-    const obj = if (parsed.value == .object) parsed.value.object else
-        return allocator.alloc(KeyVaultKey, 0);
+    const obj = if (parsed.value == .object) parsed.value.object else return .{ .items = try allocator.alloc(KeyVaultKey, 0) };
+
+    var next_link: ?[]u8 = null;
+    if (obj.get("nextLink")) |nl| {
+        if (nl == .string and nl.string.len > 0)
+            next_link = try allocator.dupe(u8, nl.string);
+    }
 
     const values = if (obj.get("value")) |v| (if (v == .array) v.array.items else null) else null;
-    const items = values orelse return allocator.alloc(KeyVaultKey, 0);
+    const items = values orelse return .{ .items = try allocator.alloc(KeyVaultKey, 0), .next_link = next_link };
 
     var result = try allocator.alloc(KeyVaultKey, items.len);
     for (items, 0..) |item, i| {
@@ -301,7 +326,7 @@ fn parseKeyList(allocator: std.mem.Allocator, body: []const u8) ![]KeyVaultKey {
         }
         result[i] = key;
     }
-    return result;
+    return .{ .items = result, .next_link = next_link };
 }
 
 // ─────────────────────────── Tests ────────────────────────────

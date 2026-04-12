@@ -3,6 +3,9 @@ const core = @import("azure_core");
 
 // ─────────────────────────── Models ───────────────────────────
 
+/// Pager type returned by `listSettings`.
+pub const SettingPager = core.pager.PipelinePager(ConfigurationSetting);
+
 pub const ConfigurationSetting = struct {
     key: []const u8,
     value: ?[]const u8 = null,
@@ -65,7 +68,10 @@ pub const ConfigurationClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.SettingNotFound; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.SettingNotFound;
+        }
 
         return parseSetting(allocator, key, resp.body);
     }
@@ -100,7 +106,10 @@ pub const ConfigurationClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.SetSettingFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.SetSettingFailed;
+        }
 
         return parseSetting(allocator, key, resp.body);
     }
@@ -124,15 +133,26 @@ pub const ConfigurationClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.DeleteSettingFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.DeleteSettingFailed;
+        }
     }
 
-    /// GET /kv?key={filter}&api-version=...
+    /// GET /kv?key={filter}&api-version=... — returns a pager over settings.
+    ///
+    /// Usage:
+    ///   var pager = try client.listSettings(allocator, "app.*");
+    ///   defer pager.deinit();
+    ///   while (try pager.next()) |settings| {
+    ///       defer allocator.free(settings);
+    ///       for (settings) |s| { ... }
+    ///   }
     pub fn listSettings(
         self: *ConfigurationClient,
         allocator: std.mem.Allocator,
         key_filter: ?[]const u8,
-    ) ![]ConfigurationSetting {
+    ) !SettingPager {
         const url = if (key_filter) |f|
             try std.fmt.allocPrint(
                 allocator,
@@ -147,16 +167,13 @@ pub const ConfigurationClient = struct {
             );
         defer allocator.free(url);
 
-        var req = core.http.Request.init(allocator, .GET, url);
-        defer req.deinit();
-        try req.setHeader("Accept", "application/vnd.microsoft.appconfig.kvset+json");
-
-        var resp = try self.pipeline.send(&req);
-        defer resp.deinit();
-
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.ListSettingsFailed; }
-
-        return parseSettingList(allocator, resp.body);
+        return SettingPager.init(
+            self.pipeline,
+            url,
+            allocator,
+            &parseSettingListPage,
+            "application/vnd.microsoft.appconfig.kvset+json",
+        );
     }
 };
 
@@ -190,16 +207,21 @@ fn parseSetting(allocator: std.mem.Allocator, key: []const u8, body: []const u8)
     return setting;
 }
 
-fn parseSettingList(allocator: std.mem.Allocator, body: []const u8) ![]ConfigurationSetting {
+fn parseSettingListPage(allocator: std.mem.Allocator, body: []const u8) !core.pager.PageResult(ConfigurationSetting) {
     const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{}) catch
-        return allocator.alloc(ConfigurationSetting, 0);
+        return .{ .items = try allocator.alloc(ConfigurationSetting, 0) };
     defer parsed.deinit();
 
-    const obj = if (parsed.value == .object) parsed.value.object else
-        return allocator.alloc(ConfigurationSetting, 0);
+    const obj = if (parsed.value == .object) parsed.value.object else return .{ .items = try allocator.alloc(ConfigurationSetting, 0) };
+
+    var next_link: ?[]u8 = null;
+    if (obj.get("@nextLink")) |nl| {
+        if (nl == .string and nl.string.len > 0)
+            next_link = try allocator.dupe(u8, nl.string);
+    }
 
     const items_arr = if (obj.get("items")) |v| (if (v == .array) v.array.items else null) else null;
-    const items = items_arr orelse return allocator.alloc(ConfigurationSetting, 0);
+    const items = items_arr orelse return .{ .items = try allocator.alloc(ConfigurationSetting, 0), .next_link = next_link };
 
     var result = try allocator.alloc(ConfigurationSetting, items.len);
     for (items, 0..) |item, i| {
@@ -217,7 +239,7 @@ fn parseSettingList(allocator: std.mem.Allocator, body: []const u8) ![]Configura
         }
         result[i] = setting;
     }
-    return result;
+    return .{ .items = result, .next_link = next_link };
 }
 
 // ─────────────────────────── Tests ────────────────────────────
@@ -290,7 +312,10 @@ test "ConfigurationClient setSetting and listSettings" {
     defer mock_list.deinit();
     client.pipeline = .{ .policies = &.{}, .transport_impl = mock_list.asTransport() };
 
-    const settings = try client.listSettings(allocator, "app.*");
+    var pager = try client.listSettings(allocator, "app.*");
+    defer pager.deinit();
+
+    const settings = (try pager.next()) orelse return error.ExpectedPage;
     defer {
         for (settings) |s| {
             if (s.key.len > 0) allocator.free(s.key);

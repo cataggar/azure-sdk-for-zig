@@ -22,9 +22,12 @@ pub const uuid = @import("uuid.zig");
 pub const datetime = @import("datetime.zig");
 pub const errors = @import("errors.zig");
 pub const response = @import("response.zig");
+pub const safe_debug = @import("safe_debug.zig");
 pub const lro = @import("lro.zig");
+pub const pager = @import("pager.zig");
 pub const case_insensitive_map = @import("case_insensitive_map.zig");
 pub const base64 = @import("base64.zig");
+pub const cloud = @import("cloud.zig");
 pub const xml = @import("xml.zig");
 
 pub const version: []const u8 = "0.1.0";

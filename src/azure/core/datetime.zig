@@ -13,7 +13,7 @@ pub const DateTime = struct {
     /// Format as RFC 3339 / ISO 8601 string: "YYYY-MM-DDTHH:MM:SSZ".
     pub fn toRfc3339(self: DateTime, buf: []u8) ![]u8 {
         return try std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z", .{
-            self.year, self.month, self.day,
+            self.year, self.month,  self.day,
             self.hour, self.minute, self.second,
         });
     }

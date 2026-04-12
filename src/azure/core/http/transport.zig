@@ -194,12 +194,15 @@ pub const StdHttpTransport = struct {
 
 /// A transport that returns canned responses — for unit tests.
 pub const MockTransport = struct {
+    pub const HeaderPair = struct { name: []const u8, value: []const u8 };
+
     response_status: u16,
     response_body: []const u8,
     allocator: std.mem.Allocator,
     transport: HttpTransport,
     last_method: ?Method = null,
     last_url: ?[]u8 = null,
+    response_headers_list: []const HeaderPair = &.{},
 
     pub fn init(allocator: std.mem.Allocator, status: u16, body: []const u8) MockTransport {
         return .{
@@ -227,7 +230,13 @@ pub const MockTransport = struct {
         self.last_url = try self.allocator.dupe(u8, request.url);
 
         const body_copy = try self.allocator.dupe(u8, self.response_body);
-        const headers = std.StringHashMap([]const u8).init(self.allocator);
+        var headers = std.StringHashMap([]const u8).init(self.allocator);
+        for (self.response_headers_list) |hdr| {
+            const k = try self.allocator.dupe(u8, hdr.name);
+            errdefer self.allocator.free(k);
+            const v = try self.allocator.dupe(u8, hdr.value);
+            try headers.put(k, v);
+        }
         return .{
             .status_code = self.response_status,
             .headers = headers,
@@ -297,7 +306,8 @@ test "response isSuccess" {
 test "mock transport" {
     const allocator = std.testing.allocator;
     var mock = MockTransport.init(allocator, 200, "{\"status\":\"ok\"}");
-    defer mock.deinit();    var req = Request.init(allocator, .POST, "https://vault.azure.net/secrets/mysecret");
+    defer mock.deinit();
+    var req = Request.init(allocator, .POST, "https://vault.azure.net/secrets/mysecret");
     defer req.deinit();
     var resp = try mock.asTransport().send(&req);
     defer resp.deinit();
@@ -305,4 +315,3 @@ test "mock transport" {
     try std.testing.expectEqualStrings("{\"status\":\"ok\"}", resp.body);
     try std.testing.expectEqual(Method.POST, mock.last_method.?);
 }
-

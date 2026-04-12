@@ -80,7 +80,10 @@ pub const AttestationClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.AttestationFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.AttestationFailed;
+        }
 
         return parseAttestationResult(allocator, resp.body);
     }
