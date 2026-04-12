@@ -19,6 +19,9 @@ pub fn AzureResponse(comptime T: type) type {
 }
 
 /// Paged response that lazily fetches continuation pages.
+///
+/// Superseded by `pager.PipelinePager` which provides a proper iterator
+/// interface. Kept for backward compatibility.
 pub fn PagedResponse(comptime T: type) type {
     return struct {
         items: []T,
