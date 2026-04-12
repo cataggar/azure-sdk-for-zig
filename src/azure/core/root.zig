@@ -29,6 +29,7 @@ pub const case_insensitive_map = @import("case_insensitive_map.zig");
 pub const base64 = @import("base64.zig");
 pub const cloud = @import("cloud.zig");
 pub const xml = @import("xml.zig");
+pub const tracing = @import("tracing/root.zig");
 
 pub const version: []const u8 = "0.1.0";
 pub const user_agent_prefix: []const u8 = "azsdk-zig-core/" ++ version;
