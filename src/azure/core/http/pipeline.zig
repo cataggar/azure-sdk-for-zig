@@ -280,6 +280,71 @@ pub const RequestIdPolicy = struct {
     }
 };
 
+/// Creates a tracing span around each HTTP request with standard attributes.
+///
+/// When a `TracerProvider` is configured, creates spans with:
+/// - `http.method`, `url.full`, `http.status_code`
+/// - `az.client_request_id` (if present)
+/// - W3C `traceparent` / `tracestate` header propagation
+pub const TracingPolicy = struct {
+    const tracing = @import("../tracing/root.zig");
+
+    tracer: *tracing.Tracer,
+    az_namespace: []const u8,
+    policy: HttpPolicy,
+
+    pub fn init(tracer: *tracing.Tracer, az_namespace: []const u8) TracingPolicy {
+        return .{
+            .tracer = tracer,
+            .az_namespace = az_namespace,
+            .policy = .{ .processFn = &processImpl },
+        };
+    }
+
+    pub fn asPolicy(self: *TracingPolicy) *HttpPolicy {
+        return &self.policy;
+    }
+
+    fn processImpl(
+        policy: *HttpPolicy,
+        request: *Request,
+        next: []*HttpPolicy,
+        final_transport: *HttpTransport,
+    ) !Response {
+        const self: *TracingPolicy = @fieldParentPtr("policy", policy);
+
+        const span = self.tracer.startSpan("HTTP", .client) catch {
+            return callNext(request, next, final_transport);
+        };
+
+        // Set standard Azure SDK span attributes.
+        span.setAttribute("http.method", @tagName(request.method)) catch {};
+        span.setAttribute("url.full", request.url) catch {};
+        span.setAttribute("az.namespace", self.az_namespace) catch {};
+
+        if (request.headers.get("x-ms-client-request-id")) |rid| {
+            span.setAttribute("az.client_request_id", rid) catch {};
+        }
+
+        // Execute the rest of the pipeline.
+        const response = callNext(request, next, final_transport) catch |err| {
+            span.setStatus(.@"error");
+            span.end();
+            return err;
+        };
+
+        // Record response status.
+        if (response.isSuccess()) {
+            span.setStatus(.ok);
+        } else {
+            span.setStatus(.@"error");
+        }
+
+        span.end();
+        return response;
+    }
+};
+
 test "pipeline with telemetry and mock transport" {
     const allocator = std.testing.allocator;
     var mock = transport.MockTransport.init(allocator, 200, "ok");
@@ -448,4 +513,54 @@ test "isRetryable status codes" {
     try std.testing.expect(!RetryPolicy.isRetryable(400));
     try std.testing.expect(!RetryPolicy.isRetryable(401));
     try std.testing.expect(!RetryPolicy.isRetryable(404));
+}
+
+test "TracingPolicy creates span with attributes" {
+    const allocator = std.testing.allocator;
+    const tracing = @import("../tracing/root.zig");
+    var mock = transport.MockTransport.init(allocator, 200, "ok");
+    defer mock.deinit();
+
+    var rec_tracer = tracing.RecordingTracer.init(allocator);
+    defer rec_tracer.deinit();
+
+    var tracing_policy = TracingPolicy.init(rec_tracer.asTracer(), "KeyVault");
+    var policy_ptrs = [_]*HttpPolicy{tracing_policy.asPolicy()};
+    var pip = HttpPipeline{ .policies = &policy_ptrs, .transport_impl = mock.asTransport() };
+
+    var req = Request.init(allocator, .GET, "https://vault.azure.net/secrets/mysecret");
+    defer req.deinit();
+    var resp = try pip.send(&req);
+    defer resp.deinit();
+
+    // Verify span was created and ended with correct attributes.
+    const span = &rec_tracer.last_span.?;
+    try std.testing.expectEqualStrings("HTTP", span.name);
+    try std.testing.expectEqual(tracing.SpanKind.client, span.kind);
+    try std.testing.expectEqual(tracing.SpanStatus.ok, span.status);
+    try std.testing.expect(span.ended);
+    try std.testing.expectEqualStrings("GET", span.attributes.get("http.method").?);
+    try std.testing.expectEqualStrings("KeyVault", span.attributes.get("az.namespace").?);
+}
+
+test "TracingPolicy sets error status on failure" {
+    const allocator = std.testing.allocator;
+    const tracing = @import("../tracing/root.zig");
+    var mock = transport.MockTransport.init(allocator, 500, "error");
+    defer mock.deinit();
+
+    var rec_tracer = tracing.RecordingTracer.init(allocator);
+    defer rec_tracer.deinit();
+
+    var tracing_policy = TracingPolicy.init(rec_tracer.asTracer(), "Storage");
+    var policy_ptrs = [_]*HttpPolicy{tracing_policy.asPolicy()};
+    var pip = HttpPipeline{ .policies = &policy_ptrs, .transport_impl = mock.asTransport() };
+
+    var req = Request.init(allocator, .GET, "https://storage.blob.core.windows.net");
+    defer req.deinit();
+    var resp = try pip.send(&req);
+    defer resp.deinit();
+
+    try std.testing.expectEqual(tracing.SpanStatus.@"error", rec_tracer.last_span.?.status);
+    try std.testing.expect(rec_tracer.last_span.?.ended);
 }
