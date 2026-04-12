@@ -108,7 +108,10 @@ pub const SecretClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.SetSecretFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.SetSecretFailed;
+        }
 
         return parseSecret(allocator, name, resp.body);
     }
@@ -129,7 +132,10 @@ pub const SecretClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.DeleteSecretFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.DeleteSecretFailed;
+        }
 
         return .{ .name = name };
     }
@@ -168,7 +174,10 @@ pub const SecretClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.RecoverFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.RecoverFailed;
+        }
 
         return parseSecret(allocator, name, resp.body);
     }
@@ -282,8 +291,7 @@ fn parseSecretListPage(allocator: std.mem.Allocator, body: []const u8) !core.pag
         return .{ .items = try allocator.alloc([]const u8, 0) };
     defer parsed.deinit();
 
-    const obj = if (parsed.value == .object) parsed.value.object else
-        return .{ .items = try allocator.alloc([]const u8, 0) };
+    const obj = if (parsed.value == .object) parsed.value.object else return .{ .items = try allocator.alloc([]const u8, 0) };
 
     // Extract next_link for pagination.
     var next_link: ?[]u8 = null;
