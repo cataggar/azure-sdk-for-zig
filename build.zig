@@ -33,7 +33,7 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    _ = b.addModule("azure_storage_blobs", .{
+    const blobs_mod = b.addModule("azure_storage_blobs", .{
         .root_source_file = b.path("src/azure/storage/blobs/root.zig"),
         .target = target,
         .imports = &.{
@@ -143,13 +143,24 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    _ = b.addModule("azure_messaging_eventhubs", .{
+    const eventhubs_mod = b.addModule("azure_messaging_eventhubs", .{
         .root_source_file = b.path("src/azure/messaging/eventhubs/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
             .{ .name = "azure_identity", .module = identity_mod },
             .{ .name = "uamqp", .module = uamqp_mod },
+        },
+    });
+
+    _ = b.addModule("azure_messaging_eventhubs_checkpointstore_blob", .{
+        .root_source_file = b.path("src/azure/messaging/eventhubs/checkpoint_store.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_identity", .module = identity_mod },
+            .{ .name = "azure_storage_blobs", .module = blobs_mod },
+            .{ .name = "azure_messaging_eventhubs", .module = eventhubs_mod },
         },
     });
 
@@ -281,6 +292,24 @@ pub fn build(b: *std.Build) void {
                     .{ .name = "azure_core", .module = core_mod },
                     .{ .name = "azure_identity", .module = identity_mod },
                     .{ .name = "uamqp", .module = uamqp_mod },
+                },
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(t).step);
+    }
+
+    // EventHubs checkpoint store tests — needs core + identity + blobs + eventhubs
+    {
+        const t = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/azure/messaging/eventhubs/checkpoint_store.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "azure_core", .module = core_mod },
+                    .{ .name = "azure_identity", .module = identity_mod },
+                    .{ .name = "azure_storage_blobs", .module = blobs_mod },
+                    .{ .name = "azure_messaging_eventhubs", .module = eventhubs_mod },
                 },
             }),
         });
