@@ -68,6 +68,15 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    _ = b.addModule("azure_data_cosmos", .{
+        .root_source_file = b.path("src/azure/data/cosmos/root.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_identity", .module = identity_mod },
+        },
+    });
+
     _ = b.addModule("azure_keyvault_keys", .{
         .root_source_file = b.path("src/azure/keyvault/keys/root.zig"),
         .target = target,
@@ -281,6 +290,7 @@ pub fn build(b: *std.Build) void {
         "src/azure/storage/files/shares/root.zig",
         "src/azure/storage/files/datalake/root.zig",
         "src/azure/data/appconfiguration/root.zig",
+        "src/azure/data/cosmos/root.zig",
         "src/azure/attestation/root.zig",
     };
     for (service_test_sources_ci) |src| {
