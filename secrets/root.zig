@@ -2,10 +2,9 @@ const std = @import("std");
 const core = @import("azure_core");
 
 const Context = core.context.Context;
-const PagedResponse = core.response.PagedResponse;
 
-/// A page of secret names from listSecrets.
-pub const SecretListPage = PagedResponse([]const u8);
+/// Pager type returned by `listSecrets`.
+pub const SecretNamePager = core.pager.PipelinePager([]const u8);
 
 // ─────────────────────────── Models ───────────────────────────
 
@@ -208,27 +207,29 @@ pub const SecretClient = struct {
         return buf;
     }
 
-    /// GET /secrets?api-version=... — returns a paged list of secret names.
+    /// GET /secrets?api-version=... — returns a pager over secret names.
+    ///
+    /// Usage:
+    ///   var pager = try client.listSecrets(allocator);
+    ///   defer pager.deinit();
+    ///   while (try pager.next()) |names| {
+    ///       defer allocator.free(names);
+    ///       for (names) |name| { defer allocator.free(name); ... }
+    ///   }
     pub fn listSecrets(
         self: *SecretClient,
         allocator: std.mem.Allocator,
-    ) !SecretListPage {
+    ) !SecretNamePager {
         const url = try self.buildUrl(allocator, &.{"secrets"}, null);
         defer allocator.free(url);
 
-        var req = core.http.Request.init(allocator, .GET, url);
-        defer req.deinit();
-        try req.setHeader("Accept", "application/json");
-
-        var resp = try self.pipeline.send(&req);
-        defer resp.deinit();
-
-        if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
-            return error.ListSecretsFailed;
-        }
-
-        return parseSecretList(allocator, resp.body);
+        return SecretNamePager.init(
+            self.pipeline,
+            url,
+            allocator,
+            &parseSecretListPage,
+            "application/json",
+        );
     }
 };
 
@@ -274,18 +275,18 @@ fn parseSecret(allocator: std.mem.Allocator, name: []const u8, body: []const u8)
     return secret;
 }
 
-/// Parse a JSON list-secrets response.
+/// Parse a JSON list-secrets response into a PageResult.
 /// Format: {"value":[{"id":"https://.../secrets/name1"}, ...], "nextLink":"https://..."}
-fn parseSecretList(allocator: std.mem.Allocator, body: []const u8) !SecretListPage {
+fn parseSecretListPage(allocator: std.mem.Allocator, body: []const u8) !core.pager.PageResult([]const u8) {
     const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{}) catch
-        return .{ .items = try allocator.alloc([]const u8, 0), .allocator = allocator };
+        return .{ .items = try allocator.alloc([]const u8, 0) };
     defer parsed.deinit();
 
     const obj = if (parsed.value == .object) parsed.value.object else
-        return .{ .items = try allocator.alloc([]const u8, 0), .allocator = allocator };
+        return .{ .items = try allocator.alloc([]const u8, 0) };
 
     // Extract next_link for pagination.
-    var next_link: ?[]const u8 = null;
+    var next_link: ?[]u8 = null;
     if (obj.get("nextLink")) |nl| {
         if (nl == .string and nl.string.len > 0) {
             next_link = try allocator.dupe(u8, nl.string);
@@ -295,7 +296,7 @@ fn parseSecretList(allocator: std.mem.Allocator, body: []const u8) !SecretListPa
     // Extract secret IDs/names from the "value" array.
     const values_arr = if (obj.get("value")) |v| (if (v == .array) v.array.items else null) else null;
     const items_slice = values_arr orelse
-        return .{ .items = try allocator.alloc([]const u8, 0), .next_link = next_link, .allocator = allocator };
+        return .{ .items = try allocator.alloc([]const u8, 0), .next_link = next_link };
 
     var names = try allocator.alloc([]const u8, items_slice.len);
     for (items_slice, 0..) |item, i| {
@@ -314,7 +315,7 @@ fn parseSecretList(allocator: std.mem.Allocator, body: []const u8) !SecretListPa
         names[i] = try allocator.dupe(u8, "");
     }
 
-    return .{ .items = names, .next_link = next_link, .allocator = allocator };
+    return .{ .items = names, .next_link = next_link };
 }
 
 // ─────────────────────────── Tests ───────────────────────────
@@ -453,15 +454,20 @@ test "SecretClient listSecrets" {
         .{},
     );
 
-    var page = try client.listSecrets(allocator);
+    var pager = try client.listSecrets(allocator);
+    defer pager.deinit();
+
+    const names = (try pager.next()) orelse return error.ExpectedPage;
     defer {
-        for (page.items) |name| allocator.free(name);
-        allocator.free(page.items);
-        if (page.next_link) |nl| allocator.free(nl);
+        for (names) |name| allocator.free(name);
+        allocator.free(names);
     }
 
-    try std.testing.expectEqual(@as(usize, 2), page.items.len);
-    try std.testing.expectEqualStrings("secret1", page.items[0]);
-    try std.testing.expectEqualStrings("secret2", page.items[1]);
-    try std.testing.expect(page.hasMore());
+    try std.testing.expectEqual(@as(usize, 2), names.len);
+    try std.testing.expectEqualStrings("secret1", names[0]);
+    try std.testing.expectEqualStrings("secret2", names[1]);
+
+    // Pager should have a next_url set from nextLink (but we'd need a
+    // SequenceMockTransport to actually fetch the second page).
+    try std.testing.expect(pager.next_url != null);
 }
