@@ -193,6 +193,7 @@ pub const BearerTokenAuthPolicy = struct {
     allocator: std.mem.Allocator,
     cached_token: ?[]const u8 = null,
     cached_expires_on: i64 = 0,
+    cached_auth_value: ?[]const u8 = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -213,6 +214,7 @@ pub const BearerTokenAuthPolicy = struct {
 
     pub fn deinit(self: *BearerTokenAuthPolicy) void {
         if (self.cached_token) |t| self.allocator.free(t);
+        if (self.cached_auth_value) |v| self.allocator.free(v);
     }
 
     fn processImpl(
@@ -241,12 +243,14 @@ pub const BearerTokenAuthPolicy = struct {
             token_str = self.cached_token;
         }
 
-        const auth_value = try std.fmt.allocPrint(
-            request.allocator,
+        // Build and cache the "Bearer {token}" header value.
+        if (self.cached_auth_value) |old| self.allocator.free(old);
+        self.cached_auth_value = try std.fmt.allocPrint(
+            self.allocator,
             "Bearer {s}",
             .{token_str.?},
         );
-        try request.setHeader("Authorization", auth_value);
+        try request.setHeader("Authorization", self.cached_auth_value.?);
         return callNext(request, next, final_transport);
     }
 };
