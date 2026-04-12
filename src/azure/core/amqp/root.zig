@@ -2,7 +2,6 @@
 ///!
 ///! Re-exports the uamqp library types and provides Azure-specific
 ///! convenience wrappers for Connection, Session, Link, and Message.
-
 const std = @import("std");
 pub const uamqp = @import("uamqp");
 

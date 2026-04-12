@@ -2,7 +2,6 @@
 ///!
 ///! Provides DefaultAzureCredential and individual credential types for
 ///! authenticating with Azure services.
-
 const core = @import("azure_core");
 
 pub const TokenCredential = core.credentials.TokenCredential;

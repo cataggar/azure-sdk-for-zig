@@ -129,8 +129,7 @@ fn parseTestPage(allocator: std.mem.Allocator, body: []const u8) !PageResult([]c
         return .{ .items = try allocator.alloc([]const u8, 0) };
     defer parsed.deinit();
 
-    const obj = if (parsed.value == .object) parsed.value.object else
-        return .{ .items = try allocator.alloc([]const u8, 0) };
+    const obj = if (parsed.value == .object) parsed.value.object else return .{ .items = try allocator.alloc([]const u8, 0) };
 
     var next_link: ?[]u8 = null;
     if (obj.get("nextLink")) |nl| {
@@ -187,11 +186,11 @@ test "PipelinePager single page" {
 test "PipelinePager multiple pages" {
     const allocator = std.testing.allocator;
     const responses = [_]transport.SequenceMockTransport.CannedResponse{
-        .{ .status = 200, .body =
-            \\{"value":["page1-a"],"nextLink":"https://example.com/items?page=2"}
+        .{ .status = 200, .body = 
+        \\{"value":["page1-a"],"nextLink":"https://example.com/items?page=2"}
         },
-        .{ .status = 200, .body =
-            \\{"value":["page2-a","page2-b"]}
+        .{ .status = 200, .body = 
+        \\{"value":["page2-a","page2-b"]}
         },
     };
     var seq = transport.SequenceMockTransport.init(allocator, &responses);

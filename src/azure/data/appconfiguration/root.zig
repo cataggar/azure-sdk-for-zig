@@ -68,7 +68,10 @@ pub const ConfigurationClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.SettingNotFound; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.SettingNotFound;
+        }
 
         return parseSetting(allocator, key, resp.body);
     }
@@ -103,7 +106,10 @@ pub const ConfigurationClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.SetSettingFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.SetSettingFailed;
+        }
 
         return parseSetting(allocator, key, resp.body);
     }
@@ -127,7 +133,10 @@ pub const ConfigurationClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.DeleteSettingFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.DeleteSettingFailed;
+        }
     }
 
     /// GET /kv?key={filter}&api-version=... — returns a pager over settings.
@@ -203,8 +212,7 @@ fn parseSettingListPage(allocator: std.mem.Allocator, body: []const u8) !core.pa
         return .{ .items = try allocator.alloc(ConfigurationSetting, 0) };
     defer parsed.deinit();
 
-    const obj = if (parsed.value == .object) parsed.value.object else
-        return .{ .items = try allocator.alloc(ConfigurationSetting, 0) };
+    const obj = if (parsed.value == .object) parsed.value.object else return .{ .items = try allocator.alloc(ConfigurationSetting, 0) };
 
     var next_link: ?[]u8 = null;
     if (obj.get("@nextLink")) |nl| {

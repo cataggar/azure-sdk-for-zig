@@ -2,7 +2,6 @@
 ///!
 ///! Replaces libxml2 for parsing Azure Storage and other service XML responses.
 ///! Provides a simple pull-parser wrapper for extracting element text content.
-
 const std = @import("std");
 const xml = @import("xml");
 

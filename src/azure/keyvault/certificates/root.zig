@@ -57,7 +57,10 @@ pub const CertificateClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.CertificateNotFound; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.CertificateNotFound;
+        }
 
         return parseCertificate(allocator, name, resp.body);
     }
@@ -89,7 +92,10 @@ pub const CertificateClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.CreateCertificateFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.CreateCertificateFailed;
+        }
 
         return parseCertificate(allocator, name, resp.body);
     }
@@ -109,7 +115,10 @@ pub const CertificateClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.DeleteCertificateFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.DeleteCertificateFailed;
+        }
     }
 
     fn buildUrl(self: *CertificateClient, allocator: std.mem.Allocator, path_segments: []const []const u8) ![]u8 {

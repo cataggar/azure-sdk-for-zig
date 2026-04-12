@@ -2,7 +2,6 @@
 ///!
 ///! Provides `RequestActivityPolicy` that creates spans for HTTP requests.
 ///! Uses comptime feature flags to enable/disable without runtime cost.
-
 const std = @import("std");
 
 pub const Config = struct {

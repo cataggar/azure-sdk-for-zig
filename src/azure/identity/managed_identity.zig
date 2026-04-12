@@ -77,7 +77,10 @@ pub const ManagedIdentityCredential = struct {
         var resp = try self.transport.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.AuthenticationFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.AuthenticationFailed;
+        }
 
         const parse = @import("client_secret.zig");
         return parse.parseTokenResponse(allocator, resp.body);
@@ -86,9 +89,7 @@ pub const ManagedIdentityCredential = struct {
 
 test "ManagedIdentityCredential" {
     const allocator = std.testing.allocator;
-    var mock = core.http.MockTransport.init(
-        allocator,
-        200,
+    var mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"msi-token","expires_in":86400}
     );
     defer mock.deinit();
@@ -106,9 +107,7 @@ test "ManagedIdentityCredential" {
 
 test "ManagedIdentityCredential with client_id" {
     const allocator = std.testing.allocator;
-    var mock = core.http.MockTransport.init(
-        allocator,
-        200,
+    var mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"msi-ua","expires_in":3600}
     );
     defer mock.deinit();

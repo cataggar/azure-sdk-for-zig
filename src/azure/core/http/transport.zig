@@ -297,7 +297,8 @@ test "response isSuccess" {
 test "mock transport" {
     const allocator = std.testing.allocator;
     var mock = MockTransport.init(allocator, 200, "{\"status\":\"ok\"}");
-    defer mock.deinit();    var req = Request.init(allocator, .POST, "https://vault.azure.net/secrets/mysecret");
+    defer mock.deinit();
+    var req = Request.init(allocator, .POST, "https://vault.azure.net/secrets/mysecret");
     defer req.deinit();
     var resp = try mock.asTransport().send(&req);
     defer resp.deinit();
@@ -305,4 +306,3 @@ test "mock transport" {
     try std.testing.expectEqualStrings("{\"status\":\"ok\"}", resp.body);
     try std.testing.expectEqual(Method.POST, mock.last_method.?);
 }
-

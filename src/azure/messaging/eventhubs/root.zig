@@ -1,7 +1,6 @@
 ///! Azure Event Hubs client — producer and consumer.
 ///!
 ///! Built on top of azure-core-amqp.
-
 const std = @import("std");
 const core = @import("azure_core");
 const uamqp = @import("uamqp");

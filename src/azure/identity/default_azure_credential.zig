@@ -125,14 +125,12 @@ test "ChainedTokenCredential uses first success" {
     const allocator = std.testing.allocator;
     var mock_fail = core.http.MockTransport.init(allocator, 401, "fail");
     defer mock_fail.deinit();
-    var mock_ok = core.http.MockTransport.init(
-        allocator,
-        200,
+    var mock_ok = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"chained-ok","expires_in":3600}
     );
     defer mock_ok.deinit();
 
-    const client_secret= @import("client_secret.zig");
+    const client_secret = @import("client_secret.zig");
     // First credential will fail (401).
     var cred1 = client_secret.ClientSecretCredential.init(allocator, mock_fail.asTransport(), "t", "c", "s");
     // Second will succeed.

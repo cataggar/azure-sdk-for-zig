@@ -68,7 +68,10 @@ pub const KeyClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.CreateKeyFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.CreateKeyFailed;
+        }
 
         return parseKey(allocator, name, resp.body);
     }
@@ -89,7 +92,10 @@ pub const KeyClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.KeyNotFound; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.KeyNotFound;
+        }
 
         return parseKey(allocator, name, resp.body);
     }
@@ -109,7 +115,10 @@ pub const KeyClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.DeleteKeyFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.DeleteKeyFailed;
+        }
     }
 
     /// GET /keys?api-version=... — returns a pager over keys.
@@ -244,7 +253,10 @@ pub const CryptographyClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.CryptoOperationFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.CryptoOperationFailed;
+        }
 
         return allocator.dupe(u8, resp.body);
     }
@@ -293,8 +305,7 @@ fn parseKeyListPage(allocator: std.mem.Allocator, body: []const u8) !core.pager.
         return .{ .items = try allocator.alloc(KeyVaultKey, 0) };
     defer parsed.deinit();
 
-    const obj = if (parsed.value == .object) parsed.value.object else
-        return .{ .items = try allocator.alloc(KeyVaultKey, 0) };
+    const obj = if (parsed.value == .object) parsed.value.object else return .{ .items = try allocator.alloc(KeyVaultKey, 0) };
 
     var next_link: ?[]u8 = null;
     if (obj.get("nextLink")) |nl| {

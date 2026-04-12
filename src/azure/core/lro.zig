@@ -3,7 +3,6 @@
 ///! Azure APIs that return HTTP 202 Accepted include headers like
 ///! `Operation-Location` or `Azure-AsyncOperation` with URLs to poll.
 ///! This module supports multiple polling strategies and auto-detection.
-
 const std = @import("std");
 const http = @import("http/transport.zig");
 const pipeline_mod = @import("http/pipeline.zig");

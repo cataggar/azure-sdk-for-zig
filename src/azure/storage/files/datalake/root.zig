@@ -44,7 +44,10 @@ pub const DataLakeFileSystemClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.CreateFileSystemFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.CreateFileSystemFailed;
+        }
     }
 
     /// DELETE /filesystem?resource=filesystem
@@ -62,7 +65,10 @@ pub const DataLakeFileSystemClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.DeleteFileSystemFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.DeleteFileSystemFailed;
+        }
     }
 
     pub fn getFileClient(self: *DataLakeFileSystemClient, file_path: []const u8) DataLakeFileClient {
@@ -100,7 +106,10 @@ pub const DataLakeFileClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.CreateFileFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.CreateFileFailed;
+        }
     }
 
     /// PATCH /filesystem/path?action=append&position={pos}
@@ -120,7 +129,10 @@ pub const DataLakeFileClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.AppendFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.AppendFailed;
+        }
     }
 
     /// PATCH /filesystem/path?action=flush&position={pos}
@@ -138,7 +150,10 @@ pub const DataLakeFileClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.FlushFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.FlushFailed;
+        }
     }
 
     /// GET /filesystem/path
@@ -156,7 +171,10 @@ pub const DataLakeFileClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.ReadFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.ReadFailed;
+        }
 
         return allocator.dupe(u8, resp.body);
     }
@@ -176,7 +194,10 @@ pub const DataLakeFileClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.DeleteFileFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.DeleteFileFailed;
+        }
     }
 };
 

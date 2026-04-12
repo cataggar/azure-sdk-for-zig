@@ -43,7 +43,8 @@ pub const StorageSharedKeyCredential = struct {
         const resource = extractResource(request.url, self.account_name);
 
         // Simplified canonical string (Blob service format).
-        const string_to_sign = try std.fmt.allocPrint(allocator,
+        const string_to_sign = try std.fmt.allocPrint(
+            allocator,
             "{s}\n\n\n{s}\n\n{s}\n\n\n\n\n\n\nx-ms-date:{s}\nx-ms-version:{s}\n/{s}{s}",
             .{ method_str, content_length, content_type, date, ms_version, self.account_name, resource },
         );
@@ -102,7 +103,8 @@ pub const SasBuilder = struct {
         defer allocator.free(key);
 
         // String to sign for account SAS.
-        const string_to_sign = try std.fmt.allocPrint(allocator,
+        const string_to_sign = try std.fmt.allocPrint(
+            allocator,
             "{s}\n{s}\n{s}\n{s}\n\n{s}\n\n{s}\n",
             .{ self.permissions, self.services, self.resource_types, self.expiry, self.protocol, self.version },
         );

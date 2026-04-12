@@ -1,7 +1,6 @@
 ///! Azure SDK Test Framework — mock transport, recording/playback, helpers.
 ///!
 ///! Built on `std.testing` with Azure-specific utilities.
-
 const std = @import("std");
 const core = @import("azure_core");
 
