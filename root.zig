@@ -44,7 +44,10 @@ pub const ShareClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.CreateShareFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.CreateShareFailed;
+        }
     }
 
     /// DELETE /share?restype=share
@@ -62,7 +65,10 @@ pub const ShareClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.DeleteShareFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.DeleteShareFailed;
+        }
     }
 
     pub fn getDirectoryClient(self: *ShareClient, directory_name: []const u8) ShareDirectoryClient {
@@ -101,7 +107,10 @@ pub const ShareDirectoryClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.CreateDirectoryFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.CreateDirectoryFailed;
+        }
     }
 
     /// DELETE /share/directory?restype=directory
@@ -119,7 +128,10 @@ pub const ShareDirectoryClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.DeleteDirectoryFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.DeleteDirectoryFailed;
+        }
     }
 
     pub fn getFileClient(self: *ShareDirectoryClient, file_name: []const u8) ShareFileClient {
@@ -160,7 +172,10 @@ pub const ShareFileClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.CreateFileFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.CreateFileFailed;
+        }
     }
 
     /// PUT /share/dir/file?comp=range
@@ -181,7 +196,10 @@ pub const ShareFileClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.UploadFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.UploadFailed;
+        }
     }
 
     /// GET /share/dir/file
@@ -195,7 +213,10 @@ pub const ShareFileClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.DownloadFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.DownloadFailed;
+        }
 
         return allocator.dupe(u8, resp.body);
     }
@@ -211,7 +232,10 @@ pub const ShareFileClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) { _ = core.errors.errorFromResponse(resp); return error.DeleteFileFailed; }
+        if (!resp.isSuccess()) {
+            _ = core.errors.errorFromResponse(resp);
+            return error.DeleteFileFailed;
+        }
     }
 
     fn buildFileUrl(self: *ShareFileClient, allocator: std.mem.Allocator) ![]u8 {
