@@ -144,6 +144,34 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    const kusto_common_mod = b.addModule("azure_kusto_common", .{
+        .root_source_file = b.path("src/azure/kusto/common.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_identity", .module = identity_mod },
+        },
+    });
+
+    _ = b.addModule("azure_kusto_data", .{
+        .root_source_file = b.path("src/azure/kusto/data/root.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_identity", .module = identity_mod },
+            .{ .name = "azure_kusto_common", .module = kusto_common_mod },
+        },
+    });
+
+    _ = b.addModule("azure_kusto_ingest", .{
+        .root_source_file = b.path("src/azure/kusto/ingest/root.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_kusto_common", .module = kusto_common_mod },
+        },
+    });
+
     _ = b.addModule("azure_core_amqp", .{
         .root_source_file = b.path("src/azure/core/amqp/root.zig"),
         .target = target,
@@ -368,6 +396,55 @@ pub fn build(b: *std.Build) void {
                     .{ .name = "azure_identity", .module = identity_mod },
                     .{ .name = "uamqp", .module = uamqp_mod },
                     .{ .name = "azure_messaging_common", .module = messaging_common_mod },
+                },
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(t).step);
+    }
+
+    // Kusto common tests — needs core + identity
+    {
+        const t = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/azure/kusto/common.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "azure_core", .module = core_mod },
+                    .{ .name = "azure_identity", .module = identity_mod },
+                },
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(t).step);
+    }
+
+    // Kusto data tests — needs core + identity + kusto_common
+    {
+        const t = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/azure/kusto/data/root.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "azure_core", .module = core_mod },
+                    .{ .name = "azure_identity", .module = identity_mod },
+                    .{ .name = "azure_kusto_common", .module = kusto_common_mod },
+                },
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(t).step);
+    }
+
+    // Kusto ingest tests — needs core + kusto_common
+    {
+        const t = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/azure/kusto/ingest/root.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "azure_core", .module = core_mod },
+                    .{ .name = "azure_kusto_common", .module = kusto_common_mod },
                 },
             }),
         });
