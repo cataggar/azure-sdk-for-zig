@@ -1,6 +1,14 @@
 const std = @import("std");
 const core = @import("azure_core");
 
+/// Pager type returned by `listSettings`.
+pub const AdminSettingPager = core.pager.PipelinePager(AdminSetting);
+
+pub const AdminSetting = struct {
+    name: []const u8,
+    value: ?[]const u8 = null,
+};
+
 // ──────────────────────── BackupClient ────────────────────────
 
 pub const BackupClientOptions = struct {
@@ -200,6 +208,27 @@ pub const SettingsClient = struct {
             return error.UpdateSettingFailed;
         }
     }
+
+    /// GET /settings?api-version=... — returns a pager over admin settings.
+    pub fn listSettings(
+        self: *SettingsClient,
+        allocator: std.mem.Allocator,
+    ) !AdminSettingPager {
+        const url = try std.fmt.allocPrint(
+            allocator,
+            "{s}/settings?api-version={s}",
+            .{ self.vault_url, self.api_version },
+        );
+        defer allocator.free(url);
+
+        return AdminSettingPager.init(
+            self.pipeline,
+            url,
+            allocator,
+            &parseAdminSettingListPage,
+            "application/json",
+        );
+    }
 };
 
 // ─────────────────────────── Parsing ──────────────────────────
@@ -230,6 +259,32 @@ fn parseSettingValue(allocator: std.mem.Allocator, body: []const u8) ![]const u8
     }
 
     return error.ParseFailed;
+}
+
+fn parseAdminSettingListPage(allocator: std.mem.Allocator, body: []const u8) !core.pager.PageResult(AdminSetting) {
+    const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{}) catch
+        return .{ .items = try allocator.alloc(AdminSetting, 0) };
+    defer parsed.deinit();
+
+    const obj = if (parsed.value == .object) parsed.value.object else return .{ .items = try allocator.alloc(AdminSetting, 0) };
+
+    const values = if (obj.get("value")) |v| (if (v == .array) v.array.items else null) else null;
+    const items = values orelse return .{ .items = try allocator.alloc(AdminSetting, 0) };
+
+    var result = try allocator.alloc(AdminSetting, items.len);
+    for (items, 0..) |item, i| {
+        var setting = AdminSetting{ .name = "" };
+        if (item == .object) {
+            if (item.object.get("name")) |n| {
+                if (n == .string) setting.name = try allocator.dupe(u8, n.string);
+            }
+            if (item.object.get("value")) |v| {
+                if (v == .string) setting.value = try allocator.dupe(u8, v.string);
+            }
+        }
+        result[i] = setting;
+    }
+    return .{ .items = result };
 }
 
 // ─────────────────────────── Tests ────────────────────────────
