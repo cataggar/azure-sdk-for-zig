@@ -89,7 +89,7 @@ pub const KustoClient = struct {
 
     /// Auto-routing: commands starting with `.` go to mgmt, others to query.
     pub fn execute(self: *KustoClient, allocator: std.mem.Allocator, database: []const u8, query_or_command: []const u8) !KustoResponseDataSet {
-        const trimmed = std.mem.trimLeft(u8, query_or_command, " \t\n\r");
+        const trimmed = std.mem.trimStart(u8, query_or_command, " \t\n\r");
         if (trimmed.len > 0 and trimmed[0] == '.') {
             return self.executeMgmt(allocator, database, query_or_command, null);
         }
