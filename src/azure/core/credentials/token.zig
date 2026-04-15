@@ -30,6 +30,12 @@ pub const TokenCredential = struct {
     }
 };
 
+/// Get the current Unix timestamp in seconds using a single-threaded Io instance.
+fn currentTimestamp() i64 {
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    return std.Io.Timestamp.now(threaded.io(), .real).toSeconds();
+}
+
 /// Wraps any TokenCredential with in-memory token caching.
 ///
 /// Returns the cached token if it is still valid (with a buffer before
@@ -66,7 +72,7 @@ pub const CachedTokenCredential = struct {
         ctx: context_mod.Context,
     ) anyerror!AccessToken {
         const self: *CachedTokenCredential = @fieldParentPtr("credential", cred);
-        const now = std.time.timestamp();
+        const now = currentTimestamp();
 
         // Return cached token if still valid.
         if (self.cached_token) |token| {
@@ -114,7 +120,7 @@ test "CachedTokenCredential caches token" {
             call_count += 1;
             const token = try allocator.dupe(u8, "test-token");
             // Expires far in the future.
-            return .{ .token = token, .expires_on = std.time.timestamp() + 7200 };
+            return .{ .token = token, .expires_on = currentTimestamp() + 7200 };
         }
     };
 

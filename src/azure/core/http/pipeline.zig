@@ -5,6 +5,16 @@ const Request = transport.Request;
 const Response = transport.Response;
 const HttpTransport = transport.HttpTransport;
 
+fn nanoTimestamp() i128 {
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    return std.Io.Timestamp.now(threaded.io(), .real).toNanoseconds();
+}
+
+fn sleepMs(ms: u64) void {
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    threaded.io().sleep(.fromMilliseconds(@intCast(ms)), .real) catch {};
+}
+
 /// A single stage in the HTTP pipeline.
 ///
 /// Policies form a chain: each receives the request, may modify it,
@@ -133,7 +143,7 @@ pub const RetryPolicy = struct {
     ) !Response {
         const self: *RetryPolicy = @fieldParentPtr("policy", policy);
         var attempt: u32 = 0;
-        var prng = std.Random.DefaultPrng.init(@truncate(@as(u128, @bitCast(std.time.nanoTimestamp()))));
+        var prng = std.Random.DefaultPrng.init(@truncate(@as(u128, @bitCast(nanoTimestamp()))));
         while (true) {
             const result = callNext(request, next, final_transport);
             if (result) |resp| {
@@ -149,7 +159,7 @@ pub const RetryPolicy = struct {
                 if (retry_after_ms > 0) {
                     // Honor server's Retry-After, capped at max_delay.
                     const delay = @min(retry_after_ms, self.max_delay_ms);
-                    std.Thread.sleep(delay * std.time.ns_per_ms);
+                    sleepMs(delay);
                 } else {
                     const base_delay = @min(
                         self.initial_delay_ms * (@as(u64, 1) << @intCast(attempt - 1)),
@@ -157,7 +167,7 @@ pub const RetryPolicy = struct {
                     );
                     const jitter = prng.random().uintLessThan(u64, @max(base_delay, 1));
                     const delay = base_delay / 2 + jitter / 2;
-                    std.Thread.sleep(delay * std.time.ns_per_ms);
+                    sleepMs(delay);
                 }
             } else |err| {
                 if (attempt >= self.max_retries) return err;
@@ -168,7 +178,7 @@ pub const RetryPolicy = struct {
                 );
                 const jitter = prng.random().uintLessThan(u64, @max(base_delay, 1));
                 const delay = base_delay / 2 + jitter / 2;
-                std.Thread.sleep(delay * std.time.ns_per_ms);
+                sleepMs(delay);
             }
         }
     }
@@ -274,7 +284,7 @@ pub const RequestIdPolicy = struct {
         final_transport: *HttpTransport,
     ) !Response {
         const uuid_mod = @import("../uuid.zig");
-        const seed: u64 = @truncate(@as(u128, @bitCast(std.time.nanoTimestamp())));
+        const seed: u64 = @truncate(@as(u128, @bitCast(nanoTimestamp())));
         var prng = std.Random.DefaultPrng.init(seed);
         const id = uuid_mod.Uuid.init(prng.random());
         const id_str = id.toString();

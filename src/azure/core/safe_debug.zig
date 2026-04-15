@@ -76,13 +76,12 @@ test "redactValue" {
 
 test "formatField redacts sensitive" {
     var buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const writer = fbs.writer();
+    var writer: std.Io.Writer = .fixed(&buf);
 
-    try formatField(writer, "token", "eyJhbGciOiJ...");
-    try std.testing.expectEqualStrings("token=***", fbs.getWritten());
+    try formatField(&writer, "token", "eyJhbGciOiJ...");
+    try std.testing.expectEqualStrings("token=***", buf[0..writer.end]);
 
-    fbs.reset();
-    try formatField(writer, "name", "my-secret");
-    try std.testing.expectEqualStrings("name=my-secret", fbs.getWritten());
+    writer.end = 0;
+    try formatField(&writer, "name", "my-secret");
+    try std.testing.expectEqualStrings("name=my-secret", buf[0..writer.end]);
 }

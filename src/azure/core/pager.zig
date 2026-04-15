@@ -186,10 +186,10 @@ test "PipelinePager single page" {
 test "PipelinePager multiple pages" {
     const allocator = std.testing.allocator;
     const responses = [_]transport.SequenceMockTransport.CannedResponse{
-        .{ .status = 200, .body = 
+        .{ .status = 200, .body =
         \\{"value":["page1-a"],"nextLink":"https://example.com/items?page=2"}
         },
-        .{ .status = 200, .body = 
+        .{ .status = 200, .body =
         \\{"value":["page2-a","page2-b"]}
         },
     };

@@ -112,8 +112,9 @@ pub const RecordingTransport = struct {
 
     /// Serialize all recorded exchanges to a JSON string.
     pub fn toJson(self: *const RecordingTransport, allocator: std.mem.Allocator) ![]u8 {
-        var buf: std.ArrayList(u8) = .empty;
-        const writer = buf.writer(allocator);
+        var aw: std.Io.Writer.Allocating = .init(allocator);
+        errdefer aw.deinit();
+        const writer = &aw.writer;
         try writer.writeAll("[");
         for (self.exchanges.items, 0..) |ex, i| {
             if (i > 0) try writer.writeAll(",");
@@ -129,7 +130,7 @@ pub const RecordingTransport = struct {
             try writer.writeAll("}");
         }
         try writer.writeAll("\n]\n");
-        return buf.toOwnedSlice(allocator);
+        return aw.toOwnedSlice();
     }
 
     fn sendImpl(transport: *core.http.HttpTransport, request: *core.http.Request) !core.http.Response {

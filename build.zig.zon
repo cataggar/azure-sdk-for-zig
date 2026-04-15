@@ -2,10 +2,10 @@
     .name = .azure_sdk,
     .version = "0.1.0",
     .fingerprint = 0x27c178e43525f3f8,
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .xml = .{
-            .url = "git+https://github.com/cataggar/zig-xml#b97f2ab4868ae3cac9902b33a40d3f31d2df739d",
+            .url = "git+https://github.com/ctaggart/zig-xml.git#c72ff9efbf1c4588ebd3c0d489576ec2dc0b36bb",
             .hash = "xml-0.2.0-ZTbP3yI6AgB9Rpd2hQrueO63ib0Bm6mQiL_WB1t7JAmP",
         },
         .uamqp = .{

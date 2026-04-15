@@ -118,7 +118,12 @@ fn parseTokenResponse(allocator: std.mem.Allocator, body: []const u8) !AccessTok
     }
 
     const token = try allocator.dupe(u8, token_str);
-    return .{ .token = token, .expires_on = std.time.timestamp() + expires_in };
+    return .{ .token = token, .expires_on = currentTimestamp() + expires_in };
+}
+
+fn currentTimestamp() i64 {
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    return std.Io.Timestamp.now(threaded.io(), .real).toSeconds();
 }
 
 test "ClientAssertionCredential getToken" {

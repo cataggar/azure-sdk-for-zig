@@ -56,10 +56,14 @@ pub const ClientCertificateCredential = struct {
         const allocator = self.allocator;
 
         // Read the PEM file.
-        const pem_content = std.fs.cwd().readFileAlloc(
-            allocator,
+        var threaded: std.Io.Threaded = .init_single_threaded;
+        const io = threaded.io();
+        const pem_content = std.Io.Dir.readFileAlloc(
+            .cwd(),
+            io,
             self.certificate_path,
-            1024 * 1024,
+            allocator,
+            .limited(1024 * 1024),
         ) catch return error.CertificateReadFailed;
         defer allocator.free(pem_content);
 

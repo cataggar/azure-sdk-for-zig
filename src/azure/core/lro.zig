@@ -7,6 +7,11 @@ const std = @import("std");
 const http = @import("http/transport.zig");
 const pipeline_mod = @import("http/pipeline.zig");
 
+fn sleepMs(ms: u64) void {
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    threaded.io().sleep(.fromMilliseconds(@intCast(ms)), .real) catch {};
+}
+
 pub const OperationStatus = enum {
     not_started,
     in_progress,
@@ -191,7 +196,7 @@ pub const Poller = struct {
         var polls: u32 = 0;
         while (polls < self.max_polls) : (polls += 1) {
             if (self.poll_interval_ms > 0) {
-                std.Thread.sleep(self.poll_interval_ms * std.time.ns_per_ms);
+                sleepMs(self.poll_interval_ms);
             }
 
             const status = try self.poll();
@@ -373,7 +378,7 @@ pub fn pollUntilDone(
         resp.deinit();
 
         if (poll_interval_ms > 0) {
-            std.Thread.sleep(poll_interval_ms * std.time.ns_per_ms);
+            sleepMs(poll_interval_ms);
         }
     }
     return error.PollTimeout;

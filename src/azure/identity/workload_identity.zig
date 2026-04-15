@@ -95,14 +95,16 @@ pub const WorkloadIdentityCredential = struct {
 };
 
 fn readTokenFile(path: []const u8) ![]const u8 {
-    const file = std.fs.openFileAbsolute(path, .{}) catch
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    const io = threaded.io();
+    const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch
         return error.WorkloadTokenFileNotFound;
-    defer file.close();
+    defer file.close(io);
     // Token files are small (typically < 4KB JWT).
     var buf: [8192]u8 = undefined;
-    const n = file.readAll(&buf) catch return error.WorkloadTokenFileNotFound;
+    const n = file.readStreaming(io, &.{&buf}) catch return error.WorkloadTokenFileNotFound;
     // Trim trailing whitespace/newlines.
-    const trimmed = std.mem.trimRight(u8, buf[0..n], " \t\r\n");
+    const trimmed = std.mem.trimEnd(u8, buf[0..n], " \t\r\n");
     return trimmed;
 }
 
