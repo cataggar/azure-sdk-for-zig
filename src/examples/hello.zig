@@ -30,7 +30,7 @@ pub fn main() void {
         "  4. RetryPolicy        (exponential backoff + jitter, 429/5xx)",
         "  5. BearerTokenAuth    (cached OAuth2 token)",
         "  6. DecompressionPolicy(Accept-Encoding: gzip, deflate)",
-        "  7. Transport           (std.http.Client → Azure)",
+        "  7. Transport           (std.http.Client -> Azure)",
     };
     for (policies) |p| std.debug.print("{s}\n", .{p});
 
