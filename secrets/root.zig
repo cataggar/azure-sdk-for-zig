@@ -313,7 +313,7 @@ fn parseSecretListPage(allocator: std.mem.Allocator, body: []const u8) !core.pag
                 if (id_val == .string) {
                     // Extract name from ID: https://.../secrets/{name}
                     const id_str = id_val.string;
-                    if (std.mem.lastIndexOfScalar(u8, id_str, '/')) |slash| {
+                    if (std.mem.findScalarLast(u8, id_str, '/')) |slash| {
                         names[i] = try allocator.dupe(u8, id_str[slash + 1 ..]);
                         continue;
                     }
@@ -357,7 +357,7 @@ test "SecretClient getSecret" {
     try std.testing.expectEqualStrings("mysecret", secret.name);
     try std.testing.expectEqualStrings("my-secret-value", secret.value.?);
     try std.testing.expectEqual(true, secret.properties.enabled.?);
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "secrets/mysecret?api-version=") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "secrets/mysecret?api-version=") != null);
 }
 
 test "SecretClient setSecret" {
