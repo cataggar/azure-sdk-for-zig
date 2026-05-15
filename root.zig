@@ -337,7 +337,7 @@ test "BlobContainerClient create and listBlobs" {
     );
 
     try container.create(allocator);
-    try std.testing.expect(std.mem.indexOf(u8, mock_create.last_url.?, "mycontainer?restype=container") != null);
+    try std.testing.expect(std.mem.find(u8, mock_create.last_url.?, "mycontainer?restype=container") != null);
 
     // Switch to list mock
     var mock_list = core.http.MockTransport.init(allocator, 200, list_body);
@@ -381,7 +381,7 @@ test "BlobClient download and upload" {
 
     try client.upload(allocator, "hello world", "text/plain");
     try std.testing.expectEqual(core.http.Method.PUT, mock_upload.last_method.?);
-    try std.testing.expect(std.mem.indexOf(u8, mock_upload.last_url.?, "mycontainer/myblob.txt") != null);
+    try std.testing.expect(std.mem.find(u8, mock_upload.last_url.?, "mycontainer/myblob.txt") != null);
 
     // Switch to download mock
     var mock_dl = core.http.MockTransport.init(allocator, 200, "hello world");
