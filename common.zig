@@ -49,7 +49,7 @@ pub const ConnectionProperties = struct {
     /// Get the data management (ingest) URL by prepending `ingest-` to the hostname.
     pub fn getIngestUrl(self: ConnectionProperties, allocator: std.mem.Allocator) ![]u8 {
         // https://cluster.region.kusto.windows.net → https://ingest-cluster.region.kusto.windows.net
-        if (std.mem.indexOf(u8, self.cluster_url, "://")) |scheme_end| {
+        if (std.mem.find(u8, self.cluster_url, "://")) |scheme_end| {
             const scheme = self.cluster_url[0 .. scheme_end + 3];
             const host = self.cluster_url[scheme_end + 3 ..];
             return std.fmt.allocPrint(allocator, "{s}ingest-{s}", .{ scheme, host });
