@@ -68,9 +68,9 @@ pub const StorageSharedKeyCredential = struct {
 fn extractResource(url: []const u8, account_name: []const u8) []const u8 {
     // Find the path after the host.
     _ = account_name;
-    if (std.mem.indexOf(u8, url, "://")) |schema_end| {
+    if (std.mem.find(u8, url, "://")) |schema_end| {
         const after_schema = url[schema_end + 3 ..];
-        if (std.mem.indexOfScalar(u8, after_schema, '/')) |slash| {
+        if (std.mem.findScalar(u8, after_schema, '/')) |slash| {
             return after_schema[slash..];
         }
     }
@@ -173,8 +173,8 @@ test "SasBuilder sign produces HMAC signature" {
     const qs = try sas.sign(allocator, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
     defer allocator.free(qs);
     // Must contain sig= with a base64 value.
-    try std.testing.expect(std.mem.indexOf(u8, qs, "&sig=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, qs, "sp=rl") != null);
+    try std.testing.expect(std.mem.find(u8, qs, "&sig=") != null);
+    try std.testing.expect(std.mem.find(u8, qs, "sp=rl") != null);
 }
 
 test "SasBuilder toQueryString unsigned" {
@@ -185,8 +185,8 @@ test "SasBuilder toQueryString unsigned" {
     };
     const qs = try sas.toQueryString(allocator);
     defer allocator.free(qs);
-    try std.testing.expect(std.mem.indexOf(u8, qs, "sp=rl") != null);
-    try std.testing.expect(std.mem.indexOf(u8, qs, "se=2026-12-31T23:59:59Z") != null);
+    try std.testing.expect(std.mem.find(u8, qs, "sp=rl") != null);
+    try std.testing.expect(std.mem.find(u8, qs, "se=2026-12-31T23:59:59Z") != null);
 }
 
 test "contentMd5" {

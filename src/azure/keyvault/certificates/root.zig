@@ -260,5 +260,5 @@ test "CertificateClient getCertificate" {
     try std.testing.expectEqualStrings("mycert", cert.name);
     try std.testing.expectEqual(true, cert.properties.enabled.?);
     try std.testing.expectEqual(@as(i64, 1800000000), cert.properties.expires_on.?);
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "certificates/mycert?api-version=") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "certificates/mycert?api-version=") != null);
 }

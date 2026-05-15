@@ -315,7 +315,7 @@ test "BackupClient beginBackup" {
 
     try std.testing.expectEqualStrings("backup-op-001", op_id);
     try std.testing.expectEqual(core.http.Method.POST, mock.last_method.?);
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "/backup?api-version=") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "/backup?api-version=") != null);
 }
 
 test "SettingsClient getSetting" {
@@ -342,5 +342,5 @@ test "SettingsClient getSetting" {
     defer allocator.free(value);
 
     try std.testing.expectEqualStrings("true", value);
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "settings/AllowKeyManagementOperationsThroughARM") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "settings/AllowKeyManagementOperationsThroughARM") != null);
 }

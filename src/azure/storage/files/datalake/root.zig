@@ -224,7 +224,7 @@ test "DataLakeFileClient create append flush and read" {
     );
 
     try fs_client.create(allocator);
-    try std.testing.expect(std.mem.indexOf(u8, mock_create.last_url.?, "myfilesystem?resource=filesystem") != null);
+    try std.testing.expect(std.mem.find(u8, mock_create.last_url.?, "myfilesystem?resource=filesystem") != null);
 
     var file = fs_client.getFileClient("data/myfile.csv");
 
@@ -233,14 +233,14 @@ test "DataLakeFileClient create append flush and read" {
     defer mock_file.deinit();
     file.pipeline = .{ .policies = &.{}, .transport_impl = mock_file.asTransport() };
     try file.create(allocator);
-    try std.testing.expect(std.mem.indexOf(u8, mock_file.last_url.?, "data/myfile.csv?resource=file") != null);
+    try std.testing.expect(std.mem.find(u8, mock_file.last_url.?, "data/myfile.csv?resource=file") != null);
 
     // Append data
     var mock_append = core.http.MockTransport.init(allocator, 202, "");
     defer mock_append.deinit();
     file.pipeline = .{ .policies = &.{}, .transport_impl = mock_append.asTransport() };
     try file.append(allocator, "col1,col2\na,b\n", 0);
-    try std.testing.expect(std.mem.indexOf(u8, mock_append.last_url.?, "action=append&position=0") != null);
+    try std.testing.expect(std.mem.find(u8, mock_append.last_url.?, "action=append&position=0") != null);
 
     // Read
     var mock_read = core.http.MockTransport.init(allocator, 200, "col1,col2\na,b\n");

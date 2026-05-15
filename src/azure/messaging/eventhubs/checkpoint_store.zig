@@ -194,8 +194,8 @@ pub fn serializeOwnership(allocator: std.mem.Allocator, own: eventhubs.Partition
 /// Extract "ownerId" value from a JSON body like {"ownerId":"xyz"}.
 fn parseOwnerField(body: []const u8) ?[]const u8 {
     const key = "\"ownerId\":\"";
-    const start = (std.mem.indexOf(u8, body, key) orelse return null) + key.len;
-    const end = std.mem.indexOfScalarPos(u8, body, start, '"') orelse return null;
+    const start = (std.mem.find(u8, body, key) orelse return null) + key.len;
+    const end = std.mem.findScalarPos(u8, body, start, '"') orelse return null;
     return body[start..end];
 }
 
@@ -206,7 +206,7 @@ fn parseCheckpointFields(body: []const u8, cp: *eventhubs.Checkpoint) void {
 }
 
 fn parseJsonInt(body: []const u8, key: []const u8) ?i64 {
-    const start = (std.mem.indexOf(u8, body, key) orelse return null) + key.len;
+    const start = (std.mem.find(u8, body, key) orelse return null) + key.len;
     var end = start;
     while (end < body.len and (body[end] == '-' or (body[end] >= '0' and body[end] <= '9'))) : (end += 1) {}
     if (start == end) return null;
@@ -315,5 +315,5 @@ test "BlobCheckpointStore updateCheckpoint" {
     });
 
     // Verify the upload went to the correct path.
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "ns.servicebus.windows.net/hub/$Default/checkpoint/0") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "ns.servicebus.windows.net/hub/$Default/checkpoint/0") != null);
 }

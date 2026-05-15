@@ -217,8 +217,8 @@ test "StreamingIngestClient ingestFromSlice" {
 
     const result = try client.ingestFromSlice(allocator, "TestDB", "Logs", "{\"ts\":\"2024-01-01\"}\n", .{ .format = .json });
     try std.testing.expectEqual(IngestionStatus.success, result.status);
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "/v1/rest/ingest/TestDB/Logs") != null);
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "streamFormat=Json") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "/v1/rest/ingest/TestDB/Logs") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "streamFormat=Json") != null);
 }
 
 test "StreamingIngestClient with mapping name" {
@@ -234,7 +234,7 @@ test "StreamingIngestClient with mapping name" {
         .mapping_name = "MyMapping",
     });
     try std.testing.expectEqual(IngestionStatus.success, result.status);
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "mappingName=MyMapping") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "mappingName=MyMapping") != null);
 }
 
 test "StreamingIngestClient failure" {
@@ -267,7 +267,7 @@ test "QueuedIngestClient ingestFromBlob" {
     }, "https://storage.blob.core.windows.net/container/blob.json");
 
     try std.testing.expectEqual(IngestionStatus.queued, result.status);
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "ingest-mycluster") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "ingest-mycluster") != null);
 }
 
 test "ManagedIngestClient ingestFromSlice success" {

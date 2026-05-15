@@ -102,7 +102,7 @@ test "ManagedIdentityCredential" {
     try std.testing.expectEqualStrings("msi-token", token.token);
     try std.testing.expectEqual(core.http.Method.GET, mock.last_method.?);
     // Verify URL contains resource without /.default.
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "resource=https://vault.azure.net") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "resource=https://vault.azure.net") != null);
 }
 
 test "ManagedIdentityCredential with client_id" {
@@ -119,5 +119,5 @@ test "ManagedIdentityCredential with client_id" {
     );
     defer allocator.free(token.token);
     try std.testing.expectEqualStrings("msi-ua", token.token);
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "client_id=user-assigned-id") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "client_id=user-assigned-id") != null);
 }

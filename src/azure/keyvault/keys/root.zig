@@ -360,7 +360,7 @@ test "KeyClient createKey and getKey" {
     try std.testing.expectEqualStrings("mykey", key.name);
     try std.testing.expectEqualStrings("RSA", key.key_type.?);
     try std.testing.expectEqual(true, key.properties.enabled.?);
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "keys/mykey/create?api-version=") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "keys/mykey/create?api-version=") != null);
 }
 
 test "CryptographyClient encrypt" {
@@ -389,5 +389,5 @@ test "CryptographyClient encrypt" {
     defer allocator.free(result);
 
     try std.testing.expectEqual(core.http.Method.POST, mock.last_method.?);
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "keys/mykey/v1/encrypt") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "keys/mykey/v1/encrypt") != null);
 }

@@ -22,7 +22,7 @@ pub const ConnectionStringProperties = struct {
             const trimmed = std.mem.trim(u8, part, " ");
             if (trimmed.len == 0) continue;
 
-            if (std.mem.indexOfScalar(u8, trimmed, '=')) |eq_pos| {
+            if (std.mem.findScalar(u8, trimmed, '=')) |eq_pos| {
                 const k = trimmed[0..eq_pos];
                 const v = trimmed[eq_pos + 1 ..];
 
@@ -51,7 +51,7 @@ pub const ConnectionStringProperties = struct {
     }
 
     fn extractHost(endpoint: []const u8) ?[]const u8 {
-        const after_scheme = if (std.mem.indexOf(u8, endpoint, "://")) |pos|
+        const after_scheme = if (std.mem.find(u8, endpoint, "://")) |pos|
             endpoint[pos + 3 ..]
         else
             endpoint;
