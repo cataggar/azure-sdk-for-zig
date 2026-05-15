@@ -6,7 +6,7 @@
     .dependencies = .{
         .xml = .{
             .url = "git+https://github.com/ctaggart/zig-xml.git#c72ff9efbf1c4588ebd3c0d489576ec2dc0b36bb",
-            .hash = "xml-0.2.0-ZTbP3yI6AgB9Rpd2hQrueO63ib0Bm6mQiL_WB1t7JAmP",
+            .hash = "xml-0.2.0-ZTbP3yI6AgCDqW2awXya1aSKFJzPrXTRGYWGmoMj1mDG",
         },
         .uamqp = .{
             .url = "git+https://github.com/cataggar/azure-uamqp-zig#1121d1e68dde8d188516083555cc7e1553b0f595",

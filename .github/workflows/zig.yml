@@ -2,19 +2,9 @@ name: Zig SDK
 
 on:
   push:
-    branches: [zig]
-    paths:
-      - 'src/**'
-      - 'build.zig'
-      - 'build.zig.zon'
-      - '.github/workflows/zig.yml'
+    branches: [main]
   pull_request:
-    branches: [zig]
-    paths:
-      - 'src/**'
-      - 'build.zig'
-      - 'build.zig.zon'
-      - '.github/workflows/zig.yml'
+    branches: [main]
 
 jobs:
   test:
