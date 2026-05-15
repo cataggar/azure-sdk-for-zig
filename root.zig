@@ -995,7 +995,7 @@ test "AdministrationClient createQueue" {
     var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
     var admin = ServiceBusAdministrationClient.init("ns.servicebus.windows.net", cred.asCredential(), mock.asTransport(), .{});
     try admin.createQueue(allocator, "testqueue");
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "testqueue") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "testqueue") != null);
     try std.testing.expectEqual(core.http.Method.PUT, mock.last_method.?);
 }
 
@@ -1050,5 +1050,5 @@ test "AdministrationClient createSubscription" {
     var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
     var admin = ServiceBusAdministrationClient.init("ns.servicebus.windows.net", cred.asCredential(), mock.asTransport(), .{});
     try admin.createSubscription(allocator, "mytopic", "mysub");
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "mytopic/subscriptions/mysub") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "mytopic/subscriptions/mysub") != null);
 }
