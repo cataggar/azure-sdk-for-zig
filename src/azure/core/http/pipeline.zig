@@ -10,6 +10,10 @@ fn nanoTimestamp() i128 {
     return std.Io.Timestamp.now(threaded.io(), .real).toNanoseconds();
 }
 
+fn unixTimestampSeconds() i64 {
+    return @intCast(@divTrunc(nanoTimestamp(), std.time.ns_per_s));
+}
+
 fn sleepMs(ms: u64) void {
     var threaded: std.Io.Threaded = .init_single_threaded;
     threaded.io().sleep(.fromMilliseconds(@intCast(ms)), .real) catch {};
@@ -234,7 +238,7 @@ pub const BearerTokenAuthPolicy = struct {
         final_transport: *HttpTransport,
     ) !Response {
         const self: *BearerTokenAuthPolicy = @fieldParentPtr("policy", policy);
-        const now = std.time.timestamp();
+        const now = unixTimestampSeconds();
         const refresh_buffer: i64 = 300; // 5 minutes before expiry
 
         // Use cached token if still valid.
@@ -430,6 +434,42 @@ test "RequestIdPolicy injects x-ms-client-request-id" {
     // UUID format: 8-4-4-4-12 = 36 chars.
     try std.testing.expectEqual(@as(usize, 36), request_id.len);
     try std.testing.expectEqual(@as(u8, '-'), request_id[8]);
+}
+
+test "BearerTokenAuthPolicy injects Authorization header" {
+    const allocator = std.testing.allocator;
+    const creds = @import("../credentials/token.zig");
+
+    const Stub = struct {
+        fn getTokenFn(
+            _: *creds.TokenCredential,
+            _: creds.TokenRequestContext,
+            _: @import("../context.zig").Context,
+        ) anyerror!creds.AccessToken {
+            const token = try allocator.dupe(u8, "stub-token");
+            return .{ .token = token, .expires_on = unixTimestampSeconds() + 3600 };
+        }
+    };
+    var credential = creds.TokenCredential{ .getTokenFn = &Stub.getTokenFn };
+
+    var mock = transport.MockTransport.init(allocator, 200, "ok");
+    defer mock.deinit();
+    var auth = BearerTokenAuthPolicy.init(
+        allocator,
+        &credential,
+        &.{"https://vault.azure.net/.default"},
+    );
+    defer auth.deinit();
+    var policy_ptrs = [_]*HttpPolicy{auth.asPolicy()};
+    var pipeline_inst = HttpPipeline{
+        .policies = &policy_ptrs,
+        .transport_impl = mock.asTransport(),
+    };
+    var req = Request.init(allocator, .GET, "https://example.com");
+    defer req.deinit();
+    var resp = try pipeline_inst.send(&req);
+    defer resp.deinit();
+    try std.testing.expectEqualStrings("Bearer stub-token", req.headers.get("Authorization").?);
 }
 
 test "RetryPolicy passes through 200 without retry" {

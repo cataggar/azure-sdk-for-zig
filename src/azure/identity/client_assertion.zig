@@ -156,6 +156,6 @@ test "ClientAssertionCredential getToken" {
 
     try std.testing.expectEqualStrings("assertion-token", token.token);
     // Verify the request was sent to the correct token endpoint.
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "tenant-1/oauth2/v2.0/token") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "tenant-1/oauth2/v2.0/token") != null);
     try std.testing.expectEqual(core.http.Method.POST, mock.last_method.?);
 }

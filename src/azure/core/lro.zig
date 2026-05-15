@@ -601,7 +601,7 @@ test "Poller azure-async-operation with final GET" {
 
     try std.testing.expectEqual(OperationStatus.succeeded, result.status);
     // The result body should be from the final GET, not the poll.
-    try std.testing.expect(std.mem.indexOf(u8, result.raw_body, "my-resource") != null);
+    try std.testing.expect(std.mem.find(u8, result.raw_body, "my-resource") != null);
 }
 
 test "Poller single poll" {

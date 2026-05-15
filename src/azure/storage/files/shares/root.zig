@@ -270,7 +270,7 @@ test "ShareFileClient create and download" {
     );
 
     try share.create(allocator);
-    try std.testing.expect(std.mem.indexOf(u8, mock_create.last_url.?, "myshare?restype=share") != null);
+    try std.testing.expect(std.mem.find(u8, mock_create.last_url.?, "myshare?restype=share") != null);
 
     // Create directory and file
     var dir = share.getDirectoryClient("mydir");

@@ -275,7 +275,7 @@ test "ConfigurationClient getSetting" {
     try std.testing.expectEqualStrings("mykey", setting.key);
     try std.testing.expectEqualStrings("myvalue", setting.value.?);
     try std.testing.expectEqualStrings("prod", setting.label.?);
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "kv/mykey?label=prod") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "kv/mykey?label=prod") != null);
 }
 
 test "ConfigurationClient setSetting and listSettings" {

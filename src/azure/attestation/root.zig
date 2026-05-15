@@ -139,5 +139,5 @@ test "AttestationClient attestSgxEnclave" {
     try std.testing.expectEqualStrings("eyJhbGciOiJSUzI1NiJ9.attestation-token", result.token.?);
     try std.testing.expectEqual(false, result.is_debuggable.?);
     try std.testing.expectEqual(core.http.Method.POST, mock.last_method.?);
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "attest/SgxEnclave?api-version=") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "attest/SgxEnclave?api-version=") != null);
 }

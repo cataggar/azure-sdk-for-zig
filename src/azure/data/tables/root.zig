@@ -210,5 +210,5 @@ test "TableClient getEntity builds correct URL" {
     var resp = try tc.getEntity(allocator, "pk1", "rk1");
     defer resp.deinit();
     try std.testing.expectEqual(@as(u16, 200), resp.status_code);
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "mytable(PartitionKey='pk1',RowKey='rk1')") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "mytable(PartitionKey='pk1',RowKey='rk1')") != null);
 }

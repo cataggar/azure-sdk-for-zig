@@ -467,10 +467,10 @@ fn parseQueryResult(allocator: std.mem.Allocator, body: []const u8) !QueryResult
     errdefer docs.deinit(allocator);
 
     // Simple extraction: find each document object in the Documents array.
-    const docs_start = std.mem.indexOf(u8, body, "\"Documents\":[") orelse
+    const docs_start = std.mem.find(u8, body, "\"Documents\":[") orelse
         return .{ .documents = &.{} };
     const array_start = docs_start + "\"Documents\":[".len;
-    const array_end = std.mem.indexOfScalarPos(u8, body, array_start, ']') orelse
+    const array_end = std.mem.findScalarPos(u8, body, array_start, ']') orelse
         return .{ .documents = &.{} };
     const array_content = body[array_start..array_end];
 
@@ -499,8 +499,8 @@ fn parseQueryResult(allocator: std.mem.Allocator, body: []const u8) !QueryResult
 }
 
 fn parseJsonString(body: []const u8, prefix: []const u8) ?[]const u8 {
-    const start = (std.mem.indexOf(u8, body, prefix) orelse return null) + prefix.len;
-    const end = std.mem.indexOfScalarPos(u8, body, start, '"') orelse return null;
+    const start = (std.mem.find(u8, body, prefix) orelse return null) + prefix.len;
+    const end = std.mem.findScalarPos(u8, body, start, '"') orelse return null;
     return body[start..end];
 }
 
@@ -511,9 +511,9 @@ fn parseIdList(allocator: std.mem.Allocator, body: []const u8, comptime T: type)
 
     const id_key = "\"id\":\"";
     var pos: usize = 0;
-    while (std.mem.indexOfPos(u8, body, pos, id_key)) |start| {
+    while (std.mem.findPos(u8, body, pos, id_key)) |start| {
         const val_start = start + id_key.len;
-        const val_end = std.mem.indexOfScalarPos(u8, body, val_start, '"') orelse break;
+        const val_end = std.mem.findScalarPos(u8, body, val_start, '"') orelse break;
         const id = try allocator.dupe(u8, body[val_start..val_end]);
         try result.append(allocator, .{ .id = id });
         pos = val_end + 1;
@@ -609,7 +609,7 @@ test "DatabaseClient createContainer" {
     var db = client.database("mydb");
     const ctr = try db.createContainer(allocator, "myctr", "/pk");
     try std.testing.expectEqualStrings("myctr", ctr.id);
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "/dbs/mydb/colls") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "/dbs/mydb/colls") != null);
 }
 
 test "DatabaseClient listContainers" {
@@ -660,7 +660,7 @@ test "ContainerClient readItem" {
     var ctr = db.container("myctr");
     const body = try ctr.readItem(allocator, "item1", "[\"pk1\"]");
     defer allocator.free(body);
-    try std.testing.expect(std.mem.indexOf(u8, body, "\"name\":\"test\"") != null);
+    try std.testing.expect(std.mem.find(u8, body, "\"name\":\"test\"") != null);
 }
 
 test "ContainerClient upsertItem" {
@@ -709,7 +709,7 @@ test "ContainerClient queryItems" {
         allocator.free(result.documents);
     }
     try std.testing.expectEqual(@as(usize, 2), result.documents.len);
-    try std.testing.expect(std.mem.indexOf(u8, result.documents[0], "\"id\":\"a\"") != null);
+    try std.testing.expect(std.mem.find(u8, result.documents[0], "\"id\":\"a\"") != null);
 }
 
 test "ContainerClient readItem 404" {

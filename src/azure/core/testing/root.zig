@@ -306,7 +306,7 @@ test "RecordingTransport captures exchanges" {
     const exchanges = recorder.getExchanges();
     try std.testing.expectEqual(@as(usize, 1), exchanges.len);
     try std.testing.expectEqual(core.http.Method.GET, exchanges[0].request_method);
-    try std.testing.expect(std.mem.indexOf(u8, exchanges[0].request_url, "secrets/s1") != null);
+    try std.testing.expect(std.mem.find(u8, exchanges[0].request_url, "secrets/s1") != null);
 }
 
 test "RecordingTransport toJson" {
@@ -327,9 +327,9 @@ test "RecordingTransport toJson" {
     defer allocator.free(json);
 
     // Verify JSON structure.
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"method\":\"POST\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"status\":201") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "example.com/items") != null);
+    try std.testing.expect(std.mem.find(u8, json, "\"method\":\"POST\"") != null);
+    try std.testing.expect(std.mem.find(u8, json, "\"status\":201") != null);
+    try std.testing.expect(std.mem.find(u8, json, "example.com/items") != null);
 }
 
 test "isSensitiveHeader" {

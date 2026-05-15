@@ -272,7 +272,7 @@ test "QueueClient sendMessage" {
 
     try client.sendMessage(allocator, "Hello Queue!");
     try std.testing.expectEqual(core.http.Method.POST, mock.last_method.?);
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "myqueue/messages") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "myqueue/messages") != null);
 }
 
 test "QueueClient receiveMessages" {

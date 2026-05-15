@@ -141,9 +141,9 @@ fn parseResponseDataSet(allocator: std.mem.Allocator, body: []const u8) !KustoRe
 
     // Find DataTable frames by searching for "TableName"
     var pos: usize = 0;
-    while (std.mem.indexOfPos(u8, body, pos, "\"TableName\":\"")) |tn_start| {
+    while (std.mem.findPos(u8, body, pos, "\"TableName\":\"")) |tn_start| {
         const name_start = tn_start + "\"TableName\":\"".len;
-        const name_end = std.mem.indexOfScalarPos(u8, body, name_start, '"') orelse break;
+        const name_end = std.mem.findScalarPos(u8, body, name_start, '"') orelse break;
         const table_name = try allocator.dupe(u8, body[name_start..name_end]);
 
         // Parse columns from this table frame
@@ -151,22 +151,22 @@ fn parseResponseDataSet(allocator: std.mem.Allocator, body: []const u8) !KustoRe
         errdefer columns.deinit(allocator);
 
         const col_search_start = name_end;
-        const col_section_end = std.mem.indexOfPos(u8, body, col_search_start, "\"Rows\"") orelse body.len;
+        const col_section_end = std.mem.findPos(u8, body, col_search_start, "\"Rows\"") orelse body.len;
 
         var col_pos = col_search_start;
         while (col_pos < col_section_end) {
-            const cn_idx = std.mem.indexOfPos(u8, body, col_pos, "\"ColumnName\":\"") orelse break;
+            const cn_idx = std.mem.findPos(u8, body, col_pos, "\"ColumnName\":\"") orelse break;
             if (cn_idx >= col_section_end) break;
             const cn_start = cn_idx + "\"ColumnName\":\"".len;
-            const cn_end = std.mem.indexOfScalarPos(u8, body, cn_start, '"') orelse break;
+            const cn_end = std.mem.findScalarPos(u8, body, cn_start, '"') orelse break;
             const col_name = try allocator.dupe(u8, body[cn_start..cn_end]);
 
             // Find ColumnType
             var col_type: []const u8 = "string";
-            if (std.mem.indexOfPos(u8, body, cn_end, "\"ColumnType\":\"")) |ct_idx| {
+            if (std.mem.findPos(u8, body, cn_end, "\"ColumnType\":\"")) |ct_idx| {
                 if (ct_idx < col_section_end) {
                     const ct_start = ct_idx + "\"ColumnType\":\"".len;
-                    const ct_end = std.mem.indexOfScalarPos(u8, body, ct_start, '"') orelse ct_start;
+                    const ct_end = std.mem.findScalarPos(u8, body, ct_start, '"') orelse ct_start;
                     col_type = try allocator.dupe(u8, body[ct_start..ct_end]);
                 }
             }
@@ -181,7 +181,7 @@ fn parseResponseDataSet(allocator: std.mem.Allocator, body: []const u8) !KustoRe
         var rows = std.ArrayList(KustoResultRow).empty;
         errdefer rows.deinit(allocator);
 
-        if (std.mem.indexOfPos(u8, body, name_end, "\"Rows\":[")) |rows_start| {
+        if (std.mem.findPos(u8, body, name_end, "\"Rows\":[")) |rows_start| {
             const array_start = rows_start + "\"Rows\":[".len;
             // Find matching close bracket
             var depth: u32 = 1;
@@ -292,7 +292,7 @@ test "KustoClient executeQuery" {
         allocator.free(result.tables);
     }
 
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "/v2/rest/query") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "/v2/rest/query") != null);
     try std.testing.expectEqual(core.http.Method.POST, mock.last_method.?);
 
     const primary = result.primaryTable().?;
@@ -332,7 +332,7 @@ test "KustoClient executeMgmt" {
         allocator.free(result.tables);
     }
 
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "/v1/rest/mgmt") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "/v1/rest/mgmt") != null);
     const table = result.tables[0];
     try std.testing.expectEqualStrings("TestDB", table.rows[0].values[0]);
 }
@@ -346,7 +346,7 @@ test "KustoClient execute auto-routes to mgmt" {
     var client = KustoClient.init(conn, mock.asTransport(), .{});
 
     _ = try client.execute(allocator, "db", ".show databases");
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "/v1/rest/mgmt") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "/v1/rest/mgmt") != null);
 }
 
 test "KustoClient execute auto-routes to query" {
@@ -358,7 +358,7 @@ test "KustoClient execute auto-routes to query" {
     var client = KustoClient.init(conn, mock.asTransport(), .{});
 
     _ = try client.execute(allocator, "db", "StormEvents | count");
-    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "/v2/rest/query") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "/v2/rest/query") != null);
 }
 
 test "KustoClient query failure returns error" {
