@@ -20,6 +20,13 @@ pub const KeyVaultKey = struct {
     id: ?[]const u8 = null,
     key_type: ?[]const u8 = null,
     properties: KeyProperties = .{},
+
+    /// Free allocated `id` and `key_type`. `name` is NOT freed —
+    /// by convention it's a borrow of the caller's input string.
+    pub fn deinit(self: KeyVaultKey, allocator: std.mem.Allocator) void {
+        if (self.id) |i| allocator.free(i);
+        if (self.key_type) |t| allocator.free(t);
+    }
 };
 
 // ─────────────────────────── KeyClient ────────────────────────
@@ -54,6 +61,25 @@ pub const KeyClient = struct {
         name: []const u8,
         key_type: []const u8,
     ) !KeyVaultKey {
+        const r = try self.createKeyResult(allocator, name, key_type);
+        return switch (r) {
+            .ok => |v| v,
+            .err => blk: {
+                var e = r.err;
+                defer e.deinit();
+                std.log.warn("{f}", .{e});
+                break :blk error.CreateKeyFailed;
+            },
+        };
+    }
+
+    /// Same as `createKey` but returns `Result(KeyVaultKey)`.
+    pub fn createKeyResult(
+        self: *KeyClient,
+        allocator: std.mem.Allocator,
+        name: []const u8,
+        key_type: []const u8,
+    ) !core.errors.Result(KeyVaultKey) {
         const url = try self.buildUrl(allocator, &.{ "keys", name, "create" });
         defer allocator.free(url);
 
@@ -70,11 +96,13 @@ pub const KeyClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.CreateKeyFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return parseKey(allocator, name, resp.body);
+        return .{ .ok = try parseKey(allocator, name, resp.body) };
     }
 
     /// GET /keys/{name}?api-version=...
@@ -83,6 +111,24 @@ pub const KeyClient = struct {
         allocator: std.mem.Allocator,
         name: []const u8,
     ) !KeyVaultKey {
+        const r = try self.getKeyResult(allocator, name);
+        return switch (r) {
+            .ok => |v| v,
+            .err => blk: {
+                var e = r.err;
+                defer e.deinit();
+                std.log.warn("{f}", .{e});
+                break :blk error.KeyNotFound;
+            },
+        };
+    }
+
+    /// Same as `getKey` but returns `Result(KeyVaultKey)`.
+    pub fn getKeyResult(
+        self: *KeyClient,
+        allocator: std.mem.Allocator,
+        name: []const u8,
+    ) !core.errors.Result(KeyVaultKey) {
         const url = try self.buildUrl(allocator, &.{ "keys", name });
         defer allocator.free(url);
 
@@ -94,11 +140,13 @@ pub const KeyClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.KeyNotFound;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return parseKey(allocator, name, resp.body);
+        return .{ .ok = try parseKey(allocator, name, resp.body) };
     }
 
     /// DELETE /keys/{name}?api-version=...
@@ -107,6 +155,24 @@ pub const KeyClient = struct {
         allocator: std.mem.Allocator,
         name: []const u8,
     ) !void {
+        const r = try self.deleteKeyResult(allocator, name);
+        switch (r) {
+            .ok => {},
+            .err => {
+                var e = r.err;
+                defer e.deinit();
+                std.log.warn("{f}", .{e});
+                return error.DeleteKeyFailed;
+            },
+        }
+    }
+
+    /// Same as `deleteKey` but returns `Result(void)`.
+    pub fn deleteKeyResult(
+        self: *KeyClient,
+        allocator: std.mem.Allocator,
+        name: []const u8,
+    ) !core.errors.Result(void) {
         const url = try self.buildUrl(allocator, &.{ "keys", name });
         defer allocator.free(url);
 
@@ -116,10 +182,11 @@ pub const KeyClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.DeleteKeyFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// GET /keys?api-version=... — returns a pager over keys.
@@ -219,6 +286,22 @@ pub const CryptographyClient = struct {
         return self.cryptoOperation(allocator, "verify", algorithm, digest);
     }
 
+    /// `Result(...)` variants of the crypto operations. Use these when you
+    /// need to branch on the Azure `error_code` (e.g. `"KeyNotFound"` vs
+    /// `"AccessDenied"` vs `"InvalidAlgorithm"`).
+    pub fn encryptResult(self: *CryptographyClient, allocator: std.mem.Allocator, algorithm: []const u8, plaintext: []const u8) !core.errors.Result([]const u8) {
+        return self.cryptoOperationResult(allocator, "encrypt", algorithm, plaintext);
+    }
+    pub fn decryptResult(self: *CryptographyClient, allocator: std.mem.Allocator, algorithm: []const u8, ciphertext: []const u8) !core.errors.Result([]const u8) {
+        return self.cryptoOperationResult(allocator, "decrypt", algorithm, ciphertext);
+    }
+    pub fn signResult(self: *CryptographyClient, allocator: std.mem.Allocator, algorithm: []const u8, digest: []const u8) !core.errors.Result([]const u8) {
+        return self.cryptoOperationResult(allocator, "sign", algorithm, digest);
+    }
+    pub fn verifyResult(self: *CryptographyClient, allocator: std.mem.Allocator, algorithm: []const u8, digest: []const u8) !core.errors.Result([]const u8) {
+        return self.cryptoOperationResult(allocator, "verify", algorithm, digest);
+    }
+
     fn cryptoOperation(
         self: *CryptographyClient,
         allocator: std.mem.Allocator,
@@ -226,6 +309,25 @@ pub const CryptographyClient = struct {
         algorithm: []const u8,
         value: []const u8,
     ) ![]const u8 {
+        const r = try self.cryptoOperationResult(allocator, operation, algorithm, value);
+        return switch (r) {
+            .ok => |v| v,
+            .err => blk: {
+                var e = r.err;
+                defer e.deinit();
+                std.log.warn("{f}", .{e});
+                break :blk error.CryptoOperationFailed;
+            },
+        };
+    }
+
+    fn cryptoOperationResult(
+        self: *CryptographyClient,
+        allocator: std.mem.Allocator,
+        operation: []const u8,
+        algorithm: []const u8,
+        value: []const u8,
+    ) !core.errors.Result([]const u8) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/keys/{s}/{s}/{s}?api-version={s}",
@@ -255,11 +357,13 @@ pub const CryptographyClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.CryptoOperationFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return allocator.dupe(u8, resp.body);
+        return .{ .ok = try allocator.dupe(u8, resp.body) };
     }
 };
 

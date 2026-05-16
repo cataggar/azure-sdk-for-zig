@@ -42,6 +42,25 @@ pub const BackupClient = struct {
         storage_uri: []const u8,
         sas_token: []const u8,
     ) ![]const u8 {
+        const r = try self.beginBackupResult(allocator, storage_uri, sas_token);
+        return switch (r) {
+            .ok => |v| v,
+            .err => blk: {
+                var e = r.err;
+                defer e.deinit();
+                std.log.warn("{f}", .{e});
+                break :blk error.BeginBackupFailed;
+            },
+        };
+    }
+
+    /// Same as `beginBackup` but returns `Result([]const u8)`.
+    pub fn beginBackupResult(
+        self: *BackupClient,
+        allocator: std.mem.Allocator,
+        storage_uri: []const u8,
+        sas_token: []const u8,
+    ) !core.errors.Result([]const u8) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/backup?api-version={s}",
@@ -66,11 +85,13 @@ pub const BackupClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.BeginBackupFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return parseOperationId(allocator, resp.body);
+        return .{ .ok = try parseOperationId(allocator, resp.body) };
     }
 
     /// POST /restore?api-version=... — begins a restore (LRO stub returning operation ID).
@@ -80,6 +101,25 @@ pub const BackupClient = struct {
         backup_uri: []const u8,
         sas_token: []const u8,
     ) ![]const u8 {
+        const r = try self.beginRestoreResult(allocator, backup_uri, sas_token);
+        return switch (r) {
+            .ok => |v| v,
+            .err => blk: {
+                var e = r.err;
+                defer e.deinit();
+                std.log.warn("{f}", .{e});
+                break :blk error.BeginRestoreFailed;
+            },
+        };
+    }
+
+    /// Same as `beginRestore` but returns `Result([]const u8)`.
+    pub fn beginRestoreResult(
+        self: *BackupClient,
+        allocator: std.mem.Allocator,
+        backup_uri: []const u8,
+        sas_token: []const u8,
+    ) !core.errors.Result([]const u8) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/restore?api-version={s}",
@@ -104,11 +144,13 @@ pub const BackupClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.BeginRestoreFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return parseOperationId(allocator, resp.body);
+        return .{ .ok = try parseOperationId(allocator, resp.body) };
     }
 
     /// Wait for a backup operation to complete by polling the operation URL.
@@ -156,6 +198,24 @@ pub const SettingsClient = struct {
         allocator: std.mem.Allocator,
         name: []const u8,
     ) ![]const u8 {
+        const r = try self.getSettingResult(allocator, name);
+        return switch (r) {
+            .ok => |v| v,
+            .err => blk: {
+                var e = r.err;
+                defer e.deinit();
+                std.log.warn("{f}", .{e});
+                break :blk error.GetSettingFailed;
+            },
+        };
+    }
+
+    /// Same as `getSetting` but returns `Result([]const u8)`.
+    pub fn getSettingResult(
+        self: *SettingsClient,
+        allocator: std.mem.Allocator,
+        name: []const u8,
+    ) !core.errors.Result([]const u8) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/settings/{s}?api-version={s}",
@@ -171,11 +231,13 @@ pub const SettingsClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.GetSettingFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return parseSettingValue(allocator, resp.body);
+        return .{ .ok = try parseSettingValue(allocator, resp.body) };
     }
 
     /// PATCH /settings/{name}?api-version=...
@@ -185,6 +247,25 @@ pub const SettingsClient = struct {
         name: []const u8,
         value: []const u8,
     ) !void {
+        const r = try self.updateSettingResult(allocator, name, value);
+        switch (r) {
+            .ok => {},
+            .err => {
+                var e = r.err;
+                defer e.deinit();
+                std.log.warn("{f}", .{e});
+                return error.UpdateSettingFailed;
+            },
+        }
+    }
+
+    /// Same as `updateSetting` but returns `Result(void)`.
+    pub fn updateSettingResult(
+        self: *SettingsClient,
+        allocator: std.mem.Allocator,
+        name: []const u8,
+        value: []const u8,
+    ) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/settings/{s}?api-version={s}",
@@ -204,10 +285,11 @@ pub const SettingsClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.UpdateSettingFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// GET /settings?api-version=... — returns a pager over admin settings.
