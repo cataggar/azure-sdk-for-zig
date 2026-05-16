@@ -1,0 +1,45 @@
+/// WIT contract for the TCGC code-model component.
+///
+/// This is the boundary between the TypeSpec / TCGC TypeScript world
+/// (compiled to a WASI component via jco) and the native Zig code
+/// generator that hosts the component.
+///
+/// The component exports a single function that takes a TypeSpec project
+/// path and an options blob, and returns the TCGC code model as JSON.
+/// The Zig host parses the JSON into `codemodel.zig` structs and feeds
+/// the emitter.
+///
+/// The contract is deliberately identical to the one used by the Rust
+/// prototype at cataggar/azure-sdk-for-rust#92 so the same `tcgc.wasm`
+/// could in principle be reused across languages.
+
+package azure:codegen;
+
+interface tcgc {
+    /// Compile a TypeSpec project and return the TCGC code model as JSON.
+    ///
+    /// Arguments
+    /// ---------
+    /// project-path     : path to a directory containing `tspconfig.yaml`
+    ///                    or `main.tsp`. The host must mount the directory
+    ///                    as a WASI preopened directory before calling.
+    /// emitter-options  : JSON-encoded emitter options. Recognised keys:
+    ///                      * "package-name"     (string)
+    ///                      * "package-version"  (string)
+    ///                      * "target-kind"      ("client" | "server"
+    ///                                            | "component")
+    ///                    Unknown keys are passed through.
+    ///
+    /// Returns
+    /// -------
+    /// Ok  : JSON string conforming to the code-model schema documented
+    ///       in `codegen/src/codemodel.zig`.
+    /// Err : Human-readable diagnostic (compilation errors, missing
+    ///       decorators, etc.).
+    compile: func(project-path: string, emitter-options: string)
+             -> result<string, string>;
+}
+
+world codegen {
+    export tcgc;
+}

@@ -1,0 +1,14 @@
+// Component-local copy of the WIT contract. Kept identical to
+// ../../wit/tcgc.wit so `jco componentize` can resolve the world without
+// reaching up out of the component directory.
+
+package azure:codegen;
+
+interface tcgc {
+    compile: func(project-path: string, emitter-options: string)
+             -> result<string, string>;
+}
+
+world codegen {
+    export tcgc;
+}

@@ -1,0 +1,27 @@
+{
+  "name": "@azure-tools/typespec-zig",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TypeSpec emitter that produces a JSON code model for the Azure SDK for Zig code generator (used as a WASI component via jco).",
+  "type": "module",
+  "main": "src/index.js",
+  "tspMain": "src/index.js",
+  "scripts": {
+    "build": "jco componentize src/index.js --wit wit/component.wit --world-name codegen --out tcgc.wasm",
+    "clean": "rm -f tcgc.wasm",
+    "dev": "node src/index.js"
+  },
+  "dependencies": {
+    "@typespec/compiler": "1.12.0",
+    "@typespec/http": "1.12.0",
+    "@typespec/rest": "0.82.0",
+    "@typespec/versioning": "0.82.0",
+    "@azure-tools/typespec-azure-core": "0.68.0",
+    "@azure-tools/typespec-azure-resource-manager": "0.68.0",
+    "@azure-tools/typespec-client-generator-core": "0.68.0"
+  },
+  "devDependencies": {
+    "@bytecodealliance/jco": "^1.19.0",
+    "@bytecodealliance/componentize-js": "^0.20.0"
+  }
+}

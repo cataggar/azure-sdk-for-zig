@@ -1,0 +1,19 @@
+.{
+    .name = .azure_sdk_codegen,
+    .version = "0.1.0",
+    .fingerprint = 0x44c286822a710187,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        // Local checkouts during development. Once stable these will
+        // point at pinned git URLs+hashes the same way the top-level
+        // build.zig.zon does for serde / uamqp.
+        .wamr = .{ .path = "../../../../wamr" },
+        .wabt = .{ .path = "../../../../wabt" },
+        .serde = .{ .path = "../../../../serde.zig" },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
