@@ -31,6 +31,12 @@ pub const ShareClient = struct {
 
     /// PUT /share?restype=share
     pub fn create(self: *ShareClient, allocator: std.mem.Allocator) !void {
+        var r = try self.createResult(allocator);
+        try r.unwrap(error.CreateShareFailed);
+    }
+
+    /// Same as `create` but returns `Result(void)`.
+    pub fn createResult(self: *ShareClient, allocator: std.mem.Allocator) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}?restype=share",
@@ -44,14 +50,21 @@ pub const ShareClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.CreateShareFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// DELETE /share?restype=share
     pub fn deleteShare(self: *ShareClient, allocator: std.mem.Allocator) !void {
+        var r = try self.deleteShareResult(allocator);
+        try r.unwrap(error.DeleteShareFailed);
+    }
+
+    /// Same as `deleteShare` but returns `Result(void)`.
+    pub fn deleteShareResult(self: *ShareClient, allocator: std.mem.Allocator) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}?restype=share",
@@ -65,10 +78,11 @@ pub const ShareClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.DeleteShareFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     pub fn getDirectoryClient(self: *ShareClient, directory_name: []const u8) ShareDirectoryClient {
@@ -93,6 +107,12 @@ pub const ShareDirectoryClient = struct {
 
     /// PUT /share/directory?restype=directory
     pub fn create(self: *ShareDirectoryClient, allocator: std.mem.Allocator) !void {
+        var r = try self.createResult(allocator);
+        try r.unwrap(error.CreateDirectoryFailed);
+    }
+
+    /// Same as `create` but returns `Result(void)`.
+    pub fn createResult(self: *ShareDirectoryClient, allocator: std.mem.Allocator) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}/{s}?restype=directory",
@@ -107,14 +127,21 @@ pub const ShareDirectoryClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.CreateDirectoryFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// DELETE /share/directory?restype=directory
     pub fn deleteDirectory(self: *ShareDirectoryClient, allocator: std.mem.Allocator) !void {
+        var r = try self.deleteDirectoryResult(allocator);
+        try r.unwrap(error.DeleteDirectoryFailed);
+    }
+
+    /// Same as `deleteDirectory` but returns `Result(void)`.
+    pub fn deleteDirectoryResult(self: *ShareDirectoryClient, allocator: std.mem.Allocator) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}/{s}?restype=directory",
@@ -128,10 +155,11 @@ pub const ShareDirectoryClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.DeleteDirectoryFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     pub fn getFileClient(self: *ShareDirectoryClient, file_name: []const u8) ShareFileClient {
@@ -158,6 +186,12 @@ pub const ShareFileClient = struct {
 
     /// PUT /share/dir/file (create with x-ms-type: file and x-ms-content-length)
     pub fn create(self: *ShareFileClient, allocator: std.mem.Allocator, content_length: u64) !void {
+        var r = try self.createResult(allocator, content_length);
+        try r.unwrap(error.CreateFileFailed);
+    }
+
+    /// Same as `create` but returns `Result(void)`.
+    pub fn createResult(self: *ShareFileClient, allocator: std.mem.Allocator, content_length: u64) !core.errors.Result(void) {
         const url = try self.buildFileUrl(allocator);
         defer allocator.free(url);
 
@@ -172,14 +206,21 @@ pub const ShareFileClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.CreateFileFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// PUT /share/dir/file?comp=range
     pub fn upload(self: *ShareFileClient, allocator: std.mem.Allocator, data: []const u8) !void {
+        var r = try self.uploadResult(allocator, data);
+        try r.unwrap(error.UploadFailed);
+    }
+
+    /// Same as `upload` but returns `Result(void)`.
+    pub fn uploadResult(self: *ShareFileClient, allocator: std.mem.Allocator, data: []const u8) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}/{s}/{s}?comp=range",
@@ -196,14 +237,21 @@ pub const ShareFileClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.UploadFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// GET /share/dir/file
     pub fn download(self: *ShareFileClient, allocator: std.mem.Allocator) ![]const u8 {
+        var r = try self.downloadResult(allocator);
+        return r.unwrap(error.DownloadFailed);
+    }
+
+    /// Same as `download` but returns `Result([]const u8)`.
+    pub fn downloadResult(self: *ShareFileClient, allocator: std.mem.Allocator) !core.errors.Result([]const u8) {
         const url = try self.buildFileUrl(allocator);
         defer allocator.free(url);
 
@@ -214,15 +262,23 @@ pub const ShareFileClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.DownloadFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return allocator.dupe(u8, resp.body);
+        return .{ .ok = try allocator.dupe(u8, resp.body) };
     }
 
     /// DELETE /share/dir/file
     pub fn deleteFile(self: *ShareFileClient, allocator: std.mem.Allocator) !void {
+        var r = try self.deleteFileResult(allocator);
+        try r.unwrap(error.DeleteFileFailed);
+    }
+
+    /// Same as `deleteFile` but returns `Result(void)`.
+    pub fn deleteFileResult(self: *ShareFileClient, allocator: std.mem.Allocator) !core.errors.Result(void) {
         const url = try self.buildFileUrl(allocator);
         defer allocator.free(url);
 
@@ -232,10 +288,11 @@ pub const ShareFileClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.DeleteFileFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     fn buildFileUrl(self: *ShareFileClient, allocator: std.mem.Allocator) ![]u8 {

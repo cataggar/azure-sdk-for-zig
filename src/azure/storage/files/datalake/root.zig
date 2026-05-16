@@ -31,6 +31,12 @@ pub const DataLakeFileSystemClient = struct {
 
     /// PUT /filesystem?resource=filesystem
     pub fn create(self: *DataLakeFileSystemClient, allocator: std.mem.Allocator) !void {
+        var r = try self.createResult(allocator);
+        try r.unwrap(error.CreateFileSystemFailed);
+    }
+
+    /// Same as `create` but returns `Result(void)`.
+    pub fn createResult(self: *DataLakeFileSystemClient, allocator: std.mem.Allocator) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}?resource=filesystem",
@@ -44,14 +50,21 @@ pub const DataLakeFileSystemClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.CreateFileSystemFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// DELETE /filesystem?resource=filesystem
     pub fn deleteFileSystem(self: *DataLakeFileSystemClient, allocator: std.mem.Allocator) !void {
+        var r = try self.deleteFileSystemResult(allocator);
+        try r.unwrap(error.DeleteFileSystemFailed);
+    }
+
+    /// Same as `deleteFileSystem` but returns `Result(void)`.
+    pub fn deleteFileSystemResult(self: *DataLakeFileSystemClient, allocator: std.mem.Allocator) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}?resource=filesystem",
@@ -65,10 +78,11 @@ pub const DataLakeFileSystemClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.DeleteFileSystemFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     pub fn getFileClient(self: *DataLakeFileSystemClient, file_path: []const u8) DataLakeFileClient {
@@ -93,6 +107,12 @@ pub const DataLakeFileClient = struct {
 
     /// PUT /filesystem/path?resource=file
     pub fn create(self: *DataLakeFileClient, allocator: std.mem.Allocator) !void {
+        var r = try self.createResult(allocator);
+        try r.unwrap(error.CreateFileFailed);
+    }
+
+    /// Same as `create` but returns `Result(void)`.
+    pub fn createResult(self: *DataLakeFileClient, allocator: std.mem.Allocator) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}/{s}?resource=file",
@@ -106,14 +126,21 @@ pub const DataLakeFileClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.CreateFileFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// PATCH /filesystem/path?action=append&position={pos}
     pub fn append(self: *DataLakeFileClient, allocator: std.mem.Allocator, data: []const u8, position: u64) !void {
+        var r = try self.appendResult(allocator, data, position);
+        try r.unwrap(error.AppendFailed);
+    }
+
+    /// Same as `append` but returns `Result(void)`.
+    pub fn appendResult(self: *DataLakeFileClient, allocator: std.mem.Allocator, data: []const u8, position: u64) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}/{s}?action=append&position={d}",
@@ -129,14 +156,21 @@ pub const DataLakeFileClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.AppendFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// PATCH /filesystem/path?action=flush&position={pos}
     pub fn flush(self: *DataLakeFileClient, allocator: std.mem.Allocator, position: u64) !void {
+        var r = try self.flushResult(allocator, position);
+        try r.unwrap(error.FlushFailed);
+    }
+
+    /// Same as `flush` but returns `Result(void)`.
+    pub fn flushResult(self: *DataLakeFileClient, allocator: std.mem.Allocator, position: u64) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}/{s}?action=flush&position={d}",
@@ -150,14 +184,21 @@ pub const DataLakeFileClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.FlushFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// GET /filesystem/path
     pub fn read(self: *DataLakeFileClient, allocator: std.mem.Allocator) ![]const u8 {
+        var r = try self.readResult(allocator);
+        return r.unwrap(error.ReadFailed);
+    }
+
+    /// Same as `read` but returns `Result([]const u8)`.
+    pub fn readResult(self: *DataLakeFileClient, allocator: std.mem.Allocator) !core.errors.Result([]const u8) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}/{s}",
@@ -172,15 +213,23 @@ pub const DataLakeFileClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.ReadFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return allocator.dupe(u8, resp.body);
+        return .{ .ok = try allocator.dupe(u8, resp.body) };
     }
 
     /// DELETE /filesystem/path
     pub fn deleteFile(self: *DataLakeFileClient, allocator: std.mem.Allocator) !void {
+        var r = try self.deleteFileResult(allocator);
+        try r.unwrap(error.DeleteFileFailed);
+    }
+
+    /// Same as `deleteFile` but returns `Result(void)`.
+    pub fn deleteFileResult(self: *DataLakeFileClient, allocator: std.mem.Allocator) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}/{s}",
@@ -194,10 +243,11 @@ pub const DataLakeFileClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.DeleteFileFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 };
 
