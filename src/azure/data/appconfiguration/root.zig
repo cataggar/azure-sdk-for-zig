@@ -14,6 +14,16 @@ pub const ConfigurationSetting = struct {
     content_type: ?[]const u8 = null,
     etag: ?[]const u8 = null,
     last_modified: ?[]const u8 = null,
+
+    /// Free allocated value/label/content_type/etag/last_modified.
+    /// `key` is NOT freed (borrows caller input).
+    pub fn deinit(self: ConfigurationSetting, allocator: std.mem.Allocator) void {
+        if (self.value) |v| allocator.free(v);
+        if (self.label) |l| allocator.free(l);
+        if (self.content_type) |c| allocator.free(c);
+        if (self.etag) |e| allocator.free(e);
+        if (self.last_modified) |lm| allocator.free(lm);
+    }
 };
 
 // ─────────────────────── ConfigurationClient ──────────────────
@@ -48,6 +58,17 @@ pub const ConfigurationClient = struct {
         key: []const u8,
         label: ?[]const u8,
     ) !ConfigurationSetting {
+        var r = try self.getSettingResult(allocator, key, label);
+        return r.unwrap(error.SettingNotFound);
+    }
+
+    /// Same as `getSetting` but returns `Result(ConfigurationSetting)`.
+    pub fn getSettingResult(
+        self: *ConfigurationClient,
+        allocator: std.mem.Allocator,
+        key: []const u8,
+        label: ?[]const u8,
+    ) !core.errors.Result(ConfigurationSetting) {
         const url = if (label) |l|
             try std.fmt.allocPrint(
                 allocator,
@@ -70,11 +91,13 @@ pub const ConfigurationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.SettingNotFound;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return parseSetting(allocator, key, resp.body);
+        return .{ .ok = try parseSetting(allocator, key, resp.body) };
     }
 
     /// PUT /kv/{key}?api-version=...
@@ -85,6 +108,18 @@ pub const ConfigurationClient = struct {
         value: []const u8,
         label: ?[]const u8,
     ) !ConfigurationSetting {
+        var r = try self.setSettingResult(allocator, key, value, label);
+        return r.unwrap(error.SetSettingFailed);
+    }
+
+    /// Same as `setSetting` but returns `Result(ConfigurationSetting)`.
+    pub fn setSettingResult(
+        self: *ConfigurationClient,
+        allocator: std.mem.Allocator,
+        key: []const u8,
+        value: []const u8,
+        label: ?[]const u8,
+    ) !core.errors.Result(ConfigurationSetting) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/kv/{s}?api-version={s}",
@@ -108,11 +143,13 @@ pub const ConfigurationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.SetSettingFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return parseSetting(allocator, key, resp.body);
+        return .{ .ok = try parseSetting(allocator, key, resp.body) };
     }
 
     /// DELETE /kv/{key}?api-version=...
@@ -121,6 +158,16 @@ pub const ConfigurationClient = struct {
         allocator: std.mem.Allocator,
         key: []const u8,
     ) !void {
+        var r = try self.deleteSettingResult(allocator, key);
+        try r.unwrap(error.DeleteSettingFailed);
+    }
+
+    /// Same as `deleteSetting` but returns `Result(void)`.
+    pub fn deleteSettingResult(
+        self: *ConfigurationClient,
+        allocator: std.mem.Allocator,
+        key: []const u8,
+    ) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/kv/{s}?api-version={s}",
@@ -134,10 +181,11 @@ pub const ConfigurationClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.DeleteSettingFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// GET /kv?key={filter}&api-version=... — returns a pager over settings.
