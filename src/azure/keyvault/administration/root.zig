@@ -65,7 +65,7 @@ pub const BackupClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.BeginBackupFailed;
         }
 
@@ -103,7 +103,7 @@ pub const BackupClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.BeginRestoreFailed;
         }
 
@@ -170,7 +170,7 @@ pub const SettingsClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.GetSettingFailed;
         }
 
@@ -204,7 +204,7 @@ pub const SettingsClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.UpdateSettingFailed;
         }
     }

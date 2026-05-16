@@ -570,7 +570,7 @@ pub const ServiceBusAdministrationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CreateQueueFailed;
         }
     }
@@ -586,7 +586,7 @@ pub const ServiceBusAdministrationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteQueueFailed;
         }
     }
@@ -602,7 +602,7 @@ pub const ServiceBusAdministrationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.ListQueuesFailed;
         }
 
@@ -633,7 +633,7 @@ pub const ServiceBusAdministrationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CreateTopicFailed;
         }
     }
@@ -649,7 +649,7 @@ pub const ServiceBusAdministrationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteTopicFailed;
         }
     }
@@ -665,7 +665,7 @@ pub const ServiceBusAdministrationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.ListTopicsFailed;
         }
 
@@ -696,7 +696,7 @@ pub const ServiceBusAdministrationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CreateSubscriptionFailed;
         }
     }
@@ -712,7 +712,7 @@ pub const ServiceBusAdministrationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteSubscriptionFailed;
         }
     }
@@ -728,7 +728,7 @@ pub const ServiceBusAdministrationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.ListSubscriptionsFailed;
         }
 

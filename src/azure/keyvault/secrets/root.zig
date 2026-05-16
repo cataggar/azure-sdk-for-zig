@@ -78,7 +78,7 @@ pub const SecretClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.SecretNotFound;
         }
 
@@ -109,7 +109,7 @@ pub const SecretClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.SetSecretFailed;
         }
 
@@ -133,7 +133,7 @@ pub const SecretClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteSecretFailed;
         }
 
@@ -175,7 +175,7 @@ pub const SecretClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.RecoverFailed;
         }
 

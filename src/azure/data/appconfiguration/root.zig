@@ -69,7 +69,7 @@ pub const ConfigurationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.SettingNotFound;
         }
 
@@ -107,7 +107,7 @@ pub const ConfigurationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.SetSettingFailed;
         }
 
@@ -134,7 +134,7 @@ pub const ConfigurationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteSettingFailed;
         }
     }

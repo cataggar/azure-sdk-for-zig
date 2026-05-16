@@ -115,7 +115,7 @@ pub const CosmosClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CreateDatabaseFailed;
         }
 
@@ -135,7 +135,7 @@ pub const CosmosClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteDatabaseFailed;
         }
     }
@@ -153,7 +153,7 @@ pub const CosmosClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.ListDatabasesFailed;
         }
 
@@ -210,7 +210,7 @@ pub const DatabaseClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CreateContainerFailed;
         }
 
@@ -230,7 +230,7 @@ pub const DatabaseClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteContainerFailed;
         }
     }
@@ -248,7 +248,7 @@ pub const DatabaseClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.ListContainersFailed;
         }
 
@@ -268,7 +268,7 @@ pub const DatabaseClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.GetContainerFailed;
         }
 
@@ -310,7 +310,7 @@ pub const ContainerClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CreateItemFailed;
         }
     }
@@ -329,7 +329,7 @@ pub const ContainerClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.ReadItemFailed;
         }
 
@@ -352,7 +352,7 @@ pub const ContainerClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.ReplaceItemFailed;
         }
     }
@@ -374,7 +374,7 @@ pub const ContainerClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.UpsertItemFailed;
         }
     }
@@ -393,7 +393,7 @@ pub const ContainerClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteItemFailed;
         }
     }
@@ -418,7 +418,7 @@ pub const ContainerClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.QueryFailed;
         }
 

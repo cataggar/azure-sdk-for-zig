@@ -80,7 +80,7 @@ pub const ClientSecretCredential = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.AuthenticationFailed;
         }
 

@@ -59,7 +59,7 @@ pub const BlobContainerClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CreateContainerFailed;
         }
     }
@@ -80,7 +80,7 @@ pub const BlobContainerClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteContainerFailed;
         }
     }
@@ -101,7 +101,7 @@ pub const BlobContainerClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.ListBlobsFailed;
         }
 
@@ -172,7 +172,7 @@ pub const BlobClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DownloadFailed;
         }
 
@@ -194,7 +194,7 @@ pub const BlobClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.UploadFailed;
         }
     }
@@ -220,7 +220,7 @@ pub const BlobClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.UploadFailed;
         }
 
@@ -240,7 +240,7 @@ pub const BlobClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteBlobFailed;
         }
     }
@@ -257,7 +257,7 @@ pub const BlobClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.GetPropertiesFailed;
         }
 

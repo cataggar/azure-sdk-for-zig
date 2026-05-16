@@ -12,6 +12,10 @@
             .url = "git+https://github.com/cataggar/azure-uamqp-zig#1121d1e68dde8d188516083555cc7e1553b0f595",
             .hash = "uamqp-0.1.0-lXMcafDqAQD3LSUZbUbyfrWhQfGG7OevKFUwhWxvGZDU",
         },
+        .serde = .{
+            .url = "git+https://github.com/OrlovEvgeny/serde.zig#6ce3999a77a62dd779d4701ff4cd5714ff7a28bf",
+            .hash = "serde-1.0.1-1DszT153DAAj09Cj1NSTPQFV2E3ZxcFXN41Wn2g4Q_pV",
+        },
     },
     .paths = .{
         "build.zig",

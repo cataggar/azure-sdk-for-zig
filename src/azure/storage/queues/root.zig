@@ -63,7 +63,7 @@ pub const QueueClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.SendMessageFailed;
         }
     }
@@ -84,7 +84,7 @@ pub const QueueClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.ReceiveMessagesFailed;
         }
 
@@ -107,7 +107,7 @@ pub const QueueClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteMessageFailed;
         }
     }
@@ -128,7 +128,7 @@ pub const QueueClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.PeekMessagesFailed;
         }
 
@@ -175,7 +175,7 @@ pub const QueueServiceClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CreateQueueFailed;
         }
     }
@@ -196,7 +196,7 @@ pub const QueueServiceClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteQueueFailed;
         }
     }

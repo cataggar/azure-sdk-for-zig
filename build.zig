@@ -15,6 +15,12 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
 
+    const serde_dep = b.dependency("serde", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const serde_mod = serde_dep.module("serde");
+
     // -- Modules (libraries exposed to consumers) --
 
     const core_mod = b.addModule("azure_core", .{
@@ -22,6 +28,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .imports = &.{
             .{ .name = "xml", .module = xml_mod },
+            .{ .name = "serde", .module = serde_mod },
         },
     });
 
@@ -245,6 +252,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "xml", .module = xml_mod },
+                .{ .name = "serde", .module = serde_mod },
             },
         }),
     });

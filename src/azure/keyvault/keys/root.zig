@@ -69,7 +69,7 @@ pub const KeyClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CreateKeyFailed;
         }
 
@@ -93,7 +93,7 @@ pub const KeyClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.KeyNotFound;
         }
 
@@ -116,7 +116,7 @@ pub const KeyClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteKeyFailed;
         }
     }
@@ -254,7 +254,7 @@ pub const CryptographyClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CryptoOperationFailed;
         }
 

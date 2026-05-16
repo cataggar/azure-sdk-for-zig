@@ -61,7 +61,7 @@ pub const CertificateClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CertificateNotFound;
         }
 
@@ -96,7 +96,7 @@ pub const CertificateClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CreateCertificateFailed;
         }
 
@@ -119,7 +119,7 @@ pub const CertificateClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteCertificateFailed;
         }
     }
