@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("azure_core");
+const serde = @import("serde");
 
 // ─────────────────────────── Models ───────────────────────────
 
@@ -69,7 +70,7 @@ pub const KeyClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CreateKeyFailed;
         }
 
@@ -93,7 +94,7 @@ pub const KeyClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.KeyNotFound;
         }
 
@@ -116,7 +117,7 @@ pub const KeyClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteKeyFailed;
         }
     }
@@ -254,7 +255,7 @@ pub const CryptographyClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CryptoOperationFailed;
         }
 
@@ -264,66 +265,70 @@ pub const CryptographyClient = struct {
 
 // ─────────────────────────── Parsing ──────────────────────────
 
-fn parseKey(allocator: std.mem.Allocator, name: []const u8, body: []const u8) !KeyVaultKey {
-    const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{}) catch
-        return .{ .name = name };
-    defer parsed.deinit();
+const KeyMaterialSchema = struct {
+    kid: ?[]const u8 = null,
+    kty: ?[]const u8 = null,
+};
 
-    const obj = if (parsed.value == .object) parsed.value.object else return .{ .name = name };
+const KeyAttributesSchema = struct {
+    enabled: ?bool = null,
+    created: ?i64 = null,
+    updated: ?i64 = null,
+};
+
+const KeySchema = struct {
+    key: ?KeyMaterialSchema = null,
+    attributes: ?KeyAttributesSchema = null,
+};
+
+fn parseKey(allocator: std.mem.Allocator, name: []const u8, body: []const u8) !KeyVaultKey {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const parsed = serde.json.fromSlice(KeySchema, arena.allocator(), body) catch
+        return .{ .name = name };
 
     var key = KeyVaultKey{ .name = name };
-
-    if (obj.get("key")) |k| {
-        if (k == .object) {
-            if (k.object.get("kid")) |v| {
-                if (v == .string) key.id = try allocator.dupe(u8, v.string);
-            }
-            if (k.object.get("kty")) |v| {
-                if (v == .string) key.key_type = try allocator.dupe(u8, v.string);
-            }
-        }
+    if (parsed.key) |k| {
+        if (k.kid) |v| key.id = try allocator.dupe(u8, v);
+        if (k.kty) |v| key.key_type = try allocator.dupe(u8, v);
     }
-    if (obj.get("attributes")) |attrs| {
-        if (attrs == .object) {
-            if (attrs.object.get("enabled")) |e| {
-                if (e == .bool) key.properties.enabled = e.bool;
-            }
-            if (attrs.object.get("created")) |e| {
-                if (e == .integer) key.properties.created_on = e.integer;
-            }
-            if (attrs.object.get("updated")) |e| {
-                if (e == .integer) key.properties.updated_on = e.integer;
-            }
-        }
+    if (parsed.attributes) |a| {
+        key.properties.enabled = a.enabled;
+        key.properties.created_on = a.created;
+        key.properties.updated_on = a.updated;
     }
-
     return key;
 }
 
-fn parseKeyListPage(allocator: std.mem.Allocator, body: []const u8) !core.pager.PageResult(KeyVaultKey) {
-    const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{}) catch
-        return .{ .items = try allocator.alloc(KeyVaultKey, 0) };
-    defer parsed.deinit();
+const KeyListEntrySchema = struct {
+    kid: ?[]const u8 = null,
+};
 
-    const obj = if (parsed.value == .object) parsed.value.object else return .{ .items = try allocator.alloc(KeyVaultKey, 0) };
+const KeyListSchema = struct {
+    value: ?[]const KeyListEntrySchema = null,
+    nextLink: ?[]const u8 = null,
+};
+
+fn parseKeyListPage(allocator: std.mem.Allocator, body: []const u8) !core.pager.PageResult(KeyVaultKey) {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const parsed = serde.json.fromSlice(KeyListSchema, arena.allocator(), body) catch
+        return .{ .items = try allocator.alloc(KeyVaultKey, 0) };
 
     var next_link: ?[]u8 = null;
-    if (obj.get("nextLink")) |nl| {
-        if (nl == .string and nl.string.len > 0)
-            next_link = try allocator.dupe(u8, nl.string);
+    if (parsed.nextLink) |nl| {
+        if (nl.len > 0) next_link = try allocator.dupe(u8, nl);
     }
 
-    const values = if (obj.get("value")) |v| (if (v == .array) v.array.items else null) else null;
-    const items = values orelse return .{ .items = try allocator.alloc(KeyVaultKey, 0), .next_link = next_link };
+    const entries = parsed.value orelse
+        return .{ .items = try allocator.alloc(KeyVaultKey, 0), .next_link = next_link };
 
-    var result = try allocator.alloc(KeyVaultKey, items.len);
-    for (items, 0..) |item, i| {
+    var result = try allocator.alloc(KeyVaultKey, entries.len);
+    for (entries, 0..) |entry, i| {
         var key = KeyVaultKey{ .name = "" };
-        if (item == .object) {
-            if (item.object.get("kid")) |kid| {
-                if (kid == .string) key.id = try allocator.dupe(u8, kid.string);
-            }
-        }
+        if (entry.kid) |kid| key.id = try allocator.dupe(u8, kid);
         result[i] = key;
     }
     return .{ .items = result, .next_link = next_link };
