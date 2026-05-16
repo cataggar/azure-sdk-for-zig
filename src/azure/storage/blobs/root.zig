@@ -286,11 +286,10 @@ fn parseBlobList(allocator: std.mem.Allocator, body: []const u8) ![]BlobItem {
     //   </Blobs>
     // </EnumerationResults>
     //
-    // Note: serde.xml's deserialization of repeated child elements (slices)
-    // does not currently round-trip — it serializes `[]T` as
-    // `<field><item>...</item></field>` but cannot parse Azure's
-    // `<Blobs><Blob>...</Blob></Blobs>` shape back into a slice. JSON parsing
-    // was fully migrated to serde, but XML still uses zig-xml.
+    // Note: blocked on cataggar/serde.zig#3 — serde.xml's slice deserializer
+    // stops after the first element when the element type contains a nested
+    // struct field. Once that's fixed, replace this with a typed schema as
+    // the queues parser does. Until then, fall back to zig-xml's text walker.
     const xml = core.xml;
 
     const names = try xml.findAllText(allocator, body, "Name");

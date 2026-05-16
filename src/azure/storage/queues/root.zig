@@ -209,40 +209,33 @@ pub const QueueServiceClient = struct {
 // ─────────────────────────── Parsing ──────────────────────────
 
 fn parseMessages(allocator: std.mem.Allocator, body: []const u8) ![]QueueMessage {
-    const xml = core.xml;
+    const serde = @import("serde");
 
-    const ids = try xml.findAllText(allocator, body, "MessageId");
-    defer {
-        for (ids) |id| allocator.free(id);
-        allocator.free(ids);
-    }
+    const QueueMessageSchema = struct {
+        MessageId: []const u8,
+        MessageText: ?[]const u8 = null,
+        InsertionTime: ?[]const u8 = null,
+        ExpirationTime: ?[]const u8 = null,
+    };
+    const QueueMessagesListSchema = struct {
+        QueueMessage: ?[]const QueueMessageSchema = null,
+    };
 
-    const texts = try xml.findAllText(allocator, body, "MessageText");
-    defer {
-        for (texts) |t| allocator.free(t);
-        allocator.free(texts);
-    }
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
 
-    const ins_times = try xml.findAllText(allocator, body, "InsertionTime");
-    defer {
-        for (ins_times) |t| allocator.free(t);
-        allocator.free(ins_times);
-    }
+    const parsed = serde.xml.fromSlice(QueueMessagesListSchema, arena.allocator(), body) catch
+        return allocator.alloc(QueueMessage, 0);
 
-    const exp_times = try xml.findAllText(allocator, body, "ExpirationTime");
-    defer {
-        for (exp_times) |t| allocator.free(t);
-        allocator.free(exp_times);
-    }
+    const msgs = parsed.QueueMessage orelse return allocator.alloc(QueueMessage, 0);
 
-    const count = ids.len;
-    var result = try allocator.alloc(QueueMessage, count);
-    for (0..count) |i| {
+    var result = try allocator.alloc(QueueMessage, msgs.len);
+    for (msgs, 0..) |m, i| {
         result[i] = .{
-            .message_id = try allocator.dupe(u8, ids[i]),
-            .message_text = if (i < texts.len) try allocator.dupe(u8, texts[i]) else null,
-            .insertion_time = if (i < ins_times.len) try allocator.dupe(u8, ins_times[i]) else null,
-            .expiration_time = if (i < exp_times.len) try allocator.dupe(u8, exp_times[i]) else null,
+            .message_id = try allocator.dupe(u8, m.MessageId),
+            .message_text = if (m.MessageText) |t| try allocator.dupe(u8, t) else null,
+            .insertion_time = if (m.InsertionTime) |t| try allocator.dupe(u8, t) else null,
+            .expiration_time = if (m.ExpirationTime) |t| try allocator.dupe(u8, t) else null,
         };
     }
     return result;
