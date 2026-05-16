@@ -61,16 +61,8 @@ pub const KeyClient = struct {
         name: []const u8,
         key_type: []const u8,
     ) !KeyVaultKey {
-        const r = try self.createKeyResult(allocator, name, key_type);
-        return switch (r) {
-            .ok => |v| v,
-            .err => blk: {
-                var e = r.err;
-                defer e.deinit();
-                std.log.warn("{f}", .{e});
-                break :blk error.CreateKeyFailed;
-            },
-        };
+        var r = try self.createKeyResult(allocator, name, key_type);
+        return r.unwrap(error.CreateKeyFailed);
     }
 
     /// Same as `createKey` but returns `Result(KeyVaultKey)`.
@@ -111,16 +103,8 @@ pub const KeyClient = struct {
         allocator: std.mem.Allocator,
         name: []const u8,
     ) !KeyVaultKey {
-        const r = try self.getKeyResult(allocator, name);
-        return switch (r) {
-            .ok => |v| v,
-            .err => blk: {
-                var e = r.err;
-                defer e.deinit();
-                std.log.warn("{f}", .{e});
-                break :blk error.KeyNotFound;
-            },
-        };
+        var r = try self.getKeyResult(allocator, name);
+        return r.unwrap(error.KeyNotFound);
     }
 
     /// Same as `getKey` but returns `Result(KeyVaultKey)`.
@@ -155,16 +139,8 @@ pub const KeyClient = struct {
         allocator: std.mem.Allocator,
         name: []const u8,
     ) !void {
-        const r = try self.deleteKeyResult(allocator, name);
-        switch (r) {
-            .ok => {},
-            .err => {
-                var e = r.err;
-                defer e.deinit();
-                std.log.warn("{f}", .{e});
-                return error.DeleteKeyFailed;
-            },
-        }
+        var r = try self.deleteKeyResult(allocator, name);
+        try r.unwrap(error.DeleteKeyFailed);
     }
 
     /// Same as `deleteKey` but returns `Result(void)`.
@@ -309,16 +285,8 @@ pub const CryptographyClient = struct {
         algorithm: []const u8,
         value: []const u8,
     ) ![]const u8 {
-        const r = try self.cryptoOperationResult(allocator, operation, algorithm, value);
-        return switch (r) {
-            .ok => |v| v,
-            .err => blk: {
-                var e = r.err;
-                defer e.deinit();
-                std.log.warn("{f}", .{e});
-                break :blk error.CryptoOperationFailed;
-            },
-        };
+        var r = try self.cryptoOperationResult(allocator, operation, algorithm, value);
+        return r.unwrap(error.CryptoOperationFailed);
     }
 
     fn cryptoOperationResult(

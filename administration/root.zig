@@ -42,16 +42,8 @@ pub const BackupClient = struct {
         storage_uri: []const u8,
         sas_token: []const u8,
     ) ![]const u8 {
-        const r = try self.beginBackupResult(allocator, storage_uri, sas_token);
-        return switch (r) {
-            .ok => |v| v,
-            .err => blk: {
-                var e = r.err;
-                defer e.deinit();
-                std.log.warn("{f}", .{e});
-                break :blk error.BeginBackupFailed;
-            },
-        };
+        var r = try self.beginBackupResult(allocator, storage_uri, sas_token);
+        return r.unwrap(error.BeginBackupFailed);
     }
 
     /// Same as `beginBackup` but returns `Result([]const u8)`.
@@ -101,16 +93,8 @@ pub const BackupClient = struct {
         backup_uri: []const u8,
         sas_token: []const u8,
     ) ![]const u8 {
-        const r = try self.beginRestoreResult(allocator, backup_uri, sas_token);
-        return switch (r) {
-            .ok => |v| v,
-            .err => blk: {
-                var e = r.err;
-                defer e.deinit();
-                std.log.warn("{f}", .{e});
-                break :blk error.BeginRestoreFailed;
-            },
-        };
+        var r = try self.beginRestoreResult(allocator, backup_uri, sas_token);
+        return r.unwrap(error.BeginRestoreFailed);
     }
 
     /// Same as `beginRestore` but returns `Result([]const u8)`.
@@ -198,16 +182,8 @@ pub const SettingsClient = struct {
         allocator: std.mem.Allocator,
         name: []const u8,
     ) ![]const u8 {
-        const r = try self.getSettingResult(allocator, name);
-        return switch (r) {
-            .ok => |v| v,
-            .err => blk: {
-                var e = r.err;
-                defer e.deinit();
-                std.log.warn("{f}", .{e});
-                break :blk error.GetSettingFailed;
-            },
-        };
+        var r = try self.getSettingResult(allocator, name);
+        return r.unwrap(error.GetSettingFailed);
     }
 
     /// Same as `getSetting` but returns `Result([]const u8)`.
@@ -247,16 +223,8 @@ pub const SettingsClient = struct {
         name: []const u8,
         value: []const u8,
     ) !void {
-        const r = try self.updateSettingResult(allocator, name, value);
-        switch (r) {
-            .ok => {},
-            .err => {
-                var e = r.err;
-                defer e.deinit();
-                std.log.warn("{f}", .{e});
-                return error.UpdateSettingFailed;
-            },
-        }
+        var r = try self.updateSettingResult(allocator, name, value);
+        try r.unwrap(error.UpdateSettingFailed);
     }
 
     /// Same as `updateSetting` but returns `Result(void)`.
