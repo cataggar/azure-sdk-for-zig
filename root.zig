@@ -570,7 +570,7 @@ pub const ServiceBusAdministrationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CreateQueueFailed;
         }
     }
@@ -586,7 +586,7 @@ pub const ServiceBusAdministrationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteQueueFailed;
         }
     }
@@ -602,7 +602,7 @@ pub const ServiceBusAdministrationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.ListQueuesFailed;
         }
 
@@ -633,7 +633,7 @@ pub const ServiceBusAdministrationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CreateTopicFailed;
         }
     }
@@ -649,7 +649,7 @@ pub const ServiceBusAdministrationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteTopicFailed;
         }
     }
@@ -665,7 +665,7 @@ pub const ServiceBusAdministrationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.ListTopicsFailed;
         }
 
@@ -696,7 +696,7 @@ pub const ServiceBusAdministrationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CreateSubscriptionFailed;
         }
     }
@@ -712,7 +712,7 @@ pub const ServiceBusAdministrationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteSubscriptionFailed;
         }
     }
@@ -728,7 +728,7 @@ pub const ServiceBusAdministrationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.ListSubscriptionsFailed;
         }
 
@@ -742,44 +742,64 @@ pub const ServiceBusAdministrationClient = struct {
 
 // ─────────────────── Atom XML Parsing ────────────────
 
-const xml = core.xml;
+const serde = @import("serde");
 
-/// Parse entity names from Atom feed response using the XML module.
+const AtomEntrySchema = struct {
+    title: []const u8,
+};
+
+const AtomFeedSchema = struct {
+    entry: ?[]const AtomEntrySchema = null,
+};
+
+/// Parse entity names from Atom feed response.
 fn parseEntityNames(allocator: std.mem.Allocator, body: []const u8, comptime entity_type: []const u8) !switch (entity_type.len) {
     5 => []QueueProperties,
     else => []TopicProperties,
 } {
-    const names = try xml.findAllText(allocator, body, "title");
-    defer {
-        for (names) |n| allocator.free(n);
-        allocator.free(names);
-    }
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const parsed = serde.xml.fromSlice(AtomFeedSchema, arena.allocator(), body) catch {
+        if (entity_type.len == 5)
+            return allocator.alloc(QueueProperties, 0)
+        else
+            return allocator.alloc(TopicProperties, 0);
+    };
+
+    const entries = parsed.entry orelse {
+        if (entity_type.len == 5)
+            return allocator.alloc(QueueProperties, 0)
+        else
+            return allocator.alloc(TopicProperties, 0);
+    };
 
     if (entity_type.len == 5) { // "Queue"
-        var result = try allocator.alloc(QueueProperties, names.len);
-        for (names, 0..) |name, i| {
-            result[i] = .{ .name = try allocator.dupe(u8, name) };
+        var result = try allocator.alloc(QueueProperties, entries.len);
+        for (entries, 0..) |e, i| {
+            result[i] = .{ .name = try allocator.dupe(u8, e.title) };
         }
         return result;
     } else { // "Topic"
-        var result = try allocator.alloc(TopicProperties, names.len);
-        for (names, 0..) |name, i| {
-            result[i] = .{ .name = try allocator.dupe(u8, name) };
+        var result = try allocator.alloc(TopicProperties, entries.len);
+        for (entries, 0..) |e, i| {
+            result[i] = .{ .name = try allocator.dupe(u8, e.title) };
         }
         return result;
     }
 }
 
 fn parseSubscriptionNames(allocator: std.mem.Allocator, body: []const u8, topic_name: []const u8) ![]SubscriptionProperties {
-    const names = try xml.findAllText(allocator, body, "title");
-    defer {
-        for (names) |n| allocator.free(n);
-        allocator.free(names);
-    }
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
 
-    var result = try allocator.alloc(SubscriptionProperties, names.len);
-    for (names, 0..) |name, i| {
-        result[i] = .{ .name = try allocator.dupe(u8, name), .topic_name = topic_name };
+    const parsed = serde.xml.fromSlice(AtomFeedSchema, arena.allocator(), body) catch
+        return allocator.alloc(SubscriptionProperties, 0);
+    const entries = parsed.entry orelse return allocator.alloc(SubscriptionProperties, 0);
+
+    var result = try allocator.alloc(SubscriptionProperties, entries.len);
+    for (entries, 0..) |e, i| {
+        result[i] = .{ .name = try allocator.dupe(u8, e.title), .topic_name = topic_name };
     }
     return result;
 }
