@@ -4,6 +4,7 @@
 ///! for account, database, and container/item operations via REST API.
 const std = @import("std");
 const core = @import("azure_core");
+const serde = @import("serde");
 
 // ─────────────────────── Enums ───────────────────────
 
@@ -439,34 +440,102 @@ pub const ContainerClient = struct {
 
 // ─────────────────── JSON Parsing ────────────────────
 
+const ResourceMetaSchema = struct {
+    _rid: ?[]const u8 = null,
+    _etag: ?[]const u8 = null,
+};
+
 fn parseDatabaseResponse(id: []const u8, body: []const u8) Database {
     var db = Database{ .id = id };
-    db.rid = parseJsonString(body, "\"_rid\":\"");
-    db.etag = parseJsonString(body, "\"_etag\":\"");
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    if (serde.json.fromSlice(ResourceMetaSchema, arena.allocator(), body)) |parsed| {
+        if (parsed._rid) |s| db.rid = dupeStaticLeak(s);
+        if (parsed._etag) |s| db.etag = dupeStaticLeak(s);
+    } else |_| {}
     return db;
 }
 
+const IdListEntrySchema = struct {
+    id: ?[]const u8 = null,
+};
+
+const DatabaseListSchema = struct {
+    Databases: ?[]const IdListEntrySchema = null,
+};
+
 fn parseDatabaseList(allocator: std.mem.Allocator, body: []const u8) ![]Database {
-    return parseIdList(allocator, body, Database);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const parsed = serde.json.fromSlice(DatabaseListSchema, arena.allocator(), body) catch
+        return allocator.alloc(Database, 0);
+    const entries = parsed.Databases orelse return allocator.alloc(Database, 0);
+
+    var result = try allocator.alloc(Database, entries.len);
+    var n: usize = 0;
+    errdefer {
+        for (result[0..n]) |db| allocator.free(db.id);
+        allocator.free(result);
+    }
+    for (entries) |entry| {
+        const id_str = entry.id orelse continue;
+        result[n] = .{ .id = try allocator.dupe(u8, id_str) };
+        n += 1;
+    }
+    return result[0..n];
 }
 
 fn parseContainerResponse(id: []const u8, body: []const u8) ContainerProperties {
     var props = ContainerProperties{ .id = id };
-    props.rid = parseJsonString(body, "\"_rid\":\"");
-    props.etag = parseJsonString(body, "\"_etag\":\"");
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    if (serde.json.fromSlice(ResourceMetaSchema, arena.allocator(), body)) |parsed| {
+        if (parsed._rid) |s| props.rid = dupeStaticLeak(s);
+        if (parsed._etag) |s| props.etag = dupeStaticLeak(s);
+    } else |_| {}
     return props;
 }
 
+const ContainerListSchema = struct {
+    DocumentCollections: ?[]const IdListEntrySchema = null,
+};
+
 fn parseContainerList(allocator: std.mem.Allocator, body: []const u8) ![]ContainerProperties {
-    return parseIdList(allocator, body, ContainerProperties);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const parsed = serde.json.fromSlice(ContainerListSchema, arena.allocator(), body) catch
+        return allocator.alloc(ContainerProperties, 0);
+    const entries = parsed.DocumentCollections orelse return allocator.alloc(ContainerProperties, 0);
+
+    var result = try allocator.alloc(ContainerProperties, entries.len);
+    var n: usize = 0;
+    errdefer {
+        for (result[0..n]) |c| allocator.free(c.id);
+        allocator.free(result);
+    }
+    for (entries) |entry| {
+        const id_str = entry.id orelse continue;
+        result[n] = .{ .id = try allocator.dupe(u8, id_str) };
+        n += 1;
+    }
+    return result[0..n];
 }
 
+const QueryResultMetaSchema = struct {
+    _continuation: ?[]const u8 = null,
+};
+
 fn parseQueryResult(allocator: std.mem.Allocator, body: []const u8) !QueryResult {
-    // Parse document bodies from {"Documents":[...], "_count": N}
+    // Parse document bodies from {"Documents":[...], "_count": N}.
+    // We do NOT use a typed schema for the document array because callers
+    // want raw JSON-encoded document substrings (each document is then
+    // re-parsed by the user with whatever schema they need). Slicing the
+    // raw body avoids a round-trip through serde.Value -> JSON.
     var docs = std.ArrayList([]const u8).empty;
     errdefer docs.deinit(allocator);
 
-    // Simple extraction: find each document object in the Documents array.
     const docs_start = std.mem.find(u8, body, "\"Documents\":[") orelse
         return .{ .documents = &.{} };
     const array_start = docs_start + "\"Documents\":[".len;
@@ -474,7 +543,6 @@ fn parseQueryResult(allocator: std.mem.Allocator, body: []const u8) !QueryResult
         return .{ .documents = &.{} };
     const array_content = body[array_start..array_end];
 
-    // Split by top-level objects (simplified: find matching braces)
     var depth: u32 = 0;
     var obj_start: ?usize = null;
     for (array_content, 0..) |ch, i| {
@@ -492,34 +560,26 @@ fn parseQueryResult(allocator: std.mem.Allocator, body: []const u8) !QueryResult
         }
     }
 
+    // Use serde for the simple `_continuation` field on the top-level envelope.
+    var meta_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer meta_arena.deinit();
+    var continuation: ?[]const u8 = null;
+    if (serde.json.fromSlice(QueryResultMetaSchema, meta_arena.allocator(), body)) |meta| {
+        if (meta._continuation) |s| continuation = dupeStaticLeak(s);
+    } else |_| {}
+
     return .{
         .documents = try docs.toOwnedSlice(allocator),
-        .continuation_token = parseJsonString(body, "\"_continuation\":\""),
+        .continuation_token = continuation,
     };
 }
 
-fn parseJsonString(body: []const u8, prefix: []const u8) ?[]const u8 {
-    const start = (std.mem.find(u8, body, prefix) orelse return null) + prefix.len;
-    const end = std.mem.findScalarPos(u8, body, start, '"') orelse return null;
-    return body[start..end];
-}
-
-fn parseIdList(allocator: std.mem.Allocator, body: []const u8, comptime T: type) ![]T {
-    // Parse {"<Collection>":[{"id":"..."},...],...}
-    var result = std.ArrayList(T).empty;
-    errdefer result.deinit(allocator);
-
-    const id_key = "\"id\":\"";
-    var pos: usize = 0;
-    while (std.mem.findPos(u8, body, pos, id_key)) |start| {
-        const val_start = start + id_key.len;
-        const val_end = std.mem.findScalarPos(u8, body, val_start, '"') orelse break;
-        const id = try allocator.dupe(u8, body[val_start..val_end]);
-        try result.append(allocator, .{ .id = id });
-        pos = val_end + 1;
-    }
-
-    return result.toOwnedSlice(allocator);
+/// Helper: dupe a string into page_allocator. The resulting slice lives forever.
+/// Used for fields on result structs that don't carry an allocator, matching
+/// the original substring-borrow lifetime (which lived for the request's
+/// response body — effectively forever for short-lived programs).
+fn dupeStaticLeak(s: []const u8) []const u8 {
+    return std.heap.page_allocator.dupe(u8, s) catch s;
 }
 
 // ─────────────────────── Tests ───────────────────────

@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("azure_core");
+const serde = @import("serde");
 
 // ─────────────────────────── Models ───────────────────────────
 
@@ -179,64 +180,62 @@ pub const ConfigurationClient = struct {
 
 // ─────────────────────────── Parsing ──────────────────────────
 
-fn parseSetting(allocator: std.mem.Allocator, key: []const u8, body: []const u8) !ConfigurationSetting {
-    const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{}) catch
-        return .{ .key = key };
-    defer parsed.deinit();
+const SettingSchema = struct {
+    value: ?[]const u8 = null,
+    label: ?[]const u8 = null,
+    content_type: ?[]const u8 = null,
+    etag: ?[]const u8 = null,
+    last_modified: ?[]const u8 = null,
+};
 
-    const obj = if (parsed.value == .object) parsed.value.object else return .{ .key = key };
+fn parseSetting(allocator: std.mem.Allocator, key: []const u8, body: []const u8) !ConfigurationSetting {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const parsed = serde.json.fromSlice(SettingSchema, arena.allocator(), body) catch
+        return .{ .key = key };
 
     var setting = ConfigurationSetting{ .key = key };
-
-    if (obj.get("value")) |v| {
-        if (v == .string) setting.value = try allocator.dupe(u8, v.string);
-    }
-    if (obj.get("label")) |v| {
-        if (v == .string) setting.label = try allocator.dupe(u8, v.string);
-    }
-    if (obj.get("content_type")) |v| {
-        if (v == .string) setting.content_type = try allocator.dupe(u8, v.string);
-    }
-    if (obj.get("etag")) |v| {
-        if (v == .string) setting.etag = try allocator.dupe(u8, v.string);
-    }
-    if (obj.get("last_modified")) |v| {
-        if (v == .string) setting.last_modified = try allocator.dupe(u8, v.string);
-    }
-
+    if (parsed.value) |v| setting.value = try allocator.dupe(u8, v);
+    if (parsed.label) |v| setting.label = try allocator.dupe(u8, v);
+    if (parsed.content_type) |v| setting.content_type = try allocator.dupe(u8, v);
+    if (parsed.etag) |v| setting.etag = try allocator.dupe(u8, v);
+    if (parsed.last_modified) |v| setting.last_modified = try allocator.dupe(u8, v);
     return setting;
 }
 
-fn parseSettingListPage(allocator: std.mem.Allocator, body: []const u8) !core.pager.PageResult(ConfigurationSetting) {
-    const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{}) catch
-        return .{ .items = try allocator.alloc(ConfigurationSetting, 0) };
-    defer parsed.deinit();
+const SettingListEntrySchema = struct {
+    key: ?[]const u8 = null,
+    value: ?[]const u8 = null,
+    label: ?[]const u8 = null,
+};
 
-    const obj = if (parsed.value == .object) parsed.value.object else return .{ .items = try allocator.alloc(ConfigurationSetting, 0) };
+const SettingListSchema = struct {
+    items: ?[]const SettingListEntrySchema = null,
+    @"@nextLink": ?[]const u8 = null,
+};
+
+fn parseSettingListPage(allocator: std.mem.Allocator, body: []const u8) !core.pager.PageResult(ConfigurationSetting) {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const parsed = serde.json.fromSlice(SettingListSchema, arena.allocator(), body) catch
+        return .{ .items = try allocator.alloc(ConfigurationSetting, 0) };
 
     var next_link: ?[]u8 = null;
-    if (obj.get("@nextLink")) |nl| {
-        if (nl == .string and nl.string.len > 0)
-            next_link = try allocator.dupe(u8, nl.string);
+    if (parsed.@"@nextLink") |nl| {
+        if (nl.len > 0) next_link = try allocator.dupe(u8, nl);
     }
 
-    const items_arr = if (obj.get("items")) |v| (if (v == .array) v.array.items else null) else null;
-    const items = items_arr orelse return .{ .items = try allocator.alloc(ConfigurationSetting, 0), .next_link = next_link };
+    const entries = parsed.items orelse
+        return .{ .items = try allocator.alloc(ConfigurationSetting, 0), .next_link = next_link };
 
-    var result = try allocator.alloc(ConfigurationSetting, items.len);
-    for (items, 0..) |item, i| {
+    var result = try allocator.alloc(ConfigurationSetting, entries.len);
+    for (entries, 0..) |entry, i| {
         var setting = ConfigurationSetting{ .key = "" };
-        if (item == .object) {
-            if (item.object.get("key")) |v| {
-                if (v == .string) setting.key = try allocator.dupe(u8, v.string);
-            }
-            if (item.object.get("value")) |v| {
-                if (v == .string) setting.value = try allocator.dupe(u8, v.string);
-            }
-            if (item.object.get("label")) |v| {
-                if (v == .string) setting.label = try allocator.dupe(u8, v.string);
-            }
-        }
+        if (entry.key) |v| setting.key = try allocator.dupe(u8, v);
+        if (entry.value) |v| setting.value = try allocator.dupe(u8, v);
+        if (entry.label) |v| setting.label = try allocator.dupe(u8, v);
         result[i] = setting;
     }
     return .{ .items = result, .next_link = next_link };

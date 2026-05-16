@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("azure_core");
+const serde = @import("serde");
 
 // ─────────────────────────── Models ───────────────────────────
 
@@ -92,21 +93,20 @@ pub const AttestationClient = struct {
 // ─────────────────────────── Parsing ──────────────────────────
 
 fn parseAttestationResult(allocator: std.mem.Allocator, body: []const u8) !AttestationResult {
-    const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{}) catch
-        return .{};
-    defer parsed.deinit();
+    const Schema = struct {
+        token: ?[]const u8 = null,
+        isDebuggable: ?bool = null,
+    };
 
-    const obj = if (parsed.value == .object) parsed.value.object else return .{};
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const parsed = serde.json.fromSlice(Schema, arena.allocator(), body) catch
+        return .{};
 
     var result = AttestationResult{};
-
-    if (obj.get("token")) |v| {
-        if (v == .string) result.token = try allocator.dupe(u8, v.string);
-    }
-    if (obj.get("isDebuggable")) |v| {
-        if (v == .bool) result.is_debuggable = v.bool;
-    }
-
+    if (parsed.token) |v| result.token = try allocator.dupe(u8, v);
+    result.is_debuggable = parsed.isDebuggable;
     return result;
 }
 

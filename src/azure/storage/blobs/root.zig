@@ -285,6 +285,12 @@ fn parseBlobList(allocator: std.mem.Allocator, body: []const u8) ![]BlobItem {
     //     <Blob><Name>file1.txt</Name><Properties><Content-Type>text/plain</Content-Type></Properties></Blob>
     //   </Blobs>
     // </EnumerationResults>
+    //
+    // Note: serde.xml's deserialization of repeated child elements (slices)
+    // does not currently round-trip — it serializes `[]T` as
+    // `<field><item>...</item></field>` but cannot parse Azure's
+    // `<Blobs><Blob>...</Blob></Blobs>` shape back into a slice. JSON parsing
+    // was fully migrated to serde, but XML still uses zig-xml.
     const xml = core.xml;
 
     const names = try xml.findAllText(allocator, body, "Name");
