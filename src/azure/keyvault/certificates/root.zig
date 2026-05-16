@@ -56,16 +56,8 @@ pub const CertificateClient = struct {
         allocator: std.mem.Allocator,
         name: []const u8,
     ) !KeyVaultCertificate {
-        const r = try self.getCertificateResult(allocator, name);
-        return switch (r) {
-            .ok => |v| v,
-            .err => blk: {
-                var e = r.err;
-                defer e.deinit();
-                std.log.warn("{f}", .{e});
-                break :blk error.CertificateNotFound;
-            },
-        };
+        var r = try self.getCertificateResult(allocator, name);
+        return r.unwrap(error.CertificateNotFound);
     }
 
     /// Same as `getCertificate` but returns `Result(KeyVaultCertificate)`.
@@ -102,16 +94,8 @@ pub const CertificateClient = struct {
         subject: []const u8,
         issuer: []const u8,
     ) !KeyVaultCertificate {
-        const r = try self.createCertificateResult(allocator, name, subject, issuer);
-        return switch (r) {
-            .ok => |v| v,
-            .err => blk: {
-                var e = r.err;
-                defer e.deinit();
-                std.log.warn("{f}", .{e});
-                break :blk error.CreateCertificateFailed;
-            },
-        };
+        var r = try self.createCertificateResult(allocator, name, subject, issuer);
+        return r.unwrap(error.CreateCertificateFailed);
     }
 
     /// Same as `createCertificate` but returns `Result(KeyVaultCertificate)`.
@@ -157,16 +141,8 @@ pub const CertificateClient = struct {
         allocator: std.mem.Allocator,
         name: []const u8,
     ) !void {
-        const r = try self.deleteCertificateResult(allocator, name);
-        switch (r) {
-            .ok => {},
-            .err => {
-                var e = r.err;
-                defer e.deinit();
-                std.log.warn("{f}", .{e});
-                return error.DeleteCertificateFailed;
-            },
-        }
+        var r = try self.deleteCertificateResult(allocator, name);
+        try r.unwrap(error.DeleteCertificateFailed);
     }
 
     /// Same as `deleteCertificate` but returns `Result(void)`.

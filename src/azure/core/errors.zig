@@ -168,6 +168,28 @@ pub fn Result(comptime T: type) type {
                 .err => |e| e.error_code,
             };
         }
+
+        /// Convert this Result into the corresponding Zig error union:
+        /// returns the `.ok` payload on success, or logs+deinits the
+        /// `AzureError` and returns `fail_error` on Azure-side failure.
+        ///
+        /// Designed for the thin-wrapper pattern: a simple-form method
+        /// like `getSecret(...) !KeyVaultSecret` calls the matching
+        /// `getSecretResult` and then `return r.unwrap(error.X);`. Two
+        /// lines instead of an explicit switch.
+        ///
+        /// Note: this consumes the `AzureError` strings via `deinit`,
+        /// so callers cannot use `r` again afterward.
+        pub fn unwrap(self: *Self, fail_error: anyerror) anyerror!T {
+            switch (self.*) {
+                .ok => |v| return v,
+                .err => |*e| {
+                    std.log.warn("{f}", .{e.*});
+                    e.deinit();
+                    return fail_error;
+                },
+            }
+        }
     };
 }
 
@@ -319,4 +341,23 @@ test "Result.deinit dispatches to payload.deinit when present" {
     try std.testing.expectEqualStrings("data", r.ok.owned);
     // testing.allocator catches leaks: if deinit didn't dispatch, this test
     // would fail with a "leaked 1 allocation" error.
+}
+
+test "Result.unwrap: .ok returns the value" {
+    var r: Result(u32) = .{ .ok = 99 };
+    const v = try r.unwrap(error.UnusedFail);
+    try std.testing.expectEqual(@as(u32, 99), v);
+}
+
+test "Result.unwrap: .err deinits and returns supplied error" {
+    var r: Result(u32) = .{ .err = .{
+        .allocator = std.testing.allocator,
+        .status_code = 403,
+        .error_code = try std.testing.allocator.dupe(u8, "Forbidden"),
+        .message = try std.testing.allocator.dupe(u8, "Access denied"),
+    } };
+    const got = r.unwrap(error.SecretNotFound);
+    try std.testing.expectError(error.SecretNotFound, got);
+    // unwrap deinits the AzureError on the .err path; testing.allocator
+    // would flag a leak here if it didn't.
 }

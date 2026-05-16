@@ -83,16 +83,8 @@ pub const SecretClient = struct {
         allocator: std.mem.Allocator,
         name: []const u8,
     ) !KeyVaultSecret {
-        const r = try self.getSecretResult(allocator, name);
-        return switch (r) {
-            .ok => |v| v,
-            .err => blk: {
-                var e = r.err;
-                defer e.deinit();
-                std.log.warn("{f}", .{e});
-                break :blk error.SecretNotFound;
-            },
-        };
+        var r = try self.getSecretResult(allocator, name);
+        return r.unwrap(error.SecretNotFound);
     }
 
     /// Same as `getSecret`, but returns the typed `AzureError` on
@@ -138,16 +130,8 @@ pub const SecretClient = struct {
         name: []const u8,
         value: []const u8,
     ) !KeyVaultSecret {
-        const r = try self.setSecretResult(allocator, name, value);
-        return switch (r) {
-            .ok => |v| v,
-            .err => blk: {
-                var e = r.err;
-                defer e.deinit();
-                std.log.warn("{f}", .{e});
-                break :blk error.SetSecretFailed;
-            },
-        };
+        var r = try self.setSecretResult(allocator, name, value);
+        return r.unwrap(error.SetSecretFailed);
     }
 
     /// Same as `setSecret` but returns `Result(KeyVaultSecret)`.
@@ -188,16 +172,8 @@ pub const SecretClient = struct {
         allocator: std.mem.Allocator,
         name: []const u8,
     ) !DeletedSecret {
-        const r = try self.deleteSecretResult(allocator, name);
-        return switch (r) {
-            .ok => |v| v,
-            .err => blk: {
-                var e = r.err;
-                defer e.deinit();
-                std.log.warn("{f}", .{e});
-                break :blk error.DeleteSecretFailed;
-            },
-        };
+        var r = try self.deleteSecretResult(allocator, name);
+        return r.unwrap(error.DeleteSecretFailed);
     }
 
     /// Same as `deleteSecret` but returns `Result(DeletedSecret)`.
@@ -232,16 +208,8 @@ pub const SecretClient = struct {
         allocator: std.mem.Allocator,
         name: []const u8,
     ) !void {
-        const r = try self.purgeDeletedSecretResult(allocator, name);
-        switch (r) {
-            .ok => {},
-            .err => {
-                var e = r.err;
-                defer e.deinit();
-                std.log.warn("{f}", .{e});
-                return error.PurgeFailed;
-            },
-        }
+        var r = try self.purgeDeletedSecretResult(allocator, name);
+        try r.unwrap(error.PurgeFailed);
     }
 
     /// Same as `purgeDeletedSecret` but returns `Result(void)`.
@@ -274,16 +242,8 @@ pub const SecretClient = struct {
         allocator: std.mem.Allocator,
         name: []const u8,
     ) !KeyVaultSecret {
-        const r = try self.recoverDeletedSecretResult(allocator, name);
-        return switch (r) {
-            .ok => |v| v,
-            .err => blk: {
-                var e = r.err;
-                defer e.deinit();
-                std.log.warn("{f}", .{e});
-                break :blk error.RecoverFailed;
-            },
-        };
+        var r = try self.recoverDeletedSecretResult(allocator, name);
+        return r.unwrap(error.RecoverFailed);
     }
 
     /// Same as `recoverDeletedSecret` but returns `Result(KeyVaultSecret)`.
