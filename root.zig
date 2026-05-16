@@ -8,6 +8,12 @@ pub const BlobProperties = struct {
     content_length: ?u64 = null,
     etag: ?[]const u8 = null,
     last_modified: ?[]const u8 = null,
+
+    pub fn deinit(self: BlobProperties, allocator: std.mem.Allocator) void {
+        if (self.content_type) |c| allocator.free(c);
+        if (self.etag) |e| allocator.free(e);
+        if (self.last_modified) |lm| allocator.free(lm);
+    }
 };
 
 pub const BlobItem = struct {
@@ -45,6 +51,12 @@ pub const BlobContainerClient = struct {
 
     /// PUT /container?restype=container
     pub fn create(self: *BlobContainerClient, allocator: std.mem.Allocator) !void {
+        var r = try self.createResult(allocator);
+        try r.unwrap(error.CreateContainerFailed);
+    }
+
+    /// Same as `create` but returns `Result(void)`.
+    pub fn createResult(self: *BlobContainerClient, allocator: std.mem.Allocator) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}?restype=container",
@@ -58,14 +70,21 @@ pub const BlobContainerClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.CreateContainerFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// DELETE /container?restype=container
     pub fn deleteContainer(self: *BlobContainerClient, allocator: std.mem.Allocator) !void {
+        var r = try self.deleteContainerResult(allocator);
+        try r.unwrap(error.DeleteContainerFailed);
+    }
+
+    /// Same as `deleteContainer` but returns `Result(void)`.
+    pub fn deleteContainerResult(self: *BlobContainerClient, allocator: std.mem.Allocator) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}?restype=container",
@@ -79,10 +98,11 @@ pub const BlobContainerClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.DeleteContainerFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// GET /container?restype=container&comp=list
@@ -162,6 +182,12 @@ pub const BlobClient = struct {
 
     /// GET /container/blob
     pub fn download(self: *BlobClient, allocator: std.mem.Allocator) ![]const u8 {
+        var r = try self.downloadResult(allocator);
+        return r.unwrap(error.DownloadFailed);
+    }
+
+    /// Same as `download` but returns `Result([]const u8)`.
+    pub fn downloadResult(self: *BlobClient, allocator: std.mem.Allocator) !core.errors.Result([]const u8) {
         const url = try self.buildBlobUrl(allocator);
         defer allocator.free(url);
 
@@ -172,15 +198,23 @@ pub const BlobClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.DownloadFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return allocator.dupe(u8, resp.body);
+        return .{ .ok = try allocator.dupe(u8, resp.body) };
     }
 
     /// PUT /container/blob
     pub fn upload(self: *BlobClient, allocator: std.mem.Allocator, data: []const u8, content_type: []const u8) !void {
+        var r = try self.uploadResult(allocator, data, content_type);
+        try r.unwrap(error.UploadFailed);
+    }
+
+    /// Same as `upload` but returns `Result(void)`.
+    pub fn uploadResult(self: *BlobClient, allocator: std.mem.Allocator, data: []const u8, content_type: []const u8) !core.errors.Result(void) {
         const url = try self.buildBlobUrl(allocator);
         defer allocator.free(url);
 
@@ -193,14 +227,21 @@ pub const BlobClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.UploadFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// PUT /container/blob with conditional headers and ETag response.
     pub fn uploadConditional(self: *BlobClient, allocator: std.mem.Allocator, data: []const u8, options: UploadBlobOptions) !UploadBlobResult {
+        var r = try self.uploadConditionalResult(allocator, data, options);
+        return r.unwrap(error.UploadFailed);
+    }
+
+    /// Same as `uploadConditional` but returns `Result(UploadBlobResult)`.
+    pub fn uploadConditionalResult(self: *BlobClient, allocator: std.mem.Allocator, data: []const u8, options: UploadBlobOptions) !core.errors.Result(UploadBlobResult) {
         const url = try self.buildBlobUrl(allocator);
         defer allocator.free(url);
 
@@ -208,28 +249,32 @@ pub const BlobClient = struct {
         defer req.deinit();
         try req.setHeader("Content-Type", options.content_type);
         try req.setHeader("x-ms-blob-type", "BlockBlob");
-        if (options.if_match) |etag| {
-            try req.setHeader("If-Match", etag);
-        }
-        if (options.if_none_match) |etag| {
-            try req.setHeader("If-None-Match", etag);
-        }
+        if (options.if_match) |etag| try req.setHeader("If-Match", etag);
+        if (options.if_none_match) |etag| try req.setHeader("If-None-Match", etag);
         req.body = data;
 
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.UploadFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
         const etag = if (resp.headers.get("ETag")) |e| try allocator.dupe(u8, e) else null;
-        return .{ .etag = etag };
+        return .{ .ok = .{ .etag = etag } };
     }
 
     /// DELETE /container/blob
     pub fn deleteBlob(self: *BlobClient, allocator: std.mem.Allocator) !void {
+        var r = try self.deleteBlobResult(allocator);
+        try r.unwrap(error.DeleteBlobFailed);
+    }
+
+    /// Same as `deleteBlob` but returns `Result(void)`.
+    pub fn deleteBlobResult(self: *BlobClient, allocator: std.mem.Allocator) !core.errors.Result(void) {
         const url = try self.buildBlobUrl(allocator);
         defer allocator.free(url);
 
@@ -239,14 +284,21 @@ pub const BlobClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.DeleteBlobFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// HEAD /container/blob
     pub fn getProperties(self: *BlobClient, allocator: std.mem.Allocator) !BlobProperties {
+        var r = try self.getPropertiesResult(allocator);
+        return r.unwrap(error.GetPropertiesFailed);
+    }
+
+    /// Same as `getProperties` but returns `Result(BlobProperties)`.
+    pub fn getPropertiesResult(self: *BlobClient, allocator: std.mem.Allocator) !core.errors.Result(BlobProperties) {
         const url = try self.buildBlobUrl(allocator);
         defer allocator.free(url);
 
@@ -257,14 +309,16 @@ pub const BlobClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.GetPropertiesFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return .{
+        return .{ .ok = .{
             .etag = if (resp.headers.get("ETag")) |e| try allocator.dupe(u8, e) else null,
             .last_modified = if (resp.headers.get("Last-Modified")) |lm| try allocator.dupe(u8, lm) else null,
-        };
+        } };
     }
 
     fn buildBlobUrl(self: *BlobClient, allocator: std.mem.Allocator) ![]u8 {
