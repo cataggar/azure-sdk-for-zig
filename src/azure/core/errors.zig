@@ -107,24 +107,21 @@ pub fn logErrorResponse(response: http.Response) void {
 ///
 /// **Lifetime**
 ///
-/// `Result.deinit()` frees the `AzureError`'s strings on the `.err`
-/// path. The `.ok` payload retains the same ownership rules as the
-/// non-`Result` variant of the method — typically the caller still
-/// frees individual fields. We deliberately do not call a synthetic
-/// `T.deinit` because not every payload type has one and the rules
-/// vary per service.
+/// `Result.deinit(allocator)` frees both branches:
+/// - On `.err`, it frees the `AzureError`'s strings.
+/// - On `.ok`, if the payload type `T` declares
+///   `pub fn deinit(self, allocator: std.mem.Allocator) void`, that
+///   method is called; otherwise no-op. This lets callers write
+///   `defer r.deinit(allocator);` once and trust both paths are
+///   cleaned up.
 ///
 /// **Example**
 ///
 /// ```zig
 /// var r = try client.getSecretResult(allocator, "name");
-/// defer r.deinit();
+/// defer r.deinit(allocator);
 /// switch (r) {
-///     .ok => |secret| {
-///         defer if (secret.value) |v| allocator.free(v);
-///         defer if (secret.id) |i| allocator.free(i);
-///         use(secret);
-///     },
+///     .ok => |secret| use(secret),
 ///     .err => |az_err| {
 ///         if (std.mem.eql(u8, az_err.error_code orelse "", "SecretNotFound")) {
 ///             // expected: secret didn't exist
@@ -141,12 +138,14 @@ pub fn Result(comptime T: type) type {
 
         const Self = @This();
 
-        /// Free the `AzureError` strings on the `.err` path. No-op for
-        /// `.ok`; callers free the payload using the same rules as the
-        /// non-`Result` variant of the method.
-        pub fn deinit(self: *Self) void {
+        /// Free both the `AzureError` strings (on the `.err` path) and the
+        /// payload's allocations (on the `.ok` path, if `T` declares a
+        /// `deinit(self, allocator) void` method — comptime-detected).
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
             switch (self.*) {
-                .ok => {},
+                .ok => |*payload| {
+                    if (comptime hasPayloadDeinit(T)) payload.deinit(allocator);
+                },
                 .err => |*e| e.deinit(),
             }
         }
@@ -170,6 +169,19 @@ pub fn Result(comptime T: type) type {
             };
         }
     };
+}
+
+/// True if `T` has `pub fn deinit(self, allocator: std.mem.Allocator) void`.
+/// Used by `Result(T).deinit` to dispatch to payload cleanup without forcing
+/// every payload type to grow a deinit method.
+fn hasPayloadDeinit(comptime T: type) bool {
+    if (@typeInfo(T) != .@"struct") return false;
+    if (!@hasDecl(T, "deinit")) return false;
+    const Fn = @TypeOf(T.deinit);
+    const info = @typeInfo(Fn);
+    if (info != .@"fn") return false;
+    const params = info.@"fn".params;
+    return params.len == 2;
 }
 
 test "errorFromResponse success" {
@@ -270,9 +282,9 @@ test "logErrorResponse is a no-op on success" {
     logErrorResponse(resp);
 }
 
-test "Result.ok holds payload, deinit is a no-op" {
+test "Result.ok holds payload, deinit is a no-op when T has no deinit" {
     var r: Result(u32) = .{ .ok = 42 };
-    defer r.deinit();
+    defer r.deinit(std.testing.allocator);
     try std.testing.expect(r.isOk());
     try std.testing.expectEqual(@as(?[]const u8, null), r.errorCode());
     try std.testing.expectEqual(@as(u32, 42), r.ok);
@@ -285,8 +297,26 @@ test "Result.err carries AzureError and frees it on deinit" {
         .error_code = try std.testing.allocator.dupe(u8, "Throttled"),
         .message = try std.testing.allocator.dupe(u8, "Slow down"),
     } };
-    defer r.deinit();
+    defer r.deinit(std.testing.allocator);
     try std.testing.expect(!r.isOk());
     try std.testing.expectEqualStrings("Throttled", r.errorCode().?);
     try std.testing.expectEqual(@as(u16, 429), r.err.status_code);
+}
+
+test "Result.deinit dispatches to payload.deinit when present" {
+    const Payload = struct {
+        owned: []const u8,
+
+        pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
+            allocator.free(self.owned);
+        }
+    };
+    var r: Result(Payload) = .{
+        .ok = .{ .owned = try std.testing.allocator.dupe(u8, "data") },
+    };
+    defer r.deinit(std.testing.allocator);
+    try std.testing.expect(r.isOk());
+    try std.testing.expectEqualStrings("data", r.ok.owned);
+    // testing.allocator catches leaks: if deinit didn't dispatch, this test
+    // would fail with a "leaked 1 allocation" error.
 }

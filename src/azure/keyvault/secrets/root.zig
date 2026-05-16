@@ -25,6 +25,16 @@ pub const KeyVaultSecret = struct {
     value: ?[]const u8 = null,
     id: ?[]const u8 = null,
     properties: SecretProperties = .{},
+
+    /// Free the allocated `value`, `id`, and `properties.content_type`
+    /// strings. `name` is NOT freed — by convention for single-resource
+    /// fetches it's a borrow of the caller's input string (and the same
+    /// pointer the caller passed to `getSecret(..., name)`).
+    pub fn deinit(self: KeyVaultSecret, allocator: std.mem.Allocator) void {
+        if (self.value) |v| allocator.free(v);
+        if (self.id) |i| allocator.free(i);
+        if (self.properties.content_type) |c| allocator.free(c);
+    }
 };
 
 pub const DeletedSecret = struct {
@@ -383,14 +393,10 @@ test "SecretClient getSecretResult: ok path" {
     );
 
     var r = try client.getSecretResult(allocator, "mysecret");
-    defer r.deinit();
+    defer r.deinit(allocator);
 
     try std.testing.expect(r.isOk());
-    const secret = r.ok;
-    defer allocator.free(secret.value.?);
-    defer allocator.free(secret.id.?);
-
-    try std.testing.expectEqualStrings("my-secret-value", secret.value.?);
+    try std.testing.expectEqualStrings("my-secret-value", r.ok.value.?);
 }
 
 test "SecretClient getSecretResult: err path surfaces SecretNotFound code" {
@@ -416,7 +422,7 @@ test "SecretClient getSecretResult: err path surfaces SecretNotFound code" {
     );
 
     var r = try client.getSecretResult(allocator, "missing");
-    defer r.deinit();
+    defer r.deinit(allocator);
 
     try std.testing.expect(!r.isOk());
     try std.testing.expectEqualStrings("SecretNotFound", r.errorCode().?);
@@ -444,7 +450,7 @@ test "SecretClient getSecretResult: err path with no parseable body" {
     );
 
     var r = try client.getSecretResult(allocator, "boom");
-    defer r.deinit();
+    defer r.deinit(allocator);
 
     try std.testing.expect(!r.isOk());
     // No JSON envelope in the body → error_code/message stay null, but
