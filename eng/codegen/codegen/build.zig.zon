@@ -8,7 +8,6 @@
         // point at pinned git URLs+hashes the same way the top-level
         // build.zig.zon does for serde / uamqp.
         .wamr = .{ .path = "../../../../wamr" },
-        .wabt = .{ .path = "../../../../wabt" },
         .serde = .{ .path = "../../../../serde.zig" },
     },
     .paths = .{

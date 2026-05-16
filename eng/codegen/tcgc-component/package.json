@@ -8,7 +8,8 @@
   "tspMain": "src/index.js",
   "scripts": {
     "build": "jco componentize src/index.js --wit wit/component.wit --world-name codegen --out tcgc.wasm",
-    "clean": "rm -f tcgc.wasm",
+    "build:stub": "jco componentize src/stub.js --wit wit/component.wit --world-name codegen --out tcgc-stub.wasm",
+    "clean": "rm -f tcgc.wasm tcgc-stub.wasm",
     "dev": "node src/index.js"
   },
   "dependencies": {

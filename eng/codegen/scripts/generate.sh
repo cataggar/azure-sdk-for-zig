@@ -8,16 +8,20 @@
 #       <abs-path-to-tspconfig.yaml-or-spec-dir> \
 #       [--kind client] \
 #       [--package-name <name>] \
-#       [--out <dir>]
+#       [--out <dir>] \
+#       [--wasi <path/to/tcgc.wasm>]
 #
-# What it does:
+# Two execution modes:
 #
-#   1. Runs the TCGC component on the spec to produce a JSON code model.
-#      For now we drive the Node-runnable form of the JS adapter; once
-#      the WASI host (`eng/codegen/codegen/src/host.zig`) is wired up,
-#      that step will load tcgc.wasm via wamr instead.
-#   2. Runs the Zig codegen binary against the JSON code model.
-#   3. Runs `zig fmt` on the output.
+#  • Node-bridge (default) — drives the JS adapter at
+#    eng/codegen/tcgc-component/src/index.js. Works today for any
+#    TypeSpec spec the JS adapter handles.
+#
+#  • WASI host (`--wasi <wasm>`) — drives the Zig codegen binary's
+#    `--tsp` mode, which loads the wasm component through the wamr
+#    Component Model runtime. Requires that `<wasm>` was produced by
+#    `jco componentize`. Only the stub component (`stub.js`) builds
+#    today; full TCGC componentization is tracked separately.
 #
 # The orphan-branch publish flow (`git worktree add --orphan
 # <kind>/<package_name>`) is intentionally separated from this script
@@ -34,12 +38,14 @@ spec_input=""
 kind="client"
 package_name=""
 out_dir=""
+use_wasi=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --kind)         kind="$2"; shift 2 ;;
         --package-name) package_name="$2"; shift 2 ;;
         --out)          out_dir="$2"; shift 2 ;;
+        --wasi)         use_wasi="$2"; shift 2 ;;
         --help|-h)
             sed -n '3,22p' "$0"
             exit 0
@@ -88,28 +94,42 @@ fi
 
 mkdir -p "$out_dir"
 
-# Step 1 — JSON code model via the JS adapter.
-json_path="$(mktemp -t code-model-XXXXXX.json)"
-trap 'rm -f "$json_path"' EXIT
-
-echo "→ running TCGC adapter on $spec_dir"
-(
-    cd "$COMPONENT_DIR"
-    if [[ ! -d node_modules ]]; then npm install --no-audit --no-fund >/dev/null; fi
-    node src/index.js "$spec_dir" "{\"package-name\":\"$package_name\"}" >"$json_path"
-)
-
-# Step 2 — Zig emitter.
+# Step 2 — build the Zig codegen binary if needed.
 if [[ ! -x "$BIN_DIR/zig-out/bin/codegen" ]]; then
     echo "→ building codegen"
     (cd "$BIN_DIR" && zig build)
 fi
 
-echo "→ emitting to $out_dir"
-"$BIN_DIR/zig-out/bin/codegen" \
-    --from-json "$json_path" \
-    --out "$out_dir" \
-    --package-name "$package_name"
+if [[ -n "$use_wasi" ]]; then
+    # WASI-host mode: feed tcgc.wasm directly to the codegen binary.
+    if [[ ! -f "$use_wasi" ]]; then
+        echo "wasm component not found: $use_wasi" >&2
+        exit 1
+    fi
+    echo "→ running WASI host on $spec_dir using $use_wasi"
+    "$BIN_DIR/zig-out/bin/codegen" \
+        --tsp "$spec_dir" \
+        --wasm "$use_wasi" \
+        --out "$out_dir" \
+        --package-name "$package_name"
+else
+    # Node-bridge mode: run the JS adapter, then the Zig emitter.
+    json_path="$(mktemp -t code-model-XXXXXX.json)"
+    trap 'rm -f "$json_path"' EXIT
+
+    echo "→ running TCGC adapter on $spec_dir"
+    (
+        cd "$COMPONENT_DIR"
+        if [[ ! -d node_modules ]]; then npm install --no-audit --no-fund >/dev/null; fi
+        node src/index.js "$spec_dir" "{\"package-name\":\"$package_name\"}" >"$json_path"
+    )
+
+    echo "→ emitting to $out_dir"
+    "$BIN_DIR/zig-out/bin/codegen" \
+        --from-json "$json_path" \
+        --out "$out_dir" \
+        --package-name "$package_name"
+fi
 
 # Step 3 — zig fmt.
 echo "→ formatting"
