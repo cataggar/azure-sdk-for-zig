@@ -45,7 +45,7 @@ pub const DataLakeFileSystemClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CreateFileSystemFailed;
         }
     }
@@ -66,7 +66,7 @@ pub const DataLakeFileSystemClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteFileSystemFailed;
         }
     }
@@ -107,7 +107,7 @@ pub const DataLakeFileClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CreateFileFailed;
         }
     }
@@ -130,7 +130,7 @@ pub const DataLakeFileClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.AppendFailed;
         }
     }
@@ -151,7 +151,7 @@ pub const DataLakeFileClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.FlushFailed;
         }
     }
@@ -172,7 +172,7 @@ pub const DataLakeFileClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.ReadFailed;
         }
 
@@ -195,7 +195,7 @@ pub const DataLakeFileClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteFileFailed;
         }
     }

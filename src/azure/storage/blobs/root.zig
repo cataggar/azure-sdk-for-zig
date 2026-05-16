@@ -59,7 +59,7 @@ pub const BlobContainerClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CreateContainerFailed;
         }
     }
@@ -80,7 +80,7 @@ pub const BlobContainerClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteContainerFailed;
         }
     }
@@ -101,7 +101,7 @@ pub const BlobContainerClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.ListBlobsFailed;
         }
 
@@ -172,7 +172,7 @@ pub const BlobClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DownloadFailed;
         }
 
@@ -194,7 +194,7 @@ pub const BlobClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.UploadFailed;
         }
     }
@@ -220,7 +220,7 @@ pub const BlobClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.UploadFailed;
         }
 
@@ -240,7 +240,7 @@ pub const BlobClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteBlobFailed;
         }
     }
@@ -257,7 +257,7 @@ pub const BlobClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.GetPropertiesFailed;
         }
 
@@ -285,26 +285,40 @@ fn parseBlobList(allocator: std.mem.Allocator, body: []const u8) ![]BlobItem {
     //     <Blob><Name>file1.txt</Name><Properties><Content-Type>text/plain</Content-Type></Properties></Blob>
     //   </Blobs>
     // </EnumerationResults>
-    const xml = core.xml;
+    const serde = @import("serde");
 
-    const names = try xml.findAllText(allocator, body, "Name");
-    defer {
-        for (names) |n| allocator.free(n);
-        allocator.free(names);
-    }
+    const BlobPropertiesSchema = struct {
+        @"Content-Type": ?[]const u8 = null,
+    };
+    const BlobSchema = struct {
+        Name: []const u8,
+        Properties: ?BlobPropertiesSchema = null,
+    };
+    const BlobsSchema = struct {
+        Blob: ?[]const BlobSchema = null,
+    };
+    const EnumerationResultsSchema = struct {
+        Blobs: ?BlobsSchema = null,
+    };
 
-    const content_types = try xml.findAllText(allocator, body, "Content-Type");
-    defer {
-        for (content_types) |ct| allocator.free(ct);
-        allocator.free(content_types);
-    }
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
 
-    var result = try allocator.alloc(BlobItem, names.len);
-    for (names, 0..) |name, i| {
+    const parsed = serde.xml.fromSlice(EnumerationResultsSchema, arena.allocator(), body) catch
+        return allocator.alloc(BlobItem, 0);
+
+    const blobs_envelope = parsed.Blobs orelse return allocator.alloc(BlobItem, 0);
+    const blob_list = blobs_envelope.Blob orelse return allocator.alloc(BlobItem, 0);
+
+    var result = try allocator.alloc(BlobItem, blob_list.len);
+    for (blob_list, 0..) |blob, i| {
         result[i] = .{
-            .name = try allocator.dupe(u8, name),
+            .name = try allocator.dupe(u8, blob.Name),
             .properties = .{
-                .content_type = if (i < content_types.len) try allocator.dupe(u8, content_types[i]) else null,
+                .content_type = if (blob.Properties) |p|
+                    (if (p.@"Content-Type") |ct| try allocator.dupe(u8, ct) else null)
+                else
+                    null,
             },
         };
     }

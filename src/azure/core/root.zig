@@ -3,11 +3,11 @@
 ///! Provides the HTTP pipeline, transport, policies, credential abstractions,
 ///! and common utilities that all Azure service SDKs build on.
 ///!
-///! Backed entirely by the Zig standard library:
-///!   HTTP  → std.http.Client
-///!   TLS   → std.crypto.tls
-///!   JSON  → std.json
-///!   XML   → zig-xml (github.com/cataggar/zig-xml)
+///! Backed by the Zig standard library + serde.zig:
+///!   HTTP   → std.http.Client
+///!   TLS    → std.crypto.tls
+///!   JSON   → serde.json (typed schemas)
+///!   XML    → serde.xml (typed schemas)
 ///!   Crypto → std.crypto (HMAC-SHA256, SHA-256, MD5)
 ///!   Base64 → std.base64
 
@@ -28,7 +28,6 @@ pub const pager = @import("pager.zig");
 pub const case_insensitive_map = @import("case_insensitive_map.zig");
 pub const base64 = @import("base64.zig");
 pub const cloud = @import("cloud.zig");
-pub const xml = @import("xml.zig");
 pub const tracing = @import("tracing/root.zig");
 
 pub const version: []const u8 = "0.1.0";

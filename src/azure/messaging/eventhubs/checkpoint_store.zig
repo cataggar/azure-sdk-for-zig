@@ -4,6 +4,7 @@
 ///! enabling distributed event processing with load balancing.
 const std = @import("std");
 const core = @import("azure_core");
+const serde = @import("serde");
 const blobs = @import("azure_storage_blobs");
 const eventhubs = @import("azure_messaging_eventhubs");
 
@@ -91,7 +92,7 @@ pub const BlobCheckpointStore = struct {
             const body = blob_client.download(allocator) catch continue;
             defer allocator.free(body);
 
-            const owner_id = parseOwnerField(body) orelse continue;
+            const owner_id = parseOwnerField(allocator, body) orelse continue;
 
             try result.append(allocator, .{
                 .fully_qualified_namespace = fqns,
@@ -192,25 +193,26 @@ pub fn serializeOwnership(allocator: std.mem.Allocator, own: eventhubs.Partition
 }
 
 /// Extract "ownerId" value from a JSON body like {"ownerId":"xyz"}.
-fn parseOwnerField(body: []const u8) ?[]const u8 {
-    const key = "\"ownerId\":\"";
-    const start = (std.mem.find(u8, body, key) orelse return null) + key.len;
-    const end = std.mem.findScalarPos(u8, body, start, '"') orelse return null;
-    return body[start..end];
+fn parseOwnerField(allocator: std.mem.Allocator, body: []const u8) ?[]const u8 {
+    const Schema = struct { ownerId: ?[]const u8 = null };
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const parsed = serde.json.fromSlice(Schema, arena.allocator(), body) catch return null;
+    const id = parsed.ownerId orelse return null;
+    return allocator.dupe(u8, id) catch null;
 }
 
 /// Parse offset and sequenceNumber from checkpoint JSON into the struct.
 fn parseCheckpointFields(body: []const u8, cp: *eventhubs.Checkpoint) void {
-    cp.offset = parseJsonInt(body, "\"offset\":");
-    cp.sequence_number = parseJsonInt(body, "\"sequenceNumber\":");
-}
-
-fn parseJsonInt(body: []const u8, key: []const u8) ?i64 {
-    const start = (std.mem.find(u8, body, key) orelse return null) + key.len;
-    var end = start;
-    while (end < body.len and (body[end] == '-' or (body[end] >= '0' and body[end] <= '9'))) : (end += 1) {}
-    if (start == end) return null;
-    return std.fmt.parseInt(i64, body[start..end], 10) catch null;
+    const Schema = struct {
+        offset: ?i64 = null,
+        sequenceNumber: ?i64 = null,
+    };
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const parsed = serde.json.fromSlice(Schema, arena.allocator(), body) catch return;
+    cp.offset = parsed.offset;
+    cp.sequence_number = parsed.sequenceNumber;
 }
 
 // ─────────────────────── Tests ───────────────────────
@@ -268,7 +270,8 @@ test "serializeOwnership" {
 }
 
 test "parseOwnerField" {
-    const owner = parseOwnerField("{\"ownerId\":\"proc-1\"}");
+    const owner = parseOwnerField(std.testing.allocator, "{\"ownerId\":\"proc-1\"}");
+    defer if (owner) |o| std.testing.allocator.free(o);
     try std.testing.expectEqualStrings("proc-1", owner.?);
 }
 

@@ -68,7 +68,7 @@ Only two external Zig packages (keep it minimal):
 
 | Package | Purpose |
 |---------|---------|
-| [zig-xml](https://github.com/cataggar/zig-xml) | XML parsing for Azure Storage |
+| [serde.zig](https://github.com/cataggar/serde.zig) | Typed JSON + XML (de)serialization |
 | [azure-uamqp-zig](https://github.com/cataggar/azure-uamqp-zig) | AMQP 1.0 for Event Hubs |
 
-Everything else comes from `std` (HTTP, TLS, JSON, crypto, base64).
+Everything else comes from `std` (HTTP, TLS, crypto, base64).

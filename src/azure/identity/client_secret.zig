@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("azure_core");
+const serde = @import("serde");
 
 const AccessToken = core.credentials.AccessToken;
 const TokenCredential = core.credentials.TokenCredential;
@@ -80,7 +81,7 @@ pub const ClientSecretCredential = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.AuthenticationFailed;
         }
 
@@ -92,28 +93,20 @@ pub const ClientSecretCredential = struct {
 ///
 /// The returned `token` slice is allocated with `allocator` — caller must free.
 pub fn parseTokenResponse(allocator: std.mem.Allocator, body: []const u8) !AccessToken {
-    const parsed = try std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{});
-    defer parsed.deinit();
+    // OAuth2 RFC 6749 §5.1: `expires_in` is a JSON number.
+    const TokenResponseSchema = struct {
+        access_token: []const u8,
+        expires_in: i64 = 3600,
+    };
 
-    const obj = if (parsed.value == .object) parsed.value.object else return error.InvalidTokenResponse;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
 
-    const token_str = if (obj.get("access_token")) |v| switch (v) {
-        .string => |s| s,
-        else => return error.InvalidTokenResponse,
-    } else return error.InvalidTokenResponse;
+    const parsed = serde.json.fromSlice(TokenResponseSchema, arena.allocator(), body) catch
+        return error.InvalidTokenResponse;
 
-    var expires_on: i64 = 0;
-    if (obj.get("expires_in")) |v| {
-        switch (v) {
-            .integer => |n| expires_on = n,
-            .string => |s| expires_on = std.fmt.parseInt(i64, s, 10) catch 3600,
-            else => {},
-        }
-    }
-
-    // Dupe into caller's allocator so the value outlives the JSON parser.
-    const token = try allocator.dupe(u8, token_str);
-    return .{ .token = token, .expires_on = expires_on };
+    const token = try allocator.dupe(u8, parsed.access_token);
+    return .{ .token = token, .expires_on = parsed.expires_in };
 }
 
 test "parseTokenResponse" {
@@ -171,7 +164,7 @@ test "ClientSecretCredential auth failure" {
 
 test "parseTokenResponse malformed JSON" {
     const result = parseTokenResponse(std.testing.allocator, "not json");
-    try std.testing.expectError(error.SyntaxError, result);
+    try std.testing.expectError(error.InvalidTokenResponse, result);
 }
 
 test "parseTokenResponse missing access_token" {

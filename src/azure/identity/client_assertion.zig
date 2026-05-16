@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("azure_core");
+const serde = @import("serde");
 
 const AccessToken = core.credentials.AccessToken;
 const TokenCredential = core.credentials.TokenCredential;
@@ -99,26 +100,19 @@ pub const ClientAssertionCredential = struct {
 };
 
 fn parseTokenResponse(allocator: std.mem.Allocator, body: []const u8) !AccessToken {
-    const parsed = try std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{});
-    defer parsed.deinit();
+    const TokenResponseSchema = struct {
+        access_token: []const u8,
+        expires_in: i64 = 3600,
+    };
 
-    const obj = if (parsed.value == .object) parsed.value.object else return error.InvalidTokenResponse;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
 
-    const token_str = if (obj.get("access_token")) |v| switch (v) {
-        .string => |s| s,
-        else => return error.InvalidTokenResponse,
-    } else return error.InvalidTokenResponse;
+    const parsed = serde.json.fromSlice(TokenResponseSchema, arena.allocator(), body) catch
+        return error.InvalidTokenResponse;
 
-    var expires_in: i64 = 3600;
-    if (obj.get("expires_in")) |v| {
-        switch (v) {
-            .integer => |n| expires_in = n,
-            else => {},
-        }
-    }
-
-    const token = try allocator.dupe(u8, token_str);
-    return .{ .token = token, .expires_on = currentTimestamp() + expires_in };
+    const token = try allocator.dupe(u8, parsed.access_token);
+    return .{ .token = token, .expires_on = currentTimestamp() + parsed.expires_in };
 }
 
 fn currentTimestamp() i64 {

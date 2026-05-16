@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("azure_core");
+const serde = @import("serde");
 
 // ─────────────────────────── Models ───────────────────────────
 
@@ -61,7 +62,7 @@ pub const CertificateClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CertificateNotFound;
         }
 
@@ -96,7 +97,7 @@ pub const CertificateClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CreateCertificateFailed;
         }
 
@@ -119,7 +120,7 @@ pub const CertificateClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteCertificateFailed;
         }
     }
@@ -169,62 +170,64 @@ pub const CertificateClient = struct {
 
 // ─────────────────────────── Parsing ──────────────────────────
 
-fn parseCertificate(allocator: std.mem.Allocator, name: []const u8, body: []const u8) !KeyVaultCertificate {
-    const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{}) catch
-        return .{ .name = name };
-    defer parsed.deinit();
+const CertAttributesSchema = struct {
+    enabled: ?bool = null,
+    nbf: ?i64 = null,
+    exp: ?i64 = null,
+    created: ?i64 = null,
+};
 
-    const obj = if (parsed.value == .object) parsed.value.object else return .{ .name = name };
+const CertSchema = struct {
+    id: ?[]const u8 = null,
+    attributes: ?CertAttributesSchema = null,
+};
+
+fn parseCertificate(allocator: std.mem.Allocator, name: []const u8, body: []const u8) !KeyVaultCertificate {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const parsed = serde.json.fromSlice(CertSchema, arena.allocator(), body) catch
+        return .{ .name = name };
 
     var cert = KeyVaultCertificate{ .name = name };
-
-    if (obj.get("id")) |v| {
-        if (v == .string) cert.id = try allocator.dupe(u8, v.string);
+    if (parsed.id) |v| cert.id = try allocator.dupe(u8, v);
+    if (parsed.attributes) |a| {
+        cert.properties.enabled = a.enabled;
+        cert.properties.not_before = a.nbf;
+        cert.properties.expires_on = a.exp;
+        cert.properties.created_on = a.created;
     }
-    if (obj.get("attributes")) |attrs| {
-        if (attrs == .object) {
-            if (attrs.object.get("enabled")) |e| {
-                if (e == .bool) cert.properties.enabled = e.bool;
-            }
-            if (attrs.object.get("nbf")) |e| {
-                if (e == .integer) cert.properties.not_before = e.integer;
-            }
-            if (attrs.object.get("exp")) |e| {
-                if (e == .integer) cert.properties.expires_on = e.integer;
-            }
-            if (attrs.object.get("created")) |e| {
-                if (e == .integer) cert.properties.created_on = e.integer;
-            }
-        }
-    }
-
     return cert;
 }
 
-fn parseCertificateListPage(allocator: std.mem.Allocator, body: []const u8) !core.pager.PageResult(KeyVaultCertificate) {
-    const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{}) catch
-        return .{ .items = try allocator.alloc(KeyVaultCertificate, 0) };
-    defer parsed.deinit();
+const CertListEntrySchema = struct {
+    id: ?[]const u8 = null,
+};
 
-    const obj = if (parsed.value == .object) parsed.value.object else return .{ .items = try allocator.alloc(KeyVaultCertificate, 0) };
+const CertListSchema = struct {
+    value: ?[]const CertListEntrySchema = null,
+    nextLink: ?[]const u8 = null,
+};
+
+fn parseCertificateListPage(allocator: std.mem.Allocator, body: []const u8) !core.pager.PageResult(KeyVaultCertificate) {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const parsed = serde.json.fromSlice(CertListSchema, arena.allocator(), body) catch
+        return .{ .items = try allocator.alloc(KeyVaultCertificate, 0) };
 
     var next_link: ?[]u8 = null;
-    if (obj.get("nextLink")) |nl| {
-        if (nl == .string and nl.string.len > 0)
-            next_link = try allocator.dupe(u8, nl.string);
+    if (parsed.nextLink) |nl| {
+        if (nl.len > 0) next_link = try allocator.dupe(u8, nl);
     }
 
-    const values = if (obj.get("value")) |v| (if (v == .array) v.array.items else null) else null;
-    const items = values orelse return .{ .items = try allocator.alloc(KeyVaultCertificate, 0), .next_link = next_link };
+    const entries = parsed.value orelse
+        return .{ .items = try allocator.alloc(KeyVaultCertificate, 0), .next_link = next_link };
 
-    var result = try allocator.alloc(KeyVaultCertificate, items.len);
-    for (items, 0..) |item, i| {
+    var result = try allocator.alloc(KeyVaultCertificate, entries.len);
+    for (entries, 0..) |entry, i| {
         var cert = KeyVaultCertificate{ .name = "" };
-        if (item == .object) {
-            if (item.object.get("id")) |id| {
-                if (id == .string) cert.id = try allocator.dupe(u8, id.string);
-            }
-        }
+        if (entry.id) |id| cert.id = try allocator.dupe(u8, id);
         result[i] = cert;
     }
     return .{ .items = result, .next_link = next_link };
