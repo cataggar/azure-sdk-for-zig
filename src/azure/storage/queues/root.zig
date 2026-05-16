@@ -40,6 +40,12 @@ pub const QueueClient = struct {
 
     /// POST /queue/messages
     pub fn sendMessage(self: *QueueClient, allocator: std.mem.Allocator, message_text: []const u8) !void {
+        var r = try self.sendMessageResult(allocator, message_text);
+        try r.unwrap(error.SendMessageFailed);
+    }
+
+    /// Same as `sendMessage` but returns `Result(void)`.
+    pub fn sendMessageResult(self: *QueueClient, allocator: std.mem.Allocator, message_text: []const u8) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}/messages",
@@ -62,14 +68,21 @@ pub const QueueClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.SendMessageFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// GET /queue/messages
     pub fn receiveMessages(self: *QueueClient, allocator: std.mem.Allocator) ![]QueueMessage {
+        var r = try self.receiveMessagesResult(allocator);
+        return r.unwrap(error.ReceiveMessagesFailed);
+    }
+
+    /// Same as `receiveMessages` but returns `Result([]QueueMessage)`.
+    pub fn receiveMessagesResult(self: *QueueClient, allocator: std.mem.Allocator) !core.errors.Result([]QueueMessage) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}/messages",
@@ -84,15 +97,23 @@ pub const QueueClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.ReceiveMessagesFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return parseMessages(allocator, resp.body);
+        return .{ .ok = try parseMessages(allocator, resp.body) };
     }
 
     /// DELETE /queue/messages/{messageId}?popreceipt={popReceipt}
     pub fn deleteMessage(self: *QueueClient, allocator: std.mem.Allocator, message_id: []const u8, pop_receipt: []const u8) !void {
+        var r = try self.deleteMessageResult(allocator, message_id, pop_receipt);
+        try r.unwrap(error.DeleteMessageFailed);
+    }
+
+    /// Same as `deleteMessage` but returns `Result(void)`.
+    pub fn deleteMessageResult(self: *QueueClient, allocator: std.mem.Allocator, message_id: []const u8, pop_receipt: []const u8) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}/messages/{s}?popreceipt={s}",
@@ -106,14 +127,21 @@ pub const QueueClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.DeleteMessageFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// GET /queue/messages?peekonly=true
     pub fn peekMessages(self: *QueueClient, allocator: std.mem.Allocator) ![]QueueMessage {
+        var r = try self.peekMessagesResult(allocator);
+        return r.unwrap(error.PeekMessagesFailed);
+    }
+
+    /// Same as `peekMessages` but returns `Result([]QueueMessage)`.
+    pub fn peekMessagesResult(self: *QueueClient, allocator: std.mem.Allocator) !core.errors.Result([]QueueMessage) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}/messages?peekonly=true",
@@ -128,11 +156,13 @@ pub const QueueClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.PeekMessagesFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return parseMessages(allocator, resp.body);
+        return .{ .ok = try parseMessages(allocator, resp.body) };
     }
 };
 
@@ -161,6 +191,12 @@ pub const QueueServiceClient = struct {
 
     /// PUT /queue?comp=metadata (create queue)
     pub fn createQueue(self: *QueueServiceClient, allocator: std.mem.Allocator, queue_name: []const u8) !void {
+        var r = try self.createQueueResult(allocator, queue_name);
+        try r.unwrap(error.CreateQueueFailed);
+    }
+
+    /// Same as `createQueue` but returns `Result(void)`.
+    pub fn createQueueResult(self: *QueueServiceClient, allocator: std.mem.Allocator, queue_name: []const u8) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}",
@@ -174,14 +210,21 @@ pub const QueueServiceClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.CreateQueueFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// DELETE /queue
     pub fn deleteQueue(self: *QueueServiceClient, allocator: std.mem.Allocator, queue_name: []const u8) !void {
+        var r = try self.deleteQueueResult(allocator, queue_name);
+        try r.unwrap(error.DeleteQueueFailed);
+    }
+
+    /// Same as `deleteQueue` but returns `Result(void)`.
+    pub fn deleteQueueResult(self: *QueueServiceClient, allocator: std.mem.Allocator, queue_name: []const u8) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}",
@@ -195,10 +238,11 @@ pub const QueueServiceClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.DeleteQueueFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     pub fn getQueueClient(self: *QueueServiceClient, queue_name: []const u8) QueueClient {
