@@ -45,7 +45,7 @@ pub const ShareClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CreateShareFailed;
         }
     }
@@ -66,7 +66,7 @@ pub const ShareClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteShareFailed;
         }
     }
@@ -108,7 +108,7 @@ pub const ShareDirectoryClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CreateDirectoryFailed;
         }
     }
@@ -129,7 +129,7 @@ pub const ShareDirectoryClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteDirectoryFailed;
         }
     }
@@ -173,7 +173,7 @@ pub const ShareFileClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.CreateFileFailed;
         }
     }
@@ -197,7 +197,7 @@ pub const ShareFileClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.UploadFailed;
         }
     }
@@ -214,7 +214,7 @@ pub const ShareFileClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DownloadFailed;
         }
 
@@ -233,7 +233,7 @@ pub const ShareFileClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.DeleteFileFailed;
         }
     }
