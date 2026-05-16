@@ -18,6 +18,11 @@ pub const KeyVaultCertificate = struct {
     name: []const u8,
     id: ?[]const u8 = null,
     properties: CertificateProperties = .{},
+
+    /// Free allocated `id`. `name` is NOT freed (borrows caller input).
+    pub fn deinit(self: KeyVaultCertificate, allocator: std.mem.Allocator) void {
+        if (self.id) |i| allocator.free(i);
+    }
 };
 
 // ──────────────────── CertificateClient ───────────────────────
@@ -51,6 +56,24 @@ pub const CertificateClient = struct {
         allocator: std.mem.Allocator,
         name: []const u8,
     ) !KeyVaultCertificate {
+        const r = try self.getCertificateResult(allocator, name);
+        return switch (r) {
+            .ok => |v| v,
+            .err => blk: {
+                var e = r.err;
+                defer e.deinit();
+                std.log.warn("{f}", .{e});
+                break :blk error.CertificateNotFound;
+            },
+        };
+    }
+
+    /// Same as `getCertificate` but returns `Result(KeyVaultCertificate)`.
+    pub fn getCertificateResult(
+        self: *CertificateClient,
+        allocator: std.mem.Allocator,
+        name: []const u8,
+    ) !core.errors.Result(KeyVaultCertificate) {
         const url = try self.buildUrl(allocator, &.{ "certificates", name });
         defer allocator.free(url);
 
@@ -62,11 +85,13 @@ pub const CertificateClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.CertificateNotFound;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return parseCertificate(allocator, name, resp.body);
+        return .{ .ok = try parseCertificate(allocator, name, resp.body) };
     }
 
     /// POST /certificates/{name}/create?api-version=...
@@ -77,6 +102,26 @@ pub const CertificateClient = struct {
         subject: []const u8,
         issuer: []const u8,
     ) !KeyVaultCertificate {
+        const r = try self.createCertificateResult(allocator, name, subject, issuer);
+        return switch (r) {
+            .ok => |v| v,
+            .err => blk: {
+                var e = r.err;
+                defer e.deinit();
+                std.log.warn("{f}", .{e});
+                break :blk error.CreateCertificateFailed;
+            },
+        };
+    }
+
+    /// Same as `createCertificate` but returns `Result(KeyVaultCertificate)`.
+    pub fn createCertificateResult(
+        self: *CertificateClient,
+        allocator: std.mem.Allocator,
+        name: []const u8,
+        subject: []const u8,
+        issuer: []const u8,
+    ) !core.errors.Result(KeyVaultCertificate) {
         const url = try self.buildUrl(allocator, &.{ "certificates", name, "create" });
         defer allocator.free(url);
 
@@ -97,11 +142,13 @@ pub const CertificateClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.CreateCertificateFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return parseCertificate(allocator, name, resp.body);
+        return .{ .ok = try parseCertificate(allocator, name, resp.body) };
     }
 
     /// DELETE /certificates/{name}?api-version=...
@@ -110,6 +157,24 @@ pub const CertificateClient = struct {
         allocator: std.mem.Allocator,
         name: []const u8,
     ) !void {
+        const r = try self.deleteCertificateResult(allocator, name);
+        switch (r) {
+            .ok => {},
+            .err => {
+                var e = r.err;
+                defer e.deinit();
+                std.log.warn("{f}", .{e});
+                return error.DeleteCertificateFailed;
+            },
+        }
+    }
+
+    /// Same as `deleteCertificate` but returns `Result(void)`.
+    pub fn deleteCertificateResult(
+        self: *CertificateClient,
+        allocator: std.mem.Allocator,
+        name: []const u8,
+    ) !core.errors.Result(void) {
         const url = try self.buildUrl(allocator, &.{ "certificates", name });
         defer allocator.free(url);
 
@@ -119,10 +184,11 @@ pub const CertificateClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.DeleteCertificateFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// GET /certificates?api-version=... — returns a pager over certificates.

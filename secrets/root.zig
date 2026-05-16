@@ -73,37 +73,34 @@ pub const SecretClient = struct {
     }
 
     /// GET /secrets/{name}?api-version=...
+    ///
+    /// Thin wrapper over `getSecretResult` that logs Azure errors via
+    /// `std.log.warn` and returns `error.SecretNotFound` on any
+    /// non-success status. Use `getSecretResult` if you need to branch
+    /// on the specific Azure `error_code`.
     pub fn getSecret(
         self: *SecretClient,
         allocator: std.mem.Allocator,
         name: []const u8,
     ) !KeyVaultSecret {
-        const url = try self.buildUrl(allocator, &.{ "secrets", name }, null);
-        defer allocator.free(url);
-
-        var req = core.http.Request.init(allocator, .GET, url);
-        defer req.deinit();
-        try req.setHeader("Accept", "application/json");
-
-        var resp = try self.pipeline.send(&req);
-        defer resp.deinit();
-
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.SecretNotFound;
-        }
-
-        return parseSecret(allocator, name, resp.body);
+        const r = try self.getSecretResult(allocator, name);
+        return switch (r) {
+            .ok => |v| v,
+            .err => blk: {
+                var e = r.err;
+                defer e.deinit();
+                std.log.warn("{f}", .{e});
+                break :blk error.SecretNotFound;
+            },
+        };
     }
 
     /// Same as `getSecret`, but returns the typed `AzureError` on
     /// Azure-side failures rather than a generic `error.SecretNotFound`.
     ///
-    /// This is the first method on the SDK using the new `Result(T)`
-    /// pattern (see `core.errors.Result`). Use it when you need to
-    /// branch on `AzureError.error_code` — for example, to distinguish
-    /// `"SecretNotFound"` (expected) from `"Forbidden"` (a real
-    /// failure).
+    /// Use this when you need to branch on `AzureError.error_code` —
+    /// for example, to distinguish `"SecretNotFound"` (expected) from
+    /// `"Forbidden"` (a real failure).
     ///
     /// Note: this method does NOT call `logErrorResponse` — the caller
     /// receives the structured error directly and can log or suppress
@@ -141,6 +138,25 @@ pub const SecretClient = struct {
         name: []const u8,
         value: []const u8,
     ) !KeyVaultSecret {
+        const r = try self.setSecretResult(allocator, name, value);
+        return switch (r) {
+            .ok => |v| v,
+            .err => blk: {
+                var e = r.err;
+                defer e.deinit();
+                std.log.warn("{f}", .{e});
+                break :blk error.SetSecretFailed;
+            },
+        };
+    }
+
+    /// Same as `setSecret` but returns `Result(KeyVaultSecret)`.
+    pub fn setSecretResult(
+        self: *SecretClient,
+        allocator: std.mem.Allocator,
+        name: []const u8,
+        value: []const u8,
+    ) !core.errors.Result(KeyVaultSecret) {
         const url = try self.buildUrl(allocator, &.{ "secrets", name }, null);
         defer allocator.free(url);
 
@@ -157,11 +173,13 @@ pub const SecretClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.SetSecretFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return parseSecret(allocator, name, resp.body);
+        return .{ .ok = try parseSecret(allocator, name, resp.body) };
     }
 
     /// DELETE /secrets/{name}?api-version=...
@@ -170,6 +188,24 @@ pub const SecretClient = struct {
         allocator: std.mem.Allocator,
         name: []const u8,
     ) !DeletedSecret {
+        const r = try self.deleteSecretResult(allocator, name);
+        return switch (r) {
+            .ok => |v| v,
+            .err => blk: {
+                var e = r.err;
+                defer e.deinit();
+                std.log.warn("{f}", .{e});
+                break :blk error.DeleteSecretFailed;
+            },
+        };
+    }
+
+    /// Same as `deleteSecret` but returns `Result(DeletedSecret)`.
+    pub fn deleteSecretResult(
+        self: *SecretClient,
+        allocator: std.mem.Allocator,
+        name: []const u8,
+    ) !core.errors.Result(DeletedSecret) {
         const url = try self.buildUrl(allocator, &.{ "secrets", name }, null);
         defer allocator.free(url);
 
@@ -181,11 +217,13 @@ pub const SecretClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.DeleteSecretFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return .{ .name = name };
+        return .{ .ok = .{ .name = name } };
     }
 
     /// DELETE /deletedsecrets/{name}?api-version=...  → 204
@@ -194,6 +232,24 @@ pub const SecretClient = struct {
         allocator: std.mem.Allocator,
         name: []const u8,
     ) !void {
+        const r = try self.purgeDeletedSecretResult(allocator, name);
+        switch (r) {
+            .ok => {},
+            .err => {
+                var e = r.err;
+                defer e.deinit();
+                std.log.warn("{f}", .{e});
+                return error.PurgeFailed;
+            },
+        }
+    }
+
+    /// Same as `purgeDeletedSecret` but returns `Result(void)`.
+    pub fn purgeDeletedSecretResult(
+        self: *SecretClient,
+        allocator: std.mem.Allocator,
+        name: []const u8,
+    ) !core.errors.Result(void) {
         const url = try self.buildUrl(allocator, &.{ "deletedsecrets", name }, null);
         defer allocator.free(url);
 
@@ -203,7 +259,13 @@ pub const SecretClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (resp.status_code != 204 and !resp.isSuccess()) return error.PurgeFailed;
+        if (resp.status_code == 204 or resp.isSuccess()) {
+            return .{ .ok = {} };
+        }
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
+        }
+        return error.AzureRequestFailed;
     }
 
     /// POST /deletedsecrets/{name}/recover?api-version=...
@@ -212,6 +274,24 @@ pub const SecretClient = struct {
         allocator: std.mem.Allocator,
         name: []const u8,
     ) !KeyVaultSecret {
+        const r = try self.recoverDeletedSecretResult(allocator, name);
+        return switch (r) {
+            .ok => |v| v,
+            .err => blk: {
+                var e = r.err;
+                defer e.deinit();
+                std.log.warn("{f}", .{e});
+                break :blk error.RecoverFailed;
+            },
+        };
+    }
+
+    /// Same as `recoverDeletedSecret` but returns `Result(KeyVaultSecret)`.
+    pub fn recoverDeletedSecretResult(
+        self: *SecretClient,
+        allocator: std.mem.Allocator,
+        name: []const u8,
+    ) !core.errors.Result(KeyVaultSecret) {
         const url = try self.buildUrl(allocator, &.{ "deletedsecrets", name, "recover" }, null);
         defer allocator.free(url);
 
@@ -223,11 +303,13 @@ pub const SecretClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.RecoverFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return parseSecret(allocator, name, resp.body);
+        return .{ .ok = try parseSecret(allocator, name, resp.body) };
     }
 
     // ──── Helpers ────
