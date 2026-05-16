@@ -117,6 +117,12 @@ pub const CosmosClient = struct {
 
     /// Create a new database.
     pub fn createDatabase(self: *CosmosClient, allocator: std.mem.Allocator, database_id: []const u8) !Database {
+        var r = try self.createDatabaseResult(allocator, database_id);
+        return r.unwrap(error.CreateDatabaseFailed);
+    }
+
+    /// Same as `createDatabase` but returns `Result(Database)`.
+    pub fn createDatabaseResult(self: *CosmosClient, allocator: std.mem.Allocator, database_id: []const u8) !core.errors.Result(Database) {
         const url = try std.fmt.allocPrint(allocator, "{s}/dbs", .{self.endpoint});
         defer allocator.free(url);
 
@@ -133,15 +139,23 @@ pub const CosmosClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.CreateDatabaseFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return parseDatabaseResponse(allocator, database_id, resp.body);
+        return .{ .ok = parseDatabaseResponse(allocator, database_id, resp.body) };
     }
 
     /// Delete a database.
     pub fn deleteDatabase(self: *CosmosClient, allocator: std.mem.Allocator, database_id: []const u8) !void {
+        var r = try self.deleteDatabaseResult(allocator, database_id);
+        try r.unwrap(error.DeleteDatabaseFailed);
+    }
+
+    /// Same as `deleteDatabase` but returns `Result(void)`.
+    pub fn deleteDatabaseResult(self: *CosmosClient, allocator: std.mem.Allocator, database_id: []const u8) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(allocator, "{s}/dbs/{s}", .{ self.endpoint, database_id });
         defer allocator.free(url);
 
@@ -152,14 +166,21 @@ pub const CosmosClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.DeleteDatabaseFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// List all databases.
     pub fn listDatabases(self: *CosmosClient, allocator: std.mem.Allocator) ![]Database {
+        var r = try self.listDatabasesResult(allocator);
+        return r.unwrap(error.ListDatabasesFailed);
+    }
+
+    /// Same as `listDatabases` but returns `Result([]Database)`.
+    pub fn listDatabasesResult(self: *CosmosClient, allocator: std.mem.Allocator) !core.errors.Result([]Database) {
         const url = try std.fmt.allocPrint(allocator, "{s}/dbs", .{self.endpoint});
         defer allocator.free(url);
 
@@ -171,11 +192,13 @@ pub const CosmosClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.ListDatabasesFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return parseDatabaseList(allocator, resp.body);
+        return .{ .ok = try parseDatabaseList(allocator, resp.body) };
     }
 
     fn setCommonHeaders(self: *CosmosClient, req: *core.http.Request) !void {
@@ -210,6 +233,12 @@ pub const DatabaseClient = struct {
 
     /// Create a new container.
     pub fn createContainer(self: *DatabaseClient, allocator: std.mem.Allocator, container_id: []const u8, partition_key_path: []const u8) !ContainerProperties {
+        var r = try self.createContainerResult(allocator, container_id, partition_key_path);
+        return r.unwrap(error.CreateContainerFailed);
+    }
+
+    /// Same as `createContainer` but returns `Result(ContainerProperties)`.
+    pub fn createContainerResult(self: *DatabaseClient, allocator: std.mem.Allocator, container_id: []const u8, partition_key_path: []const u8) !core.errors.Result(ContainerProperties) {
         const url = try std.fmt.allocPrint(allocator, "{s}/dbs/{s}/colls", .{ self.endpoint, self.database_id });
         defer allocator.free(url);
 
@@ -228,15 +257,23 @@ pub const DatabaseClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.CreateContainerFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return .{ .id = container_id, .partition_key_paths = &.{partition_key_path} };
+        return .{ .ok = .{ .id = container_id, .partition_key_paths = &.{partition_key_path} } };
     }
 
     /// Delete a container.
     pub fn deleteContainer(self: *DatabaseClient, allocator: std.mem.Allocator, container_id: []const u8) !void {
+        var r = try self.deleteContainerResult(allocator, container_id);
+        try r.unwrap(error.DeleteContainerFailed);
+    }
+
+    /// Same as `deleteContainer` but returns `Result(void)`.
+    pub fn deleteContainerResult(self: *DatabaseClient, allocator: std.mem.Allocator, container_id: []const u8) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(allocator, "{s}/dbs/{s}/colls/{s}", .{ self.endpoint, self.database_id, container_id });
         defer allocator.free(url);
 
@@ -247,14 +284,21 @@ pub const DatabaseClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.DeleteContainerFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// List all containers in this database.
     pub fn listContainers(self: *DatabaseClient, allocator: std.mem.Allocator) ![]ContainerProperties {
+        var r = try self.listContainersResult(allocator);
+        return r.unwrap(error.ListContainersFailed);
+    }
+
+    /// Same as `listContainers` but returns `Result([]ContainerProperties)`.
+    pub fn listContainersResult(self: *DatabaseClient, allocator: std.mem.Allocator) !core.errors.Result([]ContainerProperties) {
         const url = try std.fmt.allocPrint(allocator, "{s}/dbs/{s}/colls", .{ self.endpoint, self.database_id });
         defer allocator.free(url);
 
@@ -266,15 +310,23 @@ pub const DatabaseClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.ListContainersFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return parseContainerList(allocator, resp.body);
+        return .{ .ok = try parseContainerList(allocator, resp.body) };
     }
 
     /// Get a specific container.
     pub fn getContainer(self: *DatabaseClient, allocator: std.mem.Allocator, container_id: []const u8) !ContainerProperties {
+        var r = try self.getContainerResult(allocator, container_id);
+        return r.unwrap(error.GetContainerFailed);
+    }
+
+    /// Same as `getContainer` but returns `Result(ContainerProperties)`.
+    pub fn getContainerResult(self: *DatabaseClient, allocator: std.mem.Allocator, container_id: []const u8) !core.errors.Result(ContainerProperties) {
         const url = try std.fmt.allocPrint(allocator, "{s}/dbs/{s}/colls/{s}", .{ self.endpoint, self.database_id, container_id });
         defer allocator.free(url);
 
@@ -286,11 +338,13 @@ pub const DatabaseClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.GetContainerFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return parseContainerResponse(allocator, container_id, resp.body);
+        return .{ .ok = parseContainerResponse(allocator, container_id, resp.body) };
     }
 
     fn setCommonHeaders(self: *DatabaseClient, req: *core.http.Request) !void {
@@ -314,6 +368,12 @@ pub const ContainerClient = struct {
 
     /// Create (insert) an item.
     pub fn createItem(self: *ContainerClient, allocator: std.mem.Allocator, item: CosmosItem) !void {
+        var r = try self.createItemResult(allocator, item);
+        try r.unwrap(error.CreateItemFailed);
+    }
+
+    /// Same as `createItem` but returns `Result(void)`.
+    pub fn createItemResult(self: *ContainerClient, allocator: std.mem.Allocator, item: CosmosItem) !core.errors.Result(void) {
         const url = try self.buildDocsUrl(allocator);
         defer allocator.free(url);
 
@@ -327,14 +387,21 @@ pub const ContainerClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.CreateItemFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// Read an item by id and partition key.
     pub fn readItem(self: *ContainerClient, allocator: std.mem.Allocator, item_id: []const u8, partition_key: []const u8) ![]const u8 {
+        var r = try self.readItemResult(allocator, item_id, partition_key);
+        return r.unwrap(error.ReadItemFailed);
+    }
+
+    /// Same as `readItem` but returns `Result([]const u8)`.
+    pub fn readItemResult(self: *ContainerClient, allocator: std.mem.Allocator, item_id: []const u8, partition_key: []const u8) !core.errors.Result([]const u8) {
         const url = try std.fmt.allocPrint(allocator, "{s}/dbs/{s}/colls/{s}/docs/{s}", .{ self.endpoint, self.database_id, self.container_id, item_id });
         defer allocator.free(url);
 
@@ -347,15 +414,23 @@ pub const ContainerClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.ReadItemFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return allocator.dupe(u8, resp.body);
+        return .{ .ok = try allocator.dupe(u8, resp.body) };
     }
 
     /// Replace (update) an item.
     pub fn replaceItem(self: *ContainerClient, allocator: std.mem.Allocator, item: CosmosItem) !void {
+        var r = try self.replaceItemResult(allocator, item);
+        try r.unwrap(error.ReplaceItemFailed);
+    }
+
+    /// Same as `replaceItem` but returns `Result(void)`.
+    pub fn replaceItemResult(self: *ContainerClient, allocator: std.mem.Allocator, item: CosmosItem) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(allocator, "{s}/dbs/{s}/colls/{s}/docs/{s}", .{ self.endpoint, self.database_id, self.container_id, item.id });
         defer allocator.free(url);
 
@@ -369,14 +444,21 @@ pub const ContainerClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.ReplaceItemFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// Upsert (create or replace) an item.
     pub fn upsertItem(self: *ContainerClient, allocator: std.mem.Allocator, item: CosmosItem) !void {
+        var r = try self.upsertItemResult(allocator, item);
+        try r.unwrap(error.UpsertItemFailed);
+    }
+
+    /// Same as `upsertItem` but returns `Result(void)`.
+    pub fn upsertItemResult(self: *ContainerClient, allocator: std.mem.Allocator, item: CosmosItem) !core.errors.Result(void) {
         const url = try self.buildDocsUrl(allocator);
         defer allocator.free(url);
 
@@ -391,14 +473,21 @@ pub const ContainerClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.UpsertItemFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// Delete an item.
     pub fn deleteItem(self: *ContainerClient, allocator: std.mem.Allocator, item_id: []const u8, partition_key: []const u8) !void {
+        var r = try self.deleteItemResult(allocator, item_id, partition_key);
+        try r.unwrap(error.DeleteItemFailed);
+    }
+
+    /// Same as `deleteItem` but returns `Result(void)`.
+    pub fn deleteItemResult(self: *ContainerClient, allocator: std.mem.Allocator, item_id: []const u8, partition_key: []const u8) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(allocator, "{s}/dbs/{s}/colls/{s}/docs/{s}", .{ self.endpoint, self.database_id, self.container_id, item_id });
         defer allocator.free(url);
 
@@ -410,14 +499,21 @@ pub const ContainerClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.DeleteItemFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     /// Execute a SQL query against the container.
     pub fn queryItems(self: *ContainerClient, allocator: std.mem.Allocator, query: []const u8) !QueryResult {
+        var r = try self.queryItemsResult(allocator, query);
+        return r.unwrap(error.QueryFailed);
+    }
+
+    /// Same as `queryItems` but returns `Result(QueryResult)`.
+    pub fn queryItemsResult(self: *ContainerClient, allocator: std.mem.Allocator, query: []const u8) !core.errors.Result(QueryResult) {
         const url = try self.buildDocsUrl(allocator);
         defer allocator.free(url);
 
@@ -436,11 +532,13 @@ pub const ContainerClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.QueryFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return parseQueryResult(allocator, resp.body);
+        return .{ .ok = try parseQueryResult(allocator, resp.body) };
     }
 
     fn buildDocsUrl(self: *ContainerClient, allocator: std.mem.Allocator) ![]u8 {

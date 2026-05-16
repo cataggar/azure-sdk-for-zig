@@ -7,6 +7,10 @@ const serde = @import("serde");
 pub const AttestationResult = struct {
     token: ?[]const u8 = null,
     is_debuggable: ?bool = null,
+
+    pub fn deinit(self: AttestationResult, allocator: std.mem.Allocator) void {
+        if (self.token) |t| allocator.free(t);
+    }
 };
 
 // ──────────────────── AttestationClient ───────────────────────
@@ -52,12 +56,40 @@ pub const AttestationClient = struct {
         return self.attest(allocator, "OpenEnclave", report);
     }
 
+    /// `Result(...)` variants — branch on `AzureError.error_code` when
+    /// the attestation backend is unavailable, the enclave evidence is
+    /// invalid, etc.
+    pub fn attestSgxEnclaveResult(
+        self: *AttestationClient,
+        allocator: std.mem.Allocator,
+        quote: []const u8,
+    ) !core.errors.Result(AttestationResult) {
+        return self.attestResult(allocator, "SgxEnclave", quote);
+    }
+    pub fn attestOpenEnclaveResult(
+        self: *AttestationClient,
+        allocator: std.mem.Allocator,
+        report: []const u8,
+    ) !core.errors.Result(AttestationResult) {
+        return self.attestResult(allocator, "OpenEnclave", report);
+    }
+
     fn attest(
         self: *AttestationClient,
         allocator: std.mem.Allocator,
         enclave_type: []const u8,
         evidence: []const u8,
     ) !AttestationResult {
+        var r = try self.attestResult(allocator, enclave_type, evidence);
+        return r.unwrap(error.AttestationFailed);
+    }
+
+    fn attestResult(
+        self: *AttestationClient,
+        allocator: std.mem.Allocator,
+        enclave_type: []const u8,
+        evidence: []const u8,
+    ) !core.errors.Result(AttestationResult) {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/attest/{s}?api-version={s}",
@@ -82,11 +114,13 @@ pub const AttestationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.AttestationFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return parseAttestationResult(allocator, resp.body);
+        return .{ .ok = try parseAttestationResult(allocator, resp.body) };
     }
 };
 
