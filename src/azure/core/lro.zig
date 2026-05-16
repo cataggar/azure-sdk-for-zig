@@ -134,8 +134,8 @@ pub const Poller = struct {
         // Parse initial status from the response body (may already be terminal).
         const initial_status = switch (strategy) {
             .location => statusFromHttpCode(initial_response.status_code),
-            .provisioning_state => parseProvisioningState(initial_response.body),
-            else => parseStatus(initial_response.body),
+            .provisioning_state => parseProvisioningState(allocator, initial_response.body),
+            else => parseStatus(allocator, initial_response.body),
         };
 
         return .{
@@ -168,8 +168,8 @@ pub const Poller = struct {
         // Extract status based on strategy.
         self.status = switch (self.strategy) {
             .location => statusFromHttpCode(resp.status_code),
-            .provisioning_state => parseProvisioningState(resp.body),
-            else => parseStatus(resp.body),
+            .provisioning_state => parseProvisioningState(self.allocator, resp.body),
+            else => parseStatus(self.allocator, resp.body),
         };
 
         // Replace cached body.
@@ -270,12 +270,12 @@ fn detectStrategy(response: http.Response) !PollingStrategy {
 
 // ─────────────────── Status Parsing ────────────────────────
 
-fn parseStatus(body: []const u8) OperationStatus {
+fn parseStatus(allocator: std.mem.Allocator, body: []const u8) OperationStatus {
     const StatusSchema = struct {
         status: ?[]const u8 = null,
     };
 
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
     const parsed = serde.json.fromSlice(StatusSchema, arena.allocator(), body) catch return .in_progress;
@@ -283,7 +283,7 @@ fn parseStatus(body: []const u8) OperationStatus {
     return .in_progress;
 }
 
-fn parseProvisioningState(body: []const u8) OperationStatus {
+fn parseProvisioningState(allocator: std.mem.Allocator, body: []const u8) OperationStatus {
     const PropsSchema = struct {
         provisioningState: ?[]const u8 = null,
     };
@@ -293,7 +293,7 @@ fn parseProvisioningState(body: []const u8) OperationStatus {
         provisioningState: ?[]const u8 = null,
     };
 
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
     const parsed = serde.json.fromSlice(ProvisioningSchema, arena.allocator(), body) catch return .in_progress;
@@ -359,7 +359,7 @@ pub fn pollUntilDone(
         }
 
         // Parse status from response body.
-        const status = parseStatus(resp.body);
+        const status = parseStatus(resp.allocator, resp.body);
         if (status.isTerminal()) {
             return .{
                 .status = status,
@@ -669,17 +669,17 @@ test "Poller auto-detect fails without headers" {
 }
 
 test "parseProvisioningState" {
-    try std.testing.expectEqual(OperationStatus.succeeded, parseProvisioningState(
+    try std.testing.expectEqual(OperationStatus.succeeded, parseProvisioningState(std.testing.allocator,
         \\{"properties":{"provisioningState":"Succeeded"}}
     ));
-    try std.testing.expectEqual(OperationStatus.in_progress, parseProvisioningState(
+    try std.testing.expectEqual(OperationStatus.in_progress, parseProvisioningState(std.testing.allocator,
         \\{"properties":{"provisioningState":"Creating"}}
     ));
-    try std.testing.expectEqual(OperationStatus.failed, parseProvisioningState(
+    try std.testing.expectEqual(OperationStatus.failed, parseProvisioningState(std.testing.allocator,
         \\{"properties":{"provisioningState":"Failed"}}
     ));
     // Top-level fallback.
-    try std.testing.expectEqual(OperationStatus.succeeded, parseProvisioningState(
+    try std.testing.expectEqual(OperationStatus.succeeded, parseProvisioningState(std.testing.allocator,
         \\{"provisioningState":"Succeeded"}
     ));
 }
