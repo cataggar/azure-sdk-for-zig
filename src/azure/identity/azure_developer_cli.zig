@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("azure_core");
+const serde = @import("serde");
 
 const AccessToken = core.credentials.AccessToken;
 const TokenCredential = core.credentials.TokenCredential;
@@ -47,28 +48,24 @@ pub const AzureDeveloperCliCredential = struct {
 };
 
 /// Parse the `azd auth token` JSON output.
-/// Format: {"token":"...","expiresOn":"2026-04-01T15:00:00Z"}
+/// Format: {"token":"...","expiresOn":"<unix-seconds>"}
 fn parseAzdResponse(allocator: std.mem.Allocator, body: []const u8) !AccessToken {
-    const parsed = try std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{});
-    defer parsed.deinit();
+    const AzdResponseSchema = struct {
+        token: []const u8,
+        expiresOn: ?[]const u8 = null,
+    };
 
-    const obj = if (parsed.value == .object) parsed.value.object else return error.InvalidTokenResponse;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
 
-    const token_str = if (obj.get("token")) |v| switch (v) {
-        .string => |s| s,
-        else => return error.InvalidTokenResponse,
-    } else return error.InvalidTokenResponse;
+    const parsed = serde.json.fromSlice(AzdResponseSchema, arena.allocator(), body) catch
+        return error.InvalidTokenResponse;
 
     var expires_on: i64 = 0;
-    if (obj.get("expiresOn")) |v| {
-        switch (v) {
-            .integer => |n| expires_on = n,
-            .string => |s| expires_on = std.fmt.parseInt(i64, s, 10) catch 0,
-            else => {},
-        }
-    }
+    if (parsed.expiresOn) |s|
+        expires_on = std.fmt.parseInt(i64, s, 10) catch 0;
 
-    const token = try allocator.dupe(u8, token_str);
+    const token = try allocator.dupe(u8, parsed.token);
     return .{ .token = token, .expires_on = expires_on };
 }
 

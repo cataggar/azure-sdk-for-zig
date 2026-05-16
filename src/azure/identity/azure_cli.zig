@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("azure_core");
+const serde = @import("serde");
 
 const AccessToken = core.credentials.AccessToken;
 const TokenCredential = core.credentials.TokenCredential;
@@ -47,36 +48,31 @@ pub const AzureCliCredential = struct {
 };
 
 /// Parse the `az account get-access-token` JSON output.
+///
+/// Azure CLI emits both `expires_on` (Unix timestamp seconds, sometimes
+/// stringified) and `expiresIn` (relative seconds, integer). Prefer the
+/// absolute timestamp when present.
 fn parseCliResponse(allocator: std.mem.Allocator, body: []const u8) !AccessToken {
-    const parsed = try std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{});
-    defer parsed.deinit();
+    const CliResponseSchema = struct {
+        accessToken: []const u8,
+        expires_on: ?[]const u8 = null,
+        expiresIn: ?i64 = null,
+    };
 
-    const obj = if (parsed.value == .object) parsed.value.object else return error.InvalidTokenResponse;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
 
-    const token_str = if (obj.get("accessToken")) |v| switch (v) {
-        .string => |s| s,
-        else => return error.InvalidTokenResponse,
-    } else return error.InvalidTokenResponse;
+    const parsed = serde.json.fromSlice(CliResponseSchema, arena.allocator(), body) catch
+        return error.InvalidTokenResponse;
 
-    // Try expires_on (newer CLI) first, then expiresIn.
     var expires_on: i64 = 0;
-    if (obj.get("expires_on")) |v| {
-        switch (v) {
-            .integer => |n| expires_on = n,
-            .string => |s| expires_on = std.fmt.parseInt(i64, s, 10) catch 0,
-            else => {},
-        }
-    }
+    if (parsed.expires_on) |s|
+        expires_on = std.fmt.parseInt(i64, s, 10) catch 0;
     if (expires_on == 0) {
-        if (obj.get("expiresIn")) |v| {
-            switch (v) {
-                .integer => |n| expires_on = n,
-                else => {},
-            }
-        }
+        if (parsed.expiresIn) |n| expires_on = n;
     }
 
-    const token = try allocator.dupe(u8, token_str);
+    const token = try allocator.dupe(u8, parsed.accessToken);
     return .{ .token = token, .expires_on = expires_on };
 }
 

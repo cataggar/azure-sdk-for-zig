@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("azure_core");
+const serde = @import("serde");
 const client_assertion = @import("client_assertion.zig");
 
 const AccessToken = core.credentials.AccessToken;
@@ -115,16 +116,16 @@ pub const AzurePipelinesCredential = struct {
 };
 
 fn parseOidcToken(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
-    const parsed = try std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{});
-    defer parsed.deinit();
+    const OidcSchema = struct {
+        oidcToken: []const u8,
+    };
 
-    const obj = if (parsed.value == .object) parsed.value.object else return error.InvalidOidcResponse;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
 
-    if (obj.get("oidcToken")) |v| {
-        if (v == .string) return allocator.dupe(u8, v.string);
-    }
-
-    return error.InvalidOidcResponse;
+    const parsed = serde.json.fromSlice(OidcSchema, arena.allocator(), body) catch
+        return error.InvalidOidcResponse;
+    return allocator.dupe(u8, parsed.oidcToken);
 }
 
 test "parseOidcToken" {
