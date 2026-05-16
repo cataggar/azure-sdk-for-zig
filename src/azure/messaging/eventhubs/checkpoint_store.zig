@@ -149,7 +149,7 @@ pub const BlobCheckpointStore = struct {
                 .consumer_group = consumer_group,
                 .partition_id = partition_id,
             };
-            parseCheckpointFields(body, &cp);
+            parseCheckpointFields(allocator, body, &cp);
             try result.append(allocator, cp);
         }
 
@@ -203,12 +203,12 @@ fn parseOwnerField(allocator: std.mem.Allocator, body: []const u8) ?[]const u8 {
 }
 
 /// Parse offset and sequenceNumber from checkpoint JSON into the struct.
-fn parseCheckpointFields(body: []const u8, cp: *eventhubs.Checkpoint) void {
+fn parseCheckpointFields(allocator: std.mem.Allocator, body: []const u8, cp: *eventhubs.Checkpoint) void {
     const Schema = struct {
         offset: ?i64 = null,
         sequenceNumber: ?i64 = null,
     };
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const parsed = serde.json.fromSlice(Schema, arena.allocator(), body) catch return;
     cp.offset = parsed.offset;
@@ -282,7 +282,7 @@ test "parseCheckpointFields" {
         .consumer_group = "cg",
         .partition_id = "0",
     };
-    parseCheckpointFields("{\"offset\":100,\"sequenceNumber\":42}", &cp);
+    parseCheckpointFields(std.testing.allocator, "{\"offset\":100,\"sequenceNumber\":42}", &cp);
     try std.testing.expectEqual(@as(i64, 100), cp.offset.?);
     try std.testing.expectEqual(@as(i64, 42), cp.sequence_number.?);
 }

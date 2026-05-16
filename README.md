@@ -8,7 +8,7 @@
 
 Pure Zig implementation of Azure service clients with **zero C dependencies**.
 
-**40 source files · ~6,800 lines · 106 tests · Zig 0.15.2+**
+**53 source files · 219 tests · Zig 0.16+**
 
 ## Quick Start
 
@@ -33,11 +33,11 @@ const secret = try client.getSecret(allocator, "my-secret");
 
 ## Build & Test
 
-Requires [Zig 0.15.2](https://ziglang.org/download/) or later.
+Requires [Zig 0.16.0](https://ziglang.org/download/) or later.
 
 ```bash
 zig build           # compile SDK + example
-zig build test      # run all 106 tests
+zig build test      # run all 219 tests
 zig build run       # run the example app
 ```
 
@@ -73,9 +73,9 @@ azure-core-amqp: azure-uamqp-zig (pure Zig AMQP 1.0)
 | `credentials.CachedTokenCredential` | In-memory token cache with TTL |
 | `base64` | Base64 + HMAC-SHA256, SHA-256, MD5 helpers |
 | `url` | URL parsing, percent-encode/decode (RFC 3986) |
-| `xml` | XML pull-parser helpers (via zig-xml) |
-| `errors` | Azure error JSON parsing |
+| `errors` | Azure error envelope parsing + `logErrorResponse` |
 | `lro` | Long-running operation poller (poll until Succeeded/Failed) |
+| `pager` | Generic paged-result iterator (`PipelinePager`) |
 
 ### Identity (`azure_identity`)
 
@@ -104,8 +104,13 @@ azure-core-amqp: azure-uamqp-zig (pure Zig AMQP 1.0)
 | `azure_keyvault_admin` | `BackupClient`, `SettingsClient` |
 | `azure_data_tables` | `TableClient`, `TableServiceClient` |
 | `azure_data_appconfiguration` | `ConfigurationClient` |
+| `azure_data_cosmos` | `CosmosClient`, `DatabaseClient`, `ContainerClient` |
 | `azure_attestation` | `AttestationClient` |
 | `azure_messaging_eventhubs` | `ProducerClient`, `ConsumerClient` |
+| `azure_messaging_eventhubs_checkpointstore_blob` | Blob-backed checkpoint store |
+| `azure_messaging_servicebus` | `ServiceBusSenderClient`, `ServiceBusReceiverClient`, `ServiceBusAdministrationClient` |
+| `azure_kusto_data` | `KustoClient` (queries + management) |
+| `azure_kusto_ingest` | `StreamingIngestClient`, `QueuedIngestClient`, `ManagedIngestClient` |
 
 ### Infrastructure
 
@@ -122,8 +127,8 @@ The SDK uses only the Zig standard library plus two small Zig packages:
 
 | Purpose | Package |
 |---------|---------|
-| HTTP, TLS, JSON, crypto, compression | `std` (Zig standard library) |
-| XML parsing | [zig-xml](https://github.com/cataggar/zig-xml) |
+| HTTP, TLS, crypto, compression | `std` (Zig standard library) |
+| Typed JSON + XML (de)serialization | [serde.zig](https://github.com/cataggar/serde.zig) |
 | AMQP 1.0 protocol | [azure-uamqp-zig](https://github.com/cataggar/azure-uamqp-zig) |
 
 ## Using as a Dependency
@@ -157,9 +162,8 @@ replacing every C/C++ dependency with Zig standard library equivalents:
 |----------------|-----------------|
 | libcurl / WinHTTP | `std.http.Client` |
 | OpenSSL | `std.crypto.tls`, `std.crypto.hash`, `std.crypto.auth.hmac` |
-| libxml2 | zig-xml |
+| nlohmann/json + libxml2 | [serde.zig](https://github.com/cataggar/serde.zig) (typed schemas) |
 | azure-uamqp-c | azure-uamqp-zig |
-| nlohmann/json | `std.json` |
 | CMake + vcpkg | `build.zig` |
 | Google Test | `std.testing` |
 

@@ -33,6 +33,16 @@ pub const Database = struct {
     rid: ?[]const u8 = null,
     self_link: ?[]const u8 = null,
     etag: ?[]const u8 = null,
+
+    /// Free any strings duped into `allocator` by parseDatabaseResponse /
+    /// parseDatabaseList. `id` is duped for list results; not for
+    /// single-resource fetches (where it's a borrow of the caller's input).
+    pub fn deinit(self: Database, allocator: std.mem.Allocator, owns_id: bool) void {
+        if (owns_id) allocator.free(self.id);
+        if (self.rid) |s| allocator.free(s);
+        if (self.self_link) |s| allocator.free(s);
+        if (self.etag) |s| allocator.free(s);
+    }
 };
 
 pub const ContainerProperties = struct {
@@ -41,6 +51,13 @@ pub const ContainerProperties = struct {
     rid: ?[]const u8 = null,
     self_link: ?[]const u8 = null,
     etag: ?[]const u8 = null,
+
+    pub fn deinit(self: ContainerProperties, allocator: std.mem.Allocator, owns_id: bool) void {
+        if (owns_id) allocator.free(self.id);
+        if (self.rid) |s| allocator.free(s);
+        if (self.self_link) |s| allocator.free(s);
+        if (self.etag) |s| allocator.free(s);
+    }
 };
 
 pub const CosmosItem = struct {
@@ -120,7 +137,7 @@ pub const CosmosClient = struct {
             return error.CreateDatabaseFailed;
         }
 
-        return parseDatabaseResponse(database_id, resp.body);
+        return parseDatabaseResponse(allocator, database_id, resp.body);
     }
 
     /// Delete a database.
@@ -273,7 +290,7 @@ pub const DatabaseClient = struct {
             return error.GetContainerFailed;
         }
 
-        return parseContainerResponse(container_id, resp.body);
+        return parseContainerResponse(allocator, container_id, resp.body);
     }
 
     fn setCommonHeaders(self: *DatabaseClient, req: *core.http.Request) !void {
@@ -445,13 +462,13 @@ const ResourceMetaSchema = struct {
     _etag: ?[]const u8 = null,
 };
 
-fn parseDatabaseResponse(id: []const u8, body: []const u8) Database {
+fn parseDatabaseResponse(allocator: std.mem.Allocator, id: []const u8, body: []const u8) Database {
     var db = Database{ .id = id };
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     if (serde.json.fromSlice(ResourceMetaSchema, arena.allocator(), body)) |parsed| {
-        if (parsed._rid) |s| db.rid = dupeStaticLeak(s);
-        if (parsed._etag) |s| db.etag = dupeStaticLeak(s);
+        if (parsed._rid) |s| db.rid = allocator.dupe(u8, s) catch null;
+        if (parsed._etag) |s| db.etag = allocator.dupe(u8, s) catch null;
     } else |_| {}
     return db;
 }
@@ -486,13 +503,13 @@ fn parseDatabaseList(allocator: std.mem.Allocator, body: []const u8) ![]Database
     return result[0..n];
 }
 
-fn parseContainerResponse(id: []const u8, body: []const u8) ContainerProperties {
+fn parseContainerResponse(allocator: std.mem.Allocator, id: []const u8, body: []const u8) ContainerProperties {
     var props = ContainerProperties{ .id = id };
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     if (serde.json.fromSlice(ResourceMetaSchema, arena.allocator(), body)) |parsed| {
-        if (parsed._rid) |s| props.rid = dupeStaticLeak(s);
-        if (parsed._etag) |s| props.etag = dupeStaticLeak(s);
+        if (parsed._rid) |s| props.rid = allocator.dupe(u8, s) catch null;
+        if (parsed._etag) |s| props.etag = allocator.dupe(u8, s) catch null;
     } else |_| {}
     return props;
 }
@@ -561,25 +578,17 @@ fn parseQueryResult(allocator: std.mem.Allocator, body: []const u8) !QueryResult
     }
 
     // Use serde for the simple `_continuation` field on the top-level envelope.
-    var meta_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var meta_arena = std.heap.ArenaAllocator.init(allocator);
     defer meta_arena.deinit();
     var continuation: ?[]const u8 = null;
     if (serde.json.fromSlice(QueryResultMetaSchema, meta_arena.allocator(), body)) |meta| {
-        if (meta._continuation) |s| continuation = dupeStaticLeak(s);
+        if (meta._continuation) |s| continuation = try allocator.dupe(u8, s);
     } else |_| {}
 
     return .{
         .documents = try docs.toOwnedSlice(allocator),
         .continuation_token = continuation,
     };
-}
-
-/// Helper: dupe a string into page_allocator. The resulting slice lives forever.
-/// Used for fields on result structs that don't carry an allocator, matching
-/// the original substring-borrow lifetime (which lived for the request's
-/// response body — effectively forever for short-lived programs).
-fn dupeStaticLeak(s: []const u8) []const u8 {
-    return std.heap.page_allocator.dupe(u8, s) catch s;
 }
 
 // ─────────────────────── Tests ───────────────────────
@@ -613,6 +622,7 @@ test "CosmosClient createDatabase" {
     defer mock.deinit();
     var client = createTestClient(&mock);
     const db = try client.createDatabase(allocator, "testdb");
+    defer db.deinit(allocator, false);
     try std.testing.expectEqualStrings("testdb", db.id);
     try std.testing.expectEqual(core.http.Method.POST, mock.last_method.?);
     try std.testing.expect(std.mem.endsWith(u8, mock.last_url.?, "/dbs"));
@@ -668,6 +678,8 @@ test "DatabaseClient createContainer" {
     var client = createTestClient(&mock);
     var db = client.database("mydb");
     const ctr = try db.createContainer(allocator, "myctr", "/pk");
+    // createContainer assembles the struct locally from the inputs — no
+    // allocations to free.
     try std.testing.expectEqualStrings("myctr", ctr.id);
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "/dbs/mydb/colls") != null);
 }
