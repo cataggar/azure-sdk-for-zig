@@ -58,7 +58,26 @@ pub const StreamingIngestClient = struct {
     }
 
     /// Ingest data from a byte slice.
+    ///
+    /// Returns `IngestionResult{ .status = .failed }` on any Azure-side
+    /// error (and logs the error). Use `ingestFromSliceResult` to receive
+    /// the structured `AzureError` instead.
     pub fn ingestFromSlice(self: *StreamingIngestClient, allocator: std.mem.Allocator, database: []const u8, table: []const u8, data: []const u8, options: IngestOptions) !IngestionResult {
+        var r = try self.ingestFromSliceResult(allocator, database, table, data, options);
+        return switch (r) {
+            .ok => |v| v,
+            .err => blk: {
+                std.log.warn("{f}", .{r.err});
+                r.err.deinit();
+                break :blk .{ .status = .failed };
+            },
+        };
+    }
+
+    /// Same as `ingestFromSlice` but exposes Azure-side failures as the
+    /// `.err` variant of `Result` instead of collapsing them into
+    /// `IngestionResult{ .status = .failed }`.
+    pub fn ingestFromSliceResult(self: *StreamingIngestClient, allocator: std.mem.Allocator, database: []const u8, table: []const u8, data: []const u8, options: IngestOptions) !core.errors.Result(IngestionResult) {
         const url = try self.buildIngestUrl(allocator, database, table, options);
         defer allocator.free(url);
 
@@ -73,11 +92,13 @@ pub const StreamingIngestClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return .{ .status = .failed };
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return .{ .status = .success };
+        return .{ .ok = .{ .status = .success } };
     }
 
     fn buildIngestUrl(self: *StreamingIngestClient, allocator: std.mem.Allocator, database: []const u8, table: []const u8, options: IngestOptions) ![]u8 {
@@ -112,7 +133,24 @@ pub const QueuedIngestClient = struct {
     }
 
     /// Ingest from a blob URL (blob already uploaded).
+    ///
+    /// Returns `IngestionResult{ .status = .failed }` on Azure-side
+    /// errors. Use `ingestFromBlobResult` to receive the structured
+    /// `AzureError` instead.
     pub fn ingestFromBlob(self: *QueuedIngestClient, allocator: std.mem.Allocator, properties: IngestionProperties, blob_url: []const u8) !IngestionResult {
+        var r = try self.ingestFromBlobResult(allocator, properties, blob_url);
+        return switch (r) {
+            .ok => |v| v,
+            .err => blk: {
+                std.log.warn("{f}", .{r.err});
+                r.err.deinit();
+                break :blk .{ .status = .failed };
+            },
+        };
+    }
+
+    /// Same as `ingestFromBlob` but exposes Azure-side failures via Result.
+    pub fn ingestFromBlobResult(self: *QueuedIngestClient, allocator: std.mem.Allocator, properties: IngestionProperties, blob_url: []const u8) !core.errors.Result(IngestionResult) {
         // Build the ingestion message as JSON.
         const msg = try self.buildIngestionMessage(allocator, properties, blob_url);
         defer allocator.free(msg);
@@ -137,11 +175,13 @@ pub const QueuedIngestClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return .{ .status = .failed };
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return .{ .status = .queued };
+        return .{ .ok = .{ .status = .queued } };
     }
 
     fn getDmUrl(self: *QueuedIngestClient, allocator: std.mem.Allocator) ![]const u8 {
