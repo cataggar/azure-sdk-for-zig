@@ -358,6 +358,7 @@ pub fn build(b: *std.Build) void {
                 .imports = &.{
                     .{ .name = "azure_core", .module = core_mod },
                     .{ .name = "azure_identity", .module = identity_mod },
+                    .{ .name = "serde", .module = serde_mod },
                 },
             }),
         });

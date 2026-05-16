@@ -4,6 +4,7 @@
 ///! `Operation-Location` or `Azure-AsyncOperation` with URLs to poll.
 ///! This module supports multiple polling strategies and auto-detection.
 const std = @import("std");
+const serde = @import("serde");
 const http = @import("http/transport.zig");
 const pipeline_mod = @import("http/pipeline.zig");
 
@@ -270,44 +271,36 @@ fn detectStrategy(response: http.Response) !PollingStrategy {
 // ─────────────────── Status Parsing ────────────────────────
 
 fn parseStatus(body: []const u8) OperationStatus {
-    const parsed = std.json.parseFromSlice(
-        std.json.Value,
-        std.heap.page_allocator,
-        body,
-        .{},
-    ) catch return .in_progress;
-    defer parsed.deinit();
+    const StatusSchema = struct {
+        status: ?[]const u8 = null,
+    };
 
-    if (parsed.value == .object) {
-        if (parsed.value.object.get("status")) |v| {
-            if (v == .string) return OperationStatus.fromString(v.string);
-        }
-    }
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const parsed = serde.json.fromSlice(StatusSchema, arena.allocator(), body) catch return .in_progress;
+    if (parsed.status) |s| return OperationStatus.fromString(s);
     return .in_progress;
 }
 
 fn parseProvisioningState(body: []const u8) OperationStatus {
-    const parsed = std.json.parseFromSlice(
-        std.json.Value,
-        std.heap.page_allocator,
-        body,
-        .{},
-    ) catch return .in_progress;
-    defer parsed.deinit();
+    const PropsSchema = struct {
+        provisioningState: ?[]const u8 = null,
+    };
+    const ProvisioningSchema = struct {
+        properties: ?PropsSchema = null,
+        // Some ARM resources put provisioningState at the top level.
+        provisioningState: ?[]const u8 = null,
+    };
 
-    if (parsed.value == .object) {
-        if (parsed.value.object.get("properties")) |props| {
-            if (props == .object) {
-                if (props.object.get("provisioningState")) |v| {
-                    if (v == .string) return OperationStatus.fromString(v.string);
-                }
-            }
-        }
-        // Fallback: some ARM resources put status at top level.
-        if (parsed.value.object.get("provisioningState")) |v| {
-            if (v == .string) return OperationStatus.fromString(v.string);
-        }
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const parsed = serde.json.fromSlice(ProvisioningSchema, arena.allocator(), body) catch return .in_progress;
+    if (parsed.properties) |props| {
+        if (props.provisioningState) |s| return OperationStatus.fromString(s);
     }
+    if (parsed.provisioningState) |s| return OperationStatus.fromString(s);
     return .in_progress;
 }
 

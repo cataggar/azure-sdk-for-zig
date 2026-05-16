@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("azure_core");
+const serde = @import("serde");
 
 const Context = core.context.Context;
 
@@ -242,82 +243,78 @@ pub const SecretClient = struct {
     }
 };
 
+/// Wire format of a Key Vault Secret response.
+const SecretSchema = struct {
+    value: ?[]const u8 = null,
+    id: ?[]const u8 = null,
+    contentType: ?[]const u8 = null,
+    attributes: ?AttributesSchema = null,
+
+    const AttributesSchema = struct {
+        enabled: ?bool = null,
+        exp: ?i64 = null,
+        nbf: ?i64 = null,
+        created: ?i64 = null,
+        updated: ?i64 = null,
+    };
+};
+
 /// Parse a JSON secret response into a KeyVaultSecret.
 fn parseSecret(allocator: std.mem.Allocator, name: []const u8, body: []const u8) !KeyVaultSecret {
-    const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{}) catch
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const parsed = serde.json.fromSlice(SecretSchema, arena.allocator(), body) catch
         return .{ .name = name };
 
-    defer parsed.deinit();
-    const obj = if (parsed.value == .object) parsed.value.object else return .{ .name = name };
-
     var secret = KeyVaultSecret{ .name = name };
-
-    if (obj.get("value")) |v| {
-        if (v == .string) secret.value = try allocator.dupe(u8, v.string);
+    if (parsed.value) |v| secret.value = try allocator.dupe(u8, v);
+    if (parsed.id) |v| secret.id = try allocator.dupe(u8, v);
+    if (parsed.contentType) |v| secret.properties.content_type = try allocator.dupe(u8, v);
+    if (parsed.attributes) |a| {
+        secret.properties.enabled = a.enabled;
+        secret.properties.expires_on = a.exp;
+        secret.properties.not_before = a.nbf;
+        secret.properties.created_on = a.created;
+        secret.properties.updated_on = a.updated;
     }
-    if (obj.get("id")) |v| {
-        if (v == .string) secret.id = try allocator.dupe(u8, v.string);
-    }
-    if (obj.get("attributes")) |attrs| {
-        if (attrs == .object) {
-            if (attrs.object.get("enabled")) |e| {
-                if (e == .bool) secret.properties.enabled = e.bool;
-            }
-            if (attrs.object.get("exp")) |e| {
-                if (e == .integer) secret.properties.expires_on = e.integer;
-            }
-            if (attrs.object.get("nbf")) |e| {
-                if (e == .integer) secret.properties.not_before = e.integer;
-            }
-            if (attrs.object.get("created")) |e| {
-                if (e == .integer) secret.properties.created_on = e.integer;
-            }
-            if (attrs.object.get("updated")) |e| {
-                if (e == .integer) secret.properties.updated_on = e.integer;
-            }
-        }
-    }
-    if (obj.get("contentType")) |v| {
-        if (v == .string) secret.properties.content_type = try allocator.dupe(u8, v.string);
-    }
-
     return secret;
 }
+
+/// Wire format of a single entry in a list-secrets response.
+const SecretListEntry = struct {
+    id: ?[]const u8 = null,
+};
+
+/// Wire format of a paged list-secrets response.
+const SecretListSchema = struct {
+    value: ?[]const SecretListEntry = null,
+    nextLink: ?[]const u8 = null,
+};
 
 /// Parse a JSON list-secrets response into a PageResult.
 /// Format: {"value":[{"id":"https://.../secrets/name1"}, ...], "nextLink":"https://..."}
 fn parseSecretListPage(allocator: std.mem.Allocator, body: []const u8) !core.pager.PageResult([]const u8) {
-    const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{}) catch
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const parsed = serde.json.fromSlice(SecretListSchema, arena.allocator(), body) catch
         return .{ .items = try allocator.alloc([]const u8, 0) };
-    defer parsed.deinit();
 
-    const obj = if (parsed.value == .object) parsed.value.object else return .{ .items = try allocator.alloc([]const u8, 0) };
-
-    // Extract next_link for pagination.
     var next_link: ?[]u8 = null;
-    if (obj.get("nextLink")) |nl| {
-        if (nl == .string and nl.string.len > 0) {
-            next_link = try allocator.dupe(u8, nl.string);
-        }
+    if (parsed.nextLink) |nl| {
+        if (nl.len > 0) next_link = try allocator.dupe(u8, nl);
     }
 
-    // Extract secret IDs/names from the "value" array.
-    const values_arr = if (obj.get("value")) |v| (if (v == .array) v.array.items else null) else null;
-    const items_slice = values_arr orelse
+    const entries = parsed.value orelse
         return .{ .items = try allocator.alloc([]const u8, 0), .next_link = next_link };
 
-    var names = try allocator.alloc([]const u8, items_slice.len);
-    for (items_slice, 0..) |item, i| {
-        if (item == .object) {
-            if (item.object.get("id")) |id_val| {
-                if (id_val == .string) {
-                    // Extract name from ID: https://.../secrets/{name}
-                    const id_str = id_val.string;
-                    if (std.mem.findScalarLast(u8, id_str, '/')) |slash| {
-                        names[i] = try allocator.dupe(u8, id_str[slash + 1 ..]);
-                        continue;
-                    }
-                }
+    var names = try allocator.alloc([]const u8, entries.len);
+    for (entries, 0..) |entry, i| {
+        if (entry.id) |id_str| {
+            if (std.mem.findScalarLast(u8, id_str, '/')) |slash| {
+                names[i] = try allocator.dupe(u8, id_str[slash + 1 ..]);
+                continue;
             }
         }
         names[i] = try allocator.dupe(u8, "");

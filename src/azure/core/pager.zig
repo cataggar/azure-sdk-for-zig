@@ -1,4 +1,5 @@
 const std = @import("std");
+const serde = @import("serde");
 const pipeline_mod = @import("http/pipeline.zig");
 const transport = @import("http/transport.zig");
 
@@ -125,29 +126,28 @@ pub fn PipelinePager(comptime T: type) type {
 // ─────────────────────────── Tests ───────────────────────────
 
 fn parseTestPage(allocator: std.mem.Allocator, body: []const u8) !PageResult([]const u8) {
-    const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{}) catch
-        return .{ .items = try allocator.alloc([]const u8, 0) };
-    defer parsed.deinit();
+    const PageSchema = struct {
+        value: ?[]const []const u8 = null,
+        nextLink: ?[]const u8 = null,
+    };
 
-    const obj = if (parsed.value == .object) parsed.value.object else return .{ .items = try allocator.alloc([]const u8, 0) };
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const parsed = serde.json.fromSlice(PageSchema, arena.allocator(), body) catch
+        return .{ .items = try allocator.alloc([]const u8, 0) };
 
     var next_link: ?[]u8 = null;
-    if (obj.get("nextLink")) |nl| {
-        if (nl == .string and nl.string.len > 0)
-            next_link = try allocator.dupe(u8, nl.string);
+    if (parsed.nextLink) |nl| {
+        if (nl.len > 0) next_link = try allocator.dupe(u8, nl);
     }
 
-    const values_arr = if (obj.get("value")) |v| (if (v == .array) v.array.items else null) else null;
-    const values = values_arr orelse
+    const values = parsed.value orelse
         return .{ .items = try allocator.alloc([]const u8, 0), .next_link = next_link };
 
     var items = try allocator.alloc([]const u8, values.len);
-    for (values, 0..) |item, i| {
-        if (item == .string) {
-            items[i] = try allocator.dupe(u8, item.string);
-        } else {
-            items[i] = try allocator.dupe(u8, "");
-        }
+    for (values, 0..) |s, i| {
+        items[i] = try allocator.dupe(u8, s);
     }
     return .{ .items = items, .next_link = next_link };
 }

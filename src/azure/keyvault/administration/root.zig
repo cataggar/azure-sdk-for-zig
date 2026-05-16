@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("azure_core");
+const serde = @import("serde");
 
 /// Pager type returned by `listSettings`.
 pub const AdminSettingPager = core.pager.PipelinePager(AdminSetting);
@@ -234,54 +235,50 @@ pub const SettingsClient = struct {
 // ─────────────────────────── Parsing ──────────────────────────
 
 fn parseOperationId(allocator: std.mem.Allocator, body: []const u8) ![]const u8 {
-    const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{}) catch
+    const Schema = struct { jobId: ?[]const u8 = null };
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const parsed = serde.json.fromSlice(Schema, arena.allocator(), body) catch
         return error.ParseFailed;
-    defer parsed.deinit();
-
-    const obj = if (parsed.value == .object) parsed.value.object else return error.ParseFailed;
-
-    if (obj.get("jobId")) |v| {
-        if (v == .string) return allocator.dupe(u8, v.string);
-    }
-
-    return error.ParseFailed;
+    const job_id = parsed.jobId orelse return error.ParseFailed;
+    return allocator.dupe(u8, job_id);
 }
 
 fn parseSettingValue(allocator: std.mem.Allocator, body: []const u8) ![]const u8 {
-    const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{}) catch
+    const Schema = struct { value: ?[]const u8 = null };
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const parsed = serde.json.fromSlice(Schema, arena.allocator(), body) catch
         return error.ParseFailed;
-    defer parsed.deinit();
-
-    const obj = if (parsed.value == .object) parsed.value.object else return error.ParseFailed;
-
-    if (obj.get("value")) |v| {
-        if (v == .string) return allocator.dupe(u8, v.string);
-    }
-
-    return error.ParseFailed;
+    const value = parsed.value orelse return error.ParseFailed;
+    return allocator.dupe(u8, value);
 }
 
+const AdminSettingEntrySchema = struct {
+    name: ?[]const u8 = null,
+    value: ?[]const u8 = null,
+};
+
+const AdminSettingListSchema = struct {
+    value: ?[]const AdminSettingEntrySchema = null,
+};
+
 fn parseAdminSettingListPage(allocator: std.mem.Allocator, body: []const u8) !core.pager.PageResult(AdminSetting) {
-    const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, body, .{}) catch
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const parsed = serde.json.fromSlice(AdminSettingListSchema, arena.allocator(), body) catch
         return .{ .items = try allocator.alloc(AdminSetting, 0) };
-    defer parsed.deinit();
 
-    const obj = if (parsed.value == .object) parsed.value.object else return .{ .items = try allocator.alloc(AdminSetting, 0) };
+    const entries = parsed.value orelse return .{ .items = try allocator.alloc(AdminSetting, 0) };
 
-    const values = if (obj.get("value")) |v| (if (v == .array) v.array.items else null) else null;
-    const items = values orelse return .{ .items = try allocator.alloc(AdminSetting, 0) };
-
-    var result = try allocator.alloc(AdminSetting, items.len);
-    for (items, 0..) |item, i| {
+    var result = try allocator.alloc(AdminSetting, entries.len);
+    for (entries, 0..) |entry, i| {
         var setting = AdminSetting{ .name = "" };
-        if (item == .object) {
-            if (item.object.get("name")) |n| {
-                if (n == .string) setting.name = try allocator.dupe(u8, n.string);
-            }
-            if (item.object.get("value")) |v| {
-                if (v == .string) setting.value = try allocator.dupe(u8, v.string);
-            }
-        }
+        if (entry.name) |n| setting.name = try allocator.dupe(u8, n);
+        if (entry.value) |v| setting.value = try allocator.dupe(u8, v);
         result[i] = setting;
     }
     return .{ .items = result };
