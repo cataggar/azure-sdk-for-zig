@@ -88,6 +88,102 @@ pub fn logErrorResponse(response: http.Response) void {
     }
 }
 
+/// Tagged union over a successful response of type `T` or an Azure-side
+/// error. Service-client `*Result` variants return this so callers can
+/// branch on `AzureError.error_code` (e.g. retry on `"ServerBusy"`, fail
+/// fast on `"AuthFailed"`) — the standard pattern in Azure SDKs for other
+/// languages.
+///
+/// **Layered error model**
+///
+/// - The outer Zig error union (`!Result(T)`) carries *local* failures —
+///   network errors, OOM, malformed responses, allocator failures. Use
+///   normal `try`/`catch` for these.
+/// - The `.err` variant carries *Azure-side* failures — any HTTP
+///   non-2xx response whose body parsed as an Azure error envelope (or
+///   didn't, in which case `error_code`/`message` are null but
+///   `status_code` is still populated).
+/// - The `.ok` variant carries the successful response value.
+///
+/// **Lifetime**
+///
+/// `Result.deinit(allocator)` frees both branches:
+/// - On `.err`, it frees the `AzureError`'s strings.
+/// - On `.ok`, if the payload type `T` declares
+///   `pub fn deinit(self, allocator: std.mem.Allocator) void`, that
+///   method is called; otherwise no-op. This lets callers write
+///   `defer r.deinit(allocator);` once and trust both paths are
+///   cleaned up.
+///
+/// **Example**
+///
+/// ```zig
+/// var r = try client.getSecretResult(allocator, "name");
+/// defer r.deinit(allocator);
+/// switch (r) {
+///     .ok => |secret| use(secret),
+///     .err => |az_err| {
+///         if (std.mem.eql(u8, az_err.error_code orelse "", "SecretNotFound")) {
+///             // expected: secret didn't exist
+///         } else {
+///             return error.UnexpectedAzureFailure;
+///         }
+///     },
+/// }
+/// ```
+pub fn Result(comptime T: type) type {
+    return union(enum) {
+        ok: T,
+        err: AzureError,
+
+        const Self = @This();
+
+        /// Free both the `AzureError` strings (on the `.err` path) and the
+        /// payload's allocations (on the `.ok` path, if `T` declares a
+        /// `deinit(self, allocator) void` method — comptime-detected).
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            switch (self.*) {
+                .ok => |*payload| {
+                    if (comptime hasPayloadDeinit(T)) payload.deinit(allocator);
+                },
+                .err => |*e| e.deinit(),
+            }
+        }
+
+        /// Convenience for the common "succeeded?" check.
+        pub fn isOk(self: Self) bool {
+            return self == .ok;
+        }
+
+        /// Return the Azure error code if this is the `.err` variant
+        /// and the response body contained an `error.code` field;
+        /// `null` otherwise. Useful for branching:
+        ///
+        /// ```zig
+        /// if (std.mem.eql(u8, r.errorCode() orelse "", "Throttled")) ...
+        /// ```
+        pub fn errorCode(self: Self) ?[]const u8 {
+            return switch (self) {
+                .ok => null,
+                .err => |e| e.error_code,
+            };
+        }
+    };
+}
+
+/// True if `T` has `pub fn deinit(self, allocator: std.mem.Allocator) void`.
+/// Used by `Result(T).deinit` to dispatch to payload cleanup without forcing
+/// every payload type to grow a deinit method.
+fn hasPayloadDeinit(comptime T: type) bool {
+    if (@typeInfo(T) != .@"struct") return false;
+    if (!@hasDecl(T, "deinit")) return false;
+    const Fn = @TypeOf(T.deinit);
+    const info = @typeInfo(Fn);
+    if (info != .@"fn") return false;
+    const params = info.@"fn".params;
+    return params.len == 2;
+}
+
 test "errorFromResponse success" {
     var resp = http.Response{
         .status_code = 200,
@@ -184,4 +280,43 @@ test "logErrorResponse is a no-op on success" {
     defer resp.deinit();
     // Should not log anything and should not allocate beyond what resp owns.
     logErrorResponse(resp);
+}
+
+test "Result.ok holds payload, deinit is a no-op when T has no deinit" {
+    var r: Result(u32) = .{ .ok = 42 };
+    defer r.deinit(std.testing.allocator);
+    try std.testing.expect(r.isOk());
+    try std.testing.expectEqual(@as(?[]const u8, null), r.errorCode());
+    try std.testing.expectEqual(@as(u32, 42), r.ok);
+}
+
+test "Result.err carries AzureError and frees it on deinit" {
+    var r: Result(u32) = .{ .err = .{
+        .allocator = std.testing.allocator,
+        .status_code = 429,
+        .error_code = try std.testing.allocator.dupe(u8, "Throttled"),
+        .message = try std.testing.allocator.dupe(u8, "Slow down"),
+    } };
+    defer r.deinit(std.testing.allocator);
+    try std.testing.expect(!r.isOk());
+    try std.testing.expectEqualStrings("Throttled", r.errorCode().?);
+    try std.testing.expectEqual(@as(u16, 429), r.err.status_code);
+}
+
+test "Result.deinit dispatches to payload.deinit when present" {
+    const Payload = struct {
+        owned: []const u8,
+
+        pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
+            allocator.free(self.owned);
+        }
+    };
+    var r: Result(Payload) = .{
+        .ok = .{ .owned = try std.testing.allocator.dupe(u8, "data") },
+    };
+    defer r.deinit(std.testing.allocator);
+    try std.testing.expect(r.isOk());
+    try std.testing.expectEqualStrings("data", r.ok.owned);
+    // testing.allocator catches leaks: if deinit didn't dispatch, this test
+    // would fail with a "leaked 1 allocation" error.
 }
