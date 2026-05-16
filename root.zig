@@ -549,6 +549,12 @@ pub const ServiceBusAdministrationClient = struct {
     // ── Queue operations ──
 
     pub fn createQueue(self: *ServiceBusAdministrationClient, allocator: std.mem.Allocator, name: []const u8) !void {
+        var r = try self.createQueueResult(allocator, name);
+        try r.unwrap(error.CreateQueueFailed);
+    }
+
+    /// Same as `createQueue` but returns `Result(void)`.
+    pub fn createQueueResult(self: *ServiceBusAdministrationClient, allocator: std.mem.Allocator, name: []const u8) !core.errors.Result(void) {
         const url = try self.buildEntityUrl(allocator, name);
         defer allocator.free(url);
 
@@ -569,13 +575,20 @@ pub const ServiceBusAdministrationClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.CreateQueueFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     pub fn deleteQueue(self: *ServiceBusAdministrationClient, allocator: std.mem.Allocator, name: []const u8) !void {
+        var r = try self.deleteQueueResult(allocator, name);
+        try r.unwrap(error.DeleteQueueFailed);
+    }
+
+    /// Same as `deleteQueue` but returns `Result(void)`.
+    pub fn deleteQueueResult(self: *ServiceBusAdministrationClient, allocator: std.mem.Allocator, name: []const u8) !core.errors.Result(void) {
         const url = try self.buildEntityUrl(allocator, name);
         defer allocator.free(url);
 
@@ -585,13 +598,20 @@ pub const ServiceBusAdministrationClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.DeleteQueueFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     pub fn listQueues(self: *ServiceBusAdministrationClient, allocator: std.mem.Allocator) ![]QueueProperties {
+        var r = try self.listQueuesResult(allocator);
+        return r.unwrap(error.ListQueuesFailed);
+    }
+
+    /// Same as `listQueues` but returns `Result([]QueueProperties)`.
+    pub fn listQueuesResult(self: *ServiceBusAdministrationClient, allocator: std.mem.Allocator) !core.errors.Result([]QueueProperties) {
         const url = try std.fmt.allocPrint(allocator, "https://{s}/$Resources/queues?api-version={s}", .{ self.fully_qualified_namespace, self.api_version });
         defer allocator.free(url);
 
@@ -602,16 +622,24 @@ pub const ServiceBusAdministrationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.ListQueuesFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return parseEntityNames(allocator, resp.body, "Queue");
+        return .{ .ok = try parseEntityNames(allocator, resp.body, "Queue") };
     }
 
     // ── Topic operations ──
 
     pub fn createTopic(self: *ServiceBusAdministrationClient, allocator: std.mem.Allocator, name: []const u8) !void {
+        var r = try self.createTopicResult(allocator, name);
+        try r.unwrap(error.CreateTopicFailed);
+    }
+
+    /// Same as `createTopic` but returns `Result(void)`.
+    pub fn createTopicResult(self: *ServiceBusAdministrationClient, allocator: std.mem.Allocator, name: []const u8) !core.errors.Result(void) {
         const url = try self.buildEntityUrl(allocator, name);
         defer allocator.free(url);
 
@@ -632,13 +660,20 @@ pub const ServiceBusAdministrationClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.CreateTopicFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     pub fn deleteTopic(self: *ServiceBusAdministrationClient, allocator: std.mem.Allocator, name: []const u8) !void {
+        var r = try self.deleteTopicResult(allocator, name);
+        try r.unwrap(error.DeleteTopicFailed);
+    }
+
+    /// Same as `deleteTopic` but returns `Result(void)`.
+    pub fn deleteTopicResult(self: *ServiceBusAdministrationClient, allocator: std.mem.Allocator, name: []const u8) !core.errors.Result(void) {
         const url = try self.buildEntityUrl(allocator, name);
         defer allocator.free(url);
 
@@ -648,13 +683,20 @@ pub const ServiceBusAdministrationClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.DeleteTopicFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     pub fn listTopics(self: *ServiceBusAdministrationClient, allocator: std.mem.Allocator) ![]TopicProperties {
+        var r = try self.listTopicsResult(allocator);
+        return r.unwrap(error.ListTopicsFailed);
+    }
+
+    /// Same as `listTopics` but returns `Result([]TopicProperties)`.
+    pub fn listTopicsResult(self: *ServiceBusAdministrationClient, allocator: std.mem.Allocator) !core.errors.Result([]TopicProperties) {
         const url = try std.fmt.allocPrint(allocator, "https://{s}/$Resources/topics?api-version={s}", .{ self.fully_qualified_namespace, self.api_version });
         defer allocator.free(url);
 
@@ -665,16 +707,24 @@ pub const ServiceBusAdministrationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.ListTopicsFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return parseEntityNames(allocator, resp.body, "Topic");
+        return .{ .ok = try parseEntityNames(allocator, resp.body, "Topic") };
     }
 
     // ── Subscription operations ──
 
     pub fn createSubscription(self: *ServiceBusAdministrationClient, allocator: std.mem.Allocator, topic_name: []const u8, subscription_name: []const u8) !void {
+        var r = try self.createSubscriptionResult(allocator, topic_name, subscription_name);
+        try r.unwrap(error.CreateSubscriptionFailed);
+    }
+
+    /// Same as `createSubscription` but returns `Result(void)`.
+    pub fn createSubscriptionResult(self: *ServiceBusAdministrationClient, allocator: std.mem.Allocator, topic_name: []const u8, subscription_name: []const u8) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(allocator, "https://{s}/{s}/subscriptions/{s}?api-version={s}", .{ self.fully_qualified_namespace, topic_name, subscription_name, self.api_version });
         defer allocator.free(url);
 
@@ -695,13 +745,20 @@ pub const ServiceBusAdministrationClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.CreateSubscriptionFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     pub fn deleteSubscription(self: *ServiceBusAdministrationClient, allocator: std.mem.Allocator, topic_name: []const u8, subscription_name: []const u8) !void {
+        var r = try self.deleteSubscriptionResult(allocator, topic_name, subscription_name);
+        try r.unwrap(error.DeleteSubscriptionFailed);
+    }
+
+    /// Same as `deleteSubscription` but returns `Result(void)`.
+    pub fn deleteSubscriptionResult(self: *ServiceBusAdministrationClient, allocator: std.mem.Allocator, topic_name: []const u8, subscription_name: []const u8) !core.errors.Result(void) {
         const url = try std.fmt.allocPrint(allocator, "https://{s}/{s}/subscriptions/{s}?api-version={s}", .{ self.fully_qualified_namespace, topic_name, subscription_name, self.api_version });
         defer allocator.free(url);
 
@@ -711,13 +768,20 @@ pub const ServiceBusAdministrationClient = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.DeleteSubscriptionFailed;
+        if (resp.isSuccess()) return .{ .ok = {} };
+        if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+            return .{ .err = az_err };
         }
+        return error.AzureRequestFailed;
     }
 
     pub fn listSubscriptions(self: *ServiceBusAdministrationClient, allocator: std.mem.Allocator, topic_name: []const u8) ![]SubscriptionProperties {
+        var r = try self.listSubscriptionsResult(allocator, topic_name);
+        return r.unwrap(error.ListSubscriptionsFailed);
+    }
+
+    /// Same as `listSubscriptions` but returns `Result([]SubscriptionProperties)`.
+    pub fn listSubscriptionsResult(self: *ServiceBusAdministrationClient, allocator: std.mem.Allocator, topic_name: []const u8) !core.errors.Result([]SubscriptionProperties) {
         const url = try std.fmt.allocPrint(allocator, "https://{s}/{s}/subscriptions?api-version={s}", .{ self.fully_qualified_namespace, topic_name, self.api_version });
         defer allocator.free(url);
 
@@ -728,11 +792,13 @@ pub const ServiceBusAdministrationClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.ListSubscriptionsFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return parseSubscriptionNames(allocator, resp.body, topic_name);
+        return .{ .ok = try parseSubscriptionNames(allocator, resp.body, topic_name) };
     }
 
     fn buildEntityUrl(self: *ServiceBusAdministrationClient, allocator: std.mem.Allocator, name: []const u8) ![]u8 {
