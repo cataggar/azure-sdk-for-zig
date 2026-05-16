@@ -4,6 +4,7 @@
 ///! and management commands via `/v1/rest/mgmt`.
 const std = @import("std");
 const core = @import("azure_core");
+const serde = @import("serde");
 const kusto_common = @import("azure_kusto_common");
 
 pub const ConnectionProperties = kusto_common.ConnectionProperties;
@@ -123,7 +124,7 @@ pub const KustoClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            _ = core.errors.errorFromResponse(resp);
+            core.errors.logErrorResponse(resp);
             return error.KustoQueryFailed;
         }
 
@@ -133,96 +134,109 @@ pub const KustoClient = struct {
 
 // ─────────────────── Response Parsing ────────────────
 
+/// Wire shape of a single column descriptor inside a Kusto v2 DataTable frame.
+const KustoColumnSchema = struct {
+    ColumnName: []const u8,
+    ColumnType: ?[]const u8 = null,
+};
+
+/// Wire shape of a single Kusto v2 frame, columns only. Rows are dynamic
+/// JSON arrays of mixed-type values (string, int, bool, null, nested
+/// objects), which serde cannot deserialize into a uniform Zig type, so
+/// we parse `Rows` separately by walking the raw body.
+const KustoFrameSchema = struct {
+    FrameType: ?[]const u8 = null,
+    TableName: ?[]const u8 = null,
+    Columns: ?[]const KustoColumnSchema = null,
+};
+
 fn parseResponseDataSet(allocator: std.mem.Allocator, body: []const u8) !KustoResponseDataSet {
-    // Parse the v2 response: array of frame objects.
-    // Primary result is in a DataTable frame with TableName "PrimaryResult".
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const frames = serde.json.fromSlice([]const KustoFrameSchema, arena.allocator(), body) catch
+        return .{ .tables = try allocator.alloc(KustoResultTable, 0) };
+
     var tables = std.ArrayList(KustoResultTable).empty;
     errdefer tables.deinit(allocator);
 
-    // Find DataTable frames by searching for "TableName"
-    var pos: usize = 0;
-    while (std.mem.findPos(u8, body, pos, "\"TableName\":\"")) |tn_start| {
-        const name_start = tn_start + "\"TableName\":\"".len;
-        const name_end = std.mem.findScalarPos(u8, body, name_start, '"') orelse break;
-        const table_name = try allocator.dupe(u8, body[name_start..name_end]);
+    // Walk the raw body alongside the typed frames to grab `Rows`. We
+    // assume frames appear in the body in the same order they do in the
+    // typed slice.
+    var body_pos: usize = 0;
+    for (frames) |frame| {
+        const table_name_src = frame.TableName orelse continue;
+        const cols_src = frame.Columns orelse &[_]KustoColumnSchema{};
 
-        // Parse columns from this table frame
-        var columns = std.ArrayList(KustoResultColumn).empty;
-        errdefer columns.deinit(allocator);
+        const table_name = try allocator.dupe(u8, table_name_src);
+        errdefer allocator.free(table_name);
 
-        const col_search_start = name_end;
-        const col_section_end = std.mem.findPos(u8, body, col_search_start, "\"Rows\"") orelse body.len;
-
-        var col_pos = col_search_start;
-        while (col_pos < col_section_end) {
-            const cn_idx = std.mem.findPos(u8, body, col_pos, "\"ColumnName\":\"") orelse break;
-            if (cn_idx >= col_section_end) break;
-            const cn_start = cn_idx + "\"ColumnName\":\"".len;
-            const cn_end = std.mem.findScalarPos(u8, body, cn_start, '"') orelse break;
-            const col_name = try allocator.dupe(u8, body[cn_start..cn_end]);
-
-            // Find ColumnType
-            var col_type: []const u8 = "string";
-            if (std.mem.findPos(u8, body, cn_end, "\"ColumnType\":\"")) |ct_idx| {
-                if (ct_idx < col_section_end) {
-                    const ct_start = ct_idx + "\"ColumnType\":\"".len;
-                    const ct_end = std.mem.findScalarPos(u8, body, ct_start, '"') orelse ct_start;
-                    col_type = try allocator.dupe(u8, body[ct_start..ct_end]);
-                }
-            }
-
-            try columns.append(allocator, .{ .name = col_name, .column_type = col_type });
-            col_pos = cn_end + 1;
+        const cols_slice = try allocator.alloc(KustoResultColumn, cols_src.len);
+        errdefer allocator.free(cols_slice);
+        for (cols_src, 0..) |col, i| {
+            cols_slice[i] = .{
+                .name = try allocator.dupe(u8, col.ColumnName),
+                .column_type = if (col.ColumnType) |ct| try allocator.dupe(u8, ct) else try allocator.dupe(u8, "string"),
+            };
         }
 
-        const cols_slice = try columns.toOwnedSlice(allocator);
-
-        // Parse rows - simplified: find "Rows":[[...],[...]]
-        var rows = std.ArrayList(KustoResultRow).empty;
-        errdefer rows.deinit(allocator);
-
-        if (std.mem.findPos(u8, body, name_end, "\"Rows\":[")) |rows_start| {
-            const array_start = rows_start + "\"Rows\":[".len;
-            // Find matching close bracket
-            var depth: u32 = 1;
-            var i = array_start;
-            while (i < body.len and depth > 0) : (i += 1) {
-                if (body[i] == '[') depth += 1;
-                if (body[i] == ']') depth -= 1;
-            }
-            const rows_content = body[array_start .. i - 1];
-
-            // Parse individual row arrays
-            var row_depth: u32 = 0;
-            var row_start: ?usize = null;
-            for (rows_content, 0..) |ch, ri| {
-                if (ch == '[') {
-                    if (row_depth == 0) row_start = ri + 1;
-                    row_depth += 1;
-                } else if (ch == ']') {
-                    row_depth -= 1;
-                    if (row_depth == 0) {
-                        if (row_start) |rs| {
-                            const row_text = rows_content[rs..ri];
-                            const values = try parseRowValues(allocator, row_text);
-                            try rows.append(allocator, .{ .values = values, .columns = cols_slice });
-                        }
-                        row_start = null;
-                    }
-                }
-            }
-        }
+        const rows = try extractRows(allocator, body, &body_pos, cols_slice);
 
         try tables.append(allocator, .{
             .name = table_name,
             .columns = cols_slice,
-            .rows = try rows.toOwnedSlice(allocator),
+            .rows = rows,
         });
-
-        pos = name_end + 1;
     }
 
     return .{ .tables = try tables.toOwnedSlice(allocator) };
+}
+
+/// Extract the next `"Rows":[[...],[...],...]` array starting at or after
+/// `*body_pos`. Advances `*body_pos` past the consumed array. Each row's
+/// values are returned as raw JSON strings (unquoted if originally
+/// JSON-string typed) so the existing API surface is preserved.
+fn extractRows(
+    allocator: std.mem.Allocator,
+    body: []const u8,
+    body_pos: *usize,
+    columns: []const KustoResultColumn,
+) ![]KustoResultRow {
+    var rows = std.ArrayList(KustoResultRow).empty;
+    errdefer rows.deinit(allocator);
+
+    const rows_idx = std.mem.findPos(u8, body, body_pos.*, "\"Rows\":[") orelse {
+        return rows.toOwnedSlice(allocator);
+    };
+    const array_start = rows_idx + "\"Rows\":[".len;
+    var depth: u32 = 1;
+    var i = array_start;
+    while (i < body.len and depth > 0) : (i += 1) {
+        if (body[i] == '[') depth += 1;
+        if (body[i] == ']') depth -= 1;
+    }
+    const rows_content = body[array_start .. i - 1];
+    body_pos.* = i;
+
+    var row_depth: u32 = 0;
+    var row_start: ?usize = null;
+    for (rows_content, 0..) |ch, ri| {
+        if (ch == '[') {
+            if (row_depth == 0) row_start = ri + 1;
+            row_depth += 1;
+        } else if (ch == ']') {
+            row_depth -= 1;
+            if (row_depth == 0) {
+                if (row_start) |rs| {
+                    const row_text = rows_content[rs..ri];
+                    const values = try parseRowValues(allocator, row_text);
+                    try rows.append(allocator, .{ .values = values, .columns = columns });
+                }
+                row_start = null;
+            }
+        }
+    }
+    return rows.toOwnedSlice(allocator);
 }
 
 fn parseRowValues(allocator: std.mem.Allocator, row_text: []const u8) ![]const []const u8 {
@@ -243,7 +257,6 @@ fn parseRowValues(allocator: std.mem.Allocator, row_text: []const u8) ![]const [
             val_start = i + 1;
         }
     }
-    // Last value
     if (val_start <= row_text.len) {
         const raw = std.mem.trim(u8, row_text[val_start..], " \t");
         if (raw.len > 0) {
