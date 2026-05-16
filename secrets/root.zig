@@ -25,6 +25,16 @@ pub const KeyVaultSecret = struct {
     value: ?[]const u8 = null,
     id: ?[]const u8 = null,
     properties: SecretProperties = .{},
+
+    /// Free the allocated `value`, `id`, and `properties.content_type`
+    /// strings. `name` is NOT freed — by convention for single-resource
+    /// fetches it's a borrow of the caller's input string (and the same
+    /// pointer the caller passed to `getSecret(..., name)`).
+    pub fn deinit(self: KeyVaultSecret, allocator: std.mem.Allocator) void {
+        if (self.value) |v| allocator.free(v);
+        if (self.id) |i| allocator.free(i);
+        if (self.properties.content_type) |c| allocator.free(c);
+    }
 };
 
 pub const DeletedSecret = struct {
@@ -84,6 +94,43 @@ pub const SecretClient = struct {
         }
 
         return parseSecret(allocator, name, resp.body);
+    }
+
+    /// Same as `getSecret`, but returns the typed `AzureError` on
+    /// Azure-side failures rather than a generic `error.SecretNotFound`.
+    ///
+    /// This is the first method on the SDK using the new `Result(T)`
+    /// pattern (see `core.errors.Result`). Use it when you need to
+    /// branch on `AzureError.error_code` — for example, to distinguish
+    /// `"SecretNotFound"` (expected) from `"Forbidden"` (a real
+    /// failure).
+    ///
+    /// Note: this method does NOT call `logErrorResponse` — the caller
+    /// receives the structured error directly and can log or suppress
+    /// as appropriate.
+    pub fn getSecretResult(
+        self: *SecretClient,
+        allocator: std.mem.Allocator,
+        name: []const u8,
+    ) !core.errors.Result(KeyVaultSecret) {
+        const url = try self.buildUrl(allocator, &.{ "secrets", name }, null);
+        defer allocator.free(url);
+
+        var req = core.http.Request.init(allocator, .GET, url);
+        defer req.deinit();
+        try req.setHeader("Accept", "application/json");
+
+        var resp = try self.pipeline.send(&req);
+        defer resp.deinit();
+
+        if (!resp.isSuccess()) {
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
+        }
+
+        return .{ .ok = try parseSecret(allocator, name, resp.body) };
     }
 
     /// PUT /secrets/{name}?api-version=...
@@ -321,6 +368,96 @@ fn parseSecretListPage(allocator: std.mem.Allocator, body: []const u8) !core.pag
     }
 
     return .{ .items = names, .next_link = next_link };
+}
+
+test "SecretClient getSecretResult: ok path" {
+    const allocator = std.testing.allocator;
+    const body =
+        \\{"value":"my-secret-value","id":"https://myvault.vault.azure.net/secrets/mysecret/abc123"}
+    ;
+    var mock = core.http.MockTransport.init(allocator, 200, body);
+    defer mock.deinit();
+
+    const identity = @import("azure_identity");
+    var cred_mock = core.http.MockTransport.init(allocator, 200,
+        \\{"access_token":"t","expires_in":3600}
+    );
+    defer cred_mock.deinit();
+    var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
+
+    var client = SecretClient.init(
+        "https://myvault.vault.azure.net",
+        cred.asCredential(),
+        mock.asTransport(),
+        .{},
+    );
+
+    var r = try client.getSecretResult(allocator, "mysecret");
+    defer r.deinit(allocator);
+
+    try std.testing.expect(r.isOk());
+    try std.testing.expectEqualStrings("my-secret-value", r.ok.value.?);
+}
+
+test "SecretClient getSecretResult: err path surfaces SecretNotFound code" {
+    const allocator = std.testing.allocator;
+    const body =
+        \\{"error":{"code":"SecretNotFound","message":"Secret not found"}}
+    ;
+    var mock = core.http.MockTransport.init(allocator, 404, body);
+    defer mock.deinit();
+
+    const identity = @import("azure_identity");
+    var cred_mock = core.http.MockTransport.init(allocator, 200,
+        \\{"access_token":"t","expires_in":3600}
+    );
+    defer cred_mock.deinit();
+    var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
+
+    var client = SecretClient.init(
+        "https://myvault.vault.azure.net",
+        cred.asCredential(),
+        mock.asTransport(),
+        .{},
+    );
+
+    var r = try client.getSecretResult(allocator, "missing");
+    defer r.deinit(allocator);
+
+    try std.testing.expect(!r.isOk());
+    try std.testing.expectEqualStrings("SecretNotFound", r.errorCode().?);
+    try std.testing.expectEqual(@as(u16, 404), r.err.status_code);
+    try std.testing.expectEqualStrings("Secret not found", r.err.message.?);
+}
+
+test "SecretClient getSecretResult: err path with no parseable body" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 500, "Internal Server Error");
+    defer mock.deinit();
+
+    const identity = @import("azure_identity");
+    var cred_mock = core.http.MockTransport.init(allocator, 200,
+        \\{"access_token":"t","expires_in":3600}
+    );
+    defer cred_mock.deinit();
+    var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
+
+    var client = SecretClient.init(
+        "https://myvault.vault.azure.net",
+        cred.asCredential(),
+        mock.asTransport(),
+        .{},
+    );
+
+    var r = try client.getSecretResult(allocator, "boom");
+    defer r.deinit(allocator);
+
+    try std.testing.expect(!r.isOk());
+    // No JSON envelope in the body → error_code/message stay null, but
+    // status_code is still populated so callers can branch on HTTP class.
+    try std.testing.expectEqual(@as(u16, 500), r.err.status_code);
+    try std.testing.expectEqual(@as(?[]const u8, null), r.errorCode());
+    try std.testing.expectEqual(@as(?[]const u8, null), r.err.message);
 }
 
 // ─────────────────────────── Tests ───────────────────────────
