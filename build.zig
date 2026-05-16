@@ -6,9 +6,6 @@ pub fn build(b: *std.Build) void {
 
     // -- Dependencies --
 
-    const xml_dep = b.dependency("xml", .{});
-    const xml_mod = xml_dep.module("xml");
-
     const uamqp_dep = b.dependency("uamqp", .{});
     const uamqp_mod = b.createModule(.{
         .root_source_file = uamqp_dep.path("src/zig/uamqp.zig"),
@@ -27,7 +24,6 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/azure/core/root.zig"),
         .target = target,
         .imports = &.{
-            .{ .name = "xml", .module = xml_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
@@ -268,7 +264,6 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "xml", .module = xml_mod },
                 .{ .name = "serde", .module = serde_mod },
             },
         }),

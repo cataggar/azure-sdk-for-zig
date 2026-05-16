@@ -4,17 +4,13 @@
     .fingerprint = 0x27c178e43525f3f8,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
-        .xml = .{
-            .url = "git+https://github.com/ctaggart/zig-xml.git#c72ff9efbf1c4588ebd3c0d489576ec2dc0b36bb",
-            .hash = "xml-0.2.0-ZTbP3yI6AgCDqW2awXya1aSKFJzPrXTRGYWGmoMj1mDG",
-        },
         .uamqp = .{
             .url = "git+https://github.com/cataggar/azure-uamqp-zig#1121d1e68dde8d188516083555cc7e1553b0f595",
             .hash = "uamqp-0.1.0-lXMcafDqAQD3LSUZbUbyfrWhQfGG7OevKFUwhWxvGZDU",
         },
         .serde = .{
-            .url = "git+https://github.com/cataggar/serde.zig#9212dbc5e22afe6aa82b5991b792a5747e9b7d80",
-            .hash = "serde-1.0.1-1DszT9-XDABUAxAStpkmGHn-gYMLXRCAaRUL0VBCPDwc",
+            .url = "git+https://github.com/cataggar/serde.zig#7012f58c7ddf490125852e1d22006b552a1693c7",
+            .hash = "serde-1.0.1-1DszT-e9DABp6u1PoDvGFzeGaST2hRp2KGtGn_CkIl0J",
         },
     },
     .paths = .{

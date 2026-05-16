@@ -64,12 +64,11 @@ See: `SecretClient.listSecrets()`, `KeyClient.listKeys()`.
 
 ## Dependencies
 
-Only three external Zig packages (keep it minimal):
+Only two external Zig packages (keep it minimal):
 
 | Package | Purpose |
 |---------|---------|
-| [serde.zig](https://github.com/cataggar/serde.zig) | Typed JSON (de)serialization. XML support is not yet usable for Azure shapes — tracked in cataggar/serde.zig#1 |
-| [zig-xml](https://github.com/cataggar/zig-xml) | XML parsing for Azure Storage (until serde.xml lands round-trippable slice deserialization) |
+| [serde.zig](https://github.com/cataggar/serde.zig) | Typed JSON + XML (de)serialization |
 | [azure-uamqp-zig](https://github.com/cataggar/azure-uamqp-zig) | AMQP 1.0 for Event Hubs |
 
 Everything else comes from `std` (HTTP, TLS, crypto, base64).
