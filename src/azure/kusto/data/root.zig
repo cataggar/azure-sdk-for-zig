@@ -97,6 +97,25 @@ pub const KustoClient = struct {
         return self.executeQuery(allocator, database, query_or_command, null);
     }
 
+    /// `Result(...)` variants of the execute methods.
+    pub fn executeQueryResult(self: *KustoClient, allocator: std.mem.Allocator, database: []const u8, query: []const u8, properties: ?ClientRequestProperties) !core.errors.Result(KustoResponseDataSet) {
+        const url = try std.fmt.allocPrint(allocator, "{s}/v2/rest/query", .{self.connection.cluster_url});
+        defer allocator.free(url);
+        return self.executeInternalResult(allocator, url, database, query, properties);
+    }
+    pub fn executeMgmtResult(self: *KustoClient, allocator: std.mem.Allocator, database: []const u8, command: []const u8, properties: ?ClientRequestProperties) !core.errors.Result(KustoResponseDataSet) {
+        const url = try std.fmt.allocPrint(allocator, "{s}/v1/rest/mgmt", .{self.connection.cluster_url});
+        defer allocator.free(url);
+        return self.executeInternalResult(allocator, url, database, command, properties);
+    }
+    pub fn executeResult(self: *KustoClient, allocator: std.mem.Allocator, database: []const u8, query_or_command: []const u8) !core.errors.Result(KustoResponseDataSet) {
+        const trimmed = std.mem.trimStart(u8, query_or_command, " \t\n\r");
+        if (trimmed.len > 0 and trimmed[0] == '.') {
+            return self.executeMgmtResult(allocator, database, query_or_command, null);
+        }
+        return self.executeQueryResult(allocator, database, query_or_command, null);
+    }
+
     fn executeInternal(
         self: *KustoClient,
         allocator: std.mem.Allocator,
@@ -105,6 +124,18 @@ pub const KustoClient = struct {
         csl: []const u8,
         properties: ?ClientRequestProperties,
     ) !KustoResponseDataSet {
+        var r = try self.executeInternalResult(allocator, url, database, csl, properties);
+        return r.unwrap(error.KustoQueryFailed);
+    }
+
+    fn executeInternalResult(
+        self: *KustoClient,
+        allocator: std.mem.Allocator,
+        url: []const u8,
+        database: []const u8,
+        csl: []const u8,
+        properties: ?ClientRequestProperties,
+    ) !core.errors.Result(KustoResponseDataSet) {
         const props_json = if (properties) |p| try p.toJson(allocator) else try allocator.dupe(u8, "{}");
         defer allocator.free(props_json);
 
@@ -124,11 +155,13 @@ pub const KustoClient = struct {
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            core.errors.logErrorResponse(resp);
-            return error.KustoQueryFailed;
+            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
+                return .{ .err = az_err };
+            }
+            return error.AzureRequestFailed;
         }
 
-        return parseResponseDataSet(allocator, resp.body);
+        return .{ .ok = try parseResponseDataSet(allocator, resp.body) };
     }
 };
 
