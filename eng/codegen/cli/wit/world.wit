@@ -1,0 +1,23 @@
+// Component world for `codegen-cli`.
+//
+// The cli is a wasi:cli/run command that imports a single function
+// from `azure:codegen/tcgc` (the TypeSpec → JSON code-model bridge,
+// produced by `eng/codegen/tcgc-component`) and writes generated
+// files to a wasi:filesystem preopen.
+//
+// IMPORTANT (status 2026-05-17): tcgc.wasm currently targets
+// wasi:io@0.2.10 (StarlingMonkey choice), but wabt's bundled
+// adapter + WIT deps target 0.2.6. `wabt component compose` will
+// reject the version mismatch. Two follow-ups are needed:
+//   * EITHER rebuild tcgc.wasm against 0.2.6 (componentize-js
+//     would need a wasi-version flag, or we patch StarlingMonkey),
+//   * OR fetch / hand-port a complete 0.2.10 wasi WIT set.
+// Until then the cli builds and runs as a standalone component
+// (with `tcgc.compile` stubbed to NotImplemented).
+
+package azure:codegen-cli@0.1.0;
+
+world cli {
+    import wasi:cli/exit@0.2.6;
+    export wasi:cli/run@0.2.6;
+}

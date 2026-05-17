@@ -1,0 +1,5 @@
+package azure:codegen;
+
+interface tcgc {
+    compile: func(project-path: string, emitter-options: string) -> result<string, string>;
+  }

@@ -1,0 +1,70 @@
+// Trimmed slice of `wasi:io@0.2.6.streams` that the wabt-built
+// wasi-preview1 adapter needs. Mirrors the canonical
+// `bytecodealliance/wasi-io@v0.2.6` shape and declares only:
+//
+//   * `stream-error` variant — the canonical version's
+//     `last-operation-failed` case carries an `error` resource
+//     payload from `wasi:io/error`. We mirror that shape via
+//     `use error.{error};` + `last-operation-failed(error)`
+//     so the encoded `component-type:` section is byte-identical
+//     to wasmtime's reference adapter for this case. Bare
+//     `error` auto-wraps as `own<error>` per cataggar/wabt#182.
+//
+//   * `output-stream` resource with `blocking-write-and-flush` —
+//     the single method the preview1 → preview2 adapter calls in
+//     its `fd_write` body.
+//
+// The wider `streams` surface (subscribe / check-write /
+// non-blocking write / input-stream / forward / splice) lives
+// upstream and is not consumed by the adapter, so it stays out
+// of this trimmed copy to keep `metadata_encode` output minimal.
+//
+// NOTE: the package declaration for this directory's multi-file
+// slice lives in `error.wit` (which sorts first alphabetically).
+// `resolver.readWitDir` concatenates files in order, so the
+// `package wasi:io@0.2.6;` directive must appear in the file
+// that's parsed first.
+
+interface streams {
+    use error.{error};
+
+    /// Failure modes for `output-stream` writes. Matches the
+    /// canonical wasi:io@0.2.6 variant shape: the
+    /// `last-operation-failed` case carries an owned `error`
+    /// resource payload from `wasi:io/error` (the bare `error`
+    /// ref auto-wraps as `own<error>` per cataggar/wabt#182).
+    /// The adapter discards the payload — preview1 `fd_write` is
+    /// itself blocking, so any non-`ok` outcome traps before the
+    /// host sees the resource.
+    variant stream-error {
+        last-operation-failed(error),
+        closed,
+    }
+
+    /// Byte-sink resource. The adapter only needs the
+    /// blocking-and-flushed write path — preview1 `fd_write` is
+    /// itself blocking, so any non-blocking lowering would just be
+    /// extra ceremony.
+    resource output-stream {
+        /// Write `contents` and block until the host has accepted
+        /// every byte. Returns `ok` on full success or
+        /// `err(stream-error)` if the underlying sink closed or
+        /// errored mid-write.
+        blocking-write-and-flush: func(contents: list<u8>) -> result<_, stream-error>;
+    }
+
+    /// Byte-source resource. Used by the preview1 `fd_read` path
+    /// via `wasi:filesystem/types.descriptor.read-via-stream`. The
+    /// adapter installs a one-shot `cabi_import_realloc` override
+    /// pointing at the caller's preview1 iov buffer so the host's
+    /// canon-lifted `list<u8>` lands directly there (zero copy).
+    resource input-stream {
+        /// Read up to `len` bytes and block until at least one
+        /// byte is available, the underlying source signals EOF
+        /// (`stream-error.closed`), or an error occurs. Returns
+        /// the bytes read (which may be shorter than `len` on a
+        /// short read, but is never zero on success).
+        blocking-read: func(len: u64) -> result<list<u8>, stream-error>;
+    }
+}
+
