@@ -63,7 +63,7 @@ if [[ ! -f "$TCGC_WASM" ]]; then
     exit 0
 fi
 
-echo "→ wabt component compose (link tcgc.wasm) → $OUT"
-"$WABT" component compose "$COMP" -d "$TCGC_WASM" -o "$OUT"
+echo "→ wabt component compose (link tcgc.wasm, align wasi to 0.2.6) → $OUT"
+"$WABT" component compose "$COMP" -d "$TCGC_WASM" --align-wasi=0.2.6 -o "$OUT"
 
 echo "✓ $OUT  ($(stat -c %s "$OUT") bytes)"
