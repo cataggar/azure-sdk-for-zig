@@ -4,3 +4,4 @@ tcgc-stub.wasm
 package-lock.json
 .tsp-staging/
 .typespec-output/
+dist/

@@ -7,9 +7,10 @@
   "main": "src/index.js",
   "tspMain": "src/index.js",
   "scripts": {
-    "build": "jco componentize src/index.js --wit wit/component.wit --world-name codegen --out tcgc.wasm",
+    "bundle": "esbuild src/wasi-entry.js --bundle --format=esm --platform=node --target=es2022 --outfile=dist/bundled.js --external:node:* --log-level=warning",
+    "build": "npm run bundle && jco componentize dist/bundled.js --wit wit/component.wit --world-name codegen --out tcgc.wasm",
     "build:stub": "jco componentize src/stub.js --wit wit/component.wit --world-name codegen --out tcgc-stub.wasm",
-    "clean": "rm -f tcgc.wasm tcgc-stub.wasm",
+    "clean": "rm -rf dist tcgc.wasm tcgc-stub.wasm",
     "dev": "node src/index.js"
   },
   "dependencies": {
@@ -23,6 +24,7 @@
   },
   "devDependencies": {
     "@bytecodealliance/jco": "^1.19.0",
-    "@bytecodealliance/componentize-js": "^0.20.0"
+    "@bytecodealliance/componentize-js": "^0.20.0",
+    "esbuild": "^0.25.0"
   }
 }
