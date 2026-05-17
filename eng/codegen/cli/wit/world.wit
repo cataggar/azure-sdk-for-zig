@@ -1,41 +1,28 @@
 // Component world for `codegen-cli`.
 //
-// IMPORTANT: imports here are limited to the subset of wasi:cli /
-// wasi:io / wasi:filesystem / etc. that:
+// Imports listed here are the wasi-* surface the cli source code
+// actually touches (filesystem for output, stdio for diagnostics).
+// The provider (`tcgc.wasm`) imports a wider surface (terminal-*,
+// random, wasi:http); after cataggar/wabt#216 those are
+// transparently bubbled up to the wrapping component's outer
+// imports by `wabt component compose`, so we don't need to
+// declare them here.
 //
-//   1. tcgc.wasm (the provider) actually imports, AND
-//   2. wabt's bundled `adapters/wasi-preview1/wit/deps/` ships a
-//      WIT definition for.
-//
-// Today (May 2026) #2 is the binding constraint — wabt's deps tree
-// is a *trimmed slice* of wasi:cli@0.2.6 covering only what the
-// preview1 adapter needs (stdout + stderr + some clocks + a partial
-// filesystem). Trying to import `wasi:cli/stdin@0.2.6` or
-// `wasi:http/types@0.2.6` produces `UnknownInterface` /
-// `UnexpectedToken` from `wabt component embed`. Tracked at
-// cataggar/wabt#216.
-//
-// Once #216 lands and wabt's deps tree is a complete wasi 0.2.6
-// set, expand this world to mirror everything tcgc.wasm imports
-// (see `eng/codegen/tcgc-component/dist/tcgc.wasm` for the full
-// list under `jco wit`).
-//
-// `wabt component compose --align-wasi=0.2.6` rewrites tcgc.wasm's
-// 0.2.10 references down to 0.2.6 at compose time.
+// Versions are pinned at 0.2.6 to match what wasmtime 44 supports.
+// `wabt component compose --align-wasi=0.2.6` rewrites
+// `tcgc.wasm`'s 0.2.10 references down to 0.2.6 at compose time.
 
 package azure:codegen-cli@0.1.0;
 
 world cli {
     import wasi:cli/exit@0.2.6;
+    import wasi:cli/environment@0.2.6;
     import wasi:cli/stdout@0.2.6;
     import wasi:cli/stderr@0.2.6;
     import wasi:io/error@0.2.6;
     import wasi:io/streams@0.2.6;
-    import wasi:clocks/wall-clock@0.2.6;
-    import wasi:clocks/monotonic-clock@0.2.6;
     import wasi:filesystem/preopens@0.2.6;
     import wasi:filesystem/types@0.2.6;
-    import wasi:random/random@0.2.6;
 
     import azure:codegen/tcgc;
 
