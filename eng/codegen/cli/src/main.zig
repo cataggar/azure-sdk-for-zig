@@ -31,6 +31,13 @@ const cm = @import("codemodel.zig");
 const emit = @import("emit.zig");
 const tcgc = @import("tcgc_import.zig");
 
+// Force-instantiate the canonical-ABI surface (in particular
+// `cabi_realloc`, which is dead-code-eliminated from a sibling
+// module unless something here references it).
+comptime {
+    _ = tcgc;
+}
+
 const usage =
     \\codegen-cli — Azure SDK for Zig code generator (wasi:cli/run component)
     \\
@@ -122,7 +129,7 @@ pub fn main(init: std.process.Init) !u8 {
     try opts_buf.appendSlice(allocator, "}");
 
     // ── Call into the TCGC component over the WIT boundary ────────────
-    const json = tcgc.compile(allocator, sd_owned, opts_buf.items) catch |err| switch (err) {
+    const json = tcgc.invoke(allocator, sd_owned, opts_buf.items) catch |err| switch (err) {
         error.CompileFailed => |e| {
             std.debug.print("tcgc compile failed\n", .{});
             return e;

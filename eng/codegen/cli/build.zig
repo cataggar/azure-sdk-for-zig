@@ -28,6 +28,12 @@ pub fn build(b: *std.Build) void {
         .name = "codegen-cli",
         .root_module = exe_mod,
     });
+    // `@export(&cabi_realloc, …)` alone isn't enough — wasm-ld's
+    // `--gc-sections` strips it because nothing reachable from
+    // `_start` references it. `rdynamic = true` forces all
+    // `@export`-marked symbols into the wasm exports section so the
+    // tcgc subcomponent can call it for canonical-ABI allocation.
+    exe.rdynamic = true;
     b.installArtifact(exe);
 
     // Tests run against the host target (the emitter is pure logic;
