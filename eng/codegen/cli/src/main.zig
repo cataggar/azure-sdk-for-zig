@@ -109,27 +109,31 @@ pub fn main(init: std.process.Init) !u8 {
     if (azure_core_commit) |c| commit_buf = try allocator.dupe(u8, c);
 
     // ── Build emitter-options JSON ────────────────────────────────────
-    var opts_buf: std.ArrayList(u8) = .empty;
-    defer opts_buf.deinit(allocator);
-    try opts_buf.appendSlice(allocator, "{");
-    var any: bool = false;
+    //
+    // Emit JSON via std.json so embedded user values + the inlined
+    // spec-files map (potentially MBs of TypeSpec source) are escaped
+    // correctly.
+    var stream: std.Io.Writer.Allocating = .init(allocator);
+    defer stream.deinit();
+    var ws = std.json.Stringify{ .writer = &stream.writer };
+
+    try ws.beginObject();
     if (pkg_buf) |n| {
-        try opts_buf.appendSlice(allocator, "\"package-name\":\"");
-        try opts_buf.appendSlice(allocator, n);
-        try opts_buf.appendSlice(allocator, "\"");
-        any = true;
+        try ws.objectField("package-name");
+        try ws.write(n);
     }
     if (ver_buf) |v| {
-        if (any) try opts_buf.appendSlice(allocator, ",");
-        try opts_buf.appendSlice(allocator, "\"package-version\":\"");
-        try opts_buf.appendSlice(allocator, v);
-        try opts_buf.appendSlice(allocator, "\"");
-        any = true;
+        try ws.objectField("package-version");
+        try ws.write(v);
     }
-    try opts_buf.appendSlice(allocator, "}");
+    try ws.objectField("__spec_files");
+    try ws.beginObject();
+    try collectSpecFiles(allocator, init, &ws, sd_owned);
+    try ws.endObject();
+    try ws.endObject();
 
     // ── Call into the TCGC component over the WIT boundary ────────────
-    const json = tcgc.invoke(allocator, sd_owned, opts_buf.items) catch |err| switch (err) {
+    const json = tcgc.invoke(allocator, sd_owned, stream.written()) catch |err| switch (err) {
         error.CompileFailed => |e| {
             std.debug.print("tcgc compile failed\n", .{});
             return e;
@@ -163,6 +167,78 @@ pub fn main(init: std.process.Init) !u8 {
 fn die(msg: []const u8) u8 {
     std.debug.print("{s}\n\n{s}", .{ msg, usage });
     return 2;
+}
+
+/// Recursively walk `spec_dir` and emit object entries
+/// `"<absolute-virtual-path>": "<file-contents>"` for each TypeSpec
+/// source / config file found. `ws` must be inside an open object
+/// (the caller emits the wrapping `{}`).
+///
+/// The JS side of the bridge merges every entry into its
+/// `virtualFsSources` map before driving the TypeSpec compiler — the
+/// compiler's resolver then sees the spec files as plain in-memory
+/// reads. This keeps the JS guest free of any wasi:filesystem JS
+/// shim (StarlingMonkey doesn't polyfill `node:fs`), so the Zig host
+/// is the sole filesystem consumer.
+fn collectSpecFiles(
+    allocator: std.mem.Allocator,
+    init: std.process.Init,
+    ws: *std.json.Stringify,
+    spec_dir: []const u8,
+) !void {
+    const io = init.io;
+
+    // WASI doesn't support opening absolute paths from an arbitrary
+    // fd; resolve `spec_dir` to one of the preopens passed in by
+    // wasmtime (`--dir <host>::<spec_dir>`). `init.preopens` is
+    // populated by `start.zig` from `fd_prestat_get` enumeration.
+    const resource = init.preopens.get(spec_dir) orelse {
+        std.debug.print(
+            "collectSpecFiles: no WASI preopen matches '{s}'\n",
+            .{spec_dir},
+        );
+        return error.PermissionDenied;
+    };
+    var dir = switch (resource) {
+        .dir => |d| d,
+        .file => {
+            std.debug.print(
+                "collectSpecFiles: preopen '{s}' is a file, expected a directory\n",
+                .{spec_dir},
+            );
+            return error.NotDir;
+        },
+    };
+
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file) continue;
+        if (!isSpecFile(entry.basename)) continue;
+
+        // entry.path is relative to spec_dir; build the absolute
+        // virtual path the JS bridge will key into virtualFsSources.
+        const full = try std.fs.path.join(allocator, &.{ spec_dir, entry.path });
+        defer allocator.free(full);
+
+        const content = dir.readFileAlloc(io, entry.path, allocator, .limited(8 * 1024 * 1024)) catch |err| {
+            std.debug.print("collectSpecFiles: skipping {s}: {s}\n", .{ full, @errorName(err) });
+            continue;
+        };
+        defer allocator.free(content);
+
+        try ws.objectField(full);
+        try ws.write(content);
+    }
+}
+
+fn isSpecFile(name: []const u8) bool {
+    const extensions: []const []const u8 = &.{ ".tsp", ".yaml", ".yml", ".json" };
+    for (extensions) |ext| {
+        if (std.mem.endsWith(u8, name, ext)) return true;
+    }
+    return false;
 }
 
 test {

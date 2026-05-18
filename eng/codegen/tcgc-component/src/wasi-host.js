@@ -81,10 +81,11 @@ export const { reportDiagnostic } = $lib;
 const __slot = { json: null, error: null };
 
 function makeHost() {
-  // In-memory layer combining baked-in stdlib + (eventually) user-spec
-  // files passed in through the WIT call. The wasm component has no
-  // direct filesystem access from JS, so anything not in virtualFs is
-  // an error.
+  // In-memory layer combining baked-in stdlib (`virtualFsSources`)
+  // and the per-invocation spec-files map planted by `compileInner`
+  // BEFORE `tspCompile` runs. The wasm component has no JS-visible
+  // filesystem (StarlingMonkey doesn't shim `node:fs`), so user
+  // spec files are passed inline by the Zig CLI host.
   const fsReadFile = async (p) => {
     if (virtualFsSources.has(p)) {
       return makeSourceFile(virtualFsSources.get(p), p);
@@ -94,6 +95,14 @@ function makeHost() {
 
   const fsStat = async (p) => {
     if (virtualFsSources.has(p)) {
+      return { isFile: () => true, isDirectory: () => false };
+    }
+    // TypeSpec's resolver calls `stat` on the `.js` file pointed to by
+    // a package.json's `main`/`tspMain` field before calling
+    // `getJsImport(p)`. We don't keep that file's source in
+    // `virtualFsSources` (it's bundled, not interpreted), but it IS
+    // resolvable via `jsImports` — treat that as proof-of-existence.
+    if (jsImports.has(p)) {
       return { isFile: () => true, isDirectory: () => false };
     }
     for (const key of virtualFsSources.keys()) {
@@ -213,36 +222,65 @@ export async function $onEmit(context) {
 
 export const tcgc = {
   async compile(projectPath, emitterOptions) {
-    registerTypespecZig();
-    const options = JSON.parse(emitterOptions || "{}");
-    const host = makeHost();
-
-    // Resolve `projectPath` (a WASI preopen path like `/spec`) into a
-    // `main.tsp` / `client.tsp` to feed the compiler.
-    const mainFile = await resolveMainFile(host, projectPath);
-
-    __slot.json = null;
-    __slot.error = null;
-
-    const program = await tspCompile(host, mainFile, {
-      emit: ["/node_modules/" + LIB_NAME],
-      options: { [LIB_NAME]: options },
-      noEmit: false,
-      warningAsError: false,
-    });
-
-    const errs = program.diagnostics.filter((d) => d.severity === "error");
-    if (errs.length > 0) {
-      throw new Error(
-        "TypeSpec compilation failed:\n" +
-          errs.map((d) => `  ${d.code}: ${d.message}`).join("\n"),
-      );
+    try {
+      return await compileInner(projectPath, emitterOptions);
+    } catch (err) {
+      // Componentize-js's generated wrapper calls `getErrorPayload(e)`,
+      // which re-throws if `e instanceof Error` (turning the failure
+      // into an unhandled rejection and a runtime trap). To surface
+      // the message back as the `err` branch of `result<string,
+      // string>`, throw a plain object with a `payload` string — that
+      // path returns the string directly to `utf8Encode`.
+      const message =
+        err && err.stack
+          ? `${err.message ?? String(err)}\n${err.stack}`
+          : String(err && err.message ? err.message : err);
+      throw { payload: message };
     }
-    if (__slot.error) throw __slot.error;
-    if (!__slot.json) throw new Error("typespec-zig emitter produced no output");
-    return __slot.json;
   },
 };
+
+async function compileInner(projectPath, emitterOptions) {
+  registerTypespecZig();
+  const options = JSON.parse(emitterOptions || "{}");
+
+  // The Zig CLI host walks /spec via WASI filesystem and passes every
+  // file it finds inline under `__spec_files`. We merge those into the
+  // baked-in stdlib map before running TypeSpec — TypeSpec's resolver
+  // then sees `/spec/client.tsp` etc. as plain virtualFsSources hits.
+  const specFiles = options.__spec_files || {};
+  delete options.__spec_files;
+  for (const [path, content] of Object.entries(specFiles)) {
+    virtualFsSources.set(path, content);
+  }
+
+  const host = makeHost();
+
+  // Resolve `projectPath` (a WASI preopen path like `/spec`) into a
+  // `main.tsp` / `client.tsp` to feed the compiler.
+  const mainFile = await resolveMainFile(host, projectPath);
+
+  __slot.json = null;
+  __slot.error = null;
+
+  const program = await tspCompile(host, mainFile, {
+    emit: ["/node_modules/" + LIB_NAME],
+    options: { [LIB_NAME]: options },
+    noEmit: false,
+    warningAsError: false,
+  });
+
+  const errs = program.diagnostics.filter((d) => d.severity === "error");
+  if (errs.length > 0) {
+    throw new Error(
+      "TypeSpec compilation failed:\n" +
+        errs.map((d) => `  ${d.code}: ${d.message}`).join("\n"),
+    );
+  }
+  if (__slot.error) throw __slot.error;
+  if (!__slot.json) throw new Error("typespec-zig emitter produced no output");
+  return __slot.json;
+}
 
 // Register this module as `@azure-tools/typespec-zig`'s emitter target.
 // Called from the generated entry AFTER virtualFsSources / jsImports
