@@ -550,4 +550,38 @@ pub fn build(b: *std.Build) void {
 
     const run_step = b.step("run", "Run the example");
     run_step.dependOn(&run_example.step);
+
+    // -- tspconfigs tool --
+    //
+    // Builds and exposes two steps that manage `eng/codegen/tspconfigs.yaml`:
+    //   * tspconfigs-update  — reconcile entries against ../azure-rest-api-specs
+    //   * tspconfigs-resolve — fill in name/branch/zig_import from each tspconfig.yaml
+    const tspconfigs_exe = b.addExecutable(.{
+        .name = "tspconfigs",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("eng/codegen/tspconfigs/main.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+
+    const tspconfigs_update_run = b.addRunArtifact(tspconfigs_exe);
+    tspconfigs_update_run.addArg("update");
+    tspconfigs_update_run.setCwd(b.path("."));
+    tspconfigs_update_run.has_side_effects = true;
+    const tspconfigs_update_step = b.step(
+        "tspconfigs-update",
+        "Reconcile eng/codegen/tspconfigs.yaml against ../azure-rest-api-specs",
+    );
+    tspconfigs_update_step.dependOn(&tspconfigs_update_run.step);
+
+    const tspconfigs_resolve_run = b.addRunArtifact(tspconfigs_exe);
+    tspconfigs_resolve_run.addArg("resolve");
+    tspconfigs_resolve_run.setCwd(b.path("."));
+    tspconfigs_resolve_run.has_side_effects = true;
+    const tspconfigs_resolve_step = b.step(
+        "tspconfigs-resolve",
+        "Fill in name/branch/zig_import by parsing each tspconfig.yaml",
+    );
+    tspconfigs_resolve_step.dependOn(&tspconfigs_resolve_run.step);
 }
