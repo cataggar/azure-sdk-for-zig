@@ -43,6 +43,7 @@ const packages = [
   "@typespec/http",
   "@typespec/rest",
   "@typespec/versioning",
+  "@typespec/openapi",
   "@azure-tools/typespec-azure-core",
   "@azure-tools/typespec-azure-resource-manager",
   "@azure-tools/typespec-client-generator-core",
@@ -103,18 +104,35 @@ for (const spec of packages) {
     identKey: spec,
   });
 
-  // tsp-index JS module — referenced from `main.tsp` via
-  // `import "../dist/src/tsp-index.js"`. Contains the `$decorators`
-  // aggregate the TypeSpec binder reads to wire extern decorators.
-  // Not all packages have one — only register when the file exists.
-  // The package's `exports` field rarely declares this subpath, so
-  // bypass node-resolution by importing the absolute filesystem path.
-  const tspIndexAbs = path.join(pkgRoot, "dist", "src", "tsp-index.js");
-  if (fs.existsSync(tspIndexAbs)) {
+  // tsp-side JS imports — every .tsp file in the package may `import`
+  // a .js file from its sibling `dist/` tree, e.g.
+  // `import "../dist/src/tsp-index.js"` (containing `$decorators`)
+  // or `import "../dist/src/decorators.js"` (containing individual
+  // `$xxx` decorator impls). Scan every .tsp file and resolve each
+  // .js import against the package root. Each unique target becomes
+  // a `jsImports` entry imported by absolute filesystem path
+  // (package `exports` rarely declares these deep subpaths).
+  const tspJsImports = new Set();
+  for (const tspFile of walk(path.join(pkgRoot, "lib"))) {
+    if (!tspFile.endsWith(".tsp")) continue;
+    const src = fs.readFileSync(tspFile, "utf-8");
+    for (const m of src.matchAll(/^\s*import\s+"([^"]+\.js)"/gm)) {
+      const importPath = m[1];
+      // Skip package-relative imports like `@typespec/foo` — they're
+      // handled by the package being registered separately.
+      if (!importPath.startsWith(".")) continue;
+      const absImport = path.resolve(path.dirname(tspFile), importPath);
+      // Only register imports that land inside the package root.
+      if (!absImport.startsWith(pkgRoot + path.sep)) continue;
+      tspJsImports.add(absImport);
+    }
+  }
+  for (const absImport of tspJsImports) {
+    const rel = path.relative(pkgRoot, absImport);
     jsImportEntries.push({
-      virtualPath: `${virtPkgRoot}/dist/src/tsp-index.js`,
-      importSpec: tspIndexAbs,
-      identKey: `tsp-index:${spec}`,
+      virtualPath: `${virtPkgRoot}/${rel}`,
+      importSpec: absImport,
+      identKey: `tsp-js:${spec}:${rel}`,
     });
   }
 }

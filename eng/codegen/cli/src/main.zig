@@ -96,6 +96,24 @@ pub fn main(init: std.process.Init) !u8 {
     const od_owned = try allocator.dupe(u8, od);
     defer allocator.free(od_owned);
 
+    // Resolve `<out-dir>` (a WASI preopen path like `/out`) to a
+    // `std.Io.Dir`. WASI doesn't permit opening absolute paths from
+    // an arbitrary fd, so we look up the preopen `start.zig` already
+    // resolved at startup.
+    const out_dir_handle = blk: {
+        const res = init.preopens.get(od_owned) orelse {
+            std.debug.print("no WASI preopen matches '{s}'\n", .{od_owned});
+            return 2;
+        };
+        switch (res) {
+            .dir => |d| break :blk d,
+            .file => {
+                std.debug.print("preopen '{s}' is a file, expected a directory\n", .{od_owned});
+                return 2;
+            },
+        }
+    };
+
     var pkg_buf: ?[]u8 = null;
     defer if (pkg_buf) |b| allocator.free(b);
     if (package_name) |p| pkg_buf = try allocator.dupe(u8, p);
@@ -128,11 +146,14 @@ pub fn main(init: std.process.Init) !u8 {
     }
     try ws.objectField("__spec_files");
     try ws.beginObject();
+    std.debug.print("collecting spec files from {s}\n", .{sd_owned});
     try collectSpecFiles(allocator, init, &ws, sd_owned);
     try ws.endObject();
     try ws.endObject();
+    std.debug.print("emitter-options size = {d} bytes\n", .{stream.written().len});
 
     // ── Call into the TCGC component over the WIT boundary ────────────
+    std.debug.print("calling tcgc.compile...\n", .{});
     const json = tcgc.invoke(allocator, sd_owned, stream.written()) catch |err| switch (err) {
         error.CompileFailed => |e| {
             std.debug.print("tcgc compile failed\n", .{});
@@ -141,6 +162,7 @@ pub fn main(init: std.process.Init) !u8 {
         else => |e| return e,
     };
     defer allocator.free(json);
+    std.debug.print("got {d} bytes back from tcgc.compile\n", .{json.len});
 
     // ── Deserialize and emit ─────────────────────────────────────────
     var parsed = try std.json.parseFromSlice(
@@ -151,7 +173,7 @@ pub fn main(init: std.process.Init) !u8 {
     );
     defer parsed.deinit();
 
-    try emit.emit(allocator, io, parsed.value, od_owned, .{
+    try emit.emit(allocator, io, out_dir_handle, parsed.value, .{
         .package_name = pkg_buf,
         .azure_core_commit = commit_buf,
         .run_zig_fmt = run_fmt,
@@ -213,7 +235,15 @@ fn collectSpecFiles(
     var walker = try dir.walk(allocator);
     defer walker.deinit();
 
-    while (try walker.next(io)) |entry| {
+    while (true) {
+        const maybe_entry = walker.next(io) catch |err| {
+            // WASI is strict about symlinks/relative paths that
+            // escape the preopen — surface and skip rather than
+            // failing the whole collection.
+            std.debug.print("collectSpecFiles: walk error: {s}\n", .{@errorName(err)});
+            continue;
+        };
+        const entry = maybe_entry orelse break;
         if (entry.kind != .file) continue;
         if (!isSpecFile(entry.basename)) continue;
 

@@ -41,66 +41,59 @@ pub const EmitOptions = struct {
 pub fn emit(
     allocator: std.mem.Allocator,
     io: std.Io,
+    out_dir: std.Io.Dir,
     model: cm.CodeModel,
-    out_dir_path: []const u8,
     opts: EmitOptions,
 ) !void {
-    const cwd = std.Io.Dir.cwd();
-    try cwd.createDirPath(io, out_dir_path);
-    const src_path = try std.fs.path.join(allocator, &.{ out_dir_path, "src" });
-    defer allocator.free(src_path);
-    try cwd.createDirPath(io, src_path);
+    try out_dir.createDirPath(io, "src");
 
     const pkg_name = opts.package_name orelse model.package_name;
 
     {
         const s = try renderRoot(allocator, model);
         defer allocator.free(s);
-        try writeFile(allocator, io, out_dir_path, "src/root.zig", s);
+        try writeFile(io, out_dir, "src/root.zig", s);
     }
     {
         const s = try renderClients(allocator, model);
         defer allocator.free(s);
-        try writeFile(allocator, io, out_dir_path, "src/clients.zig", s);
+        try writeFile(io, out_dir, "src/clients.zig", s);
     }
     {
         const s = try renderModels(allocator, model);
         defer allocator.free(s);
-        try writeFile(allocator, io, out_dir_path, "src/models.zig", s);
+        try writeFile(io, out_dir, "src/models.zig", s);
     }
     {
         const s = try renderEnums(allocator, model);
         defer allocator.free(s);
-        try writeFile(allocator, io, out_dir_path, "src/enums.zig", s);
+        try writeFile(io, out_dir, "src/enums.zig", s);
     }
     {
         const s = try renderBuildZig(allocator, pkg_name);
         defer allocator.free(s);
-        try writeFile(allocator, io, out_dir_path, "build.zig", s);
+        try writeFile(io, out_dir, "build.zig", s);
     }
     {
         const s = try renderBuildZigZon(allocator, pkg_name, model.package_version, opts.azure_core_commit);
         defer allocator.free(s);
-        try writeFile(allocator, io, out_dir_path, "build.zig.zon", s);
+        try writeFile(io, out_dir, "build.zig.zon", s);
     }
     {
         const s = try renderReadme(allocator, pkg_name, model);
         defer allocator.free(s);
-        try writeFile(allocator, io, out_dir_path, "README.md", s);
+        try writeFile(io, out_dir, "README.md", s);
     }
-    try writeFile(allocator, io, out_dir_path, ".gitignore", "zig-cache/\nzig-out/\n.zig-cache/\n");
+    try writeFile(io, out_dir, ".gitignore", "zig-cache/\nzig-out/\n.zig-cache/\n");
 }
 
 fn writeFile(
-    allocator: std.mem.Allocator,
     io: std.Io,
-    out_dir_path: []const u8,
+    out_dir: std.Io.Dir,
     sub_path: []const u8,
     content: []const u8,
 ) !void {
-    const full = try std.fs.path.join(allocator, &.{ out_dir_path, sub_path });
-    defer allocator.free(full);
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = full, .data = content });
+    try out_dir.writeFile(io, .{ .sub_path = sub_path, .data = content });
 }
 
 // ─── root.zig ─────────────────────────────────────────────────────────
