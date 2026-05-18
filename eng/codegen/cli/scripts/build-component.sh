@@ -26,7 +26,7 @@ REPO_ROOT="$(cd "$CLI_DIR/../../.." && pwd)"
 
 WABT="${WABT:-$REPO_ROOT/../wabt/zig-out/bin/wabt}"
 ADAPTER="${PREVIEW1_ADAPTER:-/tmp/wasi_snapshot_preview1.command.wasm}"
-TCGC_WASM="${TCGC_WASM:-$CLI_DIR/../tcgc-component/tcgc.wasm}"
+TCGC_WASM="${TCGC_WASM:-$CLI_DIR/../tcgc-component/tcgc-nohttp.wasm}"
 
 if [[ ! -x "$WABT" ]]; then
     echo "error: wabt not found at $WABT" >&2
