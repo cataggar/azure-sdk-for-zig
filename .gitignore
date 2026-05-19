@@ -379,3 +379,9 @@ zig-pkg/
 eng/codegen/tcgc-component/.tsp-staging/
 eng/codegen/tcgc-component/.typespec-output/
 eng/codegen/tcgc-component/tcgc.wasm
+
+# Local environment files used by examples (never check these in)
+.env
+.env.local
+.env.*.local
+*.env
