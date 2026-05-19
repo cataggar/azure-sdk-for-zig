@@ -114,6 +114,12 @@ pub const StdHttpTransport = struct {
         defer client.deinit();
 
         // Convert request headers to std.http.Header slices.
+        //
+        // In Zig 0.16's `std.http.Client`, only `extra_headers` is actually
+        // emitted on the request line; `privileged_headers` is the allow-list
+        // of headers retained across cross-origin redirects. Auth headers
+        // therefore need to be in BOTH so they are sent on the initial
+        // request AND preserved across same-origin redirects.
         var extra = std.ArrayList(std.http.Header).empty;
         defer extra.deinit(allocator);
         var privileged = std.ArrayList(std.http.Header).empty;
@@ -122,10 +128,9 @@ pub const StdHttpTransport = struct {
         var it = request.headers.iterator();
         while (it.next()) |entry| {
             const header = std.http.Header{ .name = entry.key_ptr.*, .value = entry.value_ptr.* };
-            if (std.mem.eql(u8, entry.key_ptr.*, "Authorization")) {
+            try extra.append(allocator, header);
+            if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, "Authorization")) {
                 try privileged.append(allocator, header);
-            } else {
-                try extra.append(allocator, header);
             }
         }
 
@@ -162,12 +167,25 @@ pub const StdHttpTransport = struct {
             const name = try allocator.dupe(u8, hdr.name);
             errdefer allocator.free(name);
             const value = try allocator.dupe(u8, hdr.value);
-            try resp_headers.put(name, value);
+            errdefer allocator.free(value);
+
+            // ARM may return the same header twice (e.g. ratelimit counters).
+            // `put` would silently leak the prior key+value pair, so use
+            // `getOrPut` and free our duplicate ourselves.
+            const gop = try resp_headers.getOrPut(name);
+            if (gop.found_existing) {
+                allocator.free(name);
+                allocator.free(gop.value_ptr.*);
+                gop.value_ptr.* = value;
+            } else {
+                gop.key_ptr.* = name;
+                gop.value_ptr.* = value;
+            }
         }
 
         // Read body with decompression support.
-        var response_body: std.ArrayList(u8) = .empty;
-        errdefer response_body.deinit(allocator);
+        var body_allocating: std.Io.Writer.Allocating = .init(allocator);
+        errdefer body_allocating.deinit();
         var transfer_buffer: [64]u8 = undefined;
         var decompress: std.http.Decompress = undefined;
         const decompress_buffer: []u8 = switch (response.head.content_encoding) {
@@ -178,15 +196,15 @@ pub const StdHttpTransport = struct {
         };
         defer if (decompress_buffer.len > 0) allocator.free(decompress_buffer);
         const reader = response.readerDecompressing(&transfer_buffer, &decompress, decompress_buffer);
-        _ = reader.streamRemaining(response_body.writer(allocator).any()) catch |err| switch (err) {
+        _ = reader.streamRemaining(&body_allocating.writer) catch |err| switch (err) {
             error.ReadFailed => return response.bodyErr().?,
-            else => |e| return e,
+            error.WriteFailed => return error.OutOfMemory,
         };
 
         return .{
             .status_code = @intFromEnum(response.head.status),
             .headers = resp_headers,
-            .body = try response_body.toOwnedSlice(allocator),
+            .body = try body_allocating.toOwnedSlice(),
             .allocator = allocator,
         };
     }

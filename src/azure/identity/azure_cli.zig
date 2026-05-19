@@ -13,12 +13,14 @@ const Context = core.context.Context;
 /// Parses JSON response fields: `accessToken`, `expiresOn`.
 pub const AzureCliCredential = struct {
     allocator: std.mem.Allocator,
+    io: std.Io,
     tenant_id: ?[]const u8 = null,
     credential: TokenCredential,
 
-    pub fn init(allocator: std.mem.Allocator) AzureCliCredential {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io) AzureCliCredential {
         return .{
             .allocator = allocator,
+            .io = io,
             .credential = .{ .getTokenFn = &getTokenImpl },
         };
     }
@@ -40,7 +42,7 @@ pub const AzureCliCredential = struct {
         else
             return error.NoScopesProvided;
 
-        const result = try runCommand(allocator, scope, self.tenant_id);
+        const result = try runCommand(allocator, self.io, scope, self.tenant_id);
         defer allocator.free(result);
 
         return parseCliResponse(allocator, result);
@@ -49,11 +51,16 @@ pub const AzureCliCredential = struct {
 
 /// Parse the `az account get-access-token` JSON output.
 ///
-/// Azure CLI emits both `expires_on` (Unix timestamp seconds, sometimes
-/// stringified) and `expiresIn` (relative seconds, integer). Prefer the
-/// absolute timestamp when present.
+/// Azure CLI emits `expires_on` (POSIX timestamp seconds) — older versions
+/// stringify it, newer versions return an integer. We accept either by
+/// running two best-effort passes against the same JSON body.
 fn parseCliResponse(allocator: std.mem.Allocator, body: []const u8) !AccessToken {
-    const CliResponseSchema = struct {
+    const SchemaInt = struct {
+        accessToken: []const u8,
+        expires_on: ?i64 = null,
+        expiresIn: ?i64 = null,
+    };
+    const SchemaStr = struct {
         accessToken: []const u8,
         expires_on: ?[]const u8 = null,
         expiresIn: ?i64 = null,
@@ -62,24 +69,34 @@ fn parseCliResponse(allocator: std.mem.Allocator, body: []const u8) !AccessToken
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    const parsed = serde.json.fromSlice(CliResponseSchema, arena.allocator(), body) catch
-        return error.InvalidTokenResponse;
-
+    var access_token: []const u8 = "";
     var expires_on: i64 = 0;
-    if (parsed.expires_on) |s|
-        expires_on = std.fmt.parseInt(i64, s, 10) catch 0;
-    if (expires_on == 0) {
-        if (parsed.expiresIn) |n| expires_on = n;
+
+    if (serde.json.fromSlice(SchemaInt, arena.allocator(), body)) |parsed| {
+        access_token = parsed.accessToken;
+        if (parsed.expires_on) |n| expires_on = n;
+        if (expires_on == 0) {
+            if (parsed.expiresIn) |n| expires_on = n;
+        }
+    } else |_| {
+        const parsed = serde.json.fromSlice(SchemaStr, arena.allocator(), body) catch
+            return error.InvalidTokenResponse;
+        access_token = parsed.accessToken;
+        if (parsed.expires_on) |s|
+            expires_on = std.fmt.parseInt(i64, s, 10) catch 0;
+        if (expires_on == 0) {
+            if (parsed.expiresIn) |n| expires_on = n;
+        }
     }
 
-    const token = try allocator.dupe(u8, parsed.accessToken);
+    const token = try allocator.dupe(u8, access_token);
     return .{ .token = token, .expires_on = expires_on };
 }
 
 /// Run the Azure CLI command and capture stdout.
-fn runCommand(allocator: std.mem.Allocator, scope: []const u8, tenant_id: ?[]const u8) ![]u8 {
-    // Build argv for std.process.Child.
-    var argv_buf: [8][]const u8 = undefined;
+fn runCommand(allocator: std.mem.Allocator, io: std.Io, scope: []const u8, tenant_id: ?[]const u8) ![]u8 {
+    // Build argv for std.process.run.
+    var argv_buf: [9][]const u8 = undefined;
     var argc: usize = 0;
 
     argv_buf[argc] = "az";
@@ -97,32 +114,27 @@ fn runCommand(allocator: std.mem.Allocator, scope: []const u8, tenant_id: ?[]con
     argv_buf[argc] = scope;
     argc += 1;
 
-    // Optionally add --tenant.
-    const tenant_args: [2][]const u8 = .{ "--tenant", tenant_id orelse "" };
-    if (tenant_id != null) {
-        argv_buf[argc] = tenant_args[0];
+    if (tenant_id) |t| {
+        argv_buf[argc] = "--tenant";
         argc += 1;
-        argv_buf[argc] = tenant_args[1];
+        argv_buf[argc] = t;
         argc += 1;
     }
 
-    var child = std.process.Child.init(argv_buf[0..argc], allocator);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
+    const result = try std.process.run(allocator, io, .{
+        .argv = argv_buf[0..argc],
+        .stdout_limit = .limited(1024 * 1024),
+        .stderr_limit = .limited(1024 * 1024),
+    });
+    defer allocator.free(result.stderr);
+    errdefer allocator.free(result.stdout);
 
-    try child.spawn();
+    switch (result.term) {
+        .exited => |code| if (code != 0) return error.AzureCliNotAvailable,
+        else => return error.AzureCliNotAvailable,
+    }
 
-    var stdout_buf: std.ArrayList(u8) = .empty;
-    defer stdout_buf.deinit(allocator);
-    var stderr_buf: std.ArrayList(u8) = .empty;
-    defer stderr_buf.deinit(allocator);
-
-    try child.collectOutput(allocator, &stdout_buf, &stderr_buf, 1024 * 1024);
-    const term = try child.wait();
-
-    if (term.Exited != 0) return error.AzureCliNotAvailable;
-
-    return stdout_buf.toOwnedSlice(allocator);
+    return result.stdout;
 }
 
 test "parseCliResponse" {
@@ -132,5 +144,17 @@ test "parseCliResponse" {
     const token = try parseCliResponse(std.testing.allocator, body);
     defer std.testing.allocator.free(token.token);
     try std.testing.expectEqualStrings("cli-tok", token.token);
+    try std.testing.expectEqual(@as(i64, 1743523200), token.expires_on);
+}
+
+test "parseCliResponse accepts integer expires_on" {
+    // Modern Azure CLI emits expires_on as a POSIX timestamp integer
+    // and includes additional fields (subscription, tenant, tokenType).
+    const body =
+        \\{"accessToken":"cli-tok-2","expiresOn":"2026-04-01 15:00:00.000000","expires_on":1743523200,"subscription":"sub","tenant":"tenant","tokenType":"Bearer"}
+    ;
+    const token = try parseCliResponse(std.testing.allocator, body);
+    defer std.testing.allocator.free(token.token);
+    try std.testing.expectEqualStrings("cli-tok-2", token.token);
     try std.testing.expectEqual(@as(i64, 1743523200), token.expires_on);
 }

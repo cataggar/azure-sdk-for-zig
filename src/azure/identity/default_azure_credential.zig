@@ -68,13 +68,14 @@ pub const DefaultAzureCredential = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
+        io: std.Io,
         transport: *core.http.HttpTransport,
         env: anytype,
     ) DefaultAzureCredential {
         var self: DefaultAzureCredential = .{
             .chain = undefined,
             .mi_cred = @import("managed_identity.zig").ManagedIdentityCredential.init(allocator, transport),
-            .cli_cred = @import("azure_cli.zig").AzureCliCredential.init(allocator),
+            .cli_cred = @import("azure_cli.zig").AzureCliCredential.init(allocator, io),
         };
 
         // 1. EnvironmentCredential (may fail if env vars absent).

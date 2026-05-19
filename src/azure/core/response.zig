@@ -53,7 +53,10 @@ pub fn PagedResponse(comptime T: type) type {
             var resp = try pipeline.send(&req);
             defer resp.deinit();
 
-            if (!resp.isSuccess()) return error.PageFetchFailed;
+            if (!resp.isSuccess()) {
+                @import("pager.zig").logHttpError("PagedResponse.fetchNextPage", resp.status_code, resp.body);
+                return error.PageFetchFailed;
+            }
 
             return parseFn(allocator, resp.body);
         }

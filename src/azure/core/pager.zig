@@ -3,6 +3,21 @@ const serde = @import("serde");
 const pipeline_mod = @import("http/pipeline.zig");
 const transport = @import("http/transport.zig");
 
+/// Log a non-2xx HTTP response body so the developer sees the ARM/data-plane
+/// error message before the generic `PageFetchFailed` propagates upward.
+///
+/// Output is truncated to 1024 bytes to keep tracebacks readable; the full
+/// body is still in `resp.body` if a caller wants to inspect it. Logging is
+/// suppressed during `zig test` (the test runner treats `.err` logs as
+/// failures, but we still want the logging in real runs).
+pub fn logHttpError(context: []const u8, status_code: u16, body: []const u8) void {
+    if (@import("builtin").is_test) return;
+    const max_len: usize = 1024;
+    const snippet = if (body.len > max_len) body[0..max_len] else body;
+    const elision: []const u8 = if (body.len > max_len) "..." else "";
+    std.log.err("{s}: HTTP {d}: {s}{s}", .{ context, status_code, snippet, elision });
+}
+
 /// Generic iterator over pages of Azure API results.
 ///
 /// Concrete implementations embed this struct and use `@fieldParentPtr`
@@ -109,9 +124,15 @@ pub fn PipelinePager(comptime T: type) type {
             self.allocator.free(url);
             self.next_url = null;
 
-            if (!resp.isSuccess()) return error.PageFetchFailed;
+            if (!resp.isSuccess()) {
+                logHttpError("Pager.next", resp.status_code, resp.body);
+                return error.PageFetchFailed;
+            }
 
-            const result = try self.parseFn(self.allocator, resp.body);
+            const result = self.parseFn(self.allocator, resp.body) catch |err| {
+                logHttpError("Pager.next parse failed", resp.status_code, resp.body);
+                return err;
+            };
             self.next_url = result.next_link;
             return result.items;
         }
@@ -121,6 +142,49 @@ pub fn PipelinePager(comptime T: type) type {
             self.deinit();
         }
     };
+}
+
+// ─────────────────────────── Generic page parser ───────────────────────────
+
+/// Page parser for the standard `{ "value": [T, ...], "nextLink": "..." }`
+/// envelope used by every Azure ARM list endpoint and most data-plane list
+/// endpoints (Key Vault, Storage Tables, App Configuration, ...).
+///
+/// Returns a function pointer compatible with `PipelinePager(T).init`:
+/// ```zig
+/// var pager = try PipelinePager(PrivateCloud).init(
+///     pipeline, url, alloc,
+///     core.pager.listPageParser(PrivateCloud),
+///     "application/json",
+/// );
+/// ```
+///
+/// Per-`T` cost is zero — the comptime closure stamps out one function per
+/// `T` and `serde.json.fromSlice` does the rest. `T` must round-trip through
+/// `serde.json`; any owned strings inside each `T` are allocated from the
+/// caller's allocator and should be freed by the caller (typically via a
+/// `T.deinit(allocator)` method emitted by the codegen).
+pub fn listPageParser(comptime T: type) *const fn (std.mem.Allocator, []const u8) anyerror!PageResult(T) {
+    return &struct {
+        fn parse(allocator: std.mem.Allocator, body: []const u8) anyerror!PageResult(T) {
+            const PageSchema = struct {
+                value: ?[]T = null,
+                nextLink: ?[]const u8 = null,
+            };
+
+            const parsed = try serde.json.fromSlice(PageSchema, allocator, body);
+
+            var next_link: ?[]u8 = null;
+            if (parsed.nextLink) |nl| {
+                defer allocator.free(nl);
+                if (nl.len > 0) next_link = try allocator.dupe(u8, nl);
+            }
+            errdefer if (next_link) |nl_dup| allocator.free(nl_dup);
+
+            const items = parsed.value orelse try allocator.alloc(T, 0);
+            return .{ .items = items, .next_link = next_link };
+        }
+    }.parse;
 }
 
 // ─────────────────────────── Tests ───────────────────────────
@@ -272,4 +336,47 @@ test "Pager interface via asPager" {
 
     try std.testing.expectEqual(@as(usize, 1), items.len);
     try std.testing.expectEqualStrings("x", items[0]);
+}
+
+test "listPageParser handles standard envelope" {
+    const allocator = std.testing.allocator;
+
+    const Item = struct {
+        name: []const u8,
+
+        pub fn deinit(self: @This(), alloc: std.mem.Allocator) void {
+            alloc.free(self.name);
+        }
+    };
+
+    const body =
+        \\{"value":[{"name":"alpha"},{"name":"beta"}],"nextLink":"https://example.com/next"}
+    ;
+    const result = try listPageParser(Item)(allocator, body);
+    defer {
+        for (result.items) |item| item.deinit(allocator);
+        allocator.free(result.items);
+        if (result.next_link) |nl| allocator.free(nl);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), result.items.len);
+    try std.testing.expectEqualStrings("alpha", result.items[0].name);
+    try std.testing.expectEqualStrings("beta", result.items[1].name);
+    try std.testing.expect(result.next_link != null);
+    try std.testing.expectEqualStrings("https://example.com/next", result.next_link.?);
+}
+
+test "listPageParser tolerates missing nextLink" {
+    const allocator = std.testing.allocator;
+    const Item = struct {
+        id: i64,
+    };
+    const result = try listPageParser(Item)(allocator,
+        \\{"value":[{"id":1},{"id":2},{"id":3}]}
+    );
+    defer allocator.free(result.items);
+
+    try std.testing.expectEqual(@as(usize, 3), result.items.len);
+    try std.testing.expectEqual(@as(i64, 2), result.items[1].id);
+    try std.testing.expect(result.next_link == null);
 }
