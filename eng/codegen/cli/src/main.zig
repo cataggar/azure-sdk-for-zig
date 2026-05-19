@@ -147,7 +147,23 @@ pub fn main(init: std.process.Init) !u8 {
     try ws.objectField("__spec_files");
     try ws.beginObject();
     std.debug.print("collecting spec files from {s}\n", .{sd_owned});
-    try collectSpecFiles(allocator, init, &ws, sd_owned);
+    try collectFiles(allocator, init, &ws, sd_owned, .spec);
+    // Walk every WASI preopen whose virtual path starts with
+    // `/node_modules/` — those are stdlib package roots passed in by
+    // the wrapper script (`scripts/run.sh`). Their `.tsp` and
+    // `package.json` files are merged into the same `__spec_files`
+    // object: the JS host's `virtualFsSources` map sees them at the
+    // exact paths the TypeSpec resolver computes from package
+    // metadata.
+    {
+        var pi = init.preopens.map.iterator();
+        while (pi.next()) |kv| {
+            const name = kv.key_ptr.*;
+            if (!std.mem.startsWith(u8, name, "/node_modules/")) continue;
+            std.debug.print("collecting stdlib files from {s}\n", .{name});
+            try collectFiles(allocator, init, &ws, name, .stdlib);
+        }
+    }
     try ws.endObject();
     try ws.endObject();
     std.debug.print("emitter-options size = {d} bytes\n", .{stream.written().len});
@@ -191,33 +207,45 @@ fn die(msg: []const u8) u8 {
     return 2;
 }
 
-/// Recursively walk `spec_dir` and emit object entries
-/// `"<absolute-virtual-path>": "<file-contents>"` for each TypeSpec
-/// source / config file found. `ws` must be inside an open object
-/// (the caller emits the wrapping `{}`).
+/// Source kind for `collectFiles`.
+///
+/// - `.spec`  — user TypeSpec spec dir. Includes `.tsp` and the
+///              auxiliary config formats TypeSpec may resolve from a
+///              spec dir (`.yaml`, `.yml`, `.json`).
+/// - `.stdlib` — vendored TypeSpec package root. Only `.tsp` files
+///              and `package.json` are needed; everything else is
+///              either bundled (`.js`) or irrelevant to module
+///              resolution.
+const SourceKind = enum { spec, stdlib };
+
+/// Recursively walk `preopen_path` and emit object entries
+/// `"<absolute-virtual-path>": "<file-contents>"` for each file the
+/// `kind` filter accepts. `ws` must be inside an open object (the
+/// caller emits the wrapping `{}`).
 ///
 /// The JS side of the bridge merges every entry into its
 /// `virtualFsSources` map before driving the TypeSpec compiler — the
-/// compiler's resolver then sees the spec files as plain in-memory
-/// reads. This keeps the JS guest free of any wasi:filesystem JS
-/// shim (StarlingMonkey doesn't polyfill `node:fs`), so the Zig host
-/// is the sole filesystem consumer.
-fn collectSpecFiles(
+/// compiler's resolver then sees the spec and stdlib files as plain
+/// in-memory reads. This keeps the JS guest free of any wasi:filesystem
+/// JS shim (StarlingMonkey doesn't polyfill `node:fs`), so the Zig
+/// host is the sole filesystem consumer.
+fn collectFiles(
     allocator: std.mem.Allocator,
     init: std.process.Init,
     ws: *std.json.Stringify,
-    spec_dir: []const u8,
+    preopen_path: []const u8,
+    kind: SourceKind,
 ) !void {
     const io = init.io;
 
     // WASI doesn't support opening absolute paths from an arbitrary
-    // fd; resolve `spec_dir` to one of the preopens passed in by
-    // wasmtime (`--dir <host>::<spec_dir>`). `init.preopens` is
+    // fd; resolve `preopen_path` to one of the preopens passed in by
+    // wasmtime (`--dir <host>::<preopen_path>`). `init.preopens` is
     // populated by `start.zig` from `fd_prestat_get` enumeration.
-    const resource = init.preopens.get(spec_dir) orelse {
+    const resource = init.preopens.get(preopen_path) orelse {
         std.debug.print(
-            "collectSpecFiles: no WASI preopen matches '{s}'\n",
-            .{spec_dir},
+            "collectFiles: no WASI preopen matches '{s}'\n",
+            .{preopen_path},
         );
         return error.PermissionDenied;
     };
@@ -225,8 +253,8 @@ fn collectSpecFiles(
         .dir => |d| d,
         .file => {
             std.debug.print(
-                "collectSpecFiles: preopen '{s}' is a file, expected a directory\n",
-                .{spec_dir},
+                "collectFiles: preopen '{s}' is a file, expected a directory\n",
+                .{preopen_path},
             );
             return error.NotDir;
         },
@@ -240,20 +268,20 @@ fn collectSpecFiles(
             // WASI is strict about symlinks/relative paths that
             // escape the preopen — surface and skip rather than
             // failing the whole collection.
-            std.debug.print("collectSpecFiles: walk error: {s}\n", .{@errorName(err)});
+            std.debug.print("collectFiles: walk error: {s}\n", .{@errorName(err)});
             continue;
         };
         const entry = maybe_entry orelse break;
         if (entry.kind != .file) continue;
-        if (!isSpecFile(entry.basename)) continue;
+        if (!acceptFile(entry.basename, kind)) continue;
 
-        // entry.path is relative to spec_dir; build the absolute
+        // entry.path is relative to preopen_path; build the absolute
         // virtual path the JS bridge will key into virtualFsSources.
-        const full = try std.fs.path.join(allocator, &.{ spec_dir, entry.path });
+        const full = try std.fs.path.join(allocator, &.{ preopen_path, entry.path });
         defer allocator.free(full);
 
         const content = dir.readFileAlloc(io, entry.path, allocator, .limited(8 * 1024 * 1024)) catch |err| {
-            std.debug.print("collectSpecFiles: skipping {s}: {s}\n", .{ full, @errorName(err) });
+            std.debug.print("collectFiles: skipping {s}: {s}\n", .{ full, @errorName(err) });
             continue;
         };
         defer allocator.free(content);
@@ -263,12 +291,13 @@ fn collectSpecFiles(
     }
 }
 
-fn isSpecFile(name: []const u8) bool {
-    const extensions: []const []const u8 = &.{ ".tsp", ".yaml", ".yml", ".json" };
-    for (extensions) |ext| {
-        if (std.mem.endsWith(u8, name, ext)) return true;
-    }
-    return false;
+fn acceptFile(name: []const u8, kind: SourceKind) bool {
+    return switch (kind) {
+        .spec => for ([_][]const u8{ ".tsp", ".yaml", ".yml", ".json" }) |ext| {
+            if (std.mem.endsWith(u8, name, ext)) break true;
+        } else false,
+        .stdlib => std.mem.endsWith(u8, name, ".tsp") or std.mem.eql(u8, name, "package.json"),
+    };
 }
 
 test {

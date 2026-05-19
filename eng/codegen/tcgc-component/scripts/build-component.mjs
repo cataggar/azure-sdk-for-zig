@@ -67,32 +67,33 @@ function walk(dir) {
 }
 
 // ── Discover .tsp + package.json files to inline ────────────────────
+//
+// We DO NOT inline `.tsp` or `package.json` content anymore; those
+// come from disk at runtime via WASI preopens (the Zig host walks
+// `tcgc-component/node_modules/<pkg>/` and serializes contents into
+// `__spec_files`). We still need to:
+//
+//   * Statically import each package's main JS so esbuild bundles
+//     the code, and register it in the `jsImports` map under the
+//     virtual path the TypeSpec resolver computes from `package.json`.
+//   * Statically import every `.js` file referenced by `import "..."`
+//     in any `.tsp` under each package's `lib/` tree (decorators and
+//     helpers), and register each in `jsImports` under its virtual
+//     `/node_modules/<pkg>/<rel>` path.
+//   * Emit a list of vendored package roots so the wrapper script
+//     can mount each as a WASI preopen.
 
-const virtualFsEntries = []; // { virtualPath, sourcePath }
+const virtualFsEntries = []; // legacy slot, intentionally empty.
 const jsImportEntries = []; // { virtualPath, importSpec, identKey }
+const stdlibPreopens = []; // { hostPath, virtualPath }
 
 for (const spec of packages) {
   const pj = readPackageJson(spec);
   const pkgRoot = path.join(root, "node_modules", spec);
   const virtPkgRoot = `/node_modules/${spec}`;
 
-  // package.json — always needed for module resolution.
-  virtualFsEntries.push({
-    virtualPath: `${virtPkgRoot}/package.json`,
-    sourcePath: path.join(pkgRoot, "package.json"),
-  });
-
-  // All .tsp files under lib/ — TypeSpec stdlib source.
-  const libDir = path.join(pkgRoot, "lib");
-  for (const f of walk(libDir)) {
-    if (f.endsWith(".tsp")) {
-      const rel = path.relative(pkgRoot, f);
-      virtualFsEntries.push({
-        virtualPath: `${virtPkgRoot}/${rel}`,
-        sourcePath: f,
-      });
-    }
-  }
+  // Record the package's host path for the runtime preopen list.
+  stdlibPreopens.push({ hostPath: pkgRoot, virtualPath: virtPkgRoot });
 
   // Main JS module — used by the compiler/emitter for `$lib`,
   // `$linter`, `$onEmit`. Registered in jsImports map, NOT inlined as
@@ -165,6 +166,12 @@ for (let i = 0; i < importSpecs.length; i++) {
 entry += `\n`;
 
 // Inlined .tsp + package.json sources as a virtualFs map.
+//
+// Stdlib `.tsp` and `package.json` are NOT inlined any more — the Zig
+// host walks `tcgc-component/node_modules/<pkg>/` via WASI preopens
+// and adds entries at runtime via `__spec_files`. The map starts
+// empty here and is populated by `compileInner` for both the user
+// spec and the stdlib.
 entry += `export const virtualFsSources = new Map();\n`;
 for (const e of virtualFsEntries) {
   const content = fs.readFileSync(e.sourcePath, "utf-8");
@@ -186,6 +193,19 @@ entry += `export { compile, tcgc } from "../src/wasi-host.js";\n`;
 const entryPath = path.join(dist, "wasi-entry.generated.js");
 fs.writeFileSync(entryPath, entry);
 console.log(`wrote ${entryPath} (${entry.length} bytes)`);
+
+// Emit the stdlib preopens manifest for the wrapper script. Each
+// line is `<host-abs-path>=<virtual-path>` so the wrapper can pass
+// `--dir <host>::<virt>` to wasmtime, and the Zig host can walk each
+// preopen to populate `virtualFsSources` at runtime.
+const stdlibManifestPath = path.join(dist, "stdlib-preopens.txt");
+fs.writeFileSync(
+  stdlibManifestPath,
+  stdlibPreopens
+    .map((p) => `${p.hostPath}=${p.virtualPath}`)
+    .join("\n") + "\n",
+);
+console.log(`wrote ${stdlibManifestPath} (${stdlibPreopens.length} entries)`);
 
 // ── Inject minimal globals SpiderMonkey-in-StarlingMonkey lacks ────
 //
@@ -289,11 +309,40 @@ const wasmNohttpPath = path.join(root, "tcgc-nohttp.wasm");
 const jcoBin = path.join(root, "node_modules", ".bin", "jco");
 const witPath = path.join(root, "wit", "component.wit");
 
+// Allow overriding the StarlingMonkey engine wasm — TypeSpec/TCGC
+// compilation of large ARM specs (e.g. Microsoft.AVS) blows past the
+// upstream componentize-js engine's 32 MiB SpiderMonkey GC heap cap,
+// which is baked in at engine compile time. The companion script
+// `scripts/build-engine.sh` builds a custom engine with the cap
+// raised to 1 GiB and drops the wasm at
+// `tcgc-component/engine/starlingmonkey_embedding.wasm` (the default
+// auto-detected path). Set `STARLINGMONKEY_ENGINE=/path/to/wasm` to
+// override; with neither override nor default, componentize-js
+// falls back to its bundled 32 MiB-cap engine.
+const engineArgs = [];
+const defaultEnginePath = path.join(root, "engine", "starlingmonkey_embedding.wasm");
+const enginePath =
+  process.env.STARLINGMONKEY_ENGINE ||
+  (fs.existsSync(defaultEnginePath) ? defaultEnginePath : null);
+if (enginePath) {
+  if (!fs.existsSync(enginePath)) {
+    throw new Error(`STARLINGMONKEY_ENGINE points at missing file: ${enginePath}`);
+  }
+  engineArgs.push("--engine", enginePath);
+  console.log(`using custom StarlingMonkey engine: ${enginePath}`);
+} else {
+  console.log(
+    `note: using componentize-js's default engine (32 MiB heap cap). ` +
+      `Large ARM specs may OOM — run scripts/build-engine.sh to install a 1 GiB engine.`,
+  );
+}
+
 execFileSync(jcoBin, [
   "componentize",
   bundlePath,
   "--wit", witPath,
   "--world-name", "codegen",
+  ...engineArgs,
   "--out", wasmPath,
 ], { stdio: "inherit" });
 
@@ -308,6 +357,7 @@ execFileSync(jcoBin, [
   "--wit", witPath,
   "--world-name", "codegen",
   "--disable", "http",
+  ...engineArgs,
   "--out", wasmNohttpPath,
 ], { stdio: "inherit" });
 

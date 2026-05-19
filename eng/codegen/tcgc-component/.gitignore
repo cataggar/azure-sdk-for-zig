@@ -1,7 +1,10 @@
 node_modules/
 tcgc.wasm
+tcgc-nohttp.wasm
 tcgc-stub.wasm
 package-lock.json
 .tsp-staging/
 .typespec-output/
 dist/
+engine/
+.engine-build/
