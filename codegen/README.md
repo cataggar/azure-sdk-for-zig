@@ -9,7 +9,8 @@ The architecture mirrors the Rust experiment in
 and [PR #92](https://github.com/cataggar/azure-sdk-for-rust/pull/92): the
 TypeSpec toolchain is wrapped as a **WASI component** via
 [`jco`](https://github.com/bytecodealliance/jco), and the actual code
-generator is a **native Zig binary** that hosts the component.
+generator is a **Zig WASI component** composed with the TypeSpec
+component into a single wasm executable.
 
 ```text
    .tsp files
@@ -28,11 +29,13 @@ generator is a **native Zig binary** that hosts the component.
       │ JSON code model (WIT contract below)
       ▼
  ┌──────────────────────────────────────────┐
- │  codegen (native Zig)                    │
- │  • loads tcgc.wasm via wamr              │
+ │  codegen-cli.wasm (Zig, wasm32-wasi)     │
+ │  • imports tcgc#compile via Component    │
+ │    Model — composed with tcgc.wasm into  │
+ │    codegen-cli.composed.wasm             │
  │  • parses JSON via serde.zig             │
  │  • emits Zig source, build.zig, README   │
- │  • runs `zig fmt`                        │
+ │  • driver script then runs `zig fmt`     │
  └──────────────────────────────────────────┘
       │
       ▼
@@ -46,8 +49,8 @@ generator is a **native Zig binary** that hosts the component.
 | `tspconfigs.yaml`                 | Tracked manifest of every tspconfig.yaml under `../azure-rest-api-specs/specification/`, with resolved `js`/`zig` package names. Regenerate via `zig build tspconfigs-update` (re-walks the specs) and `zig build tspconfigs-resolve` (refills `js`/`zig`). |
 | `wit/tcgc.wit`                    | WIT contract exposed by `tcgc.wasm`.                   |
 | `tcgc-component/`                 | JS wrapper componentized by `jco` into `tcgc.wasm`.    |
-| `codegen/`                        | Zig source for the host + emitter binary.              |
-| `scripts/`                        | Generation / regeneration shell helpers.               |
+| `cli/`                            | Zig WASI emitter — `codegen-cli.wasm`, composed with `tcgc.wasm` and driven by `cli/scripts/run.sh`. |
+| `tspconfigs/`                     | Zig tool that manages `tspconfigs.yaml` (`zig build tspconfigs-update` / `-resolve`). |
 | `fixtures/`                       | Small JSON code-model fixtures used by emitter tests.  |
 
 ## Branch model
@@ -123,5 +126,3 @@ codegen/cli/scripts/run.sh \
   <https://github.com/Azure/typespec-azure/tree/main/packages/typespec-client-generator-core>
 - jco:
   <https://github.com/bytecodealliance/jco>
-- wamr (Zig component runtime used as host):
-  <https://github.com/cataggar/wamr>

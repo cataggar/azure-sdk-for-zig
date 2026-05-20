@@ -33,8 +33,8 @@ pub const EmitOptions = struct {
     azure_core_commit: ?[]const u8 = null,
     /// Reserved for future use; running `zig fmt` is currently the
     /// caller's responsibility because the Zig 0.16 process API is in
-    /// flux. The driver script in `codegen/scripts/generate.sh`
-    /// runs `zig fmt` after emitting.
+    /// flux. The wrapper script in `codegen/cli/scripts/run.sh` runs
+    /// `zig fmt` on `<out_dir>` after the wasm emitter exits.
     run_zig_fmt: bool = true,
 };
 
