@@ -32,6 +32,10 @@ pub const Origin = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Extensible enum. Indicates the action type. "Internal" refers to actions that are for internal only APIs.
@@ -53,6 +57,10 @@ pub const ActionType = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -81,6 +89,10 @@ pub const AddonType = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -116,6 +128,10 @@ pub const AddonProvisioningState = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// The kind of entity that created the resource.
@@ -144,6 +160,10 @@ pub const createdByType = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// The provisioning state of a resource type.
@@ -169,6 +189,10 @@ pub const ResourceProvisioningState = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -198,6 +222,10 @@ pub const ExpressRouteAuthorizationProvisioningState = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// cloud link provisioning state
@@ -223,6 +251,10 @@ pub const CloudLinkProvisioningState = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -253,6 +285,10 @@ pub const CloudLinkStatus = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -285,6 +321,10 @@ pub const ClusterProvisioningState = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -330,6 +370,10 @@ pub const DatastoreProvisioningState = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// mount option
@@ -353,6 +397,10 @@ pub const MountOptionEnum = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -388,6 +436,10 @@ pub const DatastoreStatus = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Global Reach Connection provisioning state
@@ -416,6 +468,10 @@ pub const GlobalReachConnectionProvisioningState = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Global Reach Connection status
@@ -442,6 +498,10 @@ pub const GlobalReachConnectionStatus = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// HCX Enterprise Site provisioning state
@@ -467,6 +527,10 @@ pub const HcxEnterpriseSiteProvisioningState = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -496,6 +560,10 @@ pub const HcxEnterpriseSiteStatus = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// The kind of host.
@@ -519,6 +587,10 @@ pub const HostKind = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -546,6 +618,10 @@ pub const HostProvisioningState = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// The reason for host maintenance.
@@ -569,6 +645,10 @@ pub const HostMaintenance = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -604,6 +684,10 @@ pub const IscsiPathProvisioningState = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// The kind of license.
@@ -625,6 +709,10 @@ pub const LicenseKind = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -652,6 +740,10 @@ pub const LicenseProvisioningState = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// The name of the license.
@@ -673,6 +765,10 @@ pub const LicenseName = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -700,6 +796,10 @@ pub const TrialStatus = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// quota enabled
@@ -723,6 +823,10 @@ pub const QuotaEnabled = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -756,6 +860,10 @@ pub const MaintenanceStateName = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// status filter for the maintenance
@@ -779,6 +887,10 @@ pub const MaintenanceStatusFilter = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -805,6 +917,10 @@ pub const MaintenanceType = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -834,6 +950,10 @@ pub const MaintenanceProvisioningState = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Defines the type of operation
@@ -859,6 +979,10 @@ pub const MaintenanceManagementOperationKind = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -886,6 +1010,10 @@ pub const ScheduleOperationConstraintKind = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Reason for blocking operation on maintenance
@@ -912,6 +1040,10 @@ pub const BlockedDatesConstraintCategory = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Constraints for rescheduling of maintenance
@@ -935,6 +1067,10 @@ pub const RescheduleOperationConstraintKind = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -964,6 +1100,10 @@ pub const MaintenanceReadinessRefreshOperationStatus = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Defines the type of maintenance readiness check
@@ -987,6 +1127,10 @@ pub const MaintenanceCheckType = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -1016,6 +1160,10 @@ pub const MaintenanceReadinessStatus = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Placement Policy type
@@ -1040,6 +1188,10 @@ pub const PlacementPolicyType = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Placement Policy state
@@ -1063,6 +1215,10 @@ pub const PlacementPolicyState = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -1096,6 +1252,10 @@ pub const PlacementPolicyProvisioningState = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Affinity type
@@ -1119,6 +1279,10 @@ pub const AffinityType = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -1144,6 +1308,10 @@ pub const AffinityStrength = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Azure Hybrid Benefit type
@@ -1167,6 +1335,10 @@ pub const AzureHybridBenefitType = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -1192,6 +1364,10 @@ pub const InternetEnum = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Whether SSL is enabled or disabled
@@ -1215,6 +1391,10 @@ pub const SslEnum = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -1240,6 +1420,10 @@ pub const AvailabilityStrategy = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Whether encryption is enabled or disabled
@@ -1263,6 +1447,10 @@ pub const EncryptionState = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -1288,6 +1476,10 @@ pub const EncryptionKeyStatus = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Whether the encryption version is fixed or auto-detected
@@ -1311,6 +1503,10 @@ pub const EncryptionVersionType = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -1348,6 +1544,10 @@ pub const PrivateCloudProvisioningState = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// NSX public IP quota raised
@@ -1371,6 +1571,10 @@ pub const NsxPublicIpQuotaRaisedEnum = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -1396,6 +1600,10 @@ pub const DnsZoneType = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// The kind of license.
@@ -1417,6 +1625,10 @@ pub const VcfLicenseKind = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -1441,6 +1653,10 @@ pub const SystemAssignedServiceIdentityType = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -1467,6 +1683,10 @@ pub const ProvisionedNetworkProvisioningState = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -1502,6 +1722,10 @@ pub const ProvisionedNetworkTypes = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Pure Storage Policy Based Management policy provisioning state
@@ -1532,6 +1756,10 @@ pub const PureStoragePolicyProvisioningState = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// A script cmdlet provisioning state
@@ -1558,6 +1786,10 @@ pub const ScriptCmdletProvisioningState = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Specifies whether a script cmdlet is intended to be invoked only through automation or visible to customers
@@ -1581,6 +1813,10 @@ pub const ScriptCmdletAudience = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -1614,6 +1850,10 @@ pub const ScriptParameterTypes = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Visibility Parameter
@@ -1638,6 +1878,10 @@ pub const VisibilityParameterEnum = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Optional Param
@@ -1661,6 +1905,10 @@ pub const OptionalParamEnum = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -1687,6 +1935,10 @@ pub const ScriptExecutionParameterType = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -1724,6 +1976,10 @@ pub const ScriptExecutionProvisioningState = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Script Output Stream type
@@ -1752,6 +2008,10 @@ pub const ScriptOutputStreamType = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Script Package provisioning state
@@ -1778,6 +2038,10 @@ pub const ScriptPackageProvisioningState = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Describes the type of resource the SKU applies to.
@@ -1801,6 +2065,10 @@ pub const ResourceSkuResourceType = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -1826,6 +2094,10 @@ pub const ResourceSkuRestrictionsType = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Describes the reason for SKU restriction.
@@ -1849,6 +2121,10 @@ pub const ResourceSkuRestrictionsReasonCode = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -1876,6 +2152,10 @@ pub const VirtualMachineProvisioningState = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Virtual Machine Restrict Movement state
@@ -1899,6 +2179,10 @@ pub const VirtualMachineRestrictMovementState = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -1932,6 +2216,10 @@ pub const WorkloadNetworkProvisioningState = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Type of DHCP: SERVER or RELAY.
@@ -1955,6 +2243,10 @@ pub const DhcpTypeEnum = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -1988,6 +2280,10 @@ pub const WorkloadNetworkDhcpProvisioningState = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// DNS service log level
@@ -2018,6 +2314,10 @@ pub const DnsServiceLogLevelEnum = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// DNS service status
@@ -2041,6 +2341,10 @@ pub const DnsServiceStatusEnum = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -2074,6 +2378,10 @@ pub const WorkloadNetworkDnsServiceProvisioningState = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Workload Network DNS Zone provisioning state
@@ -2106,6 +2414,10 @@ pub const WorkloadNetworkDnsZoneProvisioningState = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Port Mirroring Direction
@@ -2132,6 +2444,10 @@ pub const PortMirroringDirectionEnum = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Port Mirroring status
@@ -2155,6 +2471,10 @@ pub const PortMirroringStatusEnum = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -2188,6 +2508,10 @@ pub const WorkloadNetworkPortMirroringProvisioningState = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Workload Network Public IP provisioning state
@@ -2220,6 +2544,10 @@ pub const WorkloadNetworkPublicIPProvisioningState = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// Segment status
@@ -2243,6 +2571,10 @@ pub const SegmentStatusEnum = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -2276,6 +2608,10 @@ pub const WorkloadNetworkSegmentProvisioningState = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// VM type
@@ -2302,6 +2638,10 @@ pub const VMTypeEnum = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// VM group status
@@ -2325,6 +2665,10 @@ pub const VMGroupStatusEnum = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
@@ -2357,6 +2701,10 @@ pub const WorkloadNetworkVMGroupProvisioningState = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 

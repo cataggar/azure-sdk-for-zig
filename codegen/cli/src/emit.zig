@@ -492,11 +492,14 @@ fn renderReturnType(allocator: std.mem.Allocator, m: cm.Method, kind: anytype) !
     };
 }
 
-/// Render the `const url = try std.fmt.allocPrint(...)` block. Path
-/// placeholders are substituted by walking the operation path
-/// character-by-character and replacing `{<wire_name>}` runs with
-/// `{s}`, then collecting the corresponding value-expression for the
-/// argument tuple.
+/// Render the `const url = ...` block. Path placeholders are
+/// substituted by walking the operation path character-by-character
+/// and replacing `{<wire_name>}` runs with `{s}`. Required query
+/// parameters are appended inline to the head `allocPrint`. Optional
+/// query parameters (typed as `?T` in the Zig signature) are
+/// appended afterwards, each gated by `if (param) |v| { ... }`, with
+/// values percent-encoded via `core.url.percentEncode`. The final
+/// owned `[]u8` is exposed as `const url` and freed via `defer`.
 fn renderUrlBuild(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method) !void {
     var fmt_buf: std.ArrayList(u8) = .empty;
     defer fmt_buf.deinit(allocator);
@@ -526,25 +529,209 @@ fn renderUrlBuild(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method)
         }
     }
 
-    // Query string. Required first, then optional ones with conditional
-    // concatenation (out of scope here — AVS has none).
-    if (m.query_parameters.len > 0) {
-        try fmt_buf.append(allocator, '?');
-        for (m.query_parameters, 0..) |qp, idx| {
-            if (idx != 0) try fmt_buf.append(allocator, '&');
-            try fmt_buf.print(allocator, "{s}={{s}}", .{qp.wire_name});
-            const expr = try sourceExpression(allocator, qp.source);
-            defer allocator.free(expr);
-            try args_buf.appendSlice(allocator, ", ");
-            try args_buf.appendSlice(allocator, expr);
+    // Partition query parameters: required (incl. constants/client) go
+    // inline into the head allocPrint; optional ones are appended via
+    // an ArrayList with conditional `if (...) |v|` blocks.
+    var has_required_query = false;
+    for (m.query_parameters) |qp| {
+        if (qp.optional) continue;
+        if (!has_required_query) {
+            try fmt_buf.append(allocator, '?');
+            has_required_query = true;
+        } else {
+            try fmt_buf.append(allocator, '&');
+        }
+        try fmt_buf.print(allocator, "{s}={{s}}", .{qp.wire_name});
+        const expr = try sourceExpression(allocator, qp.source);
+        defer allocator.free(expr);
+        try args_buf.appendSlice(allocator, ", ");
+        try args_buf.appendSlice(allocator, expr);
+    }
+
+    // Count optional query parameters to choose between the
+    // single-allocPrint form (no optionals) and the ArrayList form.
+    var optional_count: usize = 0;
+    for (m.query_parameters) |qp| {
+        if (qp.optional) optional_count += 1;
+    }
+
+    if (optional_count == 0) {
+        try w.print(
+            \\        const url = try std.fmt.allocPrint(alloc, "{s}", .{{ {s} }});
+            \\        defer alloc.free(url);
+            \\
+        , .{ fmt_buf.items, args_buf.items });
+        return;
+    }
+
+    // ArrayList form. Build the head, then append optional params.
+    try w.print(
+        \\        var url_buf: std.ArrayList(u8) = .empty;
+        \\        defer url_buf.deinit(alloc);
+        \\        try url_buf.print(alloc, "{s}", .{{ {s} }});
+        \\
+    , .{ fmt_buf.items, args_buf.items });
+
+    // First-optional separator: `?` if no required query params, `&`
+    // otherwise. We track this at runtime via a boolean so that any
+    // mixture of populated optionals produces the right separators
+    // even when several are null. The flag is only needed when there
+    // are zero required query params; otherwise we always emit `&`.
+    if (!has_required_query) {
+        try w.writeAll("        var has_query: bool = false;\n");
+    }
+
+    for (m.query_parameters) |qp| {
+        if (!qp.optional) continue;
+        if (qp.source.name == null) continue;
+        const user_id = try ids.quoteIfNeeded(allocator, qp.source.name.?);
+        defer allocator.free(user_id);
+        const inner_kind = innerOptionKind(m, qp);
+
+        if (!has_required_query) {
+            try renderOptionalAppendNoRequired(w, user_id, qp.wire_name, inner_kind);
+        } else {
+            try renderOptionalAppendWithRequired(w, user_id, qp.wire_name, inner_kind);
         }
     }
 
-    try w.print(
-        \\        const url = try std.fmt.allocPrint(alloc, "{s}", .{{ {s} }});
+    try w.writeAll(
+        \\        const url = try url_buf.toOwnedSlice(alloc);
         \\        defer alloc.free(url);
         \\
-    , .{ fmt_buf.items, args_buf.items });
+    );
+}
+
+const InnerKind = enum { string_like, enum_or_union, numeric, boolean };
+
+fn innerOptionKind(m: cm.Method, qp: cm.WireParameter) InnerKind {
+    // Look up the user parameter and inspect the inner Option type.
+    const name = qp.source.name orelse return .string_like;
+    for (m.user_parameters) |p| {
+        if (!std.mem.eql(u8, p.name, name)) continue;
+        const t = p.param_type;
+        if (!t.isOption()) {
+            return classifyTypeRef(t);
+        }
+        // Unwrap Option to peek at the inner kind.
+        switch (t.value) {
+            .object => |o| {
+                const kind_v = o.get("kind") orelse return .string_like;
+                const inner_kind_str = switch (kind_v) {
+                    .string => |s| s,
+                    else => return .string_like,
+                };
+                const value_v = o.get("value") orelse std.json.Value{ .null = {} };
+                const inner = cm.TypeRef{ .kind = inner_kind_str, .value = value_v };
+                return classifyTypeRef(inner);
+            },
+            else => return .string_like,
+        }
+    }
+    return .string_like;
+}
+
+fn classifyTypeRef(t: cm.TypeRef) InnerKind {
+    if (t.isEnum() or std.mem.eql(u8, t.kind, "Union")) return .enum_or_union;
+    if (t.isScalar()) {
+        const name = t.scalarName() orelse return .string_like;
+        if (std.mem.eql(u8, name, "bool")) return .boolean;
+        if (std.mem.startsWith(u8, name, "int") or
+            std.mem.startsWith(u8, name, "uint") or
+            std.mem.startsWith(u8, name, "float") or
+            std.mem.eql(u8, name, "safeint") or
+            std.mem.eql(u8, name, "integer") or
+            std.mem.eql(u8, name, "numeric"))
+        {
+            return .numeric;
+        }
+        return .string_like;
+    }
+    return .string_like;
+}
+
+fn renderOptionalAppendWithRequired(
+    w: *std.Io.Writer,
+    user_id: []const u8,
+    wire_name: []const u8,
+    kind: InnerKind,
+) !void {
+    switch (kind) {
+        .string_like => try w.print(
+            \\        if ({s}) |v| {{
+            \\            const enc = try core.url.percentEncode(alloc, v);
+            \\            defer alloc.free(enc);
+            \\            try url_buf.print(alloc, "&{s}={{s}}", .{{enc}});
+            \\        }}
+            \\
+        , .{ user_id, wire_name }),
+        .enum_or_union => try w.print(
+            \\        if ({s}) |v| {{
+            \\            const enc = try core.url.percentEncode(alloc, v.toWire());
+            \\            defer alloc.free(enc);
+            \\            try url_buf.print(alloc, "&{s}={{s}}", .{{enc}});
+            \\        }}
+            \\
+        , .{ user_id, wire_name }),
+        .numeric => try w.print(
+            \\        if ({s}) |v| {{
+            \\            try url_buf.print(alloc, "&{s}={{d}}", .{{v}});
+            \\        }}
+            \\
+        , .{ user_id, wire_name }),
+        .boolean => try w.print(
+            \\        if ({s}) |v| {{
+            \\            try url_buf.print(alloc, "&{s}={{}}", .{{v}});
+            \\        }}
+            \\
+        , .{ user_id, wire_name }),
+    }
+}
+
+fn renderOptionalAppendNoRequired(
+    w: *std.Io.Writer,
+    user_id: []const u8,
+    wire_name: []const u8,
+    kind: InnerKind,
+) !void {
+    switch (kind) {
+        .string_like => try w.print(
+            \\        if ({s}) |v| {{
+            \\            const sep: []const u8 = if (has_query) "&" else "?";
+            \\            const enc = try core.url.percentEncode(alloc, v);
+            \\            defer alloc.free(enc);
+            \\            try url_buf.print(alloc, "{{s}}{s}={{s}}", .{{ sep, enc }});
+            \\            has_query = true;
+            \\        }}
+            \\
+        , .{ user_id, wire_name }),
+        .enum_or_union => try w.print(
+            \\        if ({s}) |v| {{
+            \\            const sep: []const u8 = if (has_query) "&" else "?";
+            \\            const enc = try core.url.percentEncode(alloc, v.toWire());
+            \\            defer alloc.free(enc);
+            \\            try url_buf.print(alloc, "{{s}}{s}={{s}}", .{{ sep, enc }});
+            \\            has_query = true;
+            \\        }}
+            \\
+        , .{ user_id, wire_name }),
+        .numeric => try w.print(
+            \\        if ({s}) |v| {{
+            \\            const sep: []const u8 = if (has_query) "&" else "?";
+            \\            try url_buf.print(alloc, "{{s}}{s}={{d}}", .{{ sep, v }});
+            \\            has_query = true;
+            \\        }}
+            \\
+        , .{ user_id, wire_name }),
+        .boolean => try w.print(
+            \\        if ({s}) |v| {{
+            \\            const sep: []const u8 = if (has_query) "&" else "?";
+            \\            try url_buf.print(alloc, "{{s}}{s}={{}}", .{{ sep, v }});
+            \\            has_query = true;
+            \\        }}
+            \\
+        , .{ user_id, wire_name }),
+    }
 }
 
 fn valueExpression(allocator: std.mem.Allocator, params: []cm.WireParameter, wire_name: []const u8) ![]u8 {
@@ -834,6 +1021,10 @@ fn renderEnums(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
                 \\
                 \\    pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
                 \\        return core.open_enum.serialize(self, wire_names, serializer);
+                \\    }
+                \\
+                \\    pub fn toWire(self: @This()) []const u8 {
+                \\        return core.open_enum.toWire(self, wire_names);
                 \\    }
                 \\};
                 \\

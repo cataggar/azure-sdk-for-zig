@@ -67,6 +67,26 @@ pub fn serialize(value: anytype, comptime wire_names: anytype, serializer: anyty
     unreachable;
 }
 
+/// Return the wire string for an open-enum union value. Known void
+/// variants are looked up in `wire_names`; `unrecognized` returns its
+/// inner string. The returned slice is borrowed (either a string
+/// literal from `wire_names` or the union's own backing storage) and
+/// is therefore valid only as long as `value` itself.
+pub fn toWire(value: anytype, comptime wire_names: anytype) []const u8 {
+    const T = @TypeOf(value);
+    const Tag = std.meta.Tag(T);
+    inline for (comptime std.meta.fields(T)) |field| {
+        if (@as(Tag, value) == @field(Tag, field.name)) {
+            if (comptime std.mem.eql(u8, field.name, "unrecognized")) {
+                return @field(value, "unrecognized");
+            }
+            const wire: []const u8 = @field(wire_names, field.name);
+            return wire;
+        }
+    }
+    unreachable;
+}
+
 // ─────────────────────────── Tests ───────────────────────────
 
 const testing = std.testing;
@@ -89,7 +109,20 @@ const Sample = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return @import("open_enum.zig").toWire(self, wire_names);
+    }
 };
+
+test "open enum: toWire returns mapped wire name" {
+    try testing.expectEqualStrings("One", Sample.toWire(.one));
+    try testing.expectEqualStrings("Two", Sample.toWire(.two));
+}
+
+test "open enum: toWire returns inner string for unrecognized" {
+    try testing.expectEqualStrings("Floomp", Sample.toWire(.{ .unrecognized = "Floomp" }));
+}
 
 test "open enum: known variant deserializes via wire name" {
     const serde = @import("serde");
