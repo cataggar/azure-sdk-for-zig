@@ -401,7 +401,7 @@ pub const DiskPoolVolume = struct {
     /// Name of the LUN to be used for datastore
     lun_name: []const u8,
     /// Mode that describes whether the LUN has to be mounted as a datastore or
-/// attached as a LUN
+    /// attached as a LUN
     mount_option: ?enums.MountOptionEnum = null,
     /// Device path
     path: ?[]const u8 = null,
@@ -452,18 +452,18 @@ pub const GlobalReachConnectionProperties = struct {
     /// The state of the  ExpressRoute Circuit Authorization provisioning
     provisioning_state: ?enums.GlobalReachConnectionProvisioningState = null,
     /// The network used for global reach carved out from the original network block
-/// provided for the private cloud
+    /// provided for the private cloud
     address_prefix: ?[]const u8 = null,
     /// Authorization key from the peer express route used for the global reach
-/// connection
+    /// connection
     authorization_key: ?[]const u8 = null,
     /// The connection status of the global reach connection
     circuit_connection_status: ?enums.GlobalReachConnectionStatus = null,
     /// Identifier of the ExpressRoute Circuit to peer with in the global reach
-/// connection
+    /// connection
     peer_express_route_circuit: ?[]const u8 = null,
     /// The ID of the Private Cloud's ExpressRoute Circuit that is participating in the
-/// global reach connection
+    /// global reach connection
     express_route_id: ?[]const u8 = null,
 
     pub const serde = .{ .rename_all = .camel_case };
@@ -1075,9 +1075,9 @@ pub const PrivateCloudProperties = struct {
     /// Customer managed key encryption, can be enabled or disabled
     encryption: ?Encryption = null,
     /// Array of additional networks noncontiguous with networkBlock. Networks must be
-/// unique and non-overlapping across VNet in your subscription, on-premise, and
-/// this privateCloud networkBlock attribute. Make sure the CIDR format conforms to
-/// (A.B.C.D/X).
+    /// unique and non-overlapping across VNet in your subscription, on-premise, and
+    /// this privateCloud networkBlock attribute. Make sure the CIDR format conforms to
+    /// (A.B.C.D/X).
     extended_network_blocks: ?[]const []const u8 = null,
     /// The provisioning state
     provisioning_state: ?enums.PrivateCloudProvisioningState = null,
@@ -1086,8 +1086,8 @@ pub const PrivateCloudProperties = struct {
     /// The endpoints
     endpoints: ?Endpoints = null,
     /// The block of addresses should be unique across VNet in your subscription as
-/// well as on-premise. Make sure the CIDR format is conformed to (A.B.C.D/X) where
-/// A,B,C,D are between 0 and 255, and X is between 0 and 22
+    /// well as on-premise. Make sure the CIDR format is conformed to (A.B.C.D/X) where
+    /// A,B,C,D are between 0 and 255, and X is between 0 and 22
     network_block: []const u8,
     /// Network used to access vCenter Server and NSX-T Manager
     management_network: ?[]const u8 = null,
@@ -1106,10 +1106,10 @@ pub const PrivateCloudProperties = struct {
     /// Array of cloud link IDs from other clouds that connect to this one
     external_cloud_links: ?[]const []const u8 = null,
     /// A secondary expressRoute circuit from a separate AZ. Only present in a
-/// stretched private cloud
+    /// stretched private cloud
     secondary_circuit: ?Circuit = null,
     /// Flag to indicate whether the private cloud has the quota for provisioned NSX
-/// Public IP count raised from 64 to 1024
+    /// Public IP count raised from 64 to 1024
     nsx_public_ip_quota_raised: ?enums.NsxPublicIpQuotaRaisedEnum = null,
     /// Azure resource ID of the virtual network
     virtual_network_id: ?[]const u8 = null,
@@ -1156,10 +1156,10 @@ pub const IdentitySource = struct {
     /// Protect LDAP communication using SSL certificate (LDAPS)
     ssl: ?enums.SslEnum = null,
     /// The ID of an Active Directory user with a minimum of read-only access to Base
-/// DN for users and group
+    /// DN for users and group
     username: ?[]const u8 = null,
     /// The password of the Active Directory user with a minimum of read-only access to
-/// Base DN for users and groups.
+    /// Base DN for users and groups.
     password: ?[]const u8 = null,
 
     pub const serde = .{ .rename_all = .camel_case };
@@ -1306,9 +1306,9 @@ pub const PrivateCloudUpdateProperties = struct {
     /// Customer managed key encryption, can be enabled or disabled
     encryption: ?Encryption = null,
     /// Array of additional networks noncontiguous with networkBlock. Networks must be
-/// unique and non-overlapping across VNet in your subscription, on-premise, and
-/// this privateCloud networkBlock attribute. Make sure the CIDR format conforms to
-/// (A.B.C.D/X).
+    /// unique and non-overlapping across VNet in your subscription, on-premise, and
+    /// this privateCloud networkBlock attribute. Make sure the CIDR format conforms to
+    /// (A.B.C.D/X).
     extended_network_blocks: ?[]const []const u8 = null,
     /// The type of DNS zone to use.
     dns_zone_type: ?enums.DnsZoneType = null,
@@ -1433,14 +1433,14 @@ pub const ScriptCmdletProperties = struct {
 /// An parameter that the script will accept
 pub const ScriptParameter = struct {
     /// The type of parameter the script is expecting. psCredential is a
-/// PSCredentialObject
+    /// PSCredentialObject
     type: ?enums.ScriptParameterTypes = null,
     /// The parameter name that the script will expect a parameter value for
     name: ?[]const u8 = null,
     /// User friendly description of the parameter
     description: ?[]const u8 = null,
     /// Should this parameter be visible to arm and passed in the parameters argument
-/// when executing
+    /// when executing
     visibility: ?enums.VisibilityParameterEnum = null,
     /// Is this parameter required or optional
     optional: ?enums.OptionalParamEnum = null,
@@ -1475,10 +1475,10 @@ pub const ScriptExecutionProperties = struct {
     /// Parameters the script will accept
     parameters: ?[]const ScriptExecutionParameter = null,
     /// Parameters that will be hidden/not visible to ARM, such as passwords and
-/// credentials
+    /// credentials
     hidden_parameters: ?[]const ScriptExecutionParameter = null,
     /// Error message if the script was able to run, but if the script itself had
-/// errors or powershell threw an exception
+    /// errors or powershell threw an exception
     failure_reason: ?[]const u8 = null,
     /// Time limit for execution
     timeout: []const u8,
@@ -1549,7 +1549,6 @@ pub const PSCredentialExecutionParameter = struct {
 };
 
 pub const ScriptExecutionPropertiesNamedOutput = struct {
-
     pub const serde = .{ .rename_all = .camel_case };
 };
 
@@ -2123,4 +2122,3 @@ pub const WorkloadNetworkVMGroupProperties = struct {
 
     pub const serde = .{ .rename_all = .camel_case };
 };
-

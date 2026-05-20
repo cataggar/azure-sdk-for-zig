@@ -31,10 +31,12 @@ pub const EmitOptions = struct {
     /// build.zig.zon references `azure_core` by a local `path =` entry
     /// pointing relative to the worktree root.
     azure_core_commit: ?[]const u8 = null,
-    /// Reserved for future use; running `zig fmt` is currently the
-    /// caller's responsibility because the Zig 0.16 process API is in
-    /// flux. The wrapper script in `codegen/cli/scripts/run.sh` runs
-    /// `zig fmt` on `<out_dir>` after the wasm emitter exits.
+    /// Run the in-process formatter (`std.zig.Ast.parse` +
+    /// `renderAlloc`) on every `.zig` and `.zon` file before writing
+    /// it out. Set to `false` to skip — useful when debugging emitter
+    /// output that the parser rejects, since unparseable text would
+    /// otherwise be written through as-is anyway (we fall back on
+    /// parse failure to keep build errors visible).
     run_zig_fmt: bool = true,
 };
 
@@ -52,48 +54,83 @@ pub fn emit(
     {
         const s = try renderRoot(allocator, model);
         defer allocator.free(s);
-        try writeFile(io, out_dir, "src/root.zig", s);
+        try writeFile(allocator, io, out_dir, "src/root.zig", s, opts.run_zig_fmt);
     }
     {
         const s = try renderClients(allocator, model);
         defer allocator.free(s);
-        try writeFile(io, out_dir, "src/clients.zig", s);
+        try writeFile(allocator, io, out_dir, "src/clients.zig", s, opts.run_zig_fmt);
     }
     {
         const s = try renderModels(allocator, model);
         defer allocator.free(s);
-        try writeFile(io, out_dir, "src/models.zig", s);
+        try writeFile(allocator, io, out_dir, "src/models.zig", s, opts.run_zig_fmt);
     }
     {
         const s = try renderEnums(allocator, model);
         defer allocator.free(s);
-        try writeFile(io, out_dir, "src/enums.zig", s);
+        try writeFile(allocator, io, out_dir, "src/enums.zig", s, opts.run_zig_fmt);
     }
     {
         const s = try renderBuildZig(allocator, pkg_name);
         defer allocator.free(s);
-        try writeFile(io, out_dir, "build.zig", s);
+        try writeFile(allocator, io, out_dir, "build.zig", s, opts.run_zig_fmt);
     }
     {
         const s = try renderBuildZigZon(allocator, pkg_name, model.package_version, opts.azure_core_commit);
         defer allocator.free(s);
-        try writeFile(io, out_dir, "build.zig.zon", s);
+        try writeFile(allocator, io, out_dir, "build.zig.zon", s, opts.run_zig_fmt);
     }
     {
         const s = try renderReadme(allocator, pkg_name, model);
         defer allocator.free(s);
-        try writeFile(io, out_dir, "README.md", s);
+        try writeFile(allocator, io, out_dir, "README.md", s, opts.run_zig_fmt);
     }
-    try writeFile(io, out_dir, ".gitignore", "zig-cache/\nzig-out/\n.zig-cache/\n");
+    try writeFile(allocator, io, out_dir, ".gitignore", "zig-cache/\nzig-out/\n.zig-cache/\n", opts.run_zig_fmt);
 }
 
+/// Write `content` to `<out_dir>/<sub_path>`. When `fmt_enabled` is true
+/// and the path looks like Zig (`.zig`) or ZON (`.zig.zon`), run the
+/// in-process formatter (std.zig.Ast.parse + renderAlloc) first.
+/// Parse failures fall back to writing the raw content so the operator
+/// can diagnose them via the next `zig build` instead of having them
+/// swallowed silently.
 fn writeFile(
+    allocator: std.mem.Allocator,
     io: std.Io,
     out_dir: std.Io.Dir,
     sub_path: []const u8,
     content: []const u8,
+    fmt_enabled: bool,
 ) !void {
+    if (fmt_enabled) {
+        const mode: ?std.zig.Ast.Mode =
+            if (std.mem.endsWith(u8, sub_path, ".zon")) .zon else if (std.mem.endsWith(u8, sub_path, ".zig")) .zig else null;
+        if (mode) |m| {
+            if (try maybeFormat(allocator, content, m)) |formatted| {
+                defer allocator.free(formatted);
+                try out_dir.writeFile(io, .{ .sub_path = sub_path, .data = formatted });
+                return;
+            }
+        }
+    }
     try out_dir.writeFile(io, .{ .sub_path = sub_path, .data = content });
+}
+
+/// Parse + re-render `source` with `std.zig.Ast`. Returns null when the
+/// parser reports any error — callers should fall back to writing the
+/// raw source so build failures stay visible.
+fn maybeFormat(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    mode: std.zig.Ast.Mode,
+) !?[]u8 {
+    const zsource = try allocator.dupeZ(u8, source);
+    defer allocator.free(zsource);
+    var tree = try std.zig.Ast.parse(allocator, zsource, mode);
+    defer tree.deinit(allocator);
+    if (tree.errors.len != 0) return null;
+    return try tree.renderAlloc(allocator);
 }
 
 // ─── root.zig ─────────────────────────────────────────────────────────
