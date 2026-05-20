@@ -15,8 +15,8 @@
 //!
 //! Architecture summary:
 //!   * `main` parses argv (positional: spec-dir, out-dir; flag:
-//!     --package-name, --package-version, --azure-core-commit,
-//!     --no-fmt).
+//!     --package-name, --package-version, --display-name,
+//!     --azure-core-commit, --no-fmt).
 //!   * Calls `tcgc.compile(/spec, emitter-options-json)` via the
 //!     hand-rolled canonical-ABI binding in `tcgc_import.zig`.
 //!   * Parses the JSON code model via `codemodel.zig` (std.json).
@@ -44,6 +44,7 @@ const usage =
     \\Usage:
     \\  codegen-cli <spec-dir> <out-dir>
     \\              [--package-name <name>] [--package-version <ver>]
+    \\              [--display-name <label>]
     \\              [--azure-core-commit <sha>] [--no-fmt]
     \\
 ;
@@ -60,6 +61,7 @@ pub fn main(init: std.process.Init) !u8 {
     var out_dir: ?[]const u8 = null;
     var package_name: ?[]const u8 = null;
     var package_version: ?[]const u8 = null;
+    var display_name: ?[]const u8 = null;
     var azure_core_commit: ?[]const u8 = null;
     var run_fmt = true;
 
@@ -68,6 +70,8 @@ pub fn main(init: std.process.Init) !u8 {
             package_name = it.next() orelse return die("--package-name requires a value");
         } else if (std.mem.eql(u8, a, "--package-version")) {
             package_version = it.next() orelse return die("--package-version requires a value");
+        } else if (std.mem.eql(u8, a, "--display-name")) {
+            display_name = it.next() orelse return die("--display-name requires a value");
         } else if (std.mem.eql(u8, a, "--azure-core-commit")) {
             azure_core_commit = it.next() orelse return die("--azure-core-commit requires a value");
         } else if (std.mem.eql(u8, a, "--no-fmt")) {
@@ -121,6 +125,10 @@ pub fn main(init: std.process.Init) !u8 {
     var ver_buf: ?[]u8 = null;
     defer if (ver_buf) |b| allocator.free(b);
     if (package_version) |v| ver_buf = try allocator.dupe(u8, v);
+
+    var display_buf: ?[]u8 = null;
+    defer if (display_buf) |b| allocator.free(b);
+    if (display_name) |d| display_buf = try allocator.dupe(u8, d);
 
     var commit_buf: ?[]u8 = null;
     defer if (commit_buf) |b| allocator.free(b);
@@ -191,6 +199,7 @@ pub fn main(init: std.process.Init) !u8 {
 
     try emit.emit(allocator, io, out_dir_handle, parsed.value, .{
         .package_name = pkg_buf,
+        .display_name = display_buf,
         .azure_core_commit = commit_buf,
         .run_zig_fmt = run_fmt,
     });

@@ -90,10 +90,25 @@ spec = None
 js = zig = None
 out = []
 
+def display_from_js(js_value: str, zig_value: str) -> str:
+    """Strip a leading @scope/ from `js` to get the dash-cased label
+    (e.g. `@azure/arm-avs` → `arm-avs`). Falls back to the snake-cased
+    `zig` value when `js` is empty (data-plane Foundry packages, etc.)
+    so the emitter still gets a non-empty display name.
+    """
+    if not js_value:
+        return zig_value
+    if js_value.startswith("@"):
+        slash = js_value.find("/")
+        if slash >= 0:
+            return js_value[slash + 1:]
+    return js_value
+
 def flush():
     if spec and zig:
         spec_dir = os.path.dirname(spec)
-        out.append(f"{zig}\t{spec_dir}")
+        display = display_from_js(js or "", zig)
+        out.append(f"{zig}\t{spec_dir}\t{display}")
 
 for raw in text.splitlines():
     line = raw.rstrip()
@@ -130,12 +145,31 @@ lookup_spec_dir() {
     printf '%s' "$entry"
 }
 
+lookup_display_name() {
+    local pkg="$1"
+    local entry
+    entry="$(printf '%s\n' "$SPEC_INDEX" | awk -F'\t' -v p="$pkg" '$1==p {print $3; exit}')"
+    if [[ -z "$entry" ]]; then
+        # Shouldn't happen if lookup_spec_dir already succeeded, but be
+        # defensive: fall back to the snake-cased package name.
+        printf '%s' "$pkg"
+        return
+    fi
+    printf '%s' "$entry"
+}
+
 # ── per-file sync policy ───────────────────────────────────────────
 #
-# `src/models.zig` is the only file the emitter currently owns end-
-# to-end across both ARM and data-plane packages today. Other files
-# get the SKIP-and-warn treatment unless --force is passed.
-SAFE_FILES=("src/models.zig")
+# `src/models.zig`, `src/root.zig`, and `README.md` are emitter-owned
+# end-to-end today: models.zig because the emitter is the source of
+# truth for the resource/enum shapes, and root.zig + README.md because
+# the emitter honors the dash-cased `--display-name` we derive from
+# `tspconfigs.yaml#js` and writes the same label operators used to set
+# by hand. Other emitter-touched files still drift from operator
+# tweaks (sub-clients in clients.zig, dash-cased addModule keys in
+# build.zig.zon, .env in .gitignore, …) so they get the SKIP-and-warn
+# treatment unless --force is passed.
+SAFE_FILES=("src/models.zig" "src/root.zig" "README.md")
 MANAGED_FILES=(
     "src/root.zig"
     "src/clients.zig"
@@ -185,9 +219,12 @@ for pkg in "${PKGS[@]}"; do
     out_tmp="$TMPROOT/$pkg"
     mkdir -p "$out_tmp"
 
+    display="$(lookup_display_name "$pkg")"
+
     echo "  spec: $spec_rel"
+    echo "  display: $display"
     echo "  regen: $out_tmp"
-    if ! "$RUN_SH" "$spec_dir" "$out_tmp" --package-name "$pkg" >"$TMPROOT/$pkg.log" 2>&1; then
+    if ! "$RUN_SH" "$spec_dir" "$out_tmp" --package-name "$pkg" --display-name "$display" >"$TMPROOT/$pkg.log" 2>&1; then
         echo "  ERROR: emitter failed; see $TMPROOT/$pkg.log"
         tail -20 "$TMPROOT/$pkg.log" | sed 's/^/    /'
         EXIT_CODE=1
