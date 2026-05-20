@@ -160,19 +160,20 @@ lookup_display_name() {
 
 # ── per-file sync policy ───────────────────────────────────────────
 #
-# `src/models.zig`, `src/root.zig`, and `README.md` are emitter-owned
-# end-to-end today: models.zig because the emitter is the source of
-# truth for the resource/enum shapes, and root.zig + README.md because
-# the emitter honors the dash-cased `--display-name` we derive from
-# `tspconfigs.yaml#js` and writes the same label operators used to set
-# by hand. Other emitter-touched files still drift from operator
-# tweaks (sub-clients in clients.zig, dash-cased addModule keys in
-# build.zig.zon, .env in .gitignore, …) so they get the SKIP-and-warn
-# treatment unless --force is passed.
-SAFE_FILES=("src/models.zig" "src/root.zig" "README.md")
+# `src/models.zig`, `src/root.zig`, `src/clients.zig`, `src/enums.zig`,
+# and `README.md` are emitter-owned end-to-end today: the emitter is the
+# source of truth for the resource/enum shapes and the client tree
+# (root + sub-clients + operation bodies), and it honors the dash-cased
+# `--display-name` we derive from `tspconfigs.yaml#js` so root.zig and
+# README.md no longer drift from operator tweaks. Other emitter-touched
+# files (`build.zig`, `build.zig.zon`, `.gitignore`) still drift
+# (operator-managed module wiring, .env in .gitignore, …) so they get
+# the SKIP-and-warn treatment unless --force is passed.
+SAFE_FILES=("src/models.zig" "src/root.zig" "src/clients.zig" "src/enums.zig" "README.md")
 MANAGED_FILES=(
     "src/root.zig"
     "src/clients.zig"
+    "src/clients_test.zig"
     "src/enums.zig"
     "src/models.zig"
     "build.zig"
@@ -240,7 +241,11 @@ for pkg in "${PKGS[@]}"; do
         if [[ -f "$dst" ]] && cmp -s "$src" "$dst"; then
             continue
         fi
-        if [[ "$FORCE" -eq 1 ]] || is_safe "$f"; then
+        # Seed missing files unconditionally so brand-new operator-owned
+        # files (e.g. `src/clients_test.zig`) don't need `--force` on
+        # first regen. SAFE_FILES are still overwritten when they
+        # differ. Everything else gets the SKIP-and-warn treatment.
+        if [[ ! -f "$dst" ]] || [[ "$FORCE" -eq 1 ]] || is_safe "$f"; then
             mkdir -p "$(dirname "$dst")"
             cp "$src" "$dst"
             echo "  COPY $f"

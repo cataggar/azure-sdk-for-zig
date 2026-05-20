@@ -256,6 +256,59 @@ pub const Poller = struct {
     }
 };
 
+// ─────────────────── Typed Poller wrapper ──────────────────
+
+/// Typed convenience wrapper over `Poller`. Used by generated ARM
+/// clients so callers can `await` an LRO and receive the parsed
+/// resource type instead of having to deserialize `PollResult.raw_body`
+/// themselves.
+///
+/// Specialize `T = void` for operations with no body (e.g. ARM DELETE
+/// LROs) — `pollUntilDone` then returns `void` without attempting to
+/// parse the response body.
+pub fn TypedPoller(comptime T: type) type {
+    return struct {
+        inner: Poller,
+
+        const Self = @This();
+
+        pub fn init(
+            allocator: std.mem.Allocator,
+            pipeline: pipeline_mod.HttpPipeline,
+            initial_response: http.Response,
+            original_url: ?[]const u8,
+            options: PollerOptions,
+        ) !Self {
+            return .{ .inner = try Poller.init(allocator, pipeline, initial_response, original_url, options) };
+        }
+
+        /// Single poll step; returns the new status without driving to
+        /// completion. Forwards to the embedded `Poller`.
+        pub fn poll(self: *Self) !OperationStatus {
+            return self.inner.poll();
+        }
+
+        /// Current cached status (does not perform I/O).
+        pub fn getStatus(self: *const Self) OperationStatus {
+            return self.inner.getStatus();
+        }
+
+        /// Drive the LRO to a terminal state and return the parsed `T`.
+        /// `allocator` owns the returned value's heap data; the
+        /// poll-result body is released before this method returns.
+        pub fn pollUntilDone(self: *Self, allocator: std.mem.Allocator) !T {
+            var raw = try self.inner.pollUntilDone();
+            defer raw.deinit();
+            if (T == void) return;
+            return try serde.json.fromSlice(T, allocator, raw.raw_body);
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.inner.deinit();
+        }
+    };
+}
+
 // ─────────────────── Strategy Detection ────────────────────
 
 fn detectStrategy(response: http.Response) !PollingStrategy {

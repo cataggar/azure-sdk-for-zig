@@ -23,12 +23,10 @@
 
 import {
   compile as tspCompile,
-  createTypeSpecLibrary,
-  paramMessage,
   resolvePath,
 } from "@typespec/compiler";
-import { createSdkContext } from "@azure-tools/typespec-client-generator-core";
 import { virtualFsSources, jsImports } from "../dist/wasi-entry.generated.js";
+import { $lib, $onEmit, LIB_NAME, __slot } from "./index.js";
 
 // ─────────────────────────────────────────────────────────────────
 //
@@ -47,38 +45,17 @@ import { virtualFsSources, jsImports } from "../dist/wasi-entry.generated.js";
 // FIRST (populating both maps), THEN this file runs (consuming them).
 // To make that work the entry file uses static imports rather than
 // re-imports through the package main.
+//
+// All TypeSpec→JSON adaptation logic — `$lib`, `$onEmit`, every
+// `adapt*` helper — lives in `./index.js`. This file is purely the
+// WASI host that registers `index.js` as the emitter and surfaces
+// the resulting JSON model. Keep adaptation OUT of this file so the
+// CLI shim (`node src/index.js …`) and the in-component path stay
+// byte-for-byte identical.
 
-// ── TypeSpec library registration ──────────────────────────────────
-
-const LIB_NAME = "@azure-tools/typespec-zig";
-
-export const $lib = createTypeSpecLibrary({
-  name: LIB_NAME,
-  diagnostics: {
-    "internal-error": {
-      severity: "error",
-      messages: {
-        default: paramMessage`typespec-zig encountered an internal error: ${"message"}`,
-      },
-    },
-  },
-  emitter: {
-    options: {
-      type: "object",
-      additionalProperties: true,
-      properties: {},
-      required: [],
-    },
-  },
-});
-
-/* eslint-disable-next-line @typescript-eslint/unbound-method */
-export const { reportDiagnostic } = $lib;
+export { $lib };
 
 // ── WasiHost CompilerHost implementation ───────────────────────────
-
-// Captured by $onEmit, returned by compile(). One per `compile()` call.
-const __slot = { json: null, error: null };
 
 function makeHost() {
   // In-memory layer combining baked-in stdlib (`virtualFsSources`)
@@ -186,38 +163,6 @@ function makeFsError(p, code) {
   return err;
 }
 
-// ── TypeSpec emitter — captures the SdkPackage as JSON ─────────────
-
-export async function $onEmit(context) {
-  try {
-    const sdkContext = await createSdkContext(context, LIB_NAME, {
-      disableUsageAccessPropagationToBase: true,
-    });
-    context.program.reportDiagnostics(sdkContext.diagnostics);
-    const errors = sdkContext.diagnostics.filter((d) => d.severity === "error");
-    if (errors.length > 0) {
-      throw new Error(
-        "TCGC reported errors:\n" +
-          errors.map((d) => `  ${d.code}: ${d.message}`).join("\n"),
-      );
-    }
-    const opts = context.options ?? {};
-    const codeModel = {
-      package_name: opts["package-name"] || "azure_generated",
-      package_version: opts["package-version"] || "0.1.0",
-      target_kind: opts["target-kind"] || "client",
-      service_kind: detectServiceKind(sdkContext),
-      clients: sdkContext.sdkPackage.clients.map(adaptClient),
-      models: sdkContext.sdkPackage.models.map(adaptModel),
-      enums: sdkContext.sdkPackage.enums.map(adaptEnum),
-      unions: [],
-    };
-    __slot.json = JSON.stringify(codeModel);
-  } catch (err) {
-    __slot.error = err instanceof Error ? err : new Error(String(err));
-  }
-}
-
 // ── WIT export: tcgc.compile ───────────────────────────────────────
 
 export const tcgc = {
@@ -321,253 +266,6 @@ async function resolveMainFile(host, projectPath) {
   return resolvePath(projectPath);
 }
 
-// ── Adapters — keep in sync with src/index.js (Node-bridge version) ─
-
-function detectServiceKind(sdkContext) {
-  if (sdkContext.arm === true) return "azure-arm";
-  for (const c of sdkContext.sdkPackage.clients) {
-    for (const p of c.clientInitialization?.parameters ?? []) {
-      if (p.name === "subscriptionId") return "azure-arm";
-    }
-  }
-  return "azure-dataplane";
-}
-
-function adaptClient(client) {
-  return {
-    name: client.name,
-    namespace: client.namespace ?? null,
-    doc: client.doc ?? null,
-    parameters: adaptClientParams(client.clientInitialization),
-    endpoint: adaptClientEndpoint(client.clientInitialization),
-    methods: (client.methods ?? [])
-      .filter((m) => m.kind !== "clientaccessor")
-      .map(adaptMethod),
-    sub_clients: (client.children ?? []).map((child) => ({
-      name: toSnakeCase(child.name),
-      accessor_name: `get${child.name}`,
-      client_name: child.name,
-    })),
-    credential_scopes: defaultCredentialScopes(client),
-  };
-}
-
-function adaptClientEndpoint(init) {
-  const ep = init?.parameters?.find((p) => p.kind === "endpoint");
-  if (!ep) return { name: "endpoint", default_value: null };
-  return {
-    name: toSnakeCase(ep.name),
-    default_value:
-      ep.type?.templateArguments?.[0]?.defaultValue ??
-      ep.clientDefaultValue ??
-      null,
-  };
-}
-
-function adaptClientParams(init) {
-  const params = [];
-  for (const p of init?.parameters ?? []) {
-    if (p.kind === "credential" || p.kind === "endpoint") continue;
-    if (p.isApiVersionParam) continue;
-    params.push({
-      name: toSnakeCase(p.name),
-      doc: p.doc ?? null,
-      param_type: adaptType(p.type),
-      optional: !!p.optional,
-    });
-  }
-  return params;
-}
-
-function defaultCredentialScopes(client) {
-  const isArm = (client.clientInitialization?.parameters ?? []).some(
-    (p) => p.name === "subscriptionId",
-  );
-  return isArm
-    ? ["https://management.azure.com/.default"]
-    : ["{endpoint}/.default"];
-}
-
-function adaptMethod(method) {
-  const op = method.operation ?? {};
-  return {
-    name: toSnakeCase(method.name),
-    doc: method.doc ?? null,
-    http_method: (op.verb ?? "get").toLowerCase(),
-    path: op.path ?? "",
-    parameters: (method.parameters ?? []).map(adaptMethodParameter),
-    response: { response_type: method.response?.type ? adaptType(method.response.type) : null, status_codes: [] },
-    paging: null,
-    long_running: null,
-    kind: method.kind ?? "basic",
-  };
-}
-
-function adaptMethodParameter(p) {
-  return {
-    name: toSnakeCase(p.name),
-    serialized_name: p.serializedName ?? p.name,
-    location: paramLocation(p),
-    doc: p.doc ?? null,
-    param_type: adaptType(p.type),
-    optional: !!p.optional,
-  };
-}
-
-function paramLocation(p) {
-  switch (p.kind) {
-    case "path": return "path";
-    case "query": return "query";
-    case "header": return "header";
-    case "cookie": return "cookie";
-    case "body": return "body";
-    case "endpoint": return "endpoint";
-    case "credential": return "credential";
-    default: return "method";
-  }
-}
-
-// Cross-language-definition-id of each ARM base type. TCGC stamps these
-// onto `SdkModelType.crossLanguageDefinitionId` regardless of how the
-// spec aliases the type, so matching here is robust against namespace
-// re-imports.
-const ARM_RESOURCE_KIND_BY_XLDID = {
-  "Azure.ResourceManager.CommonTypes.ProxyResource": "proxy",
-  "Azure.ResourceManager.CommonTypes.Resource": "proxy",
-  "Azure.ResourceManager.CommonTypes.TrackedResource": "tracked",
-  "Azure.ResourceManager.CommonTypes.ExtensionResource": "extension",
-  // Older / alternate aliases used by some TCGC versions.
-  "Azure.ResourceManager.ProxyResource": "proxy",
-  "Azure.ResourceManager.Resource": "proxy",
-  "Azure.ResourceManager.TrackedResource": "tracked",
-  "Azure.ResourceManager.ExtensionResource": "extension",
-};
-
-// Fallback table keyed on the topmost base model's `name`, used when
-// `crossLanguageDefinitionId` is unset or unrecognized.
-const ARM_RESOURCE_KIND_BY_NAME = {
-  ProxyResource: "proxy",
-  Resource: "proxy",
-  TrackedResource: "tracked",
-  ExtensionResource: "extension",
-};
-
-/**
- * Walk the `baseModel` chain root-to-leaf and return the concatenated
- * list of (own + inherited) properties. Inherited properties come
- * first; the leaf's own properties last. Within that order we de-dup
- * by `serializedName` so a property re-declared on the leaf wins (its
- * doc / optionality / type override the inherited one).
- */
-function collectInheritedProperties(model) {
-  const chain = [];
-  for (let cur = model; cur; cur = cur.baseModel) chain.unshift(cur);
-
-  const byKey = new Map();
-  for (const m of chain) {
-    for (const p of m.properties ?? []) {
-      const key = p.serializedName ?? p.name;
-      byKey.set(key, p);
-    }
-  }
-  return Array.from(byKey.values());
-}
-
-/**
- * Detect which ARM base type (if any) sits at the root of `model`'s
- * `baseModel` chain. Returns `"proxy"` / `"tracked"` / `"extension"`,
- * or `null` for non-ARM types.
- */
-function detectArmResourceKind(model) {
-  let topmost = model;
-  for (let cur = model; cur; cur = cur.baseModel) {
-    const xldid = cur.crossLanguageDefinitionId;
-    if (xldid && Object.prototype.hasOwnProperty.call(ARM_RESOURCE_KIND_BY_XLDID, xldid)) {
-      return ARM_RESOURCE_KIND_BY_XLDID[xldid];
-    }
-    topmost = cur;
-  }
-  // Fallback: classify by the topmost base model's name when xldid is
-  // unrecognized. Guard with a namespace prefix to avoid catching
-  // unrelated "Resource" / "TrackedResource" types in non-ARM specs.
-  const ns = topmost?.namespace ?? topmost?.clientNamespace ?? "";
-  if (
-    Object.prototype.hasOwnProperty.call(ARM_RESOURCE_KIND_BY_NAME, topmost?.name) &&
-    typeof ns === "string" &&
-    ns.startsWith("Azure.ResourceManager")
-  ) {
-    return ARM_RESOURCE_KIND_BY_NAME[topmost.name];
-  }
-  return null;
-}
-
-function adaptModel(model) {
-  const props = collectInheritedProperties(model);
-  return {
-    name: model.name,
-    namespace: model.namespace ?? null,
-    doc: model.doc ?? null,
-    fields: props.map((p) => ({
-      name: toSnakeCase(p.name),
-      serialized_name: p.serializedName ?? p.name,
-      doc: p.doc ?? null,
-      field_type: adaptType(p.type),
-      optional: !!p.optional,
-      read_only: !!p.readOnly,
-      flatten: !!p.flatten,
-    })),
-    parents: model.baseModel ? [model.baseModel.name] : [],
-    discriminator: model.discriminatorProperty?.name ?? null,
-    is_input: !!(model.usage & 1),
-    is_output: !!(model.usage & 2),
-    arm_resource_kind: detectArmResourceKind(model),
-  };
-}
-
-function adaptEnum(en) {
-  return {
-    name: en.name,
-    namespace: en.namespace ?? null,
-    doc: en.doc ?? null,
-    values: (en.values ?? []).map((v) => ({
-      name: v.name,
-      value: v.value,
-      doc: v.doc ?? null,
-    })),
-    value_type: en.valueType?.kind ?? "string",
-    extensible: en.isFixed === false,
-  };
-}
-
-function adaptType(type) {
-  if (!type) return { kind: "Scalar", value: "unknown" };
-  switch (type.kind) {
-    case "string": return { kind: "Scalar", value: "string" };
-    case "boolean": return { kind: "Scalar", value: "bool" };
-    case "bytes": return { kind: "Scalar", value: "bytes" };
-    case "url": return { kind: "Scalar", value: "url" };
-    case "utcDateTime":
-    case "offsetDateTime":
-      return { kind: "Scalar", value: "datetime" };
-    case "duration": return { kind: "Scalar", value: "duration" };
-    case "model": return { kind: "Model", value: type.name };
-    case "enum": return { kind: "Enum", value: type.name };
-    case "union": return { kind: "Union", value: type.name ?? "anonymous" };
-    case "array": return { kind: "Array", value: adaptType(type.valueType) };
-    case "dict": return { kind: "Map", value: adaptType(type.valueType) };
-    case "nullable": return { kind: "Option", value: adaptType(type.type) };
-    case "constant": return { kind: "Constant", value: String(type.value) };
-    default: return { kind: "Scalar", value: type.kind ?? "unknown" };
-  }
-}
-
-function toSnakeCase(str) {
-  return String(str)
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
-    .replace(/([a-z\d])([A-Z])/g, "$1_$2")
-    .toLowerCase()
-    .replace(/^_/, "");
-}
 
 // Top-level shim so `compile` is also reachable as a named export of
 // the bundle root (jco's "extract exports" stage looks for it).
