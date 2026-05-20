@@ -25,6 +25,16 @@ pub const EmitOptions = struct {
     /// Optional override of the package name. Defaults to
     /// `code_model.package_name`.
     package_name: ?[]const u8 = null,
+    /// Optional human-readable label used in `README.md`'s H1 and the
+    /// top-of-file doc comment in `src/root.zig`. Defaults to whatever
+    /// `package_name` resolves to.
+    ///
+    /// In practice operators set this to the dash-cased package label
+    /// (e.g. `arm-avs`, `keyvault-secrets`) so the docs read naturally
+    /// while Zig module identifiers stay snake_case. Source: stripped
+    /// from the `js:` field in `codegen/tspconfigs.yaml`
+    /// (e.g. `@azure/arm-avs` → `arm-avs`).
+    display_name: ?[]const u8 = null,
     /// Commit SHA of the `azure-sdk-for-zig` main branch that the
     /// generated `build.zig.zon` should pin `azure_core` to. May be
     /// null during local development; in that case the generated
@@ -50,9 +60,10 @@ pub fn emit(
     try out_dir.createDirPath(io, "src");
 
     const pkg_name = opts.package_name orelse model.package_name;
+    const display_name = opts.display_name orelse pkg_name;
 
     {
-        const s = try renderRoot(allocator, model);
+        const s = try renderRoot(allocator, model, display_name);
         defer allocator.free(s);
         try writeFile(allocator, io, out_dir, "src/root.zig", s, opts.run_zig_fmt);
     }
@@ -82,7 +93,7 @@ pub fn emit(
         try writeFile(allocator, io, out_dir, "build.zig.zon", s, opts.run_zig_fmt);
     }
     {
-        const s = try renderReadme(allocator, pkg_name, model);
+        const s = try renderReadme(allocator, display_name, model);
         defer allocator.free(s);
         try writeFile(allocator, io, out_dir, "README.md", s, opts.run_zig_fmt);
     }
@@ -135,7 +146,7 @@ fn maybeFormat(
 
 // ─── root.zig ─────────────────────────────────────────────────────────
 
-fn renderRoot(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
+fn renderRoot(allocator: std.mem.Allocator, model: cm.CodeModel, display_name: []const u8) ![]u8 {
     var aw: std.Io.Writer.Allocating = .init(allocator);
     errdefer aw.deinit();
     const w = &aw.writer;
@@ -149,7 +160,7 @@ fn renderRoot(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
         \\pub const models = @import("models.zig");
         \\pub const enums = @import("enums.zig");
         \\
-    , .{ .name = model.package_name });
+    , .{ .name = display_name });
 
     for (model.clients) |c| {
         try w.print("pub const {s} = clients.{s};\n", .{ c.name, c.name });
@@ -531,7 +542,7 @@ fn computeFingerprint(pkg_name: []const u8) u64 {
     return (@as(u64, crc) << 32) | @as(u32, @truncate(wy));
 }
 
-fn renderReadme(allocator: std.mem.Allocator, pkg_name: []const u8, model: cm.CodeModel) ![]u8 {
+fn renderReadme(allocator: std.mem.Allocator, display_name: []const u8, model: cm.CodeModel) ![]u8 {
     var aw: std.Io.Writer.Allocating = .init(allocator);
     errdefer aw.deinit();
     const w = &aw.writer;
@@ -547,7 +558,7 @@ fn renderReadme(allocator: std.mem.Allocator, pkg_name: []const u8, model: cm.Co
         \\
         \\## Clients
         \\
-    , .{ .name = pkg_name });
+    , .{ .name = display_name });
     for (model.clients) |c| {
         try w.print("- `{s}`\n", .{c.name});
     }
@@ -583,4 +594,40 @@ fn renderFieldType(
         return try std.fmt.allocPrint(allocator, "?{s}", .{inner});
     }
     return try types.renderType(allocator, t, scope);
+}
+
+// ─── tests ────────────────────────────────────────────────────────────
+
+test "display_name surfaces in root.zig + README, not build.zig" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    const model: cm.CodeModel = .{
+        .package_name = "arm_avs",
+        .package_version = "0.1.0",
+        .target_kind = "arm",
+        .service_kind = "default",
+    };
+
+    const root = try renderRoot(alloc, model, "arm-avs");
+    defer alloc.free(root);
+    try testing.expect(std.mem.indexOf(u8, root, "//! arm-avs — generated") != null);
+    try testing.expect(std.mem.indexOf(u8, root, "arm_avs") == null);
+
+    const readme = try renderReadme(alloc, "arm-avs", model);
+    defer alloc.free(readme);
+    try testing.expect(std.mem.indexOf(u8, readme, "# arm-avs\n") != null);
+    try testing.expect(std.mem.indexOf(u8, readme, "arm_avs") == null);
+
+    // build.zig and build.zig.zon stay on the snake-cased package name —
+    // Zig module identifiers (and `addModule` keys) must be snake_case.
+    const build_zig = try renderBuildZig(alloc, "arm_avs");
+    defer alloc.free(build_zig);
+    try testing.expect(std.mem.indexOf(u8, build_zig, "\"arm_avs\"") != null);
+    try testing.expect(std.mem.indexOf(u8, build_zig, "arm-avs") == null);
+
+    const zon = try renderBuildZigZon(alloc, "arm_avs", "0.1.0", null);
+    defer alloc.free(zon);
+    try testing.expect(std.mem.indexOf(u8, zon, ".name = .arm_avs") != null);
+    try testing.expect(std.mem.indexOf(u8, zon, "arm-avs") == null);
 }
