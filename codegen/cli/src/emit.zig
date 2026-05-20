@@ -254,6 +254,10 @@ fn renderModels(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
                 try w.print("    {s}: {s},\n", .{ id, ty });
             }
         }
+        // serde.zig honors this on (de)serialization: ARM and most data-plane
+        // services emit camelCase JSON keys while Zig fields are snake_case.
+        // Per-field `wireName` overrides from TCGC still win when present.
+        try w.writeAll("\n    pub const serde = .{ .rename_all = .camel_case };\n");
         try w.writeAll("};\n\n");
     }
     return try aw.toOwnedSlice();

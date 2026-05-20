@@ -11,10 +11,15 @@
 //!   • All other ARM resource collections (Clusters, Datastores, …) are
 //!     omitted — add them when the emitter learns sub-client recursion.
 //!   • We use a local `PrivateCloudSummary` instead of `models.PrivateCloud`
-//!     because the emitter currently produces snake_case field names while
-//!     ARM emits camelCase. Every generated struct needs
-//!     `pub const serde = .{ .rename_all = .camel_case };` (see the
-//!     `PrivateCloudSummary.Properties` block below for the pattern).
+//!     because the emitter does not yet emit fields inherited from base
+//!     ARM resource types (`id`, `location` on `TrackedResource` /
+//!     `Resource`); the generated `models.PrivateCloud` only has the
+//!     leaf-type fields, so the example would have nothing to print for
+//!     location.
+//!     The camelCase rename hint that this shim demonstrates is now
+//!     emitter-supplied as of Phase E1: every generated struct in
+//!     `src/models.zig` ends in
+//!     `pub const serde = .{ .rename_all = .camel_case };`.
 
 const std = @import("std");
 const core = @import("azure_core");
