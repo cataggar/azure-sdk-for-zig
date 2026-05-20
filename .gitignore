@@ -374,3 +374,14 @@ CMakeUserPresets.json
 
 zig-out/
 zig-pkg/
+# codegen local-dev scratch output
+.tsp-generated/
+codegen/tcgc-component/.tsp-staging/
+codegen/tcgc-component/.typespec-output/
+codegen/tcgc-component/tcgc.wasm
+
+# Local environment files used by examples (never check these in)
+.env
+.env.local
+.env.*.local
+*.env

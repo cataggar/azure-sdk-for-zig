@@ -14,7 +14,7 @@ zig build run                 # run the example app
 
 ## Code Style
 
-- Run `zig fmt src/ build.zig` before committing — CI enforces this
+- Run `zig fmt sdk/ build.zig` before committing — CI enforces this
 - Follow Zig naming conventions: `camelCase` for functions/variables, `PascalCase` for types
 - Add `///` doc comments to all public declarations
 - Keep files focused: one client or module per file
@@ -22,7 +22,7 @@ zig build run                 # run the example app
 ## Module Structure
 
 ```
-src/azure/
+sdk/
 ├── core/               # Foundation: HTTP, pipeline, credentials, utilities
 │   ├── http/           # Transport, pipeline, policies, decompression
 │   ├── credentials/    # TokenCredential interface, caching
@@ -42,7 +42,7 @@ src/azure/
 
 ## Adding a New Service SDK
 
-1. Create `src/azure/<service>/<subservice>/root.zig`
+1. Create `sdk/<service>/<subservice>/root.zig`
 2. Import `azure_core` for HTTP pipeline, credentials, errors
 3. Define models (request/response structs)
 4. Implement the client struct with CRUD operations
@@ -94,6 +94,6 @@ pub const MyImpl = struct {
 
 1. Fork and create a feature branch
 2. Make changes, add tests
-3. Run `zig fmt src/ build.zig`
+3. Run `zig fmt sdk/ build.zig`
 4. Run `zig build test --summary all` — all tests must pass
 5. Submit PR against the `zig` branch

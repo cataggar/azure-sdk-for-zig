@@ -1,0 +1,452 @@
+{
+  "package_name": "azure_contoso_widgetmanager",
+  "package_version": "0.1.0",
+  "target_kind": "client",
+  "service_kind": "azure-dataplane",
+  "clients": [
+    {
+      "name": "WidgetManagerClient",
+      "namespace": "Azure.Contoso.WidgetManager",
+      "doc": null,
+      "parameters": [],
+      "endpoint": {
+        "name": "endpoint",
+        "default_value": null
+      },
+      "methods": [],
+      "sub_clients": [
+        {
+          "name": "widgets",
+          "accessor_name": "getWidgets",
+          "client_name": "Widgets"
+        }
+      ],
+      "credential_scopes": [
+        "{endpoint}/.default"
+      ]
+    }
+  ],
+  "models": [
+    {
+      "name": "WidgetSuite",
+      "namespace": "Azure.Contoso.WidgetManager",
+      "doc": "A widget.",
+      "fields": [
+        {
+          "name": "name",
+          "serialized_name": "name",
+          "doc": "The widget name.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false
+        },
+        {
+          "name": "manufacturer_id",
+          "serialized_name": "manufacturerId",
+          "doc": "The ID of the widget's manufacturer.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false
+        },
+        {
+          "name": "shared_model",
+          "serialized_name": "sharedModel",
+          "doc": "The faked shared model.",
+          "field_type": {
+            "kind": "Model",
+            "value": "FakedSharedModel"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": true
+    },
+    {
+      "name": "FakedSharedModel",
+      "namespace": "",
+      "doc": "Faked shared model",
+      "fields": [
+        {
+          "name": "tag",
+          "serialized_name": "tag",
+          "doc": "The tag.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false
+        },
+        {
+          "name": "created_at",
+          "serialized_name": "createdAt",
+          "doc": "The created date.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "datetime"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": true
+    },
+    {
+      "name": "ErrorResponse",
+      "namespace": "Azure.Core.Foundations",
+      "doc": "A response containing error details.",
+      "fields": [
+        {
+          "name": "error",
+          "serialized_name": "error",
+          "doc": "The error object.",
+          "field_type": {
+            "kind": "Model",
+            "value": "Error"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false
+        },
+        {
+          "name": "error_code",
+          "serialized_name": "errorCode",
+          "doc": "String error code indicating what went wrong.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false
+    },
+    {
+      "name": "Error",
+      "namespace": "Azure.Core.Foundations",
+      "doc": "The error object.",
+      "fields": [
+        {
+          "name": "code",
+          "serialized_name": "code",
+          "doc": "One of a server-defined set of error codes.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false
+        },
+        {
+          "name": "message",
+          "serialized_name": "message",
+          "doc": "A human-readable representation of the error.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false
+        },
+        {
+          "name": "target",
+          "serialized_name": "target",
+          "doc": "The target of the error.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false
+        },
+        {
+          "name": "details",
+          "serialized_name": "details",
+          "doc": "An array of details about specific errors that led to this reported error.",
+          "field_type": {
+            "kind": "Array",
+            "value": {
+              "kind": "Model",
+              "value": "Error"
+            }
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false
+        },
+        {
+          "name": "innererror",
+          "serialized_name": "innererror",
+          "doc": "An object containing more specific information than the current object about the error.",
+          "field_type": {
+            "kind": "Model",
+            "value": "InnerError"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false
+    },
+    {
+      "name": "InnerError",
+      "namespace": "Azure.Core.Foundations",
+      "doc": "An object containing more specific information about the error. As per Azure REST API guidelines - https://aka.ms/AzureRestApiGuidelines#handling-errors.",
+      "fields": [
+        {
+          "name": "code",
+          "serialized_name": "code",
+          "doc": "One of a server-defined set of error codes.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false
+        },
+        {
+          "name": "innererror",
+          "serialized_name": "innererror",
+          "doc": "Inner error.",
+          "field_type": {
+            "kind": "Model",
+            "value": "InnerError"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false
+    },
+    {
+      "name": "ResourceOperationStatusWidgetSuiteWidgetSuiteError",
+      "namespace": "Azure.Core",
+      "doc": "Provides status details for long running operations.",
+      "fields": [
+        {
+          "name": "id",
+          "serialized_name": "id",
+          "doc": "The unique ID of the operation.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false
+        },
+        {
+          "name": "status",
+          "serialized_name": "status",
+          "doc": "The status of the operation",
+          "field_type": {
+            "kind": "Enum",
+            "value": "OperationState"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false
+        },
+        {
+          "name": "error",
+          "serialized_name": "error",
+          "doc": "Error object that describes the error when status is \"Failed\".",
+          "field_type": {
+            "kind": "Model",
+            "value": "Error"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false
+        },
+        {
+          "name": "result",
+          "serialized_name": "result",
+          "doc": "The result of the operation.",
+          "field_type": {
+            "kind": "Model",
+            "value": "WidgetSuite"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false
+    },
+    {
+      "name": "OperationStatusError",
+      "namespace": "Azure.Core.Foundations",
+      "doc": "Provides status details for long running operations.",
+      "fields": [
+        {
+          "name": "id",
+          "serialized_name": "id",
+          "doc": "The unique ID of the operation.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false
+        },
+        {
+          "name": "status",
+          "serialized_name": "status",
+          "doc": "The status of the operation",
+          "field_type": {
+            "kind": "Enum",
+            "value": "OperationState"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false
+        },
+        {
+          "name": "error",
+          "serialized_name": "error",
+          "doc": "Error object that describes the error when status is \"Failed\".",
+          "field_type": {
+            "kind": "Model",
+            "value": "Error"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false
+    },
+    {
+      "name": "PagedWidgetSuite",
+      "namespace": "Azure.Core.Foundations",
+      "doc": "Paged collection of WidgetSuite items",
+      "fields": [
+        {
+          "name": "value",
+          "serialized_name": "value",
+          "doc": "The WidgetSuite items on this page",
+          "field_type": {
+            "kind": "Array",
+            "value": {
+              "kind": "Model",
+              "value": "WidgetSuite"
+            }
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false
+        },
+        {
+          "name": "next_link",
+          "serialized_name": "nextLink",
+          "doc": "The link to the next page of items",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "url"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false
+    }
+  ],
+  "enums": [
+    {
+      "name": "OperationState",
+      "namespace": "Azure.Core.Foundations",
+      "doc": "Enum describing allowed operation states.",
+      "values": [
+        {
+          "name": "NotStarted",
+          "value": "NotStarted",
+          "doc": "The operation has not started."
+        },
+        {
+          "name": "Running",
+          "value": "Running",
+          "doc": "The operation is in progress."
+        },
+        {
+          "name": "Succeeded",
+          "value": "Succeeded",
+          "doc": "The operation has completed successfully."
+        },
+        {
+          "name": "Failed",
+          "value": "Failed",
+          "doc": "The operation has failed."
+        },
+        {
+          "name": "Canceled",
+          "value": "Canceled",
+          "doc": "The operation has been canceled by the user."
+        }
+      ],
+      "value_type": "string",
+      "extensible": true
+    },
+    {
+      "name": "Versions",
+      "namespace": "Azure.Contoso.WidgetManager",
+      "doc": "Versions info.",
+      "values": [
+        {
+          "name": "v2022_12_01",
+          "value": "2022-12-01",
+          "doc": "The 2022-12-01 version."
+        }
+      ],
+      "value_type": "string",
+      "extensible": false
+    }
+  ],
+  "unions": []
+}

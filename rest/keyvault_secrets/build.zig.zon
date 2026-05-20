@@ -1,0 +1,19 @@
+.{
+    .name = .keyvault_secrets,
+    .version = "0.1.0",
+    .fingerprint = 0x20fe14aad278c36b,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .azure_sdk = .{
+            // Local-dev relative path: from `rest/keyvault_secrets/` up
+            // to the repo root.
+            .path = "../..",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "README.md",
+    },
+}

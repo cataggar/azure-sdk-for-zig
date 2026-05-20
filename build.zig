@@ -21,7 +21,7 @@ pub fn build(b: *std.Build) void {
     // -- Modules (libraries exposed to consumers) --
 
     const core_mod = b.addModule("azure_core", .{
-        .root_source_file = b.path("src/azure/core/root.zig"),
+        .root_source_file = b.path("sdk/core/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "serde", .module = serde_mod },
@@ -29,7 +29,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const identity_mod = b.addModule("azure_identity", .{
-        .root_source_file = b.path("src/azure/identity/root.zig"),
+        .root_source_file = b.path("sdk/identity/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
@@ -38,7 +38,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const blobs_mod = b.addModule("azure_storage_blobs", .{
-        .root_source_file = b.path("src/azure/storage/blobs/root.zig"),
+        .root_source_file = b.path("sdk/storage/blobs/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
@@ -48,7 +48,7 @@ pub fn build(b: *std.Build) void {
     });
 
     _ = b.addModule("azure_storage_common", .{
-        .root_source_file = b.path("src/azure/storage/common/root.zig"),
+        .root_source_file = b.path("sdk/storage/common/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
@@ -57,7 +57,7 @@ pub fn build(b: *std.Build) void {
     });
 
     _ = b.addModule("azure_keyvault_secrets", .{
-        .root_source_file = b.path("src/azure/keyvault/secrets/root.zig"),
+        .root_source_file = b.path("sdk/keyvault/secrets/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
@@ -67,7 +67,7 @@ pub fn build(b: *std.Build) void {
     });
 
     _ = b.addModule("azure_data_tables", .{
-        .root_source_file = b.path("src/azure/data/tables/root.zig"),
+        .root_source_file = b.path("sdk/data/tables/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
@@ -76,7 +76,7 @@ pub fn build(b: *std.Build) void {
     });
 
     _ = b.addModule("azure_data_cosmos", .{
-        .root_source_file = b.path("src/azure/data/cosmos/root.zig"),
+        .root_source_file = b.path("sdk/data/cosmos/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
@@ -86,7 +86,7 @@ pub fn build(b: *std.Build) void {
     });
 
     _ = b.addModule("azure_keyvault_keys", .{
-        .root_source_file = b.path("src/azure/keyvault/keys/root.zig"),
+        .root_source_file = b.path("sdk/keyvault/keys/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
@@ -96,7 +96,7 @@ pub fn build(b: *std.Build) void {
     });
 
     _ = b.addModule("azure_keyvault_certificates", .{
-        .root_source_file = b.path("src/azure/keyvault/certificates/root.zig"),
+        .root_source_file = b.path("sdk/keyvault/certificates/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
@@ -106,7 +106,7 @@ pub fn build(b: *std.Build) void {
     });
 
     _ = b.addModule("azure_keyvault_admin", .{
-        .root_source_file = b.path("src/azure/keyvault/administration/root.zig"),
+        .root_source_file = b.path("sdk/keyvault/administration/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
@@ -116,7 +116,7 @@ pub fn build(b: *std.Build) void {
     });
 
     _ = b.addModule("azure_storage_queues", .{
-        .root_source_file = b.path("src/azure/storage/queues/root.zig"),
+        .root_source_file = b.path("sdk/storage/queues/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
@@ -125,7 +125,7 @@ pub fn build(b: *std.Build) void {
     });
 
     _ = b.addModule("azure_storage_files_shares", .{
-        .root_source_file = b.path("src/azure/storage/files/shares/root.zig"),
+        .root_source_file = b.path("sdk/storage/files/shares/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
@@ -134,7 +134,7 @@ pub fn build(b: *std.Build) void {
     });
 
     _ = b.addModule("azure_storage_files_datalake", .{
-        .root_source_file = b.path("src/azure/storage/files/datalake/root.zig"),
+        .root_source_file = b.path("sdk/storage/files/datalake/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
@@ -143,7 +143,7 @@ pub fn build(b: *std.Build) void {
     });
 
     _ = b.addModule("azure_data_appconfiguration", .{
-        .root_source_file = b.path("src/azure/data/appconfiguration/root.zig"),
+        .root_source_file = b.path("sdk/data/appconfiguration/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
@@ -152,7 +152,7 @@ pub fn build(b: *std.Build) void {
     });
 
     _ = b.addModule("azure_attestation", .{
-        .root_source_file = b.path("src/azure/attestation/root.zig"),
+        .root_source_file = b.path("sdk/attestation/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
@@ -161,7 +161,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const kusto_common_mod = b.addModule("azure_kusto_common", .{
-        .root_source_file = b.path("src/azure/kusto/common.zig"),
+        .root_source_file = b.path("sdk/kusto/common.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
@@ -170,7 +170,7 @@ pub fn build(b: *std.Build) void {
     });
 
     _ = b.addModule("azure_kusto_data", .{
-        .root_source_file = b.path("src/azure/kusto/data/root.zig"),
+        .root_source_file = b.path("sdk/kusto/data/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
@@ -181,7 +181,7 @@ pub fn build(b: *std.Build) void {
     });
 
     _ = b.addModule("azure_kusto_ingest", .{
-        .root_source_file = b.path("src/azure/kusto/ingest/root.zig"),
+        .root_source_file = b.path("sdk/kusto/ingest/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
@@ -191,7 +191,7 @@ pub fn build(b: *std.Build) void {
     });
 
     _ = b.addModule("azure_core_amqp", .{
-        .root_source_file = b.path("src/azure/core/amqp/root.zig"),
+        .root_source_file = b.path("sdk/core/amqp/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "uamqp", .module = uamqp_mod },
@@ -199,12 +199,12 @@ pub fn build(b: *std.Build) void {
     });
 
     const messaging_common_mod = b.addModule("azure_messaging_common", .{
-        .root_source_file = b.path("src/azure/messaging/common.zig"),
+        .root_source_file = b.path("sdk/messaging/common.zig"),
         .target = target,
     });
 
     const eventhubs_mod = b.addModule("azure_messaging_eventhubs", .{
-        .root_source_file = b.path("src/azure/messaging/eventhubs/root.zig"),
+        .root_source_file = b.path("sdk/messaging/eventhubs/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
@@ -215,7 +215,7 @@ pub fn build(b: *std.Build) void {
     });
 
     _ = b.addModule("azure_messaging_eventhubs_checkpointstore_blob", .{
-        .root_source_file = b.path("src/azure/messaging/eventhubs/checkpoint_store.zig"),
+        .root_source_file = b.path("sdk/messaging/eventhubs/checkpoint_store.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
@@ -227,7 +227,7 @@ pub fn build(b: *std.Build) void {
     });
 
     _ = b.addModule("azure_messaging_servicebus", .{
-        .root_source_file = b.path("src/azure/messaging/servicebus/root.zig"),
+        .root_source_file = b.path("sdk/messaging/servicebus/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
@@ -239,12 +239,12 @@ pub fn build(b: *std.Build) void {
     });
 
     _ = b.addModule("azure_core_tracing", .{
-        .root_source_file = b.path("src/azure/core/tracing/root.zig"),
+        .root_source_file = b.path("sdk/core/tracing/root.zig"),
         .target = target,
     });
 
     _ = b.addModule("azure_core_testing", .{
-        .root_source_file = b.path("src/azure/core/testing/root.zig"),
+        .root_source_file = b.path("sdk/core/testing/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
@@ -252,7 +252,7 @@ pub fn build(b: *std.Build) void {
     });
 
     _ = b.addModule("azure_core_perf", .{
-        .root_source_file = b.path("src/azure/core/perf/root.zig"),
+        .root_source_file = b.path("sdk/core/perf/root.zig"),
         .target = target,
     });
 
@@ -260,7 +260,7 @@ pub fn build(b: *std.Build) void {
 
     const core_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/azure/core/root.zig"),
+            .root_source_file = b.path("sdk/core/root.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
@@ -271,7 +271,7 @@ pub fn build(b: *std.Build) void {
 
     const identity_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/azure/identity/root.zig"),
+            .root_source_file = b.path("sdk/identity/root.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
@@ -286,7 +286,7 @@ pub fn build(b: *std.Build) void {
 
     const storage_common_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/azure/storage/common/root.zig"),
+            .root_source_file = b.path("sdk/storage/common/root.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
@@ -299,7 +299,7 @@ pub fn build(b: *std.Build) void {
 
     const kv_secrets_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/azure/keyvault/secrets/root.zig"),
+            .root_source_file = b.path("sdk/keyvault/secrets/root.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
@@ -313,7 +313,7 @@ pub fn build(b: *std.Build) void {
 
     const tables_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/azure/data/tables/root.zig"),
+            .root_source_file = b.path("sdk/data/tables/root.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
@@ -333,16 +333,16 @@ pub fn build(b: *std.Build) void {
 
     // Service SDK tests — core + identity deps
     const service_test_sources_ci = [_][]const u8{
-        "src/azure/keyvault/keys/root.zig",
-        "src/azure/keyvault/certificates/root.zig",
-        "src/azure/keyvault/administration/root.zig",
-        "src/azure/storage/blobs/root.zig",
-        "src/azure/storage/queues/root.zig",
-        "src/azure/storage/files/shares/root.zig",
-        "src/azure/storage/files/datalake/root.zig",
-        "src/azure/data/appconfiguration/root.zig",
-        "src/azure/data/cosmos/root.zig",
-        "src/azure/attestation/root.zig",
+        "sdk/keyvault/keys/root.zig",
+        "sdk/keyvault/certificates/root.zig",
+        "sdk/keyvault/administration/root.zig",
+        "sdk/storage/blobs/root.zig",
+        "sdk/storage/queues/root.zig",
+        "sdk/storage/files/shares/root.zig",
+        "sdk/storage/files/datalake/root.zig",
+        "sdk/data/appconfiguration/root.zig",
+        "sdk/data/cosmos/root.zig",
+        "sdk/attestation/root.zig",
     };
     for (service_test_sources_ci) |src| {
         const t = b.addTest(.{
@@ -364,7 +364,7 @@ pub fn build(b: *std.Build) void {
     {
         const t = b.addTest(.{
             .root_module = b.createModule(.{
-                .root_source_file = b.path("src/azure/messaging/eventhubs/root.zig"),
+                .root_source_file = b.path("sdk/messaging/eventhubs/root.zig"),
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
@@ -382,7 +382,7 @@ pub fn build(b: *std.Build) void {
     {
         const t = b.addTest(.{
             .root_module = b.createModule(.{
-                .root_source_file = b.path("src/azure/messaging/eventhubs/checkpoint_store.zig"),
+                .root_source_file = b.path("sdk/messaging/eventhubs/checkpoint_store.zig"),
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
@@ -401,7 +401,7 @@ pub fn build(b: *std.Build) void {
     {
         const t = b.addTest(.{
             .root_module = b.createModule(.{
-                .root_source_file = b.path("src/azure/messaging/common.zig"),
+                .root_source_file = b.path("sdk/messaging/common.zig"),
                 .target = target,
                 .optimize = optimize,
             }),
@@ -413,7 +413,7 @@ pub fn build(b: *std.Build) void {
     {
         const t = b.addTest(.{
             .root_module = b.createModule(.{
-                .root_source_file = b.path("src/azure/messaging/servicebus/root.zig"),
+                .root_source_file = b.path("sdk/messaging/servicebus/root.zig"),
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
@@ -432,7 +432,7 @@ pub fn build(b: *std.Build) void {
     {
         const t = b.addTest(.{
             .root_module = b.createModule(.{
-                .root_source_file = b.path("src/azure/kusto/common.zig"),
+                .root_source_file = b.path("sdk/kusto/common.zig"),
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
@@ -448,7 +448,7 @@ pub fn build(b: *std.Build) void {
     {
         const t = b.addTest(.{
             .root_module = b.createModule(.{
-                .root_source_file = b.path("src/azure/kusto/data/root.zig"),
+                .root_source_file = b.path("sdk/kusto/data/root.zig"),
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
@@ -466,7 +466,7 @@ pub fn build(b: *std.Build) void {
     {
         const t = b.addTest(.{
             .root_module = b.createModule(.{
-                .root_source_file = b.path("src/azure/kusto/ingest/root.zig"),
+                .root_source_file = b.path("sdk/kusto/ingest/root.zig"),
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
@@ -481,8 +481,8 @@ pub fn build(b: *std.Build) void {
 
     // Core infrastructure tests — no deps
     const core_infra_sources = [_][]const u8{
-        "src/azure/core/tracing/root.zig",
-        "src/azure/core/perf/root.zig",
+        "sdk/core/tracing/root.zig",
+        "sdk/core/perf/root.zig",
     };
     for (core_infra_sources) |src| {
         const t = b.addTest(.{
@@ -499,7 +499,7 @@ pub fn build(b: *std.Build) void {
     {
         const t = b.addTest(.{
             .root_module = b.createModule(.{
-                .root_source_file = b.path("src/azure/core/amqp/root.zig"),
+                .root_source_file = b.path("sdk/core/amqp/root.zig"),
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
@@ -514,7 +514,7 @@ pub fn build(b: *std.Build) void {
     {
         const t = b.addTest(.{
             .root_module = b.createModule(.{
-                .root_source_file = b.path("src/azure/core/testing/root.zig"),
+                .root_source_file = b.path("sdk/core/testing/root.zig"),
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
@@ -530,7 +530,7 @@ pub fn build(b: *std.Build) void {
     const example = b.addExecutable(.{
         .name = "azure_example",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/examples/hello.zig"),
+            .root_source_file = b.path("examples/hello.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
@@ -550,4 +550,38 @@ pub fn build(b: *std.Build) void {
 
     const run_step = b.step("run", "Run the example");
     run_step.dependOn(&run_example.step);
+
+    // -- tspconfigs tool --
+    //
+    // Builds and exposes two steps that manage `codegen/tspconfigs.yaml`:
+    //   * tspconfigs-update  — reconcile entries against ../azure-rest-api-specs
+    //   * tspconfigs-resolve — fill in name/branch/zig_import from each tspconfig.yaml
+    const tspconfigs_exe = b.addExecutable(.{
+        .name = "tspconfigs",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("codegen/tspconfigs/main.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+
+    const tspconfigs_update_run = b.addRunArtifact(tspconfigs_exe);
+    tspconfigs_update_run.addArg("update");
+    tspconfigs_update_run.setCwd(b.path("."));
+    tspconfigs_update_run.has_side_effects = true;
+    const tspconfigs_update_step = b.step(
+        "tspconfigs-update",
+        "Reconcile codegen/tspconfigs.yaml against ../azure-rest-api-specs",
+    );
+    tspconfigs_update_step.dependOn(&tspconfigs_update_run.step);
+
+    const tspconfigs_resolve_run = b.addRunArtifact(tspconfigs_exe);
+    tspconfigs_resolve_run.addArg("resolve");
+    tspconfigs_resolve_run.setCwd(b.path("."));
+    tspconfigs_resolve_run.has_side_effects = true;
+    const tspconfigs_resolve_step = b.step(
+        "tspconfigs-resolve",
+        "Fill in name/branch/zig_import by parsing each tspconfig.yaml",
+    );
+    tspconfigs_resolve_step.dependOn(&tspconfigs_resolve_run.step);
 }

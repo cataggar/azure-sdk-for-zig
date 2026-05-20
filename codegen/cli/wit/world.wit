@@ -1,0 +1,30 @@
+// Component world for `codegen-cli`.
+//
+// Imports listed here are the wasi-* surface the cli source code
+// actually touches (filesystem for output, stdio for diagnostics).
+// The provider (`tcgc.wasm`) imports a wider surface (terminal-*,
+// random, wasi:http); after cataggar/wabt#216 those are
+// transparently bubbled up to the wrapping component's outer
+// imports by `wabt component compose`, so we don't need to
+// declare them here.
+//
+// Versions are pinned at 0.2.6 to match what wasmtime 44 supports.
+// `wabt component compose --align-wasi=0.2.6` rewrites
+// `tcgc.wasm`'s 0.2.10 references down to 0.2.6 at compose time.
+
+package azure:codegen-cli@0.1.0;
+
+world cli {
+    import wasi:cli/exit@0.2.6;
+    import wasi:cli/environment@0.2.6;
+    import wasi:cli/stdout@0.2.6;
+    import wasi:cli/stderr@0.2.6;
+    import wasi:io/error@0.2.6;
+    import wasi:io/streams@0.2.6;
+    import wasi:filesystem/preopens@0.2.6;
+    import wasi:filesystem/types@0.2.6;
+
+    import azure:codegen/tcgc;
+
+    export wasi:cli/run@0.2.6;
+}
