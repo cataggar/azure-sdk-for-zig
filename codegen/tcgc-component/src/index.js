@@ -388,12 +388,87 @@ function adaptLro(method) {
 
 /* ───────────────────────── Model / enum / type adapters ──────────── */
 
+// Cross-language-definition-id of each ARM base type. TCGC stamps these
+// onto `SdkModelType.crossLanguageDefinitionId` regardless of how the
+// spec aliases the type, so matching here is robust against namespace
+// re-imports.
+const ARM_RESOURCE_KIND_BY_XLDID = {
+  "Azure.ResourceManager.CommonTypes.ProxyResource": "proxy",
+  "Azure.ResourceManager.CommonTypes.Resource": "proxy",
+  "Azure.ResourceManager.CommonTypes.TrackedResource": "tracked",
+  "Azure.ResourceManager.CommonTypes.ExtensionResource": "extension",
+  // Older / alternate aliases used by some TCGC versions.
+  "Azure.ResourceManager.ProxyResource": "proxy",
+  "Azure.ResourceManager.Resource": "proxy",
+  "Azure.ResourceManager.TrackedResource": "tracked",
+  "Azure.ResourceManager.ExtensionResource": "extension",
+};
+
+// Fallback table keyed on the topmost base model's `name`, used when
+// `crossLanguageDefinitionId` is unset or unrecognized.
+const ARM_RESOURCE_KIND_BY_NAME = {
+  ProxyResource: "proxy",
+  Resource: "proxy",
+  TrackedResource: "tracked",
+  ExtensionResource: "extension",
+};
+
+/**
+ * Walk the `baseModel` chain root-to-leaf and return the concatenated
+ * list of (own + inherited) properties. Inherited properties come
+ * first; the leaf's own properties last. Within that order we de-dup
+ * by `serializedName` so a property re-declared on the leaf wins (its
+ * doc / optionality / type override the inherited one).
+ */
+function collectInheritedProperties(model) {
+  const chain = [];
+  for (let cur = model; cur; cur = cur.baseModel) chain.unshift(cur);
+
+  const byKey = new Map();
+  for (const m of chain) {
+    for (const p of m.properties ?? []) {
+      const key = p.serializedName ?? p.name;
+      byKey.set(key, p); // later (more-derived) entries replace earlier ones
+    }
+  }
+  return Array.from(byKey.values());
+}
+
+/**
+ * Detect which ARM base type (if any) sits at the root of `model`'s
+ * `baseModel` chain. Returns `"proxy"` / `"tracked"` / `"extension"`,
+ * or `null` for non-ARM types.
+ */
+function detectArmResourceKind(model) {
+  let topmost = model;
+  for (let cur = model; cur; cur = cur.baseModel) {
+    const xldid = cur.crossLanguageDefinitionId;
+    if (xldid && Object.prototype.hasOwnProperty.call(ARM_RESOURCE_KIND_BY_XLDID, xldid)) {
+      return ARM_RESOURCE_KIND_BY_XLDID[xldid];
+    }
+    topmost = cur;
+  }
+  // Fallback: classify by the topmost base model's name when xldid is
+  // unrecognized. Guard with a namespace prefix to avoid catching
+  // unrelated "Resource" / "TrackedResource" types in non-ARM specs.
+  const ns = topmost?.namespace ?? topmost?.clientNamespace ?? "";
+  if (
+    Object.prototype.hasOwnProperty.call(ARM_RESOURCE_KIND_BY_NAME, topmost?.name) &&
+    typeof ns === "string" &&
+    ns.startsWith("Azure.ResourceManager")
+  ) {
+    return ARM_RESOURCE_KIND_BY_NAME[topmost.name];
+  }
+  return null;
+}
+
 function adaptModel(model) {
+  const props = collectInheritedProperties(model);
   return {
     name: model.name,
     namespace: model.namespace ?? null,
     doc: model.doc ?? null,
-    fields: (model.properties ?? []).map((p) => ({
+    fields: props.map((p) => ({
       name: toSnakeCase(p.name),
       serialized_name: p.serializedName ?? p.name,
       doc: p.doc ?? null,
@@ -406,6 +481,7 @@ function adaptModel(model) {
     discriminator: model.discriminatorProperty?.name ?? null,
     is_input: !!(model.usage & 1),
     is_output: !!(model.usage & 2),
+    arm_resource_kind: detectArmResourceKind(model),
   };
 }
 
