@@ -7,11 +7,11 @@
 //!     wasmtime run --dir <spec>::/spec --dir <out>::/out \
 //!         codegen-cli.composed.wasm /spec /out [--package-name foo]
 //!
-//! The composition is produced by `eng/codegen/cli/build.sh` from
+//! The composition is produced by `codegen/cli/build.sh` from
 //!
 //!     codegen-cli.wasm  (this binary, compiled to wasm32-wasi and
 //!                        wrapped into a component via wabt)
-//!     tcgc.wasm         (eng/codegen/tcgc-component output)
+//!     tcgc.wasm         (codegen/tcgc-component output)
 //!
 //! Architecture summary:
 //!   * `main` parses argv (positional: spec-dir, out-dir; flag:

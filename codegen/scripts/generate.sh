@@ -4,7 +4,7 @@
 #
 # Usage:
 #
-#   eng/codegen/scripts/generate.sh \
+#   codegen/scripts/generate.sh \
 #       <abs-path-to-tspconfig.yaml-or-spec-dir> \
 #       [--kind client] \
 #       [--package-name <name>] \
@@ -14,7 +14,7 @@
 # Two execution modes:
 #
 #  • Node-bridge (default) — drives the JS adapter at
-#    eng/codegen/tcgc-component/src/index.js. Works today for any
+#    codegen/tcgc-component/src/index.js. Works today for any
 #    TypeSpec spec the JS adapter handles.
 #
 #  • WASI host (`--wasi <wasm>`) — drives the Zig codegen binary's
@@ -29,8 +29,8 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-CODEGEN_DIR="$REPO_ROOT/eng/codegen"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+CODEGEN_DIR="$REPO_ROOT/codegen"
 COMPONENT_DIR="$CODEGEN_DIR/tcgc-component"
 BIN_DIR="$CODEGEN_DIR/codegen"
 

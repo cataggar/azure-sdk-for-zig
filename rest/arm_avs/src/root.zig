@@ -1,6 +1,6 @@
 //! arm-avs — generated from TypeSpec.
 //!
-//! Do not edit by hand. Regenerate with `eng/codegen`.
+//! Do not edit by hand. Regenerate with `codegen`.
 
 const clients = @import("clients.zig");
 pub const models = @import("models.zig");

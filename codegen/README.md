@@ -81,7 +81,7 @@ full plan, naming rules, and phased rollout.
 #
 #    Requirements: cmake (4.x), rustup, clang. Build is ~3 min on
 #    Apple Silicon (downloads SpiderMonkey + OpenSSL on first run).
-cd eng/codegen/tcgc-component
+cd codegen/tcgc-component
 scripts/build-engine.sh
 
 # 1. Build the TCGC component (once per TypeSpec version bump).
@@ -101,7 +101,7 @@ scripts/build-component.sh   # produces zig-out/bin/codegen-cli.composed.wasm
 #    tcgc-component/dist/stdlib-preopens.txt and constructs the right
 #    set of wasmtime --dir flags for the stdlib + user spec + output.
 cd ../../..
-eng/codegen/cli/scripts/run.sh \
+codegen/cli/scripts/run.sh \
     ../azure-rest-api-specs/specification/keyvault/data-plane/Secrets \
     .tsp-generated/client/keyvault_secrets \
     --package-name keyvault-secrets

@@ -5,7 +5,7 @@
 #
 # Usage:
 #
-#   eng/codegen/cli/scripts/run.sh <spec-dir> <out-dir> [extra args…]
+#   codegen/cli/scripts/run.sh <spec-dir> <out-dir> [extra args…]
 #
 # Mounts:
 #

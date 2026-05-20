@@ -1,5 +1,5 @@
 //! Code model types deserialized from the JSON produced by
-//! `eng/codegen/tcgc-component`. The shape is duplicated on the JS
+//! `codegen/tcgc-component`. The shape is duplicated on the JS
 //! side in `tcgc-component/src/index.js`; the two must evolve together.
 //!
 //! Keep the types open (`additionalProperties` on the JS side) and

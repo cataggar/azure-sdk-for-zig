@@ -7,7 +7,7 @@
 //!
 //! In the JSON mode (P3 of the rollout) the generator skips the
 //! TypeSpec stack entirely and reads a pre-built code model produced
-//! by `eng/codegen/tcgc-component`. This lets the emitter be developed
+//! by `codegen/tcgc-component`. This lets the emitter be developed
 //! and tested without the WASI host plumbing.
 
 const std = @import("std");

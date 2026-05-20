@@ -33,7 +33,7 @@ pub const EmitOptions = struct {
     azure_core_commit: ?[]const u8 = null,
     /// Reserved for future use; running `zig fmt` is currently the
     /// caller's responsibility because the Zig 0.16 process API is in
-    /// flux. The driver script in `eng/codegen/scripts/generate.sh`
+    /// flux. The driver script in `codegen/scripts/generate.sh`
     /// runs `zig fmt` after emitting.
     run_zig_fmt: bool = true,
 };
@@ -113,7 +113,7 @@ fn renderRoot(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
     try w.print(
         \\//! {[name]s} — generated from TypeSpec.
         \\//!
-        \\//! Do not edit by hand. Regenerate with `eng/codegen`.
+        \\//! Do not edit by hand. Regenerate with `codegen`.
         \\
         \\const clients = @import("clients.zig");
         \\pub const models = @import("models.zig");
@@ -425,7 +425,7 @@ fn renderReadme(allocator: std.mem.Allocator, pkg_name: []const u8, model: cm.Co
         \\
         \\Generated Azure SDK client for Zig.
         \\
-        \\This package is produced by `eng/codegen` from the TypeSpec
+        \\This package is produced by `codegen` from the TypeSpec
         \\specification in [`Azure/azure-rest-api-specs`](https://github.com/Azure/azure-rest-api-specs).
         \\Do not edit the contents of `src/` by hand — they will be
         \\overwritten on the next regeneration.

@@ -1,4 +1,4 @@
-//! tspconfigs — manage eng/codegen/tspconfigs.yaml
+//! tspconfigs — manage codegen/tspconfigs.yaml
 //!
 //! Subcommands:
 //!   update   Discover every `tspconfig.yaml` under
@@ -20,7 +20,7 @@
 
 const std = @import("std");
 
-const OUT_YAML = "eng/codegen/tspconfigs.yaml";
+const OUT_YAML = "codegen/tspconfigs.yaml";
 const SPECS_ROOT = "../azure-rest-api-specs";
 const SPECS_SPECIFICATION_DIR = SPECS_ROOT ++ "/specification";
 

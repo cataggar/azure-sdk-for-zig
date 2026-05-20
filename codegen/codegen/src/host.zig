@@ -6,7 +6,7 @@
 //! model.
 //!
 //! The component itself is produced by `jco componentize` from
-//! `eng/codegen/tcgc-component`. See `eng/codegen/README.md` for the
+//! `codegen/tcgc-component`. See `codegen/README.md` for the
 //! end-to-end pipeline.
 
 const std = @import("std");

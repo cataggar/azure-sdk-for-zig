@@ -7,19 +7,19 @@ This document provides guidance for AI agents (Copilot, etc.) working on this re
 ```bash
 zig build                     # compile SDK + example
 zig build test --summary all  # run all tests (must pass before committing)
-zig fmt src/ build.zig        # format code (CI enforces this)
-zig fmt --check src/ build.zig # check formatting without modifying
+zig fmt sdk/ build.zig        # format code (CI enforces this)
+zig fmt --check sdk/ build.zig # check formatting without modifying
 ```
 
 ## Repository Structure
 
-- `src/azure/core/` — Core framework (HTTP pipeline, credentials, pager, LRO, utilities)
-- `src/azure/identity/` — Credential implementations (CLI, client secret, managed identity, etc.)
-- `src/azure/storage/` — Azure Storage clients (blobs, queues, files)
-- `src/azure/keyvault/` — Azure Key Vault clients (secrets, keys, certificates)
-- `src/azure/data/` — Data services (Tables, App Configuration)
-- `src/azure/messaging/` — Messaging services (Event Hubs)
-- `src/azure/attestation/` — Azure Attestation
+- `sdk/core/` — Core framework (HTTP pipeline, credentials, pager, LRO, utilities)
+- `sdk/identity/` — Credential implementations (CLI, client secret, managed identity, etc.)
+- `sdk/storage/` — Azure Storage clients (blobs, queues, files)
+- `sdk/keyvault/` — Azure Key Vault clients (secrets, keys, certificates)
+- `sdk/data/` — Data services (Tables, App Configuration)
+- `sdk/messaging/` — Messaging services (Event Hubs)
+- `sdk/attestation/` — Azure Attestation
 - `build.zig` — Build configuration (modules, tests, dependencies)
 - `build.zig.zon` — Package dependencies
 

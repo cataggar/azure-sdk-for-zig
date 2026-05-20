@@ -22,7 +22,7 @@
 set -euo pipefail
 
 CLI_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REPO_ROOT="$(cd "$CLI_DIR/../../.." && pwd)"
+REPO_ROOT="$(cd "$CLI_DIR/../.." && pwd)"
 
 WABT="${WABT:-$REPO_ROOT/../wabt/zig-out/bin/wabt}"
 ADAPTER="${PREVIEW1_ADAPTER:-/tmp/wasi_snapshot_preview1.command.wasm}"
