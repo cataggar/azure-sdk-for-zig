@@ -1096,7 +1096,30 @@ pub const Maintenances = struct {
     subscription_id: []const u8,
     /// List Maintenance resources by subscription ID
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, state_name: ?enums.MaintenanceStateName, status: ?enums.MaintenanceStatusFilter, from: ?[]const u8, to: ?[]const u8) !core.pager.PipelinePager(models.Maintenance) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/maintenances?api-version={s}&stateName={s}&status={s}&from={s}&to={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version, state_name, status, from, to });
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.print(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/maintenances?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        if (state_name) |v| {
+            const enc = try core.url.percentEncode(alloc, v.toWire());
+            defer alloc.free(enc);
+            try url_buf.print(alloc, "&stateName={s}", .{enc});
+        }
+        if (status) |v| {
+            const enc = try core.url.percentEncode(alloc, v.toWire());
+            defer alloc.free(enc);
+            try url_buf.print(alloc, "&status={s}", .{enc});
+        }
+        if (from) |v| {
+            const enc = try core.url.percentEncode(alloc, v);
+            defer alloc.free(enc);
+            try url_buf.print(alloc, "&from={s}", .{enc});
+        }
+        if (to) |v| {
+            const enc = try core.url.percentEncode(alloc, v);
+            defer alloc.free(enc);
+            try url_buf.print(alloc, "&to={s}", .{enc});
+        }
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.Maintenance).init(
             self.pipeline,
