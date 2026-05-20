@@ -61,7 +61,8 @@ pub fn main(init: std.process.Init) !void {
                     .unrecognized => |s| s,
                     else => @tagName(ps),
                 } else "-"
-            else "-";
+            else
+                "-";
             try w.print("{s:<40}  {s:<14}  {s:<18}\n", .{ cloud.name, cloud.location, state });
             count += 1;
         }
