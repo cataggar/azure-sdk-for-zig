@@ -11,7 +11,7 @@
     "build": "npm run bundle && jco componentize dist/bundled.js --wit wit/component.wit --world-name codegen --out tcgc.wasm",
     "build:stub": "jco componentize src/stub.js --wit wit/component.wit --world-name codegen --out tcgc-stub.wasm",
     "clean": "rm -rf dist tcgc.wasm tcgc-stub.wasm",
-    "dev": "node src/index.js"
+    "dev": "node src/cli.js"
   },
   "dependencies": {
     "@typespec/compiler": "1.12.0",

@@ -23,11 +23,31 @@ pub const Client = struct {
     name: []const u8,
     namespace: ?[]const u8 = null,
     doc: ?[]const u8 = null,
-    parameters: []ClientParameter = &.{},
+    /// True for the top-level client of a service. The emitter renders
+    /// `init()`/`deinit()`/auth on the root only; sub-clients borrow the
+    /// pipeline by value via accessor methods.
+    is_root: bool = true,
+    parent_name: ?[]const u8 = null,
+    /// Typed client-level state propagated through the sub-client tree
+    /// (e.g. ARM's `subscription_id`). The emitter places each entry as
+    /// a struct field on every client in the family, and as a required
+    /// field on the root's `InitOptions`.
+    init_parameters: []InitParameter = &.{},
+    /// Default api-version string read from TCGC's `apiVersion`
+    /// `clientDefaultValue`. Used to populate `InitOptions.api_version`.
+    api_version_default: ?[]const u8 = null,
     endpoint: Endpoint,
     methods: []Method = &.{},
     sub_clients: []SubClient = &.{},
     credential_scopes: [][]const u8 = &.{},
+};
+
+pub const InitParameter = struct {
+    name: []const u8,
+    serialized_name: []const u8,
+    doc: ?[]const u8 = null,
+    param_type: TypeRef,
+    optional: bool = false,
 };
 
 pub const Endpoint = struct {
@@ -35,38 +55,65 @@ pub const Endpoint = struct {
     default_value: ?[]const u8 = null,
 };
 
-pub const ClientParameter = struct {
-    name: []const u8,
-    doc: ?[]const u8 = null,
-    param_type: TypeRef,
-    optional: bool = false,
-};
-
 pub const SubClient = struct {
-    name: []const u8,
-    accessor_name: []const u8,
+    accessor_camel: []const u8,
+    accessor_snake: []const u8,
     client_name: []const u8,
 };
 
 pub const Method = struct {
     name: []const u8,
+    name_camel: []const u8,
     doc: ?[]const u8 = null,
     http_method: []const u8,
     path: []const u8,
-    parameters: []MethodParameter = &.{},
+    /// User-facing method parameters in declaration order (after the
+    /// implicit `self` and `allocator`). Client-level params
+    /// (`subscription_id`, `api_version`, `endpoint`) and constants
+    /// (`Accept`, `Content-Type`) are absent here — they're sourced
+    /// from the client struct or hard-coded.
+    user_parameters: []UserParameter = &.{},
+    /// Path placeholders resolved to either a client-state field or a
+    /// user parameter.
+    path_parameters: []WireParameter = &.{},
+    /// Query-string keys; ordered as TCGC surfaces them.
+    query_parameters: []WireParameter = &.{},
+    /// HTTP request headers; constants are emitted unconditionally.
+    header_parameters: []WireParameter = &.{},
+    /// Body to serialize; null for verbs without a payload.
+    body_parameter: ?BodyParameter = null,
     response: MethodResponse,
     paging: ?Paging = null,
     long_running: ?LongRunning = null,
     kind: []const u8 = "basic",
 };
 
-pub const MethodParameter = struct {
+pub const UserParameter = struct {
     name: []const u8,
-    serialized_name: []const u8,
-    location: []const u8,
+    method_name: []const u8,
     doc: ?[]const u8 = null,
     param_type: TypeRef,
     optional: bool = false,
+};
+
+pub const WireParameter = struct {
+    wire_name: []const u8,
+    source: WireSource,
+    optional: bool = false,
+};
+
+pub const WireSource = struct {
+    /// "client" | "user" | "constant"
+    kind: []const u8,
+    /// snake_case identifier for "client"/"user" sources.
+    name: ?[]const u8 = null,
+    /// Constant literal for "constant" sources.
+    value: ?[]const u8 = null,
+};
+
+pub const BodyParameter = struct {
+    user_param_name: []const u8,
+    content_type: []const u8,
 };
 
 pub const MethodResponse = struct {
@@ -79,6 +126,12 @@ pub const Paging = struct {
     next_link_segments: []?[]const u8 = &.{},
     next_link_verb: ?[]const u8 = null,
     next_link_operation: ?[]const u8 = null,
+    /// Marker set by the JS adapter when the response is the standard
+    /// `{ "value": [T, ...], "nextLink": "..." }` ARM envelope. The
+    /// emitter uses `core.pager.listPageParser(T)` in that case.
+    envelope: ?[]const u8 = null,
+    /// The element type T for envelope=`value_next_link`. Null otherwise.
+    item_type: ?TypeRef = null,
 };
 
 pub const LongRunning = struct {

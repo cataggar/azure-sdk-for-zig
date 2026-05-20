@@ -189,12 +189,28 @@ pub fn main(init: std.process.Init) !u8 {
     std.debug.print("got {d} bytes back from tcgc.compile\n", .{json.len});
 
     // ── Deserialize and emit ─────────────────────────────────────────
-    var parsed = try std.json.parseFromSlice(
-        cm.CodeModel,
-        allocator,
-        json,
-        .{ .ignore_unknown_fields = true },
-    );
+    var parsed = blk: {
+        var diag: std.json.Diagnostics = .{};
+        var scanner = std.json.Scanner.initCompleteInput(allocator, json);
+        defer scanner.deinit();
+        scanner.enableDiagnostics(&diag);
+        const r = std.json.parseFromTokenSource(
+            cm.CodeModel,
+            allocator,
+            &scanner,
+            .{ .ignore_unknown_fields = true },
+        ) catch |e| {
+            const off: usize = @intCast(diag.getByteOffset());
+            const lo = if (off > 200) off - 200 else 0;
+            const hi = @min(json.len, off + 200);
+            std.debug.print(
+                "JSON parse failure: {s} (line {d} col {d} byte {d})\nnear:\n{s}\n",
+                .{ @errorName(e), diag.getLine(), diag.getColumn(), off, json[lo..hi] },
+            );
+            return e;
+        };
+        break :blk r;
+    };
     defer parsed.deinit();
 
     try emit.emit(allocator, io, out_dir_handle, parsed.value, .{

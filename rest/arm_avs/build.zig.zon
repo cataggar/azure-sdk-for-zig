@@ -9,6 +9,10 @@
             // repo root.
             .path = "../..",
         },
+        .serde = .{
+            .url = "git+https://github.com/cataggar/serde.zig#7012f58c7ddf490125852e1d22006b552a1693c7",
+            .hash = "serde-1.0.1-1DszT-e9DABp6u1PoDvGFzeGaST2hRp2KGtGn_CkIl0J",
+        },
     },
     .paths = .{
         "build.zig",

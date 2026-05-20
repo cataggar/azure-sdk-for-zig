@@ -9,4 +9,28 @@ overwritten on the next regeneration.
 
 ## Clients
 - `AVSClient`
+- `Operations`
+- `Addons`
+- `Authorizations`
+- `CloudLinks`
+- `Clusters`
+- `Datastores`
+- `GlobalReachConnections`
+- `HcxEnterpriseSites`
+- `Hosts`
+- `IscsiPaths`
+- `Licenses`
+- `Locations`
+- `Maintenances`
+- `PlacementPolicies`
+- `PrivateClouds`
+- `ProvisionedNetworks`
+- `PureStoragePolicies`
+- `ScriptCmdlets`
+- `ScriptExecutions`
+- `ScriptPackages`
+- `ServiceComponents`
+- `Skus`
+- `VirtualMachines`
+- `WorkloadNetworks`
 

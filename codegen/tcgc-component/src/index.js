@@ -23,20 +23,14 @@
 // (matches @typespec/compiler 1.12.0).
 
 import {
-  compile as tspCompile,
-  NodeHost,
-  resolvePath,
   createTypeSpecLibrary,
   paramMessage,
 } from "@typespec/compiler";
 import { createSdkContext } from "@azure-tools/typespec-client-generator-core";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 
 /* ───────────────────────── Library registration ──────────────────── */
 
-const LIB_NAME = "@azure-tools/typespec-zig";
+export const LIB_NAME = "@azure-tools/typespec-zig";
 
 export const $lib = createTypeSpecLibrary({
   name: LIB_NAME,
@@ -71,7 +65,7 @@ export const { reportDiagnostic } = $lib;
  *
  * @type {{ json: string | null, error: Error | null }}
  */
-const __slot = { json: null, error: null };
+export const __slot = { json: null, error: null };
 
 /* ───────────────────────── TypeSpec `$onEmit` ────────────────────── */
 
@@ -97,12 +91,22 @@ export async function $onEmit(context) {
     }
 
     const opts = context.options ?? {};
+    // Flatten the SdkClient tree (TCGC keeps children nested under
+    // `client.children`). The Zig emitter renders one struct per
+    // entry; the first entry of each contiguous family is the root
+    // (`is_root: true`) and owns init / auth / deinit. Sub-clients
+    // borrow the parent's pipeline + init params and only carry
+    // method bodies.
+    const flatClients = [];
+    for (const top of sdkContext.sdkPackage.clients) {
+      flattenClients(top, /*parent=*/null, flatClients);
+    }
     const codeModel = {
       package_name: opts["package-name"] || "azure_generated",
       package_version: opts["package-version"] || "0.1.0",
       target_kind: opts["target-kind"] || "client",
       service_kind: detectServiceKind(sdkContext),
-      clients: sdkContext.sdkPackage.clients.map(adaptClient),
+      clients: flatClients,
       models: sdkContext.sdkPackage.models.map(adaptModel),
       enums: sdkContext.sdkPackage.enums.map(adaptEnum),
       unions: [],
@@ -110,133 +114,6 @@ export async function $onEmit(context) {
     __slot.json = JSON.stringify(codeModel, null, 2);
   } catch (err) {
     __slot.error = err instanceof Error ? err : new Error(String(err));
-  }
-}
-
-/* ───────────────────────── WIT export: compile() ─────────────────── */
-
-/**
- * Drives the TypeSpec compiler with this package registered as the
- * sole emitter and returns the JSON code model.
- *
- * @param {string} projectPath path to a directory containing
- *                             `tspconfig.yaml`, `client.tsp`, or
- *                             `main.tsp`, or to a `.tsp` file.
- * @param {string} emitterOptions JSON-encoded options blob.
- * @returns {Promise<string>} JSON code model.
- */
-export async function compile(projectPath, emitterOptions) {
-  const options = JSON.parse(emitterOptions || "{}");
-  const staged = stageSpec(projectPath);
-  const mainFile = resolveMainFile(staged);
-
-  __slot.json = null;
-  __slot.error = null;
-
-  const program = await tspCompile(NodeHost, mainFile, {
-    emit: [packageRoot()],
-    options: {
-      [LIB_NAME]: {
-        "package-name": options["package-name"],
-        "package-version": options["package-version"],
-        "target-kind": options["target-kind"] ?? "client",
-        "emitter-output-dir": joinTmp(),
-      },
-    },
-    noEmit: false,
-    warningAsError: false,
-  });
-
-  const compileErrors = program.diagnostics.filter(
-    (d) => d.severity === "error",
-  );
-  if (compileErrors.length > 0) {
-    throw new Error(
-      "TypeSpec compilation failed:\n" +
-        compileErrors.map((d) => `  ${d.code}: ${d.message}`).join("\n"),
-    );
-  }
-  if (__slot.error) throw __slot.error;
-  if (!__slot.json) throw new Error("typespec-zig emitter produced no output");
-  return __slot.json;
-}
-
-/* ───────────────────────── Helpers ───────────────────────────────── */
-
-function packageRoot() {
-  // src/index.js → ../
-  const here = fileURLToPath(import.meta.url);
-  return resolvePath(path.dirname(path.dirname(here)));
-}
-
-function joinTmp() {
-  // The TypeSpec compiler insists on an emitter-output-dir even when we
-  // don't write any files. Use the package's own tmp area; we'll clean
-  // it up implicitly on next invocation.
-  return resolvePath(path.join(packageRoot(), ".typespec-output"));
-}
-
-function resolveMainFile(projectPath) {
-  const abs = path.resolve(projectPath);
-  const stat = fs.statSync(abs);
-  if (stat.isFile()) return resolvePath(abs);
-  for (const candidate of ["client.tsp", "main.tsp"]) {
-    const p = path.join(abs, candidate);
-    if (fs.existsSync(p)) return resolvePath(p);
-  }
-  return resolvePath(abs);
-}
-
-/**
- * The TypeSpec compiler walks up from the spec file's directory looking
- * for `node_modules`. Azure specs in `azure-rest-api-specs/` don't have
- * one, so we stage the spec under our package directory where our
- * `node_modules` is reachable.
- *
- * For specs that pull in sibling directories via tspconfig
- * `additionalDirectories`, this layout is extended later. For
- * self-contained specs (e.g. keyvault data-plane), copying the spec
- * directory itself is enough.
- *
- * @param {string} inputPath
- * @returns {string} path to the staged equivalent of `inputPath`.
- */
-function stageSpec(inputPath) {
-  const root = packageRoot();
-  const stagingRoot = path.join(root, ".tsp-staging");
-  fs.rmSync(stagingRoot, { recursive: true, force: true });
-  fs.mkdirSync(stagingRoot, { recursive: true });
-
-  // For initial bring-up: stage the spec's parent directory so sibling
-  // dirs referenced by `tspconfig.additionalDirectories` or relative
-  // imports (`../Foo.Shared`) are reachable. Specs that reach further
-  // (ARM `../../common-types/...`) still need an extended staging
-  // strategy — tracked as a follow-up.
-  const absInput = path.resolve(inputPath);
-  const inputDir = fs.statSync(absInput).isFile()
-    ? path.dirname(absInput)
-    : absInput;
-  const parentDir = path.dirname(inputDir);
-
-  const stagedParent = path.join(stagingRoot, path.basename(parentDir));
-  fs.mkdirSync(stagedParent, { recursive: true });
-  copyDir(parentDir, stagedParent);
-
-  const rel = path.relative(parentDir, absInput);
-  return rel === "" ? stagedParent : path.join(stagedParent, rel);
-}
-
-function copyDir(src, dst) {
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    if (entry.name === "node_modules" || entry.name === ".git") continue;
-    const s = path.join(src, entry.name);
-    const d = path.join(dst, entry.name);
-    if (entry.isDirectory()) {
-      fs.mkdirSync(d, { recursive: true });
-      copyDir(s, d);
-    } else if (entry.isFile()) {
-      fs.copyFileSync(s, d);
-    }
   }
 }
 
@@ -254,69 +131,163 @@ function detectServiceKind(sdkContext) {
 
 /* ───────────────────────── Client / method adapters ──────────────── */
 
-function adaptClient(client) {
+/** Recursively walk a TCGC client tree and adapt each node. */
+function flattenClients(client, parent, out) {
+  out.push(adaptClient(client, parent));
+  for (const child of client.children ?? []) {
+    flattenClients(child, client, out);
+  }
+}
+
+function adaptClient(client, parent) {
+  const isRoot = !parent;
+  const initParams = adaptInitParameters(client.clientInitialization);
   return {
     name: client.name,
     namespace: client.namespace ?? null,
     doc: client.doc ?? null,
-    parameters: adaptClientParams(client.clientInitialization),
-    endpoint: adaptClientEndpoint(client.clientInitialization),
+    is_root: isRoot,
+    parent_name: parent ? parent.name : null,
+    /** Propagated client-level state stored on every (root + sub-)
+     *  client struct (e.g. `subscription_id`). */
+    init_parameters: initParams.propagated,
+    /** Default api-version string (`@@clientInitialization apiVersion`
+     *  default). Used to populate `InitOptions.api_version`. */
+    api_version_default: initParams.api_version_default,
+    endpoint: initParams.endpoint,
     methods: (client.methods ?? [])
       .filter((m) => m.kind !== "clientaccessor")
-      .map(adaptMethod),
+      .map((m) => adaptMethod(m, initParams.client_param_names)),
     sub_clients: (client.children ?? []).map((child) => ({
-      name: toSnakeCase(child.name),
-      accessor_name: `get${child.name}`,
+      /** camelCase accessor: `Microsoft.AVS.PrivateClouds` →
+       *  `privateClouds`. The previous shape (`getPrivateClouds`) was
+       *  wrong for the Zig emitter. */
+      accessor_camel: toCamelCase(child.name),
+      /** snake_case fallback if a future emitter needs it. */
+      accessor_snake: toSnakeCase(child.name),
       client_name: child.name,
     })),
     credential_scopes: defaultCredentialScopes(client),
   };
 }
 
-function adaptClientEndpoint(init) {
-  const ep = init?.parameters?.find((p) => p.kind === "endpoint");
-  if (!ep) return { name: "endpoint", default_value: null };
-  return {
-    name: toSnakeCase(ep.name),
-    default_value:
-      ep.type?.templateArguments?.[0]?.defaultValue ??
-      ep.clientDefaultValue ??
-      null,
-  };
-}
-
-function adaptClientParams(init) {
-  const params = [];
-  for (const p of init?.parameters ?? []) {
-    if (p.kind === "credential" || p.kind === "endpoint") continue;
-    if (p.isApiVersionParam) continue;
-    params.push({
-      name: toSnakeCase(p.name),
+/**
+ * Walk a `SdkClientInitializationType.parameters` array and partition
+ * it into:
+ *   - `endpoint`         : the endpoint param (always present)
+ *   - `api_version_default` : default value if a method-typed
+ *                          `apiVersion` parameter is present
+ *   - `propagated`       : typed init knobs (e.g. `subscription_id`)
+ *                          that we surface as required fields on the
+ *                          root `InitOptions` and store on every
+ *                          sub-client struct
+ *   - `client_param_names`: a set of snake_cased names of all
+ *                          client-level params (`subscription_id`,
+ *                          `endpoint`, `api_version`). The method
+ *                          adapter uses this set to decide whether a
+ *                          path/query parameter is sourced from
+ *                          `self.<name>` instead of a user argument.
+ */
+function adaptInitParameters(init) {
+  const params = init?.parameters ?? [];
+  const propagated = [];
+  let endpointParam = null;
+  let apiVersionDefault = null;
+  const clientParamNames = new Set();
+  for (const p of params) {
+    if (p.kind === "endpoint") {
+      endpointParam = p;
+      clientParamNames.add("endpoint");
+      continue;
+    }
+    if (p.kind === "credential") continue;
+    if (p.isApiVersionParam) {
+      if (typeof p.clientDefaultValue === "string") apiVersionDefault = p.clientDefaultValue;
+      clientParamNames.add("api_version");
+      continue;
+    }
+    // Remaining: typed init knobs (kind === "method"). For ARM, that's
+    // `subscriptionId`. Surface as a required required field unless
+    // marked optional.
+    const snake = toSnakeCase(p.name);
+    clientParamNames.add(snake);
+    propagated.push({
+      name: snake,
+      serialized_name: p.serializedName ?? p.name,
       doc: p.doc ?? null,
       param_type: adaptType(p.type),
       optional: !!p.optional,
     });
   }
-  return params;
+  return {
+    endpoint: adaptEndpointFromParam(endpointParam),
+    api_version_default: apiVersionDefault,
+    propagated,
+    client_param_names: clientParamNames,
+  };
+}
+
+function adaptEndpointFromParam(ep) {
+  if (!ep) return { name: "endpoint", default_value: null };
+  return {
+    name: toSnakeCase(ep.name),
+    default_value:
+      ep.type?.templateArguments?.[0]?.clientDefaultValue ??
+      ep.clientDefaultValue ??
+      null,
+  };
 }
 
 function defaultCredentialScopes(client) {
-  const isArm = (client.clientInitialization?.parameters ?? []).some(
+  // Look up the credential param on this client (or any ancestor) and
+  // pick the first scope value the OAuth2 flow declares.
+  let cur = client;
+  while (cur) {
+    for (const p of cur.clientInitialization?.parameters ?? []) {
+      if (p.kind !== "credential") continue;
+      const flows = p.type?.scheme?.flows ?? [];
+      const scopes = [];
+      for (const f of flows) {
+        for (const s of f.scopes ?? []) {
+          if (s.value) scopes.push(s.value);
+        }
+      }
+      if (scopes.length > 0) return Array.from(new Set(scopes));
+    }
+    cur = cur.parent;
+  }
+  // Fallback: ARM scope if a `subscriptionId` parameter is present,
+  // else the data-plane wildcard.
+  const hasSub = (client.clientInitialization?.parameters ?? []).some(
     (p) => p.name === "subscriptionId",
   );
-  return isArm
+  return hasSub
     ? ["https://management.azure.com/.default"]
     : ["{endpoint}/.default"];
 }
 
-function adaptMethod(method) {
+function adaptMethod(method, clientParamNames) {
   const op = method.operation ?? {};
+  const user = adaptUserParameters(method.parameters ?? [], clientParamNames);
+  const wire = adaptWireParameters(op, clientParamNames, user.byMethodName);
   return {
     name: toSnakeCase(method.name),
+    name_camel: toCamelCase(method.name),
     doc: method.doc ?? null,
     http_method: (op.verb ?? "get").toLowerCase(),
     path: op.path ?? "",
-    parameters: (method.parameters ?? []).map(adaptMethodParameter),
+    /** User-facing args. Snake-cased name + type; the emitter renders
+     *  these as method parameters in order. */
+    user_parameters: user.list,
+    /** Resolved path placeholders: `{ wire_name, source: {kind, name} }`. */
+    path_parameters: wire.path,
+    /** Query string keys: `{ wire_name, source, optional }`. */
+    query_parameters: wire.query,
+    /** Static + sourced headers. The emitter always sets the ones with
+     *  `source.kind === "constant"`. */
+    header_parameters: wire.header,
+    /** Body to serialize; null for no-body operations. */
+    body_parameter: wire.body,
     response: adaptMethodResponse(method.response),
     paging: adaptPaging(method),
     long_running: adaptLro(method),
@@ -324,36 +295,129 @@ function adaptMethod(method) {
   };
 }
 
-function adaptMethodParameter(p) {
-  return {
-    name: toSnakeCase(p.name),
-    serialized_name: p.serializedName ?? p.name,
-    location: paramLocation(p),
-    doc: p.doc ?? null,
-    param_type: adaptType(p.type),
-    optional: !!p.optional,
-  };
+/**
+ * Extract the user-facing parameter list from a method. Filter out:
+ *   - `accept` / `contentType` (constants emitted by the wire layer)
+ *   - client-level parameters (`subscriptionId`, `apiVersion`,
+ *     `endpoint`) — those are stored on the client struct
+ *
+ * Returns `{ list, byMethodName }`. `list` keeps spec declaration
+ * order so the generated function signature matches the spec.
+ * `byMethodName` is a `Map<string, UserParam>` keyed by the *raw*
+ * TCGC name (camelCase) used by `methodParameterSegments` lookups.
+ */
+function adaptUserParameters(params, clientParamNames) {
+  const list = [];
+  const byMethodName = new Map();
+  for (const p of params) {
+    const snake = toSnakeCase(p.name);
+    if (clientParamNames.has(snake)) continue;
+    if (p.isApiVersionParam) continue;
+    if (p.type?.kind === "constant") continue;
+    // Anything else is a real user-facing arg.
+    const out = {
+      name: snake,
+      method_name: p.name,
+      doc: p.doc ?? null,
+      param_type: adaptType(p.type),
+      optional: !!p.optional,
+    };
+    list.push(out);
+    byMethodName.set(p.name, out);
+  }
+  return { list, byMethodName };
 }
 
-function paramLocation(p) {
-  switch (p.kind) {
-    case "path":
-      return "path";
-    case "query":
-      return "query";
-    case "header":
-      return "header";
-    case "cookie":
-      return "cookie";
-    case "body":
-      return "body";
-    case "endpoint":
-      return "endpoint";
-    case "credential":
-      return "credential";
-    default:
-      return "method";
+/**
+ * Walk `operation.parameters` + `operation.bodyParam` and tag each
+ * HTTP-layer parameter with how to source its value at runtime:
+ *
+ *   - `{ kind: "client", name: "subscription_id" }`
+ *   - `{ kind: "user",   name: "resource_group_name" }`
+ *   - `{ kind: "constant", value: "application/json" }`
+ *
+ * Returns `{ path, query, header, body }`.
+ */
+function adaptWireParameters(op, clientParamNames, userByMethodName) {
+  const path = [];
+  const query = [];
+  const header = [];
+  let body = null;
+
+  function sourceFor(p) {
+    // 1. Sourced from the client struct? (subscription_id, etc.)
+    if (p.onClient) {
+      const snake = toSnakeCase(p.name);
+      if (p.isApiVersionParam) {
+        return { kind: "client", name: "api_version" };
+      }
+      if (clientParamNames.has(snake)) {
+        return { kind: "client", name: snake };
+      }
+    }
+    // 2. Constant from a TypeSpec literal (e.g. `Accept: "application/json"`).
+    if (p.type?.kind === "constant") {
+      return { kind: "constant", value: String(p.type.value ?? "") };
+    }
+    // 3. Sourced from a user-facing method parameter via the
+    //    correspondence chain. Prefer `methodParameterSegments` over
+    //    the deprecated `correspondingMethodParams`.
+    const segs = p.methodParameterSegments?.[0] ?? p.correspondingMethodParams ?? [];
+    for (const seg of segs) {
+      const user = userByMethodName.get(seg.name);
+      if (user) return { kind: "user", name: user.name };
+    }
+    // 4. Last-resort fallback to a constant value if the param has a
+    //    `clientDefaultValue` (e.g. `accept` is sometimes modeled as a
+    //    method param with a constant type that we already filtered).
+    if (typeof p.clientDefaultValue !== "undefined") {
+      return { kind: "constant", value: String(p.clientDefaultValue) };
+    }
+    return { kind: "user", name: toSnakeCase(p.name) };
   }
+
+  for (const p of op.parameters ?? []) {
+    const src = sourceFor(p);
+    const entry = {
+      wire_name: p.serializedName ?? p.name,
+      source: src,
+      optional: !!p.optional,
+    };
+    switch (p.kind) {
+      case "path":
+        path.push(entry);
+        break;
+      case "query":
+        query.push(entry);
+        break;
+      case "header":
+        header.push(entry);
+        break;
+      // We intentionally drop "cookie" — no Azure API uses it.
+    }
+  }
+
+  if (op.bodyParam) {
+    const bp = op.bodyParam;
+    const segs = bp.methodParameterSegments?.[0] ?? bp.correspondingMethodParams ?? [];
+    let userName = null;
+    for (const seg of segs) {
+      const user = userByMethodName.get(seg.name);
+      if (user) {
+        userName = user.name;
+        break;
+      }
+    }
+    body = {
+      user_param_name: userName ?? toSnakeCase(bp.name),
+      content_type:
+        bp.defaultContentType ??
+        (bp.contentTypes && bp.contentTypes[0]) ??
+        "application/json",
+    };
+  }
+
+  return { path, query, header, body };
 }
 
 function adaptMethodResponse(resp) {
@@ -367,22 +431,56 @@ function adaptMethodResponse(resp) {
 function adaptPaging(method) {
   if (method.kind !== "paging" && method.kind !== "lropaging") return null;
   const meta = method.pagingMetadata ?? {};
+  const items = meta.pageItemsSegments ?? [];
+  // For the standard `{ "value": [T, ...], "nextLink": "..." }` ARM
+  // envelope, surface the *item* type (T) so the Zig emitter can hand
+  // it to `core.pager.listPageParser(T)` directly.
+  let item_type = null;
+  if (items.length === 1) {
+    const leaf = items[0];
+    if (leaf.type?.kind === "array" && leaf.type.valueType) {
+      item_type = adaptType(leaf.type.valueType);
+    }
+  }
   return {
-    items_segments: (meta.pageItemsSegments ?? []).map((s) => s.name ?? null),
+    items_segments: items.map((s) => s.name ?? null),
     next_link_segments: (meta.nextLinkSegments ?? []).map((s) => s.name ?? null),
     next_link_verb: meta.nextLinkVerb ?? null,
     next_link_operation: meta.nextLinkOperation?.name ?? null,
+    /** Standard ARM-style page envelope marker. The emitter falls back
+     *  to a hand-rolled parse if this isn't set. */
+    envelope:
+      items.length === 1 &&
+      items[0].name === "value" &&
+      (meta.nextLinkSegments ?? []).length === 1 &&
+      meta.nextLinkSegments[0].name === "nextLink"
+        ? "value_next_link"
+        : null,
+    item_type,
   };
 }
 
 function adaptLro(method) {
   if (method.kind !== "lro" && method.kind !== "lropaging") return null;
   const meta = method.lroMetadata ?? {};
+  // For the typed final result we prefer the operation's own response
+  // model (e.g. `PrivateCloud` for `privateClouds.update`) over the
+  // polling envelope (`ArmOperationStatusResourceProvisioningState`
+  // and similar). TCGC's `finalResult` / `envelopeResult` reflect the
+  // *polling protocol* output, not the user-visible result. Falling
+  // back to `method.response.type` matches every ARM LRO we've
+  // surveyed.
+  let result_type = null;
+  if (method.response?.type) {
+    result_type = adaptType(method.response.type);
+  } else if (meta.finalResult && typeof meta.finalResult !== "string") {
+    result_type = adaptType(meta.finalResult);
+  } else if (meta.envelopeResult) {
+    result_type = adaptType(meta.envelopeResult);
+  }
   return {
     final_state_via: meta.finalStateVia ?? null,
-    final_response_type: meta.finalResponse?.envelopeResult
-      ? adaptType(meta.finalResponse.envelopeResult)
-      : null,
+    final_response_type: result_type,
   };
 }
 
@@ -565,25 +663,10 @@ function toSnakeCase(str) {
     .replace(/^_/, "");
 }
 
-/* ───────────────────────── CLI shim ──────────────────────────────── */
-
-if (
-  typeof process !== "undefined" &&
-  typeof process.argv?.[1] === "string" &&
-  process.argv[1].endsWith("index.js")
-) {
-  const args = process.argv.slice(2);
-  if (args.length < 1) {
-    console.error(
-      "Usage: node src/index.js <project-path> [emitter-options-json]",
-    );
-    process.exit(1);
-  }
-  compile(args[0], args[1] || "{}").then(
-    (json) => process.stdout.write(json + "\n"),
-    (err) => {
-      console.error(err?.stack || err);
-      process.exit(1);
-    },
-  );
+/** Lower-camel-case: keeps existing camelCase as-is, lowercases the
+ *  first character. `PrivateClouds` → `privateClouds`. */
+function toCamelCase(str) {
+  const s = String(str);
+  if (!s) return s;
+  return s.charAt(0).toLowerCase() + s.slice(1);
 }

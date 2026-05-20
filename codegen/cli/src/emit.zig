@@ -97,6 +97,30 @@ pub fn emit(
         defer allocator.free(s);
         try writeFile(allocator, io, out_dir, "README.md", s, opts.run_zig_fmt);
     }
+    // Operator-owned test file. The emitter writes a stub the first
+    // time a package is generated; on subsequent regenerations the
+    // sync helper marks it as operator-managed (SKIP-and-warn) so
+    // operator-added tests are preserved.
+    try writeFile(
+        allocator,
+        io,
+        out_dir,
+        "src/clients_test.zig",
+        \\//! Tests for the generated `clients.zig`.
+        \\//!
+        \\//! Kept in a separate file so the emitter can overwrite
+        \\//! `clients.zig` without losing test coverage. Wired into the
+        \\//! package's test step via `root.zig`.
+        \\//!
+        \\//! This file is **operator-owned**: `codegen/scripts/sync.sh`
+        \\//! marks it as operator-managed and never overwrites an
+        \\//! existing copy. Add tests freely.
+        \\
+        \\const std = @import("std");
+        \\
+    ,
+        opts.run_zig_fmt,
+    );
     try writeFile(allocator, io, out_dir, ".gitignore", "zig-cache/\nzig-out/\n.zig-cache/\n", opts.run_zig_fmt);
 }
 
@@ -162,9 +186,25 @@ fn renderRoot(allocator: std.mem.Allocator, model: cm.CodeModel, display_name: [
         \\
     , .{ .name = display_name });
 
+    // Only re-export root clients; sub-clients are reachable through
+    // accessor methods on their parent.
     for (model.clients) |c| {
+        if (!c.is_root) continue;
         try w.print("pub const {s} = clients.{s};\n", .{ c.name, c.name });
     }
+
+    // Pull in an operator-owned test file (if it exists) so package
+    // tests stay reachable from `zig build test` across regenerations.
+    // The file itself is hand-written and never overwritten by the
+    // emitter; if it does not exist, the build will fail loudly — drop
+    // the import or land a `clients_test.zig` in `src/`.
+    try w.writeAll(
+        \\
+        \\test {
+        \\    _ = @import("clients_test.zig");
+        \\}
+        \\
+    );
     return try aw.toOwnedSlice();
 }
 
@@ -179,12 +219,21 @@ fn renderClients(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
         \\//! Generated service clients.
         \\
         \\const std = @import("std");
+        \\const serde = @import("serde");
         \\const core = @import("azure_core");
         \\const models = @import("models.zig");
         \\const enums = @import("enums.zig");
         \\
         \\
     );
+
+    // Per-family constants (endpoint default, api-version default, auth
+    // scopes) emitted next to the root client so callers can override
+    // them via `InitOptions`.
+    for (model.clients) |c| {
+        if (!c.is_root) continue;
+        try renderRootConstants(w, c);
+    }
 
     for (model.clients) |c| {
         try renderClient(allocator, w, c);
@@ -193,80 +242,457 @@ fn renderClients(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
     return try aw.toOwnedSlice();
 }
 
+fn renderRootConstants(w: *std.Io.Writer, c: cm.Client) !void {
+    if (c.endpoint.default_value) |ep| {
+        try w.print("const default_endpoint = \"{s}\";\n", .{ep});
+    }
+    if (c.api_version_default) |ver| {
+        try w.print("const default_api_version = \"{s}\";\n", .{ver});
+    }
+    try w.writeAll("const auth_scopes: []const []const u8 = &.{");
+    for (c.credential_scopes, 0..) |s, i| {
+        if (i != 0) try w.writeAll(", ");
+        try w.print("\"{s}\"", .{s});
+    }
+    try w.writeAll("};\n\n");
+}
+
 fn renderClient(allocator: std.mem.Allocator, w: *std.Io.Writer, c: cm.Client) !void {
     if (c.doc) |d| try renderDocComment(w, d);
     try w.print("pub const {s} = struct {{\n", .{c.name});
+
+    // Common state — present on root *and* sub-clients so the
+    // accessor on the root can splat-assign in one literal.
     try w.writeAll(
-        \\    allocator: std.mem.Allocator,
-        \\    pipeline: core.pipeline.HttpPipeline,
         \\    endpoint: []const u8,
+        \\    api_version: []const u8,
+        \\    pipeline: core.pipeline.HttpPipeline,
         \\
     );
+    for (c.init_parameters) |p| {
+        const id = try ids.quoteIfNeeded(allocator, p.name);
+        defer allocator.free(id);
+        const ty = try renderFieldType(allocator, p.param_type, p.optional, .clients);
+        defer allocator.free(ty);
+        try w.print("    {s}: {s},\n", .{ id, ty });
+    }
 
-    try w.print(
-        \\
-        \\    pub fn init(
-        \\        allocator: std.mem.Allocator,
-        \\        endpoint: []const u8,
-        \\        credential: core.credentials.TokenCredential,
-        \\        transport: core.http.Transport,
-        \\        options: ClientOptions,
-        \\    ) {s} {{
-        \\        _ = options;
-        \\        _ = credential;
-        \\        return .{{
-        \\            .allocator = allocator,
-        \\            .endpoint = endpoint,
-        \\            .pipeline = core.pipeline.HttpPipeline.init(allocator, transport),
-        \\        }};
-        \\    }}
-        \\
-        \\    pub const ClientOptions = struct {{}};
-        \\
-    , .{c.name});
+    if (c.is_root) {
+        // Root-only: own the bearer-token policy + policy_ptrs slice
+        // and expose `init()`/`deinit()`.
+        try w.writeAll(
+            \\    allocator: std.mem.Allocator,
+            \\    auth_policy: *core.pipeline.BearerTokenAuthPolicy,
+            \\    policy_ptrs: []*core.pipeline.HttpPolicy,
+            \\
+        );
+        try renderRootInit(allocator, w, c);
+        try renderRootDeinit(w);
+    }
+
+    for (c.sub_clients) |sc| {
+        try renderSubClientAccessor(w, c, sc);
+    }
 
     for (c.methods) |m| {
-        try renderMethod(allocator, w, m);
+        try renderMethod(allocator, w, c, m);
     }
 
     try w.writeAll("};\n");
 }
 
-fn renderMethod(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method) !void {
-    if (m.doc) |d| try renderDocComment(w, d);
-    const camel = try naming.toCamelCase(allocator, m.name);
-    defer allocator.free(camel);
-
-    try w.print("    pub fn {s}(self: *@This()", .{camel});
-    for (m.parameters) |p| {
-        if (std.mem.eql(u8, p.location, "endpoint") or
-            std.mem.eql(u8, p.location, "credential")) continue;
+fn renderRootInit(allocator: std.mem.Allocator, w: *std.Io.Writer, c: cm.Client) !void {
+    try w.writeAll(
+        \\
+        \\    pub const InitOptions = struct {
+        \\
+    );
+    for (c.init_parameters) |p| {
+        const id = try ids.quoteIfNeeded(allocator, p.name);
+        defer allocator.free(id);
         const ty = try renderFieldType(allocator, p.param_type, p.optional, .clients);
         defer allocator.free(ty);
-        const id = try ids.quoteIfNeeded(allocator, p.name);
-        defer allocator.free(id);
-        try w.print(", {s}: {s}", .{ id, ty });
-    }
-    if (m.response.response_type) |rt| {
-        const ret = try types.renderType(allocator, rt, .clients);
-        defer allocator.free(ret);
-        try w.print(") !{s} {{\n", .{ret});
-    } else {
-        try w.writeAll(") !void {\n");
-    }
-    try w.writeAll("        _ = self;\n");
-    for (m.parameters) |p| {
-        if (std.mem.eql(u8, p.location, "endpoint") or
-            std.mem.eql(u8, p.location, "credential")) continue;
-        const id = try ids.quoteIfNeeded(allocator, p.name);
-        defer allocator.free(id);
-        try w.print("        _ = {s};\n", .{id});
+        try w.print("        {s}: {s},\n", .{ id, ty });
     }
     try w.writeAll(
-        \\        return error.NotImplemented;
+        \\        credential: *core.credentials.TokenCredential,
+        \\        transport: *core.http.HttpTransport,
+        \\
+    );
+    if (c.endpoint.default_value != null) {
+        try w.writeAll("        endpoint: []const u8 = default_endpoint,\n");
+    } else {
+        try w.writeAll("        endpoint: []const u8,\n");
+    }
+    if (c.api_version_default != null) {
+        try w.writeAll("        api_version: []const u8 = default_api_version,\n");
+    } else {
+        try w.writeAll("        api_version: []const u8,\n");
+    }
+    try w.writeAll(
+        \\    };
+        \\
+        \\
+    );
+
+    try w.print(
+        \\    pub fn init(allocator: std.mem.Allocator, options: InitOptions) !{s} {{
+        \\        const auth_policy = try allocator.create(core.pipeline.BearerTokenAuthPolicy);
+        \\        errdefer allocator.destroy(auth_policy);
+        \\        auth_policy.* = core.pipeline.BearerTokenAuthPolicy.init(
+        \\            allocator,
+        \\            options.credential,
+        \\            auth_scopes,
+        \\        );
+        \\
+        \\        const policy_ptrs = try allocator.alloc(*core.pipeline.HttpPolicy, 1);
+        \\        errdefer allocator.free(policy_ptrs);
+        \\        policy_ptrs[0] = auth_policy.asPolicy();
+        \\
+        \\        return .{{
+        \\            .allocator = allocator,
+        \\            .endpoint = options.endpoint,
+        \\            .api_version = options.api_version,
+        \\            .auth_policy = auth_policy,
+        \\            .policy_ptrs = policy_ptrs,
+        \\            .pipeline = .{{
+        \\                .policies = policy_ptrs,
+        \\                .transport_impl = options.transport,
+        \\            }},
+        \\
+    , .{c.name});
+    for (c.init_parameters) |p| {
+        const id = try ids.quoteIfNeeded(allocator, p.name);
+        defer allocator.free(id);
+        try w.print("            .{s} = options.{s},\n", .{ id, id });
+    }
+    try w.writeAll(
+        \\        };
         \\    }
         \\
     );
+}
+
+fn renderRootDeinit(w: *std.Io.Writer) !void {
+    try w.writeAll(
+        \\
+        \\    pub fn deinit(self: *@This()) void {
+        \\        self.auth_policy.deinit();
+        \\        self.allocator.destroy(self.auth_policy);
+        \\        self.allocator.free(self.policy_ptrs);
+        \\    }
+        \\
+    );
+}
+
+fn renderSubClientAccessor(w: *std.Io.Writer, parent: cm.Client, sc: cm.SubClient) !void {
+    try w.print(
+        \\
+        \\    pub fn {[acc]s}(self: *@This()) {[name]s} {{
+        \\        return .{{
+        \\            .endpoint = self.endpoint,
+        \\            .api_version = self.api_version,
+        \\            .pipeline = self.pipeline,
+        \\
+    , .{ .acc = sc.accessor_camel, .name = sc.client_name });
+    for (parent.init_parameters) |p| {
+        try w.print("            .{s} = self.{s},\n", .{ p.name, p.name });
+    }
+    try w.writeAll(
+        \\        };
+        \\    }
+        \\
+    );
+}
+
+// ─── method bodies ────────────────────────────────────────────────────
+
+fn renderMethod(allocator: std.mem.Allocator, w: *std.Io.Writer, c: cm.Client, m: cm.Method) !void {
+    if (m.doc) |d| try renderDocComment(w, d);
+
+    // Return type depends on method kind.
+    const ReturnKind = enum { void_op, value_op, list_op, lro_op };
+    const ret_kind: ReturnKind = if (m.long_running != null)
+        .lro_op
+    else if (std.mem.eql(u8, m.kind, "paging") or std.mem.eql(u8, m.kind, "lropaging"))
+        .list_op
+    else if (m.response.response_type == null)
+        .void_op
+    else
+        .value_op;
+
+    const ret_str = try renderReturnType(allocator, m, ret_kind);
+    defer allocator.free(ret_str);
+
+    // Signature: `pub fn <name>(self: *@This(), alloc: std.mem.Allocator, <user params>) !<ret> {`
+    try w.print("\n    pub fn {s}(self: *@This(), alloc: std.mem.Allocator", .{m.name_camel});
+    for (m.user_parameters) |p| {
+        const id = try ids.quoteIfNeeded(allocator, p.name);
+        defer allocator.free(id);
+        const ty = try renderFieldType(allocator, p.param_type, p.optional, .clients);
+        defer allocator.free(ty);
+        try w.print(", {s}: {s}", .{ id, ty });
+    }
+    try w.print(") !{s} {{\n", .{ret_str});
+
+    // URL build (path + query) — shared by every kind.
+    try renderUrlBuild(allocator, w, m);
+
+    switch (ret_kind) {
+        .list_op => try renderListBody(allocator, w, m),
+        .void_op => try renderVoidBody(allocator, w, c, m),
+        .value_op => try renderValueBody(allocator, w, c, m),
+        .lro_op => try renderLroBody(allocator, w, c, m),
+    }
+
+    try w.writeAll("    }\n");
+}
+
+fn renderReturnType(allocator: std.mem.Allocator, m: cm.Method, kind: anytype) ![]u8 {
+    return switch (kind) {
+        .void_op => try allocator.dupe(u8, "void"),
+        .value_op => blk: {
+            const t = m.response.response_type.?;
+            const ty = try types.renderType(allocator, t, .clients);
+            break :blk ty;
+        },
+        .list_op => blk: {
+            // Item type from paging metadata when the envelope is the
+            // standard `{ value, nextLink }` shape; otherwise fall back
+            // to the response type (already an array).
+            const item_type_ref: ?cm.TypeRef = if (m.paging) |p| p.item_type else null;
+            if (item_type_ref) |it| {
+                const ty = try types.renderType(allocator, it, .clients);
+                defer allocator.free(ty);
+                break :blk try std.fmt.allocPrint(allocator, "core.pager.PipelinePager({s})", .{ty});
+            }
+            // No item_type? Fall back to the response type's element.
+            if (m.response.response_type) |t| {
+                const ty = try types.renderType(allocator, t, .clients);
+                defer allocator.free(ty);
+                // ty is `[]const X`. Strip the prefix to get X.
+                const prefix = "[]const ";
+                if (std.mem.startsWith(u8, ty, prefix)) {
+                    const elem = ty[prefix.len..];
+                    break :blk try std.fmt.allocPrint(allocator, "core.pager.PipelinePager({s})", .{elem});
+                }
+                break :blk try std.fmt.allocPrint(allocator, "core.pager.PipelinePager({s})", .{ty});
+            }
+            break :blk try allocator.dupe(u8, "core.pager.PipelinePager(std.json.Value)");
+        },
+        .lro_op => blk: {
+            const final = if (m.long_running) |l| l.final_response_type else null;
+            if (final) |t| {
+                const ty = try types.renderType(allocator, t, .clients);
+                defer allocator.free(ty);
+                break :blk try std.fmt.allocPrint(allocator, "core.lro.TypedPoller({s})", .{ty});
+            }
+            break :blk try allocator.dupe(u8, "core.lro.TypedPoller(void)");
+        },
+    };
+}
+
+/// Render the `const url = try std.fmt.allocPrint(...)` block. Path
+/// placeholders are substituted by walking the operation path
+/// character-by-character and replacing `{<wire_name>}` runs with
+/// `{s}`, then collecting the corresponding value-expression for the
+/// argument tuple.
+fn renderUrlBuild(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method) !void {
+    var fmt_buf: std.ArrayList(u8) = .empty;
+    defer fmt_buf.deinit(allocator);
+    var args_buf: std.ArrayList(u8) = .empty;
+    defer args_buf.deinit(allocator);
+
+    // Endpoint first.
+    try fmt_buf.appendSlice(allocator, "{s}");
+    try args_buf.appendSlice(allocator, "self.endpoint");
+
+    // Walk the path, substituting placeholders.
+    var i: usize = 0;
+    const path = m.path;
+    while (i < path.len) {
+        if (path[i] == '{') {
+            const close = std.mem.indexOfScalarPos(u8, path, i + 1, '}') orelse break;
+            const wire_name = path[i + 1 .. close];
+            try fmt_buf.appendSlice(allocator, "{s}");
+            const expr = try valueExpression(allocator, m.path_parameters, wire_name);
+            defer allocator.free(expr);
+            try args_buf.appendSlice(allocator, ", ");
+            try args_buf.appendSlice(allocator, expr);
+            i = close + 1;
+        } else {
+            try fmt_buf.append(allocator, path[i]);
+            i += 1;
+        }
+    }
+
+    // Query string. Required first, then optional ones with conditional
+    // concatenation (out of scope here — AVS has none).
+    if (m.query_parameters.len > 0) {
+        try fmt_buf.append(allocator, '?');
+        for (m.query_parameters, 0..) |qp, idx| {
+            if (idx != 0) try fmt_buf.append(allocator, '&');
+            try fmt_buf.print(allocator, "{s}={{s}}", .{qp.wire_name});
+            const expr = try sourceExpression(allocator, qp.source);
+            defer allocator.free(expr);
+            try args_buf.appendSlice(allocator, ", ");
+            try args_buf.appendSlice(allocator, expr);
+        }
+    }
+
+    try w.print(
+        \\        const url = try std.fmt.allocPrint(alloc, "{s}", .{{ {s} }});
+        \\        defer alloc.free(url);
+        \\
+    , .{ fmt_buf.items, args_buf.items });
+}
+
+fn valueExpression(allocator: std.mem.Allocator, params: []cm.WireParameter, wire_name: []const u8) ![]u8 {
+    for (params) |p| {
+        if (std.mem.eql(u8, p.wire_name, wire_name)) {
+            return sourceExpression(allocator, p.source);
+        }
+    }
+    // Fallback to the placeholder name as-is (snake-cased) — keeps the
+    // file compiling so the reviewer can spot the missing wire mapping.
+    return try std.fmt.allocPrint(allocator, "\"<missing:{s}>\"", .{wire_name});
+}
+
+fn sourceExpression(allocator: std.mem.Allocator, src: cm.WireSource) ![]u8 {
+    if (std.mem.eql(u8, src.kind, "constant")) {
+        return try std.fmt.allocPrint(allocator, "\"{s}\"", .{src.value orelse ""});
+    }
+    if (std.mem.eql(u8, src.kind, "client")) {
+        return try std.fmt.allocPrint(allocator, "self.{s}", .{src.name orelse "<missing>"});
+    }
+    // user
+    return try ids.quoteIfNeeded(allocator, src.name orelse "<missing>");
+}
+
+fn renderListBody(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method) !void {
+    // Determine the item type T.
+    const item_type_ref: ?cm.TypeRef = if (m.paging) |p| p.item_type else null;
+    var item_ty: []u8 = undefined;
+    if (item_type_ref) |t| {
+        item_ty = try types.renderType(allocator, t, .clients);
+    } else if (m.response.response_type) |t| {
+        const ty = try types.renderType(allocator, t, .clients);
+        defer allocator.free(ty);
+        const prefix = "[]const ";
+        if (std.mem.startsWith(u8, ty, prefix)) {
+            item_ty = try allocator.dupe(u8, ty[prefix.len..]);
+        } else {
+            item_ty = try allocator.dupe(u8, ty);
+        }
+    } else {
+        item_ty = try allocator.dupe(u8, "std.json.Value");
+    }
+    defer allocator.free(item_ty);
+
+    try w.print(
+        \\        return core.pager.PipelinePager({s}).init(
+        \\            self.pipeline,
+        \\            url,
+        \\            alloc,
+        \\            core.pager.listPageParser({s}),
+        \\            "application/json",
+        \\        );
+        \\
+    , .{ item_ty, item_ty });
+}
+
+fn renderRequestSetup(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method) !void {
+    const verb = try httpVerbZig(allocator, m.http_method);
+    defer allocator.free(verb);
+    try w.print(
+        \\        var req = core.http.Request.init(alloc, .{s}, url);
+        \\        defer req.deinit();
+        \\
+    , .{verb});
+
+    // Render headers — every entry tagged `kind: "constant"` becomes a
+    // `req.setHeader("Name", "value")` line. User-sourced headers are
+    // out of scope for the initial emitter cut (AVS has none).
+    for (m.header_parameters) |hp| {
+        if (std.mem.eql(u8, hp.source.kind, "constant")) {
+            try w.print("        try req.setHeader(\"{s}\", \"{s}\");\n", .{ hp.wire_name, hp.source.value orelse "" });
+        }
+    }
+
+    if (m.body_parameter) |bp| {
+        const id = try ids.quoteIfNeeded(allocator, bp.user_param_name);
+        defer allocator.free(id);
+        try w.print(
+            \\        const body_json = try serde.json.toSlice(alloc, {s});
+            \\        defer alloc.free(body_json);
+            \\        req.body = body_json;
+            \\
+        , .{id});
+    }
+}
+
+fn httpVerbZig(allocator: std.mem.Allocator, http_method: []const u8) ![]u8 {
+    var upper = try allocator.alloc(u8, http_method.len);
+    for (http_method, 0..) |c, i| upper[i] = std.ascii.toUpper(c);
+    return upper;
+}
+
+fn renderVoidBody(allocator: std.mem.Allocator, w: *std.Io.Writer, c: cm.Client, m: cm.Method) !void {
+    try renderRequestSetup(allocator, w, m);
+    try w.print(
+        \\
+        \\        var resp = try self.pipeline.send(&req);
+        \\        defer resp.deinit();
+        \\
+        \\        if (!resp.isSuccess()) {{
+        \\            core.pager.logHttpError("{[client]s}.{[method]s}", resp.status_code, resp.body);
+        \\            return error.AzureRequestFailed;
+        \\        }}
+        \\        return;
+        \\
+    , .{ .client = c.name, .method = m.name_camel });
+}
+
+fn renderValueBody(allocator: std.mem.Allocator, w: *std.Io.Writer, c: cm.Client, m: cm.Method) !void {
+    try renderRequestSetup(allocator, w, m);
+    const ty = try types.renderType(allocator, m.response.response_type.?, .clients);
+    defer allocator.free(ty);
+    try w.print(
+        \\
+        \\        var resp = try self.pipeline.send(&req);
+        \\        defer resp.deinit();
+        \\
+        \\        if (!resp.isSuccess()) {{
+        \\            core.pager.logHttpError("{[client]s}.{[method]s}", resp.status_code, resp.body);
+        \\            return error.AzureRequestFailed;
+        \\        }}
+        \\        return try serde.json.fromSlice({[ty]s}, alloc, resp.body);
+        \\
+    , .{ .client = c.name, .method = m.name_camel, .ty = ty });
+}
+
+fn renderLroBody(allocator: std.mem.Allocator, w: *std.Io.Writer, c: cm.Client, m: cm.Method) !void {
+    try renderRequestSetup(allocator, w, m);
+    const final_ty = if (m.long_running) |l| l.final_response_type else null;
+    var ty_owned: []u8 = undefined;
+    if (final_ty) |t| {
+        ty_owned = try types.renderType(allocator, t, .clients);
+    } else {
+        ty_owned = try allocator.dupe(u8, "void");
+    }
+    defer allocator.free(ty_owned);
+    try w.print(
+        \\
+        \\        var resp = try self.pipeline.send(&req);
+        \\        defer resp.deinit();
+        \\
+        \\        if (!resp.isSuccess()) {{
+        \\            core.pager.logHttpError("{[client]s}.{[method]s}", resp.status_code, resp.body);
+        \\            return error.AzureRequestFailed;
+        \\        }}
+        \\        return try core.lro.TypedPoller({[ty]s}).init(alloc, self.pipeline, resp, url, .{{}});
+        \\
+    , .{ .client = c.name, .method = m.name_camel, .ty = ty_owned });
 }
 
 // ─── models.zig ───────────────────────────────────────────────────────
