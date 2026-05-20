@@ -466,17 +466,28 @@ function adaptLro(method) {
   // For the typed final result we prefer the operation's own response
   // model (e.g. `PrivateCloud` for `privateClouds.update`) over the
   // polling envelope (`ArmOperationStatusResourceProvisioningState`
-  // and similar). TCGC's `finalResult` / `envelopeResult` reflect the
-  // *polling protocol* output, not the user-visible result. Falling
-  // back to `method.response.type` matches every ARM LRO we've
-  // surveyed.
+  // and similar). TCGC sets `method.response.type` to
+  // `lroMetadata.finalResponse.result` — the user-visible final
+  // result — or leaves it `undefined` when the LRO has no final body
+  // (`lroMetadata.finalResponse === undefined`). That covers:
+  //
+  //   * ARM DELETE LROs (e.g. `privateClouds.delete`)
+  //   * "Fire-and-forget" POST LROs (e.g. `rotateVcenterPassword`,
+  //     `checkAvailability`, `restrictMovement`)
+  //
+  // Leaving `final_response_type` null in those cases makes the Zig
+  // emitter fall back to `core.lro.TypedPoller(void)`, which skips
+  // the final deserialize (see `sdk/core/lro.zig`:
+  // `if (T == void) return;`).
+  //
+  // We deliberately do not fall back to `lroMetadata.envelopeResult`
+  // when `method.response.type` is undefined: that field is the
+  // polling-protocol envelope, not a user-visible payload, and
+  // surfacing it would re-introduce
+  // `TypedPoller(ArmOperationStatus...)` for void LROs.
   let result_type = null;
   if (method.response?.type) {
     result_type = adaptType(method.response.type);
-  } else if (meta.finalResult && typeof meta.finalResult !== "string") {
-    result_type = adaptType(meta.finalResult);
-  } else if (meta.envelopeResult) {
-    result_type = adaptType(meta.envelopeResult);
   }
   return {
     final_state_via: meta.finalStateVia ?? null,
