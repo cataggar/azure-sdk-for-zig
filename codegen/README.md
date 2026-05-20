@@ -51,6 +51,7 @@ component into a single wasm executable.
 | `tcgc-component/`                 | JS wrapper componentized by `jco` into `tcgc.wasm`.    |
 | `cli/`                            | Zig WASI emitter — `codegen-cli.wasm`, composed with `tcgc.wasm` and driven by `cli/scripts/run.sh`. |
 | `tspconfigs/`                     | Zig tool that manages `tspconfigs.yaml` (`zig build tspconfigs-update` / `-resolve`). |
+| `scripts/sync.sh`                 | Resyncs `rest/<pkg>/` from the canonical spec; overwrites only `src/models.zig` by default. |
 | `fixtures/`                       | Small JSON code-model fixtures used by emitter tests.  |
 
 ## Branch model
@@ -109,6 +110,25 @@ codegen/cli/scripts/run.sh \
     .tsp-generated/client/keyvault_secrets \
     --package-name keyvault-secrets
 ```
+
+## How to resync a tracked package
+
+Tracked packages under `rest/<pkg>/` mostly own their `build.zig`,
+`build.zig.zon`, `README.md`, `.gitignore`, and (occasionally)
+`src/clients.zig` / `src/enums.zig` — operators wire in examples,
+add deps, work around emitter bugs, etc. `src/models.zig` is the one
+file the emitter currently owns end-to-end.
+
+```bash
+codegen/scripts/sync.sh                 # every existing rest/<pkg>/
+codegen/scripts/sync.sh arm_avs         # one package
+codegen/scripts/sync.sh --force arm_avs # also overwrite build.zig etc.
+```
+
+Default behaviour copies `src/models.zig` only and reports every
+other emitter-managed file that drifted as `SKIP <file>
+(operator-managed)`. `--force` overwrites them too — use that flag
+when onboarding a brand-new package.
 
 > **Note on the engine wasm.** If step 0 is skipped, step 1 falls
 > back to the bundled 32 MiB-heap engine — small specs (e.g.
