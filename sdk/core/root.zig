@@ -30,6 +30,8 @@ pub const base64 = @import("base64.zig");
 pub const cloud = @import("cloud.zig");
 pub const tracing = @import("tracing/root.zig");
 pub const dotenv = @import("dotenv.zig");
+pub const arm = @import("arm/resource.zig");
+pub const open_enum = @import("open_enum.zig");
 
 pub const version: []const u8 = "0.1.0";
 pub const user_agent_prefix: []const u8 = "azsdk-zig-core/" ++ version;

@@ -265,14 +265,31 @@ fn renderModels(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
     errdefer aw.deinit();
     const w = &aw.writer;
 
+    // Whether any generated struct will reference `core.arm.ResourceKind`.
+    // If so, models.zig needs `const core = @import("azure_core");`.
+    var needs_core = false;
+    for (model.models) |m| {
+        if (m.arm_resource_kind != null) {
+            needs_core = true;
+            break;
+        }
+    }
+
     try w.writeAll(
         \\//! Generated data-transfer-object models.
         \\
         \\const std = @import("std");
         \\const enums = @import("enums.zig");
         \\
-        \\
     );
+    if (needs_core) {
+        try w.writeAll(
+            \\const core = @import("azure_core");
+            \\
+        );
+    }
+    try w.writeAll("\n");
+
     for (model.models) |m| {
         if (m.doc) |d| try renderDocComment(w, d);
         try w.print("pub const {s} = struct {{\n", .{m.name});
@@ -295,6 +312,18 @@ fn renderModels(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
         // services emit camelCase JSON keys while Zig fields are snake_case.
         // Per-field `wireName` overrides from TCGC still win when present.
         try w.writeAll("\n    pub const serde = .{ .rename_all = .camel_case };\n");
+
+        // ARM resource marker. Lets `core.arm` helpers like
+        // `core.arm.id(&res)` / `core.arm.setTags(&res, ...)` dispatch
+        // on the resource's base type at comptime, with zero runtime
+        // cost. See `sdk/core/arm/resource.zig`.
+        if (m.arm_resource_kind) |kind| {
+            try w.print(
+                "    pub const arm_resource_kind: core.arm.ResourceKind = .{s};\n",
+                .{kind},
+            );
+        }
+
         try w.writeAll("};\n\n");
     }
     return try aw.toOwnedSlice();
@@ -307,18 +336,32 @@ fn renderEnums(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
     errdefer aw.deinit();
     const w = &aw.writer;
 
+    var any_extensible = false;
+    for (model.enums) |e| {
+        if (e.extensible) {
+            any_extensible = true;
+            break;
+        }
+    }
+
     try w.writeAll(
         \\//! Generated enums.
         \\//!
         \\//! Azure data-plane enums are typically *extensible* — the wire
         \\//! contract may grow with new values that older clients still
         \\//! need to round-trip. Represented as a tagged union with a
-        \\//! catch-all `unknown` variant.
+        \\//! catch-all `unrecognized` variant.
         \\
         \\const std = @import("std");
         \\
-        \\
     );
+    if (any_extensible) {
+        try w.writeAll(
+            \\const core = @import("azure_core");
+            \\
+        );
+    }
+    try w.writeAll("\n");
     for (model.enums) |e| {
         if (e.doc) |d| try renderDocComment(w, d);
         if (e.extensible) {
@@ -330,7 +373,35 @@ fn renderEnums(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
                 defer allocator.free(tag);
                 try w.print("    {s},\n", .{tag});
             }
-            try w.writeAll("    unknown: []const u8,\n};\n\n");
+            try w.writeAll("    unrecognized: []const u8,\n\n");
+
+            try w.writeAll("    const wire_names = .{\n");
+            for (e.values) |v| {
+                const snake = try naming.toSnakeCase(allocator, v.name);
+                defer allocator.free(snake);
+                const tag = try ids.quoteIfNeeded(allocator, snake);
+                defer allocator.free(tag);
+                const wire = wireNameForEnumValue(v);
+                try w.print("        .{s} = \"{s}\",\n", .{ tag, wire });
+            }
+            try w.writeAll("    };\n\n");
+
+            try w.writeAll(
+                \\    pub fn zerdeDeserialize(
+                \\        comptime T: type,
+                \\        allocator: std.mem.Allocator,
+                \\        deserializer: anytype,
+                \\    ) @TypeOf(deserializer.*).Error!T {
+                \\        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
+                \\    }
+                \\
+                \\    pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
+                \\        return core.open_enum.serialize(self, wire_names, serializer);
+                \\    }
+                \\};
+                \\
+                \\
+            );
         } else {
             try w.print("pub const {s} = enum {{\n", .{e.name});
             for (e.values) |v| {
@@ -344,6 +415,16 @@ fn renderEnums(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
         }
     }
     return try aw.toOwnedSlice();
+}
+
+/// Choose the JSON-wire string for an enum value. Prefers the explicit
+/// `value` if it parsed as a string (TypeSpec allows `Foo: "wire-form"`);
+/// falls back to the variant `name` otherwise.
+fn wireNameForEnumValue(v: cm.EnumValue) []const u8 {
+    return switch (v.value) {
+        .string => |s| s,
+        else => v.name,
+    };
 }
 
 // ─── build.zig / build.zig.zon ───────────────────────────────────────

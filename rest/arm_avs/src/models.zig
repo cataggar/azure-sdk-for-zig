@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const enums = @import("enums.zig");
+const core = @import("azure_core");
 
 /// A list of REST API operations supported by an Azure Resource Provider. It contains an URL link to get the next set of results.
 pub const OperationListResult = struct {
@@ -89,12 +90,19 @@ pub const AddonList = struct {
 
 /// An addon resource
 pub const Addon = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?AddonProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// Name of the addon.
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?AddonProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// The properties of an addon
@@ -109,30 +117,36 @@ pub const AddonProperties = struct {
 
 /// The properties of a Site Recovery Manager (SRM) addon
 pub const AddonSrmProperties = struct {
-    /// The Site Recovery Manager (SRM) license
-    license_key: ?[]const u8 = null,
     /// The type of private cloud addon
     addon_type: []const u8,
+    /// The state of the addon provisioning
+    provisioning_state: ?enums.AddonProvisioningState = null,
+    /// The Site Recovery Manager (SRM) license
+    license_key: ?[]const u8 = null,
 
     pub const serde = .{ .rename_all = .camel_case };
 };
 
 /// The properties of a vSphere Replication (VR) addon
 pub const AddonVrProperties = struct {
-    /// The vSphere Replication Server (VRS) count
-    vrs_count: i32,
     /// The type of private cloud addon
     addon_type: []const u8,
+    /// The state of the addon provisioning
+    provisioning_state: ?enums.AddonProvisioningState = null,
+    /// The vSphere Replication Server (VRS) count
+    vrs_count: i32,
 
     pub const serde = .{ .rename_all = .camel_case };
 };
 
 /// The properties of an HCX addon
 pub const AddonHcxProperties = struct {
-    /// The HCX offer, example VMware MaaS Cloud Provider (Enterprise)
-    offer: []const u8,
     /// The type of private cloud addon
     addon_type: []const u8,
+    /// The state of the addon provisioning
+    provisioning_state: ?enums.AddonProvisioningState = null,
+    /// The HCX offer, example VMware MaaS Cloud Provider (Enterprise)
+    offer: []const u8,
     /// HCX management network.
     management_network: ?[]const u8 = null,
     /// HCX uplink network
@@ -143,10 +157,12 @@ pub const AddonHcxProperties = struct {
 
 /// The properties of an Arc addon
 pub const AddonArcProperties = struct {
-    /// The VMware vCenter resource ID
-    v_center: ?[]const u8 = null,
     /// The type of private cloud addon
     addon_type: []const u8,
+    /// The state of the addon provisioning
+    provisioning_state: ?enums.AddonProvisioningState = null,
+    /// The VMware vCenter resource ID
+    v_center: ?[]const u8 = null,
 
     pub const serde = .{ .rename_all = .camel_case };
 };
@@ -202,12 +218,19 @@ pub const ExpressRouteAuthorizationList = struct {
 
 /// ExpressRoute Circuit Authorization
 pub const ExpressRouteAuthorization = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?ExpressRouteAuthorizationProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// Name of the ExpressRoute Circuit Authorization
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?ExpressRouteAuthorizationProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// The properties of an ExpressRoute Circuit Authorization resource
@@ -236,12 +259,19 @@ pub const CloudLinkList = struct {
 
 /// A cloud link resource
 pub const CloudLink = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?CloudLinkProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// Name of the cloud link.
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?CloudLinkProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// The properties of a cloud link.
@@ -268,14 +298,21 @@ pub const ClusterList = struct {
 
 /// A cluster resource
 pub const Cluster = struct {
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
+    /// Name of the cluster
+    name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
     /// The resource-specific properties for this resource.
     properties: ?ClusterProperties = null,
     /// The SKU (Stock Keeping Unit) assigned to this resource.
     sku: Sku,
-    /// Name of the cluster
-    name: []const u8,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// The properties of a cluster
@@ -360,12 +397,19 @@ pub const DatastoreList = struct {
 
 /// A datastore resource
 pub const Datastore = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?DatastoreProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// Name of the datastore
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?DatastoreProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// The properties of a datastore
@@ -439,12 +483,19 @@ pub const GlobalReachConnectionList = struct {
 
 /// A global reach connection resource
 pub const GlobalReachConnection = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?GlobalReachConnectionProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// Name of the global reach connection
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?GlobalReachConnectionProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// The properties of a global reach connection
@@ -481,12 +532,19 @@ pub const HcxEnterpriseSiteList = struct {
 
 /// An HCX Enterprise Site resource
 pub const HcxEnterpriseSite = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?HcxEnterpriseSiteProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// Name of the HCX Enterprise Site
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?HcxEnterpriseSiteProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// The properties of an HCX Enterprise Site
@@ -513,16 +571,23 @@ pub const HostListResult = struct {
 
 /// A host resource
 pub const Host = struct {
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
+    /// The host identifier.
+    name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
     /// The resource-specific properties for this resource.
     properties: ?HostProperties = null,
     /// The availability zones.
     zones: ?[]const []const u8 = null,
     /// The SKU (Stock Keeping Unit) assigned to this resource.
     sku: ?Sku = null,
-    /// The host identifier.
-    name: []const u8,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// The properties of a host.
@@ -548,6 +613,17 @@ pub const HostProperties = struct {
 pub const GeneralHostProperties = struct {
     /// The kind of host.
     kind: []const u8,
+    /// The state of the host provisioning.
+    provisioning_state: ?enums.HostProvisioningState = null,
+    /// Display name of the host in VMware vCenter.
+    display_name: ?[]const u8 = null,
+    /// vCenter managed object reference ID of the host.
+    mo_ref_id: ?[]const u8 = null,
+    /// Fully qualified domain name of the host.
+    fqdn: ?[]const u8 = null,
+    /// If provided, the host is in maintenance. The value is the reason for maintenance.
+    maintenance: ?enums.HostMaintenance = null,
+    fault_domain: ?[]const u8 = null,
 
     pub const serde = .{ .rename_all = .camel_case };
 };
@@ -556,6 +632,17 @@ pub const GeneralHostProperties = struct {
 pub const SpecializedHostProperties = struct {
     /// The kind of host is specialized.
     kind: []const u8,
+    /// The state of the host provisioning.
+    provisioning_state: ?enums.HostProvisioningState = null,
+    /// Display name of the host in VMware vCenter.
+    display_name: ?[]const u8 = null,
+    /// vCenter managed object reference ID of the host.
+    mo_ref_id: ?[]const u8 = null,
+    /// Fully qualified domain name of the host.
+    fqdn: ?[]const u8 = null,
+    /// If provided, the host is in maintenance. The value is the reason for maintenance.
+    maintenance: ?enums.HostMaintenance = null,
+    fault_domain: ?[]const u8 = null,
 
     pub const serde = .{ .rename_all = .camel_case };
 };
@@ -572,12 +659,19 @@ pub const IscsiPathListResult = struct {
 
 /// An iSCSI path resource
 pub const IscsiPath = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?IscsiPathProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// Name of the iSCSI path resource
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?IscsiPathProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// The properties of an iSCSI path resource
@@ -602,12 +696,19 @@ pub const LicenseListResult = struct {
 
 /// A license resource
 pub const License = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?LicenseProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// Name of the license.
     name: enums.LicenseName,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?LicenseProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// The properties of a license
@@ -624,6 +725,8 @@ pub const LicenseProperties = struct {
 pub const VmwareFirewallLicenseProperties = struct {
     /// License kind
     kind: []const u8,
+    /// The state of the license provisioning
+    provisioning_state: ?enums.LicenseProvisioningState = null,
     /// License key
     license_key: ?[]const u8 = null,
     /// Number of cores included in the license, measured per hour
@@ -682,12 +785,19 @@ pub const MaintenanceListResult = struct {
 
 /// A cluster resource
 pub const Maintenance = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?MaintenanceProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// Name of the maintenance
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?MaintenanceProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// properties of a maintenance
@@ -960,12 +1070,19 @@ pub const PlacementPoliciesList = struct {
 
 /// A vSphere Distributed Resource Scheduler (DRS) placement policy
 pub const PlacementPolicy = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?PlacementPolicyProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// Name of the placement policy.
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?PlacementPolicyProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// Abstract placement policy properties
@@ -984,18 +1101,32 @@ pub const PlacementPolicyProperties = struct {
 
 /// VM-VM placement policy properties
 pub const VmPlacementPolicyProperties = struct {
+    /// placement policy type
+    type: []const u8,
+    /// Whether the placement policy is enabled or disabled
+    state: ?enums.PlacementPolicyState = null,
+    /// Display name of the placement policy
+    display_name: ?[]const u8 = null,
+    /// The provisioning state
+    provisioning_state: ?enums.PlacementPolicyProvisioningState = null,
     /// Virtual machine members list
     vm_members: []const []const u8,
     /// placement policy affinity type
     affinity_type: enums.AffinityType,
-    /// placement policy type
-    type: []const u8,
 
     pub const serde = .{ .rename_all = .camel_case };
 };
 
 /// VM-Host placement policy properties
 pub const VmHostPlacementPolicyProperties = struct {
+    /// placement policy type
+    type: []const u8,
+    /// Whether the placement policy is enabled or disabled
+    state: ?enums.PlacementPolicyState = null,
+    /// Display name of the placement policy
+    display_name: ?[]const u8 = null,
+    /// The provisioning state
+    provisioning_state: ?enums.PlacementPolicyProvisioningState = null,
     /// Virtual machine members list
     vm_members: []const []const u8,
     /// Host members list
@@ -1006,8 +1137,6 @@ pub const VmHostPlacementPolicyProperties = struct {
     affinity_strength: ?enums.AffinityStrength = null,
     /// placement policy azure hybrid benefit opt-in type
     azure_hybrid_benefit_type: ?enums.AzureHybridBenefitType = null,
-    /// placement policy type
-    type: []const u8,
 
     pub const serde = .{ .rename_all = .camel_case };
 };
@@ -1048,6 +1177,18 @@ pub const PrivateCloudList = struct {
 
 /// A private cloud resource
 pub const PrivateCloud = struct {
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
+    /// Name of the private cloud
+    name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// Resource tags.
+    tags: ?std.json.ArrayHashMap([]const u8) = null,
+    /// The geo-location where the resource lives
+    location: []const u8,
     /// The resource-specific properties for this resource.
     properties: ?PrivateCloudProperties = null,
     /// The SKU (Stock Keeping Unit) assigned to this resource.
@@ -1056,10 +1197,9 @@ pub const PrivateCloud = struct {
     identity: ?SystemAssignedServiceIdentity = null,
     /// The availability zones.
     zones: ?[]const []const u8 = null,
-    /// Name of the private cloud
-    name: []const u8,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .tracked;
 };
 
 /// The properties of a private cloud resource
@@ -1251,6 +1391,8 @@ pub const VcfLicense = struct {
 pub const Vcf5License = struct {
     /// License kind
     kind: []const u8,
+    /// The state of the license provisioning
+    provisioning_state: ?enums.LicenseProvisioningState = null,
     /// License key
     license_key: ?[]const u8 = null,
     /// Number of cores included in the license
@@ -1342,12 +1484,19 @@ pub const ProvisionedNetworkListResult = struct {
 
 /// A provisioned network resource
 pub const ProvisionedNetwork = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?ProvisionedNetworkProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// Name of the cloud link.
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?ProvisionedNetworkProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// The properties of a provisioned network.
@@ -1374,12 +1523,19 @@ pub const PureStoragePolicyListResult = struct {
 
 /// An instance describing a Pure Storage Policy Based Management policy
 pub const PureStoragePolicy = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?PureStoragePolicyProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// Name of the storage policy.
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?PureStoragePolicyProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// Properties of a Pure Storage Policy Based Management policy
@@ -1406,12 +1562,19 @@ pub const ScriptCmdletsList = struct {
 
 /// A cmdlet available for script execution
 pub const ScriptCmdlet = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?ScriptCmdletProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// Name of the script cmdlet.
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?ScriptCmdletProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// Properties of a pre-canned script
@@ -1460,12 +1623,19 @@ pub const ScriptExecutionsList = struct {
 
 /// An instance of a script executed by a user - custom or AVS
 pub const ScriptExecution = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?ScriptExecutionProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// Name of the script cmdlet.
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?ScriptExecutionProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// Properties of a user-invoked script
@@ -1518,32 +1688,38 @@ pub const ScriptExecutionParameter = struct {
 
 /// a plain text value execution parameter
 pub const ScriptSecureStringExecutionParameter = struct {
-    /// A secure value for the passed parameter, not to be stored in logs
-    secure_value: ?[]const u8 = null,
     /// The type of execution parameter
     type: []const u8,
+    /// The parameter name
+    name: []const u8,
+    /// A secure value for the passed parameter, not to be stored in logs
+    secure_value: ?[]const u8 = null,
 
     pub const serde = .{ .rename_all = .camel_case };
 };
 
 /// a plain text value execution parameter
 pub const ScriptStringExecutionParameter = struct {
-    /// The value for the passed parameter
-    value: ?[]const u8 = null,
     /// The type of execution parameter
     type: []const u8,
+    /// The parameter name
+    name: []const u8,
+    /// The value for the passed parameter
+    value: ?[]const u8 = null,
 
     pub const serde = .{ .rename_all = .camel_case };
 };
 
 /// a powershell credential object
 pub const PSCredentialExecutionParameter = struct {
+    /// The type of execution parameter
+    type: []const u8,
+    /// The parameter name
+    name: []const u8,
     /// username for login
     username: ?[]const u8 = null,
     /// password for login
     password: ?[]const u8 = null,
-    /// The type of execution parameter
-    type: []const u8,
 
     pub const serde = .{ .rename_all = .camel_case };
 };
@@ -1564,12 +1740,19 @@ pub const ScriptPackagesList = struct {
 
 /// Script Package resources available for execution
 pub const ScriptPackage = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?ScriptPackageProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// Name of the script package.
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?ScriptPackageProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// Properties of a Script Package subresource
@@ -1690,12 +1873,19 @@ pub const VirtualMachinesList = struct {
 
 /// Virtual Machine
 pub const VirtualMachine = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?VirtualMachineProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// ID of the virtual machine.
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?VirtualMachineProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// Virtual Machine Properties
@@ -1724,12 +1914,19 @@ pub const VirtualMachineRestrictMovement = struct {
 
 /// Workload Network
 pub const WorkloadNetwork = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?WorkloadNetworkProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// Name of the global reach connection
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?WorkloadNetworkProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// The properties of a workload network
@@ -1762,12 +1959,19 @@ pub const WorkloadNetworkDhcpList = struct {
 
 /// NSX DHCP
 pub const WorkloadNetworkDhcp = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?WorkloadNetworkDhcpEntity = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// The ID of the DHCP configuration
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?WorkloadNetworkDhcpEntity = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// Base class for WorkloadNetworkDhcpServer and WorkloadNetworkDhcpRelay to
@@ -1789,22 +1993,38 @@ pub const WorkloadNetworkDhcpEntity = struct {
 
 /// NSX DHCP Server
 pub const WorkloadNetworkDhcpServer = struct {
+    /// Type of DHCP: SERVER or RELAY.
+    dhcp_type: []const u8,
+    /// Display name of the DHCP entity.
+    display_name: ?[]const u8 = null,
+    /// NSX Segments consuming DHCP.
+    segments: ?[]const []const u8 = null,
+    /// The provisioning state
+    provisioning_state: ?enums.WorkloadNetworkDhcpProvisioningState = null,
+    /// NSX revision number.
+    revision: ?i64 = null,
     /// DHCP Server Address.
     server_address: ?[]const u8 = null,
     /// DHCP Server Lease Time.
     lease_time: ?i64 = null,
-    /// Type of DHCP: SERVER or RELAY.
-    dhcp_type: []const u8,
 
     pub const serde = .{ .rename_all = .camel_case };
 };
 
 /// NSX DHCP Relay
 pub const WorkloadNetworkDhcpRelay = struct {
-    /// DHCP Relay Addresses. Max 3.
-    server_addresses: ?[]const []const u8 = null,
     /// Type of DHCP: SERVER or RELAY.
     dhcp_type: []const u8,
+    /// Display name of the DHCP entity.
+    display_name: ?[]const u8 = null,
+    /// NSX Segments consuming DHCP.
+    segments: ?[]const []const u8 = null,
+    /// The provisioning state
+    provisioning_state: ?enums.WorkloadNetworkDhcpProvisioningState = null,
+    /// NSX revision number.
+    revision: ?i64 = null,
+    /// DHCP Relay Addresses. Max 3.
+    server_addresses: ?[]const []const u8 = null,
 
     pub const serde = .{ .rename_all = .camel_case };
 };
@@ -1821,12 +2041,19 @@ pub const WorkloadNetworkDnsServicesList = struct {
 
 /// NSX DNS Service
 pub const WorkloadNetworkDnsService = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?WorkloadNetworkDnsServiceProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// ID of the DNS service.
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?WorkloadNetworkDnsServiceProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// NSX DNS Service Properties
@@ -1863,12 +2090,19 @@ pub const WorkloadNetworkDnsZonesList = struct {
 
 /// NSX DNS Zone
 pub const WorkloadNetworkDnsZone = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?WorkloadNetworkDnsZoneProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// ID of the DNS zone.
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?WorkloadNetworkDnsZoneProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// NSX DNS Zone Properties
@@ -1903,12 +2137,19 @@ pub const WorkloadNetworkGatewayList = struct {
 
 /// NSX Gateway.
 pub const WorkloadNetworkGateway = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?WorkloadNetworkGatewayProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// The ID of the NSX Gateway
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?WorkloadNetworkGatewayProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// Properties of a NSX Gateway.
@@ -1935,12 +2176,19 @@ pub const WorkloadNetworkPortMirroringList = struct {
 
 /// NSX Port Mirroring
 pub const WorkloadNetworkPortMirroring = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?WorkloadNetworkPortMirroringProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// ID of the NSX port mirroring profile.
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?WorkloadNetworkPortMirroringProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// NSX Port Mirroring Properties
@@ -1975,12 +2223,19 @@ pub const WorkloadNetworkPublicIPsList = struct {
 
 /// NSX Public IP Block
 pub const WorkloadNetworkPublicIP = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?WorkloadNetworkPublicIPProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// ID of the DNS zone.
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?WorkloadNetworkPublicIPProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// NSX Public IP Block Properties
@@ -2009,12 +2264,19 @@ pub const WorkloadNetworkSegmentsList = struct {
 
 /// NSX Segment
 pub const WorkloadNetworkSegment = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?WorkloadNetworkSegmentProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// The ID of the NSX Segment
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?WorkloadNetworkSegmentProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// NSX Segment Properties
@@ -2067,12 +2329,19 @@ pub const WorkloadNetworkVirtualMachinesList = struct {
 
 /// NSX Virtual Machine
 pub const WorkloadNetworkVirtualMachine = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?WorkloadNetworkVirtualMachineProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// ID of the virtual machine.
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?WorkloadNetworkVirtualMachineProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// NSX Virtual Machine Properties
@@ -2099,12 +2368,19 @@ pub const WorkloadNetworkVMGroupsList = struct {
 
 /// NSX VM Group
 pub const WorkloadNetworkVMGroup = struct {
-    /// The resource-specific properties for this resource.
-    properties: ?WorkloadNetworkVMGroupProperties = null,
+    /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
+    id: ?[]const u8 = null,
     /// ID of the VM group.
     name: []const u8,
+    /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
+    type: ?[]const u8 = null,
+    /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
+    system_data: ?SystemData = null,
+    /// The resource-specific properties for this resource.
+    properties: ?WorkloadNetworkVMGroupProperties = null,
 
     pub const serde = .{ .rename_all = .camel_case };
+    pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
 /// NSX VM Group Properties
