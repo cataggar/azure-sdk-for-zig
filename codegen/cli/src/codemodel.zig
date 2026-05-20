@@ -95,6 +95,13 @@ pub const Model = struct {
     discriminator: ?[]const u8 = null,
     is_input: bool = false,
     is_output: bool = false,
+    /// ARM base-type kind, set by the TCGC adapter when this model's
+    /// `baseModel` chain terminates in `Azure.ResourceManager.{Proxy,
+    /// Tracked,Extension}Resource`. The emitter renders a
+    /// `pub const arm_resource_kind: core.arm.ResourceKind = .<kind>;`
+    /// inside the generated struct so `core.arm` helpers can dispatch
+    /// on it.
+    arm_resource_kind: ?[]const u8 = null,
 };
 
 pub const Field = struct {

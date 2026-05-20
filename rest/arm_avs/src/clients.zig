@@ -10,16 +10,13 @@
 //!   • Only `AVSClient.privateClouds().listInSubscription(...)` is wired.
 //!   • All other ARM resource collections (Clusters, Datastores, …) are
 //!     omitted — add them when the emitter learns sub-client recursion.
-//!   • We use a local `PrivateCloudSummary` instead of `models.PrivateCloud`
-//!     because the emitter does not yet emit fields inherited from base
-//!     ARM resource types (`id`, `location` on `TrackedResource` /
-//!     `Resource`); the generated `models.PrivateCloud` only has the
-//!     leaf-type fields, so the example would have nothing to print for
-//!     location.
-//!     The camelCase rename hint that this shim demonstrates is now
-//!     emitter-supplied as of Phase E1: every generated struct in
-//!     `src/models.zig` ends in
-//!     `pub const serde = .{ .rename_all = .camel_case };`.
+//!
+//! Resource DTOs come from the generated `models.zig`: every ARM resource
+//! (e.g. `models.PrivateCloud`) carries the full set of inherited fields
+//! from its base chain (`id`, `name`, `type`, `system_data`, plus
+//! `location`/`tags` for tracked resources) and is tagged with
+//! `pub const arm_resource_kind: core.arm.ResourceKind = .tracked;` so
+//! that generic helpers in `core.arm` accept it.
 
 const std = @import("std");
 const core = @import("azure_core");
@@ -29,27 +26,8 @@ const default_endpoint = "https://management.azure.com";
 const default_api_version = "2025-09-01";
 const arm_scopes: []const []const u8 = &.{"https://management.azure.com/.default"};
 
-/// Minimal view of a Private Cloud sufficient for `listInSubscription`.
-///
-/// Hand-written wire-format type with `pub const serde = .{ .rename_all =
-/// .camel_case }` so ARM's camelCase JSON keys map to snake_case Zig
-/// fields. This is the convention the emitter is expected to apply to
-/// every generated struct.
-pub const PrivateCloudSummary = struct {
-    id: ?[]const u8 = null,
-    name: []const u8,
-    location: ?[]const u8 = null,
-    properties: ?Properties = null,
-
-    pub const Properties = struct {
-        provisioning_state: ?[]const u8 = null,
-
-        pub const serde = .{ .rename_all = .camel_case };
-    };
-};
-
 /// Pager type returned by `PrivateCloudsClient.listInSubscription`.
-pub const PrivateCloudPager = core.pager.PipelinePager(PrivateCloudSummary);
+pub const PrivateCloudPager = core.pager.PipelinePager(models.PrivateCloud);
 
 /// Top-level Azure VMware Solution client.
 ///
@@ -144,7 +122,7 @@ pub const PrivateCloudsClient = struct {
             self.pipeline,
             url,
             alloc,
-            core.pager.listPageParser(PrivateCloudSummary),
+            core.pager.listPageParser(models.PrivateCloud),
             "application/json",
         );
     }
@@ -158,7 +136,7 @@ test "AVSClient.privateClouds().listInSubscription pages mock results" {
     const allocator = testing.allocator;
 
     const body =
-        \\{"value":[{"name":"cloud-a","sku":{"name":"av36"}},{"name":"cloud-b","sku":{"name":"av36p"}}]}
+        \\{"value":[{"name":"cloud-a","location":"eastus","sku":{"name":"av36"}},{"name":"cloud-b","location":"westus2","sku":{"name":"av36p"}}]}
     ;
     var mock = core.http.MockTransport.init(allocator, 200, body);
     defer mock.deinit();
@@ -193,6 +171,11 @@ test "AVSClient.privateClouds().listInSubscription pages mock results" {
     try testing.expectEqual(@as(usize, 2), page.len);
     try testing.expectEqualStrings("cloud-a", page[0].name);
     try testing.expectEqualStrings("cloud-b", page[1].name);
+    // Generic ARM accessors from `core.arm` work because the generated
+    // struct carries `pub const arm_resource_kind = .tracked` and the
+    // required base fields.
+    try testing.expectEqualStrings("eastus", core.arm.location(&page[0]).?);
+    try testing.expectEqualStrings("westus2", core.arm.location(&page[1]).?);
 
     try testing.expect(try pager.next() == null);
 }

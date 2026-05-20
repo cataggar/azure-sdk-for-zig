@@ -56,12 +56,13 @@ pub fn main(init: std.process.Init) !void {
     var count: usize = 0;
     while (try pager.next()) |page| {
         for (page) |cloud| {
-            const state = if (cloud.properties) |props|
-                props.provisioning_state orelse "-"
-            else
-                "-";
-            const location = cloud.location orelse "-";
-            try w.print("{s:<40}  {s:<14}  {s:<18}\n", .{ cloud.name, location, state });
+            const state: []const u8 = if (cloud.properties) |props|
+                if (props.provisioning_state) |ps| switch (ps) {
+                    .unrecognized => |s| s,
+                    else => @tagName(ps),
+                } else "-"
+            else "-";
+            try w.print("{s:<40}  {s:<14}  {s:<18}\n", .{ cloud.name, cloud.location, state });
             count += 1;
         }
     }
