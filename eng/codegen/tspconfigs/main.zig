@@ -1,9 +1,11 @@
 //! tspconfigs — manage eng/codegen/tspconfigs.yaml
 //!
 //! Subcommands:
-//!   update   Reconcile entries against ../azure-rest-api-specs (add/remove
-//!            groups based on whether each tspconfig.yaml exists). Preserves
-//!            previously-resolved fields (js/zig).
+//!   update   Discover every `tspconfig.yaml` under
+//!            `../azure-rest-api-specs/specification/` and reconcile the
+//!            yaml entries against the live filesystem (add new specs,
+//!            remove vanished ones). Previously-resolved js/zig fields
+//!            on kept entries are preserved.
 //!   resolve  For each entry, parse the underlying tspconfig.yaml in
 //!            ../azure-rest-api-specs and derive:
 //!              js   — the @azure-tools/typespec-ts package-details name
@@ -18,9 +20,9 @@
 
 const std = @import("std");
 
-const PACKAGES_TXT = "eng/codegen/typespec-packages.txt";
 const OUT_YAML = "eng/codegen/tspconfigs.yaml";
 const SPECS_ROOT = "../azure-rest-api-specs";
+const SPECS_SPECIFICATION_DIR = SPECS_ROOT ++ "/specification";
 
 const Entry = struct {
     path: []const u8,
@@ -55,16 +57,8 @@ pub fn main(init: std.process.Init) !u8 {
 // ---------------------------------------------------------------------------
 
 fn cmdUpdate(alloc: std.mem.Allocator, io: std.Io) !void {
-    const txt = try readFile(alloc, io, PACKAGES_TXT, 16 * 1024 * 1024);
-
     var paths: std.ArrayList([]const u8) = .empty;
-    var it = std.mem.splitScalar(u8, txt, '\n');
-    while (it.next()) |raw| {
-        const line = std.mem.trim(u8, raw, " \t\r");
-        if (line.len == 0) continue;
-        if (line[0] == '#') continue;
-        try paths.append(alloc, line);
-    }
+    try collectTspconfigs(alloc, io, &paths);
     std.mem.sort([]const u8, paths.items, {}, lessThanStr);
 
     var existing = try loadYaml(alloc, io, OUT_YAML);
@@ -74,15 +68,9 @@ fn cmdUpdate(alloc: std.mem.Allocator, io: std.Io) !void {
     var kept: usize = 0;
     var removed: usize = 0;
 
-    var seen_in_txt = std.StringHashMap(void).init(alloc);
+    var seen_on_disk = std.StringHashMap(void).init(alloc);
     for (paths.items) |p| {
-        try seen_in_txt.put(p, {});
-        const abs = try std.fs.path.join(alloc, &.{ SPECS_ROOT, p });
-        const exists = fileExists(io, abs);
-        if (!exists) {
-            if (existing.contains(p)) removed += 1;
-            continue;
-        }
+        try seen_on_disk.put(p, {});
         if (existing.get(p)) |e| {
             try out.append(alloc, e);
             kept += 1;
@@ -94,7 +82,7 @@ fn cmdUpdate(alloc: std.mem.Allocator, io: std.Io) !void {
 
     var ex_iter = existing.iterator();
     while (ex_iter.next()) |kv| {
-        if (!seen_in_txt.contains(kv.key_ptr.*)) removed += 1;
+        if (!seen_on_disk.contains(kv.key_ptr.*)) removed += 1;
     }
 
     try writeYaml(alloc, io, OUT_YAML, out.items);
@@ -103,6 +91,38 @@ fn cmdUpdate(alloc: std.mem.Allocator, io: std.Io) !void {
         "tspconfigs update: {d} entries ({d} added, {d} kept, {d} removed)\n",
         .{ out.items.len, added, kept, removed },
     );
+}
+
+/// Recursively walk `SPECS_SPECIFICATION_DIR` and collect every path that
+/// ends in `tspconfig.yaml`. Stored paths are repo-relative
+/// (`specification/<rest>/tspconfig.yaml`) so they round-trip through
+/// `loadYaml`/`writeYaml` unchanged.
+fn collectTspconfigs(
+    alloc: std.mem.Allocator,
+    io: std.Io,
+    out: *std.ArrayList([]const u8),
+) !void {
+    var dir = std.Io.Dir.cwd().openDir(io, SPECS_SPECIFICATION_DIR, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => {
+            std.debug.print(
+                "specs root not found at '{s}'; expected a sibling clone of azure-rest-api-specs\n",
+                .{SPECS_SPECIFICATION_DIR},
+            );
+            return error.SpecsRootNotFound;
+        },
+        else => return err,
+    };
+    defer dir.close(io);
+
+    var walker = try dir.walk(alloc);
+    defer walker.deinit();
+
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.eql(u8, entry.basename, "tspconfig.yaml")) continue;
+        const rel = try std.fmt.allocPrint(alloc, "specification/{s}", .{entry.path});
+        try out.append(alloc, rel);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -147,20 +167,11 @@ fn cmdResolve(alloc: std.mem.Allocator, io: std.Io) !void {
 // I/O helpers
 // ---------------------------------------------------------------------------
 
-fn readFile(alloc: std.mem.Allocator, io: std.Io, sub_path: []const u8, limit: usize) ![]u8 {
-    return std.Io.Dir.readFileAlloc(.cwd(), io, sub_path, alloc, .limited(limit));
-}
-
 fn readFileOptional(alloc: std.mem.Allocator, io: std.Io, sub_path: []const u8, limit: usize) !?[]u8 {
     return std.Io.Dir.readFileAlloc(.cwd(), io, sub_path, alloc, .limited(limit)) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => return err,
     };
-}
-
-fn fileExists(io: std.Io, sub_path: []const u8) bool {
-    _ = std.Io.Dir.statFile(.cwd(), io, sub_path, .{}) catch return false;
-    return true;
 }
 
 fn writeFile(io: std.Io, sub_path: []const u8, data: []const u8) !void {
@@ -208,8 +219,7 @@ fn loadYaml(alloc: std.mem.Allocator, io: std.Io, file_path: []const u8) !EntryM
         const val_owned = try alloc.dupe(u8, val);
         if (cur_key) |ck| {
             const ePtr = map.getPtr(ck) orelse continue;
-            if (std.mem.eql(u8, key, "js")) ePtr.js = val_owned
-            else if (std.mem.eql(u8, key, "zig")) ePtr.zig = val_owned;
+            if (std.mem.eql(u8, key, "js")) ePtr.js = val_owned else if (std.mem.eql(u8, key, "zig")) ePtr.zig = val_owned;
         }
     }
     return map;
@@ -221,9 +231,10 @@ fn writeYaml(alloc: std.mem.Allocator, io: std.Io, file_path: []const u8, entrie
 
     try buf.appendSlice(alloc,
         \\# Auto-generated by `zig build tspconfigs-update` / `tspconfigs-resolve`.
-        \\# Source: eng/codegen/typespec-packages.txt
-        \\# Edit packages.txt to add/remove specs; the next `update` run will
-        \\# reconcile this file against ../azure-rest-api-specs.
+        \\# Source of truth: this file. `update` walks
+        \\# `../azure-rest-api-specs/specification/` and reconciles entries
+        \\# against the live filesystem; `resolve` parses each entry's
+        \\# upstream tspconfig.yaml to fill in `js`/`zig`.
         \\
         \\
     );

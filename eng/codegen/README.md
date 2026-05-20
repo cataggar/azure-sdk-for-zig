@@ -43,7 +43,7 @@ generator is a **native Zig binary** that hosts the component.
 
 | Path                              | Purpose                                                |
 | --------------------------------- | ------------------------------------------------------ |
-| `typespec-packages.txt`           | Inventory: 564 `tspconfig.yaml` repo-relative paths.   |
+| `tspconfigs.yaml`                 | Tracked manifest of every tspconfig.yaml under `../azure-rest-api-specs/specification/`, with resolved `js`/`zig` package names. Regenerate via `zig build tspconfigs-update` (re-walks the specs) and `zig build tspconfigs-resolve` (refills `js`/`zig`). |
 | `wit/tcgc.wit`                    | WIT contract exposed by `tcgc.wasm`.                   |
 | `tcgc-component/`                 | JS wrapper componentized by `jco` into `tcgc.wasm`.    |
 | `codegen/`                        | Zig source for the host + emitter binary.              |
