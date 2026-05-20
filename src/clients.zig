@@ -117,7 +117,15 @@ pub const KeyVaultClient = struct {
     }
     /// The GET operation is applicable to any secret stored in Azure Key Vault. This operation requires the secrets/get permission.
     pub fn getSecret(self: *@This(), alloc: std.mem.Allocator, secret_name: []const u8, secret_version: []const u8, out_content_type: ?enums.ContentType) !models.SecretBundle {
-        const url = try std.fmt.allocPrint(alloc, "{s}/secrets/{s}/{s}?api-version={s}&outContentType={s}", .{ self.endpoint, secret_name, secret_version, self.api_version, out_content_type });
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.print(alloc, "{s}/secrets/{s}/{s}?api-version={s}", .{ self.endpoint, secret_name, secret_version, self.api_version });
+        if (out_content_type) |v| {
+            const enc = try core.url.percentEncode(alloc, v.toWire());
+            defer alloc.free(enc);
+            try url_buf.print(alloc, "&outContentType={s}", .{enc});
+        }
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -134,7 +142,13 @@ pub const KeyVaultClient = struct {
     }
     /// The Get Secrets operation is applicable to the entire vault. However, only the base secret identifier and its attributes are provided in the response. Individual secret versions are not listed in the response. This operation requires the secrets/list permission.
     pub fn getSecrets(self: *@This(), alloc: std.mem.Allocator, maxresults: ?i32) !core.pager.PipelinePager(models.SecretItem) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/secrets?api-version={s}&maxresults={s}", .{ self.endpoint, self.api_version, maxresults });
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.print(alloc, "{s}/secrets?api-version={s}", .{ self.endpoint, self.api_version });
+        if (maxresults) |v| {
+            try url_buf.print(alloc, "&maxresults={d}", .{v});
+        }
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.SecretItem).init(
             self.pipeline,
@@ -146,7 +160,13 @@ pub const KeyVaultClient = struct {
     }
     /// The full secret identifier and attributes are provided in the response. No values are returned for the secrets. This operations requires the secrets/list permission.
     pub fn getSecretVersions(self: *@This(), alloc: std.mem.Allocator, secret_name: []const u8, maxresults: ?i32) !core.pager.PipelinePager(models.SecretItem) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/secrets/{s}/versions?api-version={s}&maxresults={s}", .{ self.endpoint, secret_name, self.api_version, maxresults });
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.print(alloc, "{s}/secrets/{s}/versions?api-version={s}", .{ self.endpoint, secret_name, self.api_version });
+        if (maxresults) |v| {
+            try url_buf.print(alloc, "&maxresults={d}", .{v});
+        }
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.SecretItem).init(
             self.pipeline,
@@ -158,7 +178,13 @@ pub const KeyVaultClient = struct {
     }
     /// The Get Deleted Secrets operation returns the secrets that have been deleted for a vault enabled for soft-delete. This operation requires the secrets/list permission.
     pub fn getDeletedSecrets(self: *@This(), alloc: std.mem.Allocator, maxresults: ?i32) !core.pager.PipelinePager(models.DeletedSecretItem) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/deletedsecrets?api-version={s}&maxresults={s}", .{ self.endpoint, self.api_version, maxresults });
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.print(alloc, "{s}/deletedsecrets?api-version={s}", .{ self.endpoint, self.api_version });
+        if (maxresults) |v| {
+            try url_buf.print(alloc, "&maxresults={d}", .{v});
+        }
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.DeletedSecretItem).init(
             self.pipeline,

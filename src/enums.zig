@@ -40,6 +40,10 @@ pub const DeletionRecoveryLevel = union(enum) {
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
     }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
 };
 
 /// The media type (MIME type).
@@ -63,6 +67,10 @@ pub const ContentType = union(enum) {
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
         return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
     }
 };
 
