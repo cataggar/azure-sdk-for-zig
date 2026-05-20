@@ -352,7 +352,7 @@ pub const Addons = struct {
         return try core.lro.TypedPoller(models.Addon).init(alloc, self.pipeline, resp, url, .{});
     }
     /// Delete a Addon
-    pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, addon_name: []const u8) !core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState) {
+    pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, addon_name: []const u8) !core.lro.TypedPoller(void) {
         const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/addons/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, addon_name, self.api_version });
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
@@ -365,7 +365,7 @@ pub const Addons = struct {
             core.pager.logHttpError("Addons.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState).init(alloc, self.pipeline, resp, url, .{});
+        return try core.lro.TypedPoller(void).init(alloc, self.pipeline, resp, url, .{});
     }
 };
 
@@ -425,7 +425,7 @@ pub const Authorizations = struct {
         return try core.lro.TypedPoller(models.ExpressRouteAuthorization).init(alloc, self.pipeline, resp, url, .{});
     }
     /// Delete a ExpressRouteAuthorization
-    pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, authorization_name: []const u8) !core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState) {
+    pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, authorization_name: []const u8) !core.lro.TypedPoller(void) {
         const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/authorizations/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, authorization_name, self.api_version });
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
@@ -438,7 +438,7 @@ pub const Authorizations = struct {
             core.pager.logHttpError("Authorizations.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState).init(alloc, self.pipeline, resp, url, .{});
+        return try core.lro.TypedPoller(void).init(alloc, self.pipeline, resp, url, .{});
     }
 };
 
@@ -498,7 +498,7 @@ pub const CloudLinks = struct {
         return try core.lro.TypedPoller(models.CloudLink).init(alloc, self.pipeline, resp, url, .{});
     }
     /// Delete a CloudLink
-    pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cloud_link_name: []const u8) !core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState) {
+    pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cloud_link_name: []const u8) !core.lro.TypedPoller(void) {
         const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/cloudLinks/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cloud_link_name, self.api_version });
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
@@ -511,7 +511,7 @@ pub const CloudLinks = struct {
             core.pager.logHttpError("CloudLinks.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState).init(alloc, self.pipeline, resp, url, .{});
+        return try core.lro.TypedPoller(void).init(alloc, self.pipeline, resp, url, .{});
     }
 };
 
@@ -592,7 +592,7 @@ pub const Clusters = struct {
         return try core.lro.TypedPoller(models.Cluster).init(alloc, self.pipeline, resp, url, .{});
     }
     /// Delete a Cluster
-    pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8) !core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState) {
+    pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8) !core.lro.TypedPoller(void) {
         const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cluster_name, self.api_version });
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
@@ -605,7 +605,7 @@ pub const Clusters = struct {
             core.pager.logHttpError("Clusters.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState).init(alloc, self.pipeline, resp, url, .{});
+        return try core.lro.TypedPoller(void).init(alloc, self.pipeline, resp, url, .{});
     }
     /// List hosts by zone in a cluster
     pub fn listZones(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8) !models.ClusterZoneList {
@@ -682,7 +682,7 @@ pub const Datastores = struct {
         return try core.lro.TypedPoller(models.Datastore).init(alloc, self.pipeline, resp, url, .{});
     }
     /// Delete a Datastore
-    pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, datastore_name: []const u8) !core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState) {
+    pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, datastore_name: []const u8) !core.lro.TypedPoller(void) {
         const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/datastores/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cluster_name, datastore_name, self.api_version });
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
@@ -695,7 +695,7 @@ pub const Datastores = struct {
             core.pager.logHttpError("Datastores.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState).init(alloc, self.pipeline, resp, url, .{});
+        return try core.lro.TypedPoller(void).init(alloc, self.pipeline, resp, url, .{});
     }
 };
 
@@ -755,7 +755,7 @@ pub const GlobalReachConnections = struct {
         return try core.lro.TypedPoller(models.GlobalReachConnection).init(alloc, self.pipeline, resp, url, .{});
     }
     /// Delete a GlobalReachConnection
-    pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, global_reach_connection_name: []const u8) !core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState) {
+    pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, global_reach_connection_name: []const u8) !core.lro.TypedPoller(void) {
         const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/globalReachConnections/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, global_reach_connection_name, self.api_version });
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
@@ -768,7 +768,7 @@ pub const GlobalReachConnections = struct {
             core.pager.logHttpError("GlobalReachConnections.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState).init(alloc, self.pipeline, resp, url, .{});
+        return try core.lro.TypedPoller(void).init(alloc, self.pipeline, resp, url, .{});
     }
 };
 
@@ -937,7 +937,7 @@ pub const IscsiPaths = struct {
         return try core.lro.TypedPoller(models.IscsiPath).init(alloc, self.pipeline, resp, url, .{});
     }
     /// Delete a IscsiPath
-    pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState) {
+    pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
         const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/iscsiPaths/default?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
@@ -950,7 +950,7 @@ pub const IscsiPaths = struct {
             core.pager.logHttpError("IscsiPaths.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState).init(alloc, self.pipeline, resp, url, .{});
+        return try core.lro.TypedPoller(void).init(alloc, self.pipeline, resp, url, .{});
     }
 };
 
@@ -1010,7 +1010,7 @@ pub const Licenses = struct {
         return try core.lro.TypedPoller(models.License).init(alloc, self.pipeline, resp, url, .{});
     }
     /// Delete a License
-    pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, license_name: enums.LicenseName) !core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState) {
+    pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, license_name: enums.LicenseName) !core.lro.TypedPoller(void) {
         const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/licenses/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, license_name, self.api_version });
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
@@ -1023,7 +1023,7 @@ pub const Licenses = struct {
             core.pager.logHttpError("Licenses.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState).init(alloc, self.pipeline, resp, url, .{});
+        return try core.lro.TypedPoller(void).init(alloc, self.pipeline, resp, url, .{});
     }
     /// Just like ArmResourceActionSync, but with no request body.
     pub fn getProperties(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, license_name: enums.LicenseName) !models.LicenseProperties {
@@ -1261,7 +1261,7 @@ pub const PlacementPolicies = struct {
         return try core.lro.TypedPoller(models.PlacementPolicy).init(alloc, self.pipeline, resp, url, .{});
     }
     /// Delete a PlacementPolicy
-    pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, placement_policy_name: []const u8) !core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState) {
+    pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, placement_policy_name: []const u8) !core.lro.TypedPoller(void) {
         const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/placementPolicies/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cluster_name, placement_policy_name, self.api_version });
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
@@ -1274,7 +1274,7 @@ pub const PlacementPolicies = struct {
             core.pager.logHttpError("PlacementPolicies.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState).init(alloc, self.pipeline, resp, url, .{});
+        return try core.lro.TypedPoller(void).init(alloc, self.pipeline, resp, url, .{});
     }
 };
 
@@ -1367,7 +1367,7 @@ pub const PrivateClouds = struct {
         return try core.lro.TypedPoller(models.PrivateCloud).init(alloc, self.pipeline, resp, url, .{});
     }
     /// Delete a PrivateCloud
-    pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState) {
+    pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
         const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
@@ -1380,10 +1380,10 @@ pub const PrivateClouds = struct {
             core.pager.logHttpError("PrivateClouds.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState).init(alloc, self.pipeline, resp, url, .{});
+        return try core.lro.TypedPoller(void).init(alloc, self.pipeline, resp, url, .{});
     }
     /// Rotate the vCenter password
-    pub fn rotateVcenterPassword(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState) {
+    pub fn rotateVcenterPassword(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
         const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/rotateVcenterPassword?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .POST, url);
@@ -1396,10 +1396,10 @@ pub const PrivateClouds = struct {
             core.pager.logHttpError("PrivateClouds.rotateVcenterPassword", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState).init(alloc, self.pipeline, resp, url, .{});
+        return try core.lro.TypedPoller(void).init(alloc, self.pipeline, resp, url, .{});
     }
     /// Rotate the NSX-T Manager password
-    pub fn rotateNsxtPassword(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState) {
+    pub fn rotateNsxtPassword(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
         const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/rotateNsxtPassword?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .POST, url);
@@ -1412,7 +1412,7 @@ pub const PrivateClouds = struct {
             core.pager.logHttpError("PrivateClouds.rotateNsxtPassword", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState).init(alloc, self.pipeline, resp, url, .{});
+        return try core.lro.TypedPoller(void).init(alloc, self.pipeline, resp, url, .{});
     }
     /// List the admin credentials for the private cloud
     pub fn listAdminCredentials(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !models.AdminCredentials {
@@ -1542,7 +1542,7 @@ pub const PureStoragePolicies = struct {
         return try core.lro.TypedPoller(models.PureStoragePolicy).init(alloc, self.pipeline, resp, url, .{});
     }
     /// Delete a PureStoragePolicy
-    pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, storage_policy_name: []const u8) !core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState) {
+    pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, storage_policy_name: []const u8) !core.lro.TypedPoller(void) {
         const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/pureStoragePolicies/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, storage_policy_name, self.api_version });
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
@@ -1555,7 +1555,7 @@ pub const PureStoragePolicies = struct {
             core.pager.logHttpError("PureStoragePolicies.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState).init(alloc, self.pipeline, resp, url, .{});
+        return try core.lro.TypedPoller(void).init(alloc, self.pipeline, resp, url, .{});
     }
 };
 
@@ -1651,7 +1651,7 @@ pub const ScriptExecutions = struct {
         return try core.lro.TypedPoller(models.ScriptExecution).init(alloc, self.pipeline, resp, url, .{});
     }
     /// Delete a ScriptExecution
-    pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, script_execution_name: []const u8) !core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState) {
+    pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, script_execution_name: []const u8) !core.lro.TypedPoller(void) {
         const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/scriptExecutions/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, script_execution_name, self.api_version });
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
@@ -1664,7 +1664,7 @@ pub const ScriptExecutions = struct {
             core.pager.logHttpError("ScriptExecutions.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState).init(alloc, self.pipeline, resp, url, .{});
+        return try core.lro.TypedPoller(void).init(alloc, self.pipeline, resp, url, .{});
     }
     /// Return the logs for a script execution resource
     pub fn getExecutionLogs(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, script_execution_name: []const u8, script_output_stream_type: ?[]const enums.ScriptOutputStreamType) !models.ScriptExecution {
@@ -1731,7 +1731,7 @@ pub const ServiceComponents = struct {
     pipeline: core.pipeline.HttpPipeline,
     subscription_id: []const u8,
     /// Return service component availability
-    pub fn checkAvailability(self: *@This(), alloc: std.mem.Allocator, location: []const u8, service_component_name: []const u8) !core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState) {
+    pub fn checkAvailability(self: *@This(), alloc: std.mem.Allocator, location: []const u8, service_component_name: []const u8) !core.lro.TypedPoller(void) {
         const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/providers/Microsoft.AVS/locations/{s}/serviceComponents/{s}/checkAvailability?api-version={s}", .{ self.endpoint, self.subscription_id, location, service_component_name, self.api_version });
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .POST, url);
@@ -1744,7 +1744,7 @@ pub const ServiceComponents = struct {
             core.pager.logHttpError("ServiceComponents.checkAvailability", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState).init(alloc, self.pipeline, resp, url, .{});
+        return try core.lro.TypedPoller(void).init(alloc, self.pipeline, resp, url, .{});
     }
 };
 
@@ -1802,7 +1802,7 @@ pub const VirtualMachines = struct {
         return try serde.json.fromSlice(models.VirtualMachine, alloc, resp.body);
     }
     /// Enable or disable DRS-driven VM movement restriction
-    pub fn restrictMovement(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, virtual_machine_id: []const u8, restrict_movement: models.VirtualMachineRestrictMovement) !core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState) {
+    pub fn restrictMovement(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, virtual_machine_id: []const u8, restrict_movement: models.VirtualMachineRestrictMovement) !core.lro.TypedPoller(void) {
         const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/virtualMachines/{s}/restrictMovement?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cluster_name, virtual_machine_id, self.api_version });
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .POST, url);
@@ -1819,7 +1819,7 @@ pub const VirtualMachines = struct {
             core.pager.logHttpError("VirtualMachines.restrictMovement", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState).init(alloc, self.pipeline, resp, url, .{});
+        return try core.lro.TypedPoller(void).init(alloc, self.pipeline, resp, url, .{});
     }
 };
 
@@ -1929,7 +1929,7 @@ pub const WorkloadNetworks = struct {
         return try core.lro.TypedPoller(models.WorkloadNetworkDhcp).init(alloc, self.pipeline, resp, url, .{});
     }
     /// Delete a WorkloadNetworkDhcp
-    pub fn deleteDhcp(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, dhcp_id: []const u8) !core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState) {
+    pub fn deleteDhcp(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, dhcp_id: []const u8) !core.lro.TypedPoller(void) {
         const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dhcpConfigurations/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, dhcp_id, self.api_version });
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
@@ -1942,7 +1942,7 @@ pub const WorkloadNetworks = struct {
             core.pager.logHttpError("WorkloadNetworks.deleteDhcp", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState).init(alloc, self.pipeline, resp, url, .{});
+        return try core.lro.TypedPoller(void).init(alloc, self.pipeline, resp, url, .{});
     }
     /// List WorkloadNetworkDnsService resources by WorkloadNetwork
     pub fn listDnsServices(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetworkDnsService) {
@@ -2016,7 +2016,7 @@ pub const WorkloadNetworks = struct {
         return try core.lro.TypedPoller(models.WorkloadNetworkDnsService).init(alloc, self.pipeline, resp, url, .{});
     }
     /// Delete a WorkloadNetworkDnsService
-    pub fn deleteDnsService(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, dns_service_id: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState) {
+    pub fn deleteDnsService(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, dns_service_id: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
         const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dnsServices/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, dns_service_id, self.api_version });
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
@@ -2029,7 +2029,7 @@ pub const WorkloadNetworks = struct {
             core.pager.logHttpError("WorkloadNetworks.deleteDnsService", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState).init(alloc, self.pipeline, resp, url, .{});
+        return try core.lro.TypedPoller(void).init(alloc, self.pipeline, resp, url, .{});
     }
     /// List WorkloadNetworkDnsZone resources by WorkloadNetwork
     pub fn listDnsZones(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetworkDnsZone) {
@@ -2103,7 +2103,7 @@ pub const WorkloadNetworks = struct {
         return try core.lro.TypedPoller(models.WorkloadNetworkDnsZone).init(alloc, self.pipeline, resp, url, .{});
     }
     /// Delete a WorkloadNetworkDnsZone
-    pub fn deleteDnsZone(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, dns_zone_id: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState) {
+    pub fn deleteDnsZone(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, dns_zone_id: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
         const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dnsZones/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, dns_zone_id, self.api_version });
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
@@ -2116,7 +2116,7 @@ pub const WorkloadNetworks = struct {
             core.pager.logHttpError("WorkloadNetworks.deleteDnsZone", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState).init(alloc, self.pipeline, resp, url, .{});
+        return try core.lro.TypedPoller(void).init(alloc, self.pipeline, resp, url, .{});
     }
     /// List WorkloadNetworkGateway resources by WorkloadNetwork
     pub fn listGateways(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetworkGateway) {
@@ -2219,7 +2219,7 @@ pub const WorkloadNetworks = struct {
         return try core.lro.TypedPoller(models.WorkloadNetworkPortMirroring).init(alloc, self.pipeline, resp, url, .{});
     }
     /// Delete a WorkloadNetworkPortMirroring
-    pub fn deletePortMirroring(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, port_mirroring_id: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState) {
+    pub fn deletePortMirroring(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, port_mirroring_id: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
         const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/portMirroringProfiles/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, port_mirroring_id, self.api_version });
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
@@ -2232,7 +2232,7 @@ pub const WorkloadNetworks = struct {
             core.pager.logHttpError("WorkloadNetworks.deletePortMirroring", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState).init(alloc, self.pipeline, resp, url, .{});
+        return try core.lro.TypedPoller(void).init(alloc, self.pipeline, resp, url, .{});
     }
     /// List WorkloadNetworkPublicIP resources by WorkloadNetwork
     pub fn listPublicIPs(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetworkPublicIP) {
@@ -2285,7 +2285,7 @@ pub const WorkloadNetworks = struct {
         return try core.lro.TypedPoller(models.WorkloadNetworkPublicIP).init(alloc, self.pipeline, resp, url, .{});
     }
     /// Delete a WorkloadNetworkPublicIP
-    pub fn deletePublicIP(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, public_ip_id: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState) {
+    pub fn deletePublicIP(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, public_ip_id: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
         const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/publicIPs/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, public_ip_id, self.api_version });
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
@@ -2298,7 +2298,7 @@ pub const WorkloadNetworks = struct {
             core.pager.logHttpError("WorkloadNetworks.deletePublicIP", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState).init(alloc, self.pipeline, resp, url, .{});
+        return try core.lro.TypedPoller(void).init(alloc, self.pipeline, resp, url, .{});
     }
     /// List WorkloadNetworkSegment resources by WorkloadNetwork
     pub fn listSegments(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetworkSegment) {
@@ -2372,7 +2372,7 @@ pub const WorkloadNetworks = struct {
         return try core.lro.TypedPoller(models.WorkloadNetworkSegment).init(alloc, self.pipeline, resp, url, .{});
     }
     /// Delete a WorkloadNetworkSegment
-    pub fn deleteSegment(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, segment_id: []const u8) !core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState) {
+    pub fn deleteSegment(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, segment_id: []const u8) !core.lro.TypedPoller(void) {
         const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/segments/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, segment_id, self.api_version });
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
@@ -2385,7 +2385,7 @@ pub const WorkloadNetworks = struct {
             core.pager.logHttpError("WorkloadNetworks.deleteSegment", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState).init(alloc, self.pipeline, resp, url, .{});
+        return try core.lro.TypedPoller(void).init(alloc, self.pipeline, resp, url, .{});
     }
     /// List WorkloadNetworkVirtualMachine resources by WorkloadNetwork
     pub fn listVirtualMachines(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetworkVirtualMachine) {
@@ -2488,7 +2488,7 @@ pub const WorkloadNetworks = struct {
         return try core.lro.TypedPoller(models.WorkloadNetworkVMGroup).init(alloc, self.pipeline, resp, url, .{});
     }
     /// Delete a WorkloadNetworkVMGroup
-    pub fn deleteVMGroup(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, vm_group_id: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState) {
+    pub fn deleteVMGroup(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, vm_group_id: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
         const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/vmGroups/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, vm_group_id, self.api_version });
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
@@ -2501,6 +2501,6 @@ pub const WorkloadNetworks = struct {
             core.pager.logHttpError("WorkloadNetworks.deleteVMGroup", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try core.lro.TypedPoller(models.ArmOperationStatusResourceProvisioningState).init(alloc, self.pipeline, resp, url, .{});
+        return try core.lro.TypedPoller(void).init(alloc, self.pipeline, resp, url, .{});
     }
 };
