@@ -530,7 +530,7 @@ pub fn build(b: *std.Build) void {
     const example = b.addExecutable(.{
         .name = "azure_example",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/examples/hello.zig"),
+            .root_source_file = b.path("examples/hello.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
