@@ -1071,11 +1071,18 @@ fn renderBuildZig(allocator: std.mem.Allocator, pkg_name: []const u8) ![]u8 {
         \\    }});
         \\    const azure_core_mod = azure_sdk_dep.module("azure_core");
         \\
+        \\    const serde_dep = b.dependency("serde", .{{
+        \\        .target = target,
+        \\        .optimize = optimize,
+        \\    }});
+        \\    const serde_mod = serde_dep.module("serde");
+        \\
         \\    _ = b.addModule("{[name]s}", .{{
         \\        .root_source_file = b.path("src/root.zig"),
         \\        .target = target,
         \\        .imports = &.{{
         \\            .{{ .name = "azure_core", .module = azure_core_mod }},
+        \\            .{{ .name = "serde", .module = serde_mod }},
         \\        }},
         \\    }});
         \\
@@ -1086,6 +1093,7 @@ fn renderBuildZig(allocator: std.mem.Allocator, pkg_name: []const u8) ![]u8 {
         \\            .optimize = optimize,
         \\            .imports = &.{{
         \\                .{{ .name = "azure_core", .module = azure_core_mod }},
+        \\                .{{ .name = "serde", .module = serde_mod }},
         \\            }},
         \\        }}),
         \\    }});
@@ -1122,6 +1130,14 @@ fn renderBuildZigZon(
         );
     defer allocator.free(azure_sdk_entry);
 
+    const serde_entry =
+        \\        .serde = .{
+        \\            .url = "git+https://github.com/cataggar/serde.zig#7012f58c7ddf490125852e1d22006b552a1693c7",
+        \\            .hash = "serde-1.0.1-1DszT-e9DABp6u1PoDvGFzeGaST2hRp2KGtGn_CkIl0J",
+        \\        },
+        \\
+    ;
+
     return std.fmt.allocPrint(allocator,
         \\.{{
         \\    .name = .{[name_id]s},
@@ -1129,7 +1145,7 @@ fn renderBuildZigZon(
         \\    .fingerprint = 0x{[fp]x},
         \\    .minimum_zig_version = "0.16.0",
         \\    .dependencies = .{{
-        \\{[sdk]s}    }},
+        \\{[sdk]s}{[serde]s}    }},
         \\    .paths = .{{
         \\        "build.zig",
         \\        "build.zig.zon",
@@ -1143,6 +1159,7 @@ fn renderBuildZigZon(
         .version = pkg_version,
         .fp = computeFingerprint(pkg_name),
         .sdk = azure_sdk_entry,
+        .serde = serde_entry,
     });
 }
 
