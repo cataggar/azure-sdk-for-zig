@@ -39,7 +39,7 @@ component into a single wasm executable.
  └──────────────────────────────────────────┘
       │
       ▼
- git push origin <package_name>             ← orphan branch
+ git push origin rest/<package_name>        ← orphan branch
 ```
 
 ## Layout
@@ -56,15 +56,15 @@ component into a single wasm executable.
 
 ## Branch model
 
-Each generated package lives on its own **orphan branch** named after
-the package:
+Each generated package lives on its own **orphan branch** named
+`rest/<package_name>`:
 
 ```
-<package_name>
+rest/<package_name>
 ```
 
 - `<package_name>` is the snake_case Zig module name, e.g.
-  `keyvault_secrets`, `arm_keyvault` (see the `zig:` field in
+  `rest/keyvault_secrets`, `rest/arm_avs` (see the `zig:` field in
   `tspconfigs.yaml`).
 - The orphan branch references `azure_core` (and friends) from `main`
   through a pinned git URL+hash in `build.zig.zon`.
