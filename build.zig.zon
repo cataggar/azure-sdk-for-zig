@@ -8,6 +8,10 @@
             .url = "git+https://github.com/cataggar/azure-sdk-for-zig#19e06fc47073bcb9a6c461e3a0bf5298dc49cc60",
             .hash = "azure_sdk-0.1.0--PMlNXbOCABgms9eiNEzsH14JwZ1Z1_xtr7TD_71OkGE",
         },
+        .serde = .{
+            .url = "git+https://github.com/cataggar/serde.zig#7012f58c7ddf490125852e1d22006b552a1693c7",
+            .hash = "serde-1.0.1-1DszT-e9DABp6u1PoDvGFzeGaST2hRp2KGtGn_CkIl0J",
+        },
     },
     .paths = .{
         "build.zig",
