@@ -121,7 +121,7 @@ pub fn emit(
     ,
         opts.run_zig_fmt,
     );
-    try writeFile(allocator, io, out_dir, ".gitignore", "zig-cache/\nzig-out/\n.zig-cache/\n", opts.run_zig_fmt);
+    try writeFile(allocator, io, out_dir, ".gitignore", "zig-cache/\nzig-out/\nzig-pkg/\n.zig-cache/\n", opts.run_zig_fmt);
 }
 
 /// Write `content` to `<out_dir>/<sub_path>`. When `fmt_enabled` is true
