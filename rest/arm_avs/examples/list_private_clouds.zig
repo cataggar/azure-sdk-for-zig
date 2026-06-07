@@ -12,7 +12,7 @@
 
 const std = @import("std");
 const core = @import("azure_core");
-const identity = @import("azure_identity");
+const identity = @import("azure_core").identity;
 const arm_avs = @import("arm_avs");
 
 pub fn main(init: std.process.Init) !void {

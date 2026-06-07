@@ -343,7 +343,7 @@ test "BackupClient beginBackup" {
     );
     defer mock.deinit();
 
-    const identity = @import("azure_identity");
+    const identity = @import("azure_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -372,7 +372,7 @@ test "SettingsClient getSetting" {
     );
     defer mock.deinit();
 
-    const identity2 = @import("azure_identity");
+    const identity2 = @import("azure_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );

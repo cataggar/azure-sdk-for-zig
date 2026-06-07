@@ -28,21 +28,11 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    const identity_mod = b.addModule("azure_identity", .{
-        .root_source_file = b.path("sdk/identity/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "azure_core", .module = core_mod },
-            .{ .name = "serde", .module = serde_mod },
-        },
-    });
-
     const blobs_mod = b.addModule("azure_storage_blobs", .{
         .root_source_file = b.path("sdk/storage/blobs/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
-            .{ .name = "azure_identity", .module = identity_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
@@ -61,7 +51,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
-            .{ .name = "azure_identity", .module = identity_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
@@ -71,7 +60,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
-            .{ .name = "azure_identity", .module = identity_mod },
         },
     });
 
@@ -80,7 +68,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
-            .{ .name = "azure_identity", .module = identity_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
@@ -90,7 +77,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
-            .{ .name = "azure_identity", .module = identity_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
@@ -100,7 +86,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
-            .{ .name = "azure_identity", .module = identity_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
@@ -110,7 +95,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
-            .{ .name = "azure_identity", .module = identity_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
@@ -165,7 +149,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
-            .{ .name = "azure_identity", .module = identity_mod },
         },
     });
 
@@ -174,7 +157,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
-            .{ .name = "azure_identity", .module = identity_mod },
             .{ .name = "azure_kusto_common", .module = kusto_common_mod },
             .{ .name = "serde", .module = serde_mod },
         },
@@ -208,7 +190,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
-            .{ .name = "azure_identity", .module = identity_mod },
             .{ .name = "uamqp", .module = uamqp_mod },
             .{ .name = "azure_messaging_common", .module = messaging_common_mod },
         },
@@ -219,7 +200,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
-            .{ .name = "azure_identity", .module = identity_mod },
             .{ .name = "azure_storage_blobs", .module = blobs_mod },
             .{ .name = "azure_messaging_eventhubs", .module = eventhubs_mod },
             .{ .name = "serde", .module = serde_mod },
@@ -231,7 +211,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
-            .{ .name = "azure_identity", .module = identity_mod },
             .{ .name = "uamqp", .module = uamqp_mod },
             .{ .name = "azure_messaging_common", .module = messaging_common_mod },
             .{ .name = "serde", .module = serde_mod },
@@ -269,20 +248,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    const identity_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("sdk/identity/root.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "azure_core", .module = core_mod },
-                .{ .name = "serde", .module = serde_mod },
-            },
-        }),
-    });
-
     const run_core_tests = b.addRunArtifact(core_tests);
-    const run_identity_tests = b.addRunArtifact(identity_tests);
 
     const storage_common_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -304,7 +270,6 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "azure_core", .module = core_mod },
-                .{ .name = "azure_identity", .module = identity_mod },
                 .{ .name = "serde", .module = serde_mod },
             },
         }),
@@ -318,7 +283,6 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "azure_core", .module = core_mod },
-                .{ .name = "azure_identity", .module = identity_mod },
             },
         }),
     });
@@ -326,7 +290,6 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_core_tests.step);
-    test_step.dependOn(&run_identity_tests.step);
     test_step.dependOn(&run_storage_common_tests.step);
     test_step.dependOn(&run_kv_secrets_tests.step);
     test_step.dependOn(&run_tables_tests.step);
@@ -352,7 +315,6 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 .imports = &.{
                     .{ .name = "azure_core", .module = core_mod },
-                    .{ .name = "azure_identity", .module = identity_mod },
                     .{ .name = "serde", .module = serde_mod },
                 },
             }),
@@ -369,7 +331,6 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 .imports = &.{
                     .{ .name = "azure_core", .module = core_mod },
-                    .{ .name = "azure_identity", .module = identity_mod },
                     .{ .name = "uamqp", .module = uamqp_mod },
                     .{ .name = "azure_messaging_common", .module = messaging_common_mod },
                 },
@@ -387,7 +348,6 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 .imports = &.{
                     .{ .name = "azure_core", .module = core_mod },
-                    .{ .name = "azure_identity", .module = identity_mod },
                     .{ .name = "azure_storage_blobs", .module = blobs_mod },
                     .{ .name = "azure_messaging_eventhubs", .module = eventhubs_mod },
                     .{ .name = "serde", .module = serde_mod },
@@ -418,7 +378,6 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 .imports = &.{
                     .{ .name = "azure_core", .module = core_mod },
-                    .{ .name = "azure_identity", .module = identity_mod },
                     .{ .name = "uamqp", .module = uamqp_mod },
                     .{ .name = "azure_messaging_common", .module = messaging_common_mod },
                     .{ .name = "serde", .module = serde_mod },
@@ -437,7 +396,6 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 .imports = &.{
                     .{ .name = "azure_core", .module = core_mod },
-                    .{ .name = "azure_identity", .module = identity_mod },
                 },
             }),
         });
@@ -453,7 +411,6 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 .imports = &.{
                     .{ .name = "azure_core", .module = core_mod },
-                    .{ .name = "azure_identity", .module = identity_mod },
                     .{ .name = "azure_kusto_common", .module = kusto_common_mod },
                     .{ .name = "serde", .module = serde_mod },
                 },
@@ -535,7 +492,6 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "azure_core", .module = core_mod },
-                .{ .name = "azure_identity", .module = identity_mod },
             },
         }),
     });
