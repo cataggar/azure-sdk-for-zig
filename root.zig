@@ -292,7 +292,7 @@ test "QueueClient sendMessage" {
     var mock = core.http.MockTransport.init(allocator, 201, "");
     defer mock.deinit();
 
-    const identity = @import("azure_identity");
+    const identity = @import("azure_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -320,7 +320,7 @@ test "QueueClient receiveMessages" {
     var mock = core.http.MockTransport.init(allocator, 200, body);
     defer mock.deinit();
 
-    const identity2 = @import("azure_identity");
+    const identity2 = @import("azure_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
