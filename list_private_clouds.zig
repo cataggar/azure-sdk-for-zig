@@ -73,9 +73,10 @@ pub fn main(init: std.process.Init) !void {
 /// Look up subscription id from (in order): argv[1], $AZURE_SUBSCRIPTION_ID,
 /// or AZURE_SUBSCRIPTION_ID in a `.env` file in the cwd.
 fn resolveSubscriptionId(init: std.process.Init, dotenv: *const core.dotenv.DotEnv) ![]const u8 {
-    var args = init.minimal.args.iterate();
+    var args = try init.minimal.args.iterateAllocator(init.gpa);
+    defer args.deinit();
     _ = args.next(); // argv[0]
-    if (args.next()) |arg1| return arg1;
+    if (args.next()) |arg1| return try init.gpa.dupe(u8, arg1);
     if (init.environ_map.get("AZURE_SUBSCRIPTION_ID")) |v| return v;
     if (dotenv.get("AZURE_SUBSCRIPTION_ID")) |v| return v;
     return error.MissingAzureSubscriptionId;

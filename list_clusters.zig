@@ -75,11 +75,12 @@ const Args = struct { []const u8, []const u8, []const u8 };
 /// Look up subscription id, resource group, and private cloud name from
 /// (in order): argv, env vars, then `.env` in the cwd.
 fn resolveArgs(init: std.process.Init, dotenv: *const core.dotenv.DotEnv) !Args {
-    var args = init.minimal.args.iterate();
+    var args = try init.minimal.args.iterateAllocator(init.gpa);
+    defer args.deinit();
     _ = args.next(); // argv[0]
-    const arg1 = args.next();
-    const arg2 = args.next();
-    const arg3 = args.next();
+    const arg1 = if (args.next()) |a| try init.gpa.dupe(u8, a) else null;
+    const arg2 = if (args.next()) |a| try init.gpa.dupe(u8, a) else null;
+    const arg3 = if (args.next()) |a| try init.gpa.dupe(u8, a) else null;
 
     const sub = arg1 orelse
         init.environ_map.get("AZURE_SUBSCRIPTION_ID") orelse
