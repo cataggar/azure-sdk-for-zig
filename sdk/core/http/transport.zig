@@ -107,7 +107,7 @@ pub const StdHttpTransport = struct {
     }
 
     fn sendImpl(transport: *HttpTransport, request: *Request) !Response {
-        const self: *StdHttpTransport = @fieldParentPtr("transport", transport);
+        const self: *StdHttpTransport = @alignCast(@fieldParentPtr("transport", transport));
         const allocator = self.allocator;
 
         var client: std.http.Client = .{ .allocator = allocator, .io = self.io };
@@ -242,7 +242,7 @@ pub const MockTransport = struct {
     }
 
     fn sendImpl(transport: *HttpTransport, request: *Request) !Response {
-        const self: *MockTransport = @fieldParentPtr("transport", transport);
+        const self: *MockTransport = @alignCast(@fieldParentPtr("transport", transport));
         self.last_method = request.method;
         if (self.last_url) |old| self.allocator.free(old);
         self.last_url = try self.allocator.dupe(u8, request.url);
@@ -286,7 +286,7 @@ pub const SequenceMockTransport = struct {
     }
 
     fn sendImpl(transport: *HttpTransport, request: *Request) !Response {
-        const self: *SequenceMockTransport = @fieldParentPtr("transport", transport);
+        const self: *SequenceMockTransport = @alignCast(@fieldParentPtr("transport", transport));
         _ = request;
         const idx = @min(self.call_count, self.responses.len - 1);
         self.call_count += 1;
