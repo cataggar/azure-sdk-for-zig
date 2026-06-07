@@ -32,6 +32,17 @@ pub const tracing = @import("tracing/root.zig");
 pub const dotenv = @import("dotenv.zig");
 pub const arm = @import("arm/resource.zig");
 pub const open_enum = @import("open_enum.zig");
+pub const env_token = @import("credentials/env_token.zig");
+
+/// WASI HTTP transport for running the SDK inside a `wasi:http`-capable
+/// WebAssembly component (wamr / wasmtime). Only present on `wasm32-wasi`;
+/// resolves to an empty namespace on every other target so consumers can
+/// reference `core.wasi_http` unconditionally.
+pub const wasi_http = if (@import("builtin").target.cpu.arch == .wasm32 and
+    @import("builtin").target.os.tag == .wasi)
+    @import("http/wasi_http.zig")
+else
+    struct {};
 
 pub const version: []const u8 = "0.1.0";
 pub const user_agent_prefix: []const u8 = "azsdk-zig-core/" ++ version;
