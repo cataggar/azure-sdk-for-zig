@@ -71,7 +71,7 @@ pub const CachedTokenCredential = struct {
         request_context: TokenRequestContext,
         ctx: context_mod.Context,
     ) anyerror!AccessToken {
-        const self: *CachedTokenCredential = @fieldParentPtr("credential", cred);
+        const self: *CachedTokenCredential = @alignCast(@fieldParentPtr("credential", cred));
         const now = currentTimestamp();
 
         // Return cached token if still valid.

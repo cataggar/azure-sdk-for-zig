@@ -81,7 +81,7 @@ pub const NoopTracerProvider = struct {
     fn getTracerImpl(p: *TracerProvider, name: []const u8, version: []const u8) *Tracer {
         _ = name;
         _ = version;
-        const self: *NoopTracerProvider = @fieldParentPtr("provider", p);
+        const self: *NoopTracerProvider = @alignCast(@fieldParentPtr("provider", p));
         return &self.tracer.tracer;
     }
 };
@@ -99,7 +99,7 @@ pub const NoopTracer = struct {
     fn startSpanImpl(t: *Tracer, name: []const u8, kind: SpanKind) !*Span {
         _ = name;
         _ = kind;
-        const self: *NoopTracer = @fieldParentPtr("tracer", t);
+        const self: *NoopTracer = @alignCast(@fieldParentPtr("tracer", t));
         return &self.span.span;
     }
 };
@@ -166,17 +166,17 @@ pub const RecordingSpan = struct {
     }
 
     fn setAttributeImpl(s: *Span, key: []const u8, value: []const u8) !void {
-        const self: *RecordingSpan = @fieldParentPtr("span", s);
+        const self: *RecordingSpan = @alignCast(@fieldParentPtr("span", s));
         try self.attributes.put(key, value);
     }
 
     fn setStatusImpl(s: *Span, status: SpanStatus) void {
-        const self: *RecordingSpan = @fieldParentPtr("span", s);
+        const self: *RecordingSpan = @alignCast(@fieldParentPtr("span", s));
         self.status = status;
     }
 
     fn endImpl(s: *Span) void {
-        const self: *RecordingSpan = @fieldParentPtr("span", s);
+        const self: *RecordingSpan = @alignCast(@fieldParentPtr("span", s));
         self.ended = true;
     }
 };
@@ -203,7 +203,7 @@ pub const RecordingTracer = struct {
     }
 
     fn startSpanImpl(t: *Tracer, name: []const u8, kind: SpanKind) !*Span {
-        const self: *RecordingTracer = @fieldParentPtr("tracer", t);
+        const self: *RecordingTracer = @alignCast(@fieldParentPtr("tracer", t));
         if (self.last_span) |*s| s.deinit();
         self.last_span = RecordingSpan.init(self.allocator, name, kind);
         return &self.last_span.?.span;

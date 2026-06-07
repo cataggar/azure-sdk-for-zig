@@ -83,7 +83,7 @@ pub const TelemetryPolicy = struct {
         next: []*HttpPolicy,
         final_transport: *HttpTransport,
     ) !Response {
-        const self: *TelemetryPolicy = @fieldParentPtr("policy", policy);
+        const self: *TelemetryPolicy = @alignCast(@fieldParentPtr("policy", policy));
         try request.setHeader("User-Agent", self.user_agent);
         return callNext(request, next, final_transport);
     }
@@ -145,7 +145,7 @@ pub const RetryPolicy = struct {
         next: []*HttpPolicy,
         final_transport: *HttpTransport,
     ) !Response {
-        const self: *RetryPolicy = @fieldParentPtr("policy", policy);
+        const self: *RetryPolicy = @alignCast(@fieldParentPtr("policy", policy));
         var attempt: u32 = 0;
         var prng = std.Random.DefaultPrng.init(@truncate(@as(u128, @bitCast(nanoTimestamp()))));
         while (true) {
@@ -237,7 +237,7 @@ pub const BearerTokenAuthPolicy = struct {
         next: []*HttpPolicy,
         final_transport: *HttpTransport,
     ) !Response {
-        const self: *BearerTokenAuthPolicy = @fieldParentPtr("policy", policy);
+        const self: *BearerTokenAuthPolicy = @alignCast(@fieldParentPtr("policy", policy));
         const now = unixTimestampSeconds();
         const refresh_buffer: i64 = 300; // 5 minutes before expiry
 
@@ -329,7 +329,7 @@ pub const TracingPolicy = struct {
         next: []*HttpPolicy,
         final_transport: *HttpTransport,
     ) !Response {
-        const self: *TracingPolicy = @fieldParentPtr("policy", policy);
+        const self: *TracingPolicy = @alignCast(@fieldParentPtr("policy", policy));
 
         const span = self.tracer.startSpan("HTTP", .client) catch {
             return callNext(request, next, final_transport);
