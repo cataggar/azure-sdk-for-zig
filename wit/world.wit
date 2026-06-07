@@ -1,0 +1,10 @@
+package example:avs-wasi;
+
+// Full canonical wasi:http surface (imported transitively via
+// outgoing-handler). Using the canonical WIT — not a hand-trimmed subset —
+// keeps the linear-memory layout of every result/variant identical to what
+// the host (wamr / wasmtime) produces, which the transport's ret-area
+// decoding in src/wasi_http.zig depends on.
+world avs-wasi {
+    import wasi:http/outgoing-handler@0.2.6;
+}

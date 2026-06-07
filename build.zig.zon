@@ -1,0 +1,17 @@
+.{
+    .name = .avs_wasi,
+    .version = "0.0.0",
+    .fingerprint = 0x4eaf77d39eba7682,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .azure_sdk = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig#19e06fc47073bcb9a6c461e3a0bf5298dc49cc60",
+            .hash = "azure_sdk-0.1.0--PMlNXbOCABgms9eiNEzsH14JwZ1Z1_xtr7TD_71OkGE",
+        },
+        .arm_avs = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig?ref=rest/arm_avs#90eb37fda8d6a8b0aa213368389e685afca30090",
+            .hash = "arm_avs-0.1.0-xpBKWCrMBAA9iAEuNEiuLBbwGvM8RXqRe4cK4NrhUne0",
+        },
+    },
+    .paths = .{ "build.zig", "build.zig.zon", "src", "wit" },
+}
