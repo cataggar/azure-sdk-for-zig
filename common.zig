@@ -139,7 +139,7 @@ test "KustoConnectionStringBuilder build" {
 }
 
 test "KustoConnectionStringBuilder withTokenCredential" {
-    const identity = @import("azure_identity");
+    const identity = @import("azure_core").identity;
     const allocator = std.testing.allocator;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
