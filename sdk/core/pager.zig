@@ -110,7 +110,7 @@ pub fn PipelinePager(comptime T: type) type {
         }
 
         fn nextImpl(pager_ptr: *Pager(T)) anyerror!?[]T {
-            const self: *Self = @fieldParentPtr("pager", pager_ptr);
+            const self: *Self = @alignCast(@fieldParentPtr("pager", pager_ptr));
             const url = self.next_url orelse return null;
 
             var req = transport.Request.init(self.allocator, .GET, url);
@@ -138,7 +138,7 @@ pub fn PipelinePager(comptime T: type) type {
         }
 
         fn deinitImpl(pager_ptr: *Pager(T)) void {
-            const self: *Self = @fieldParentPtr("pager", pager_ptr);
+            const self: *Self = @alignCast(@fieldParentPtr("pager", pager_ptr));
             self.deinit();
         }
     };
