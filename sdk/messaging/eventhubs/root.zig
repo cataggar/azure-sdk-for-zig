@@ -550,7 +550,7 @@ test "EventPosition fromEnqueuedTime" {
 
 test "ProducerClient createBatch" {
     const allocator = std.testing.allocator;
-    const cred_mod = @import("azure_identity").client_secret;
+    const cred_mod = @import("azure_core").identity.client_secret;
     var mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -568,7 +568,7 @@ test "ProducerClient createBatch" {
 
 test "ProducerClient sendBatch" {
     const allocator = std.testing.allocator;
-    const cred_mod = @import("azure_identity").client_secret;
+    const cred_mod = @import("azure_core").identity.client_secret;
     var mock_http = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -593,7 +593,7 @@ test "ProducerClient sendBatch" {
 
 test "ProducerClient sendBatch empty returns error" {
     const allocator = std.testing.allocator;
-    const cred_mod = @import("azure_identity").client_secret;
+    const cred_mod = @import("azure_core").identity.client_secret;
     var mock_http = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -614,7 +614,7 @@ test "ProducerClient sendBatch empty returns error" {
 
 test "ProducerClient getEventHubProperties" {
     const allocator = std.testing.allocator;
-    const cred_mod = @import("azure_identity").client_secret;
+    const cred_mod = @import("azure_core").identity.client_secret;
     var mock_http = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -634,7 +634,7 @@ test "ProducerClient getEventHubProperties" {
 
 test "ConsumerClient receiveEvents" {
     const allocator = std.testing.allocator;
-    const cred_mod = @import("azure_identity").client_secret;
+    const cred_mod = @import("azure_core").identity.client_secret;
     var mock_http = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );

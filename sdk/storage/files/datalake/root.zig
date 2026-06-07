@@ -258,7 +258,7 @@ test "DataLakeFileClient create append flush and read" {
     var mock_create = core.http.MockTransport.init(allocator, 201, "");
     defer mock_create.deinit();
 
-    const identity = @import("azure_identity");
+    const identity = @import("azure_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );

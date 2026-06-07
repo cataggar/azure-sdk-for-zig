@@ -1,5 +1,5 @@
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("../root.zig");
 const client_assertion = @import("client_assertion.zig");
 
 const AccessToken = core.credentials.AccessToken;
