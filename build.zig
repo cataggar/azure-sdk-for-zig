@@ -9,7 +9,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const azure_core_mod = azure_sdk_dep.module("azure_core");
-    const azure_identity_mod = azure_sdk_dep.module("azure_identity");
 
     const serde_dep = b.dependency("serde", .{
         .target = target,
@@ -52,7 +51,6 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "arm_avs", .module = lib_mod },
                 .{ .name = "azure_core", .module = azure_core_mod },
-                .{ .name = "azure_identity", .module = azure_identity_mod },
             },
         }),
     });
@@ -74,7 +72,6 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "arm_avs", .module = lib_mod },
                 .{ .name = "azure_core", .module = azure_core_mod },
-                .{ .name = "azure_identity", .module = azure_identity_mod },
             },
         }),
     });
