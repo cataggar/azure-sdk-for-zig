@@ -5,12 +5,12 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .azure_sdk = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig#19e06fc47073bcb9a6c461e3a0bf5298dc49cc60",
-            .hash = "azure_sdk-0.1.0--PMlNXbOCABgms9eiNEzsH14JwZ1Z1_xtr7TD_71OkGE",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig#f02d62e09a17e722f5828caa8acc290d94b654bf",
+            .hash = "azure_sdk-0.1.0--PMlNZAHCQB-Zo8vjfyyjg8eio5OWTWdcAe7LRgU_pyT",
         },
         .arm_avs = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig?ref=rest/arm_avs#90eb37fda8d6a8b0aa213368389e685afca30090",
-            .hash = "arm_avs-0.1.0-xpBKWCrMBAA9iAEuNEiuLBbwGvM8RXqRe4cK4NrhUne0",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig?ref=rest/arm_avs#931683b83d06b64a7b2f43951b599d10cc11d203",
+            .hash = "arm_avs-0.1.0-xpBKWCrMBAC9ZF6Ydb_iHJ8ibW3kWyU53Y0gf7mZI4uM",
         },
     },
     .paths = .{ "build.zig", "build.zig.zon", "src", "wit" },

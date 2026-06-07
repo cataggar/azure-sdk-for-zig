@@ -1,40 +1,39 @@
 #!/usr/bin/env bash
 # Build the AVS "list private clouds" WASI component end-to-end.
 #
-#   1. zig build              -> zig-out/bin/avs-wasi.wasm   (wasm32-wasi core)
-#   2. wasm-tools embed       -> embeds the WIT world
-#   3. wasm-tools new --adapt -> wraps into a component (+ wasi-p1 adapter)
+#   1. zig build            -> zig-out/bin/avs-wasi.wasm   (wasm32-wasi core)
+#   2. wabt component embed -> embeds the WIT world
+#   3. wabt component new   -> wraps into a component (built-in wasi-p1 adapter)
+#   4. wabt module validate -> validates the component
 #
 # Output: zig-out/avs-wasi.component.wasm
 #
-# Requires: zig 0.16, wasm-tools, and a wasi_snapshot_preview1 *command*
-# adapter. Override its path with WASI_ADAPTER=/path/to/adapter.wasm.
+# Requires: zig 0.16 and wabt v3+ (install via ghr: `ghr install cataggar/wabt`).
+# wabt's `component new` auto-attaches a built-in wasi_snapshot_preview1
+# adapter, so no external adapter file is needed. To override (e.g. to use a
+# different adapter), set WASI_ADAPTER=/path/to/adapter.wasm.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-ADAPTER="${WASI_ADAPTER:-/tmp/wasi_snapshot_preview1.command.wasm}"
-if [[ ! -f "$ADAPTER" ]]; then
-    echo "error: wasi-preview1 command adapter not found at $ADAPTER" >&2
-    echo "       set WASI_ADAPTER=/path/to/wasi_snapshot_preview1.command.wasm" >&2
-    exit 1
-fi
-
 echo "==> zig build (wasm32-wasi core)"
 zig build --fetch
-./patch-deps.sh
 zig build
 
 CORE=zig-out/bin/avs-wasi.wasm
 EMBED=zig-out/avs-wasi.embed.wasm
 COMPONENT=zig-out/avs-wasi.component.wasm
 
-echo "==> wasm-tools component embed"
-wasm-tools component embed wit --world avs-wasi "$CORE" -o "$EMBED"
+echo "==> wabt component embed"
+wabt component embed --world avs-wasi -o "$EMBED" wit "$CORE"
 
-echo "==> wasm-tools component new (+ wasi-preview1 adapter)"
-wasm-tools component new "$EMBED" --adapt "wasi_snapshot_preview1=$ADAPTER" -o "$COMPONENT"
+echo "==> wabt component new"
+if [[ -n "${WASI_ADAPTER:-}" ]]; then
+    wabt component new --adapt "wasi_snapshot_preview1=$WASI_ADAPTER" -o "$COMPONENT" "$EMBED"
+else
+    wabt component new -o "$COMPONENT" "$EMBED"
+fi
 
-echo "==> validate"
-wasm-tools validate "$COMPONENT"
+echo "==> wabt module validate"
+wabt module validate "$COMPONENT"
 
 echo "OK: $COMPONENT"

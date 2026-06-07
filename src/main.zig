@@ -24,8 +24,8 @@
 const std = @import("std");
 const core = @import("azure_core");
 const arm_avs = @import("arm_avs");
-const EnvTokenCredential = @import("env_token_credential.zig").EnvTokenCredential;
-const WasiHttpTransport = @import("wasi_http.zig").WasiHttpTransport;
+const EnvTokenCredential = core.env_token.EnvTokenCredential;
+const WasiHttpTransport = core.wasi_http.WasiHttpTransport;
 
 fn writeAll(bytes: []const u8) void {
     var off: usize = 0;
