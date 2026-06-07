@@ -39,7 +39,7 @@ component into a single wasm executable.
  └──────────────────────────────────────────┘
       │
       ▼
- git push origin client/<package_name>      ← orphan branch
+ git push origin rest/<package_name>        ← orphan branch
 ```
 
 ## Layout
@@ -56,15 +56,16 @@ component into a single wasm executable.
 
 ## Branch model
 
-Each generated package lives on its own **orphan branch**:
+Each generated package lives on its own **orphan branch** named
+`rest/<package_name>`:
 
 ```
-<kind>/<package_name>
+rest/<package_name>
 ```
 
-- `<kind>` ∈ `client` (current), `server` (future), `component` (future).
 - `<package_name>` is the snake_case Zig module name, e.g.
-  `azure_security_keyvault_secrets`, `azure_resourcemanager_vmware`.
+  `rest/keyvault_secrets`, `rest/arm_avs` (see the `zig:` field in
+  `tspconfigs.yaml`).
 - The orphan branch references `azure_core` (and friends) from `main`
   through a pinned git URL+hash in `build.zig.zon`.
 
@@ -105,10 +106,13 @@ scripts/build-component.sh   # produces zig-out/bin/codegen-cli.composed.wasm
 #    tcgc-component/dist/stdlib-preopens.txt and constructs the right
 #    set of wasmtime --dir flags for the stdlib + user spec + output.
 cd ../../..
+#    `--package-name` is the snake_case Zig module id (also the orphan
+#    branch suffix); `--display-name` is the dash-cased human label used
+#    in README.md / doc comments. Both come from tspconfigs.yaml.
 codegen/cli/scripts/run.sh \
     ../azure-rest-api-specs/specification/keyvault/data-plane/Secrets \
     .tsp-generated/client/keyvault_secrets \
-    --package-name keyvault-secrets
+    --package-name keyvault_secrets --display-name keyvault-secrets
 ```
 
 ## How to resync a tracked package
