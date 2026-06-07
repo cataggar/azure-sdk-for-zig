@@ -389,7 +389,7 @@ test "BlobContainerClient create and listBlobs" {
     var mock_create = core.http.MockTransport.init(allocator, 201, "");
     defer mock_create.deinit();
 
-    const identity = @import("azure_identity");
+    const identity = @import("azure_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -431,7 +431,7 @@ test "BlobClient download and upload" {
     var mock_upload = core.http.MockTransport.init(allocator, 201, "");
     defer mock_upload.deinit();
 
-    const identity2 = @import("azure_identity");
+    const identity2 = @import("azure_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -469,7 +469,7 @@ test "BlobClient uploadConditional with etag" {
     };
     defer mock.deinit();
 
-    const identity_uc = @import("azure_identity");
+    const identity_uc = @import("azure_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -502,7 +502,7 @@ test "BlobClient getProperties with etag" {
     };
     defer mock.deinit();
 
-    const identity_gp = @import("azure_identity");
+    const identity_gp = @import("azure_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -534,7 +534,7 @@ test "BlobClient download 404" {
     );
     defer mock.deinit();
 
-    const identity3 = @import("azure_identity");
+    const identity3 = @import("azure_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
