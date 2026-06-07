@@ -27,6 +27,10 @@ vtables, so the WASI port is purely these two implementations plus packaging.
 Requirements: Zig 0.16, `wasm-tools`, and a `wasi_snapshot_preview1` **command**
 adapter (override its path with `WASI_ADAPTER=/path/to/adapter.wasm`).
 
+Packaging uses `wasm-tools` rather than `wabt`: wabt's component encoder
+produced an invalid component (`unknown type N: type index out of bounds`) for
+this wasi:http world — see cataggar/wabt#234.
+
 `package.sh` runs `patch-deps.sh` first — see "Upstream fix needed" below.
 
 ## Run
@@ -81,7 +85,7 @@ wamr and wasmtime disagree on the linear-memory alignment of `wasi:http`'s
 align-8, wamr lays `handle`'s `result<future, error-code>` out align-4. The
 transport detects which from the zero-filled ret-area after `handle` and reads
 the future handle accordingly (`get`'s result is align-8 on both). See the
-comments in `src/wasi_http.zig`.
+comments in `src/wasi_http.zig`, and cataggar/wamr#814 for the wamr-side bug.
 
 ## Upstream fix needed
 
