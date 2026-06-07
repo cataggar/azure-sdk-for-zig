@@ -48,7 +48,7 @@ pub const PlaybackTransport = struct {
     }
 
     fn sendImpl(transport: *core.http.HttpTransport, request: *core.http.Request) !core.http.Response {
-        const self: *PlaybackTransport = @fieldParentPtr("transport", transport);
+        const self: *PlaybackTransport = @alignCast(@fieldParentPtr("transport", transport));
         if (self.index >= self.recordings.len) return error.NoMoreRecordings;
 
         const rec = self.recordings[self.index];
@@ -134,7 +134,7 @@ pub const RecordingTransport = struct {
     }
 
     fn sendImpl(transport: *core.http.HttpTransport, request: *core.http.Request) !core.http.Response {
-        const self: *RecordingTransport = @fieldParentPtr("transport", transport);
+        const self: *RecordingTransport = @alignCast(@fieldParentPtr("transport", transport));
 
         // Forward to inner transport.
         const resp = try self.inner.send(request);
