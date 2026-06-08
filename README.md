@@ -37,8 +37,11 @@ this wasi:http world — see cataggar/wabt#234.
 Get a token + subscription id on the host:
 
 ```sh
-TOK=$(az account get-access-token --resource https://management.azure.com --query accessToken -o tsv)
-SUB=$(az account show --query id -o tsv)
+SUB=$(grep -E '^AZURE_SUBSCRIPTION_ID=' .env | cut -d= -f2)
+# Scope the token to $SUB so `az` issues it for that subscription's tenant —
+# your default `az` login may be in a different tenant.
+TOK=$(az account get-access-token --subscription "$SUB" \
+    --resource https://management.azure.com --query accessToken -o tsv)
 C=zig-out/avs-wasi.component.wasm
 ```
 
