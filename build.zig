@@ -13,7 +13,7 @@ pub fn build(b: *std.Build) void {
     const arm_avs_mod = arm_avs_dep.module("arm_avs");
 
     const exe = b.addExecutable(.{
-        .name = "avs-wasi",
+        .name = "avs.core",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,

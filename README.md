@@ -4,7 +4,7 @@ List Microsoft.AVS private clouds from a WebAssembly **component**, running the
 generated [`arm_avs`](https://github.com/cataggar/azure-sdk-for-zig) Azure SDK
 client under WASI (wamr / wasmtime).
 
-It is the WASI port of `/work/avs-smoke` (`list_private_clouds`). The native
+It is the WASI port of `list_private_clouds`. The native
 example uses `std.http.Client` and the Azure CLI credential; neither works
 inside a wasm component, so this version swaps in two pluggable pieces that
 live in `azure_core`:
@@ -21,16 +21,17 @@ vtables, so this example is purely the wiring in `src/main.zig` plus packaging.
 ## Build
 
 ```sh
-./package.sh           # zig build (wasm32-wasi) -> wasm-tools embed/new -> validate
-# output: zig-out/avs-wasi.component.wasm
+./package.sh           # zig build (wasm32-wasi) -> wabt component new
+# output: zig-out/bin/avs.wasm
 ```
 
-Requirements: Zig 0.16, `wasm-tools`, and a `wasi_snapshot_preview1` **command**
-adapter (override its path with `WASI_ADAPTER=/path/to/adapter.wasm`).
+Requirements: Zig 0.16 and wabt v3+ (`ghr install cataggar/wabt`).
 
-Packaging uses `wasm-tools` rather than `wabt`: wabt's component encoder
-produced an invalid component (`unknown type N: type index out of bounds`) for
-this wasi:http world — see cataggar/wabt#234.
+`wabt component new zig-out/bin/avs.core.wasm` does it all in one call:
+embeds the sole WIT world from the `wit/` directory (the default when
+`--wit` is omitted), auto-attaches the built-in wasi-preview1 → preview2
+adapter, wraps the core into a component, and validates it. The
+`<name>.core.wasm` input yields `<name>.wasm`.
 
 ## Run
 
@@ -42,7 +43,7 @@ SUB=$(grep -E '^AZURE_SUBSCRIPTION_ID=' .env | cut -d= -f2)
 # your default `az` login may be in a different tenant.
 TOK=$(az account get-access-token --subscription "$SUB" \
     --resource https://management.azure.com --query accessToken -o tsv)
-C=zig-out/avs-wasi.component.wasm
+C=zig-out/bin/avs.wasm
 ```
 
 ### wasmtime
