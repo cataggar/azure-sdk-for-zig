@@ -29,5 +29,8 @@ pub fn build(b: *std.Build) void {
     // return-value materialization for the wasi:http imports).
     exe.entry = .disabled;
     exe.rdynamic = true;
+    // Use Zig's self-hosted wasm backend and linker instead of LLVM/LLD.
+    exe.use_llvm = false;
+    exe.use_lld = false;
     b.installArtifact(exe);
 }
