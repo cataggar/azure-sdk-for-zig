@@ -1,7 +1,7 @@
 # avs-wasi
 
 List Microsoft.AVS private clouds from a WebAssembly **component**, running the
-generated [`arm_avs`](https://github.com/cataggar/azure-sdk-for-zig) Azure SDK
+generated [`azure_rest_arm_avs`](https://github.com/cataggar/azure-sdk-for-zig) Azure SDK
 client under WASI (wamr / wasmtime).
 
 ## Build
@@ -57,5 +57,5 @@ cataggar/wamr#831.
 
 The canonical-ABI glue (and the wamr/wasmtime align-4 vs align-8 quirk for
 `wasi:http`'s `error-code` variant — see cataggar/wamr#814) lives in
-`azure_core`'s `sdk/core/http/wasi_http.zig`.
+`azure_sdk_core`'s `sdk/core/http/wasi_http.zig`.
 

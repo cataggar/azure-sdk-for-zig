@@ -22,8 +22,8 @@
 //!         avs-wasi.component.wasm
 
 const std = @import("std");
-const core = @import("azure_core");
-const arm_avs = @import("arm_avs");
+const core = @import("azure_sdk_core");
+const arm_avs = @import("azure_rest_arm_avs");
 const EnvTokenCredential = core.env_token.EnvTokenCredential;
 const WasiHttpTransport = core.wasi_http.WasiHttpTransport;
 
