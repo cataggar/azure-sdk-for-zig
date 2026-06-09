@@ -4,20 +4,6 @@ List Microsoft.AVS private clouds from a WebAssembly **component**, running the
 generated [`arm_avs`](https://github.com/cataggar/azure-sdk-for-zig) Azure SDK
 client under WASI (wamr / wasmtime).
 
-It is the WASI port of `list_private_clouds`. The native
-example uses `std.http.Client` and the Azure CLI credential; neither works
-inside a wasm component, so this version swaps in two pluggable pieces that
-live in `azure_core`:
-
-| Piece | Where | Replaces |
-|-------|-------|----------|
-| `core.wasi_http.WasiHttpTransport` | `azure_core` (PR #40) | `StdHttpTransport` — outbound HTTPS via `wasi:http/outgoing-handler@0.2.6` |
-| `core.env_token.EnvTokenCredential` | `azure_core` (PR #40) | `AzureCliCredential` — bearer token from the `AZURE_TOKEN` env var |
-
-Everything else (the pager, JSON parsing, the pipeline/auth policy) is the
-unmodified SDK: it only depends on the abstract `HttpTransport` / `TokenCredential`
-vtables, so this example is purely the wiring in `src/main.zig` plus packaging.
-
 ## Build
 
 ```sh
@@ -55,15 +41,19 @@ wasmtime run -S http -S cli-exit-with-code \
 
 ### wamr
 
-`wamr run` is AOT-only, and run-flags must precede the module:
+`wamr` is AOT-only. `wamrc run` AOT-compiles the component (caching the
+artifact next to it) and then spawns the runtime in one step; flags after
+`--` are forwarded verbatim to `wamr run`:
 
 ```sh
-wamrc run "$C"                          # AOT-compile once (-> <stem>.cwasm.json)
-wamr run --allow-net 0.0.0.0/0 \
-    --env AZURE_SUBSCRIPTION_ID="$SUB" --env AZURE_TOKEN="$TOK" "$C"
+wamrc run "$C" -- --allow-net 0.0.0.0/0 \
+    --env AZURE_SUBSCRIPTION_ID="$SUB" --env AZURE_TOKEN="$TOK"
 ```
 
-`--allow-net` is required: wamr default-denies outbound HTTP.
+`--allow-net` is required: wamr default-denies outbound HTTP. Requires wamr
+≥ v3.0.0-dev.11 (`ghr install cataggar/wamr`), which added macOS aarch64
+host-import trampolines and fixed `wamrc run` flag forwarding — see
+cataggar/wamr#831.
 
 The canonical-ABI glue (and the wamr/wasmtime align-4 vs align-8 quirk for
 `wasi:http`'s `error-code` variant — see cataggar/wamr#814) lives in
