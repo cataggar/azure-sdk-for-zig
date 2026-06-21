@@ -150,3 +150,5 @@ when onboarding a brand-new package.
   <https://github.com/Azure/typespec-azure/tree/main/packages/typespec-client-generator-core>
 - jco:
   <https://github.com/bytecodealliance/jco>
+- Design (draft): replacing `jco` with QuickJS —
+  [`design/replace-jco-with-quickjs.md`](design/replace-jco-with-quickjs.md)
