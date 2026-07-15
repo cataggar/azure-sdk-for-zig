@@ -48,7 +48,8 @@ pub const AzureDeveloperCliCredential = struct {
 };
 
 /// Parse the `azd auth token` JSON output.
-/// Format: {"token":"...","expiresOn":"<unix-seconds>"}
+/// `expiresOn` is normally RFC3339; numeric Unix seconds are accepted for
+/// compatibility with older fixtures and CLI versions.
 fn parseAzdResponse(allocator: std.mem.Allocator, body: []const u8) !AccessToken {
     const AzdResponseSchema = struct {
         token: []const u8,
@@ -61,12 +62,84 @@ fn parseAzdResponse(allocator: std.mem.Allocator, body: []const u8) !AccessToken
     const parsed = serde.json.fromSlice(AzdResponseSchema, arena.allocator(), body) catch
         return error.InvalidTokenResponse;
 
-    var expires_on: i64 = 0;
-    if (parsed.expiresOn) |s|
-        expires_on = std.fmt.parseInt(i64, s, 10) catch 0;
+    const expiration = parsed.expiresOn orelse return error.InvalidTokenResponse;
+    const expires_on = std.fmt.parseInt(i64, expiration, 10) catch
+        parseRfc3339Unix(expiration) catch return error.InvalidTokenResponse;
+    if (expires_on <= 0) return error.InvalidTokenResponse;
 
     const token = try allocator.dupe(u8, parsed.token);
-    return .{ .token = token, .expires_on = expires_on };
+    return .{
+        .token = token,
+        .expires_on = expires_on,
+        .allocator = allocator,
+    };
+}
+
+fn parseRfc3339Unix(value: []const u8) !i64 {
+    if (value.len < 20 or
+        value[4] != '-' or
+        value[7] != '-' or
+        value[10] != 'T' or
+        value[13] != ':' or
+        value[16] != ':')
+    {
+        return error.InvalidRfc3339;
+    }
+
+    const year = try std.fmt.parseInt(i64, value[0..4], 10);
+    const month_number = try std.fmt.parseInt(u8, value[5..7], 10);
+    const day = try std.fmt.parseInt(u8, value[8..10], 10);
+    const hour = try std.fmt.parseInt(u8, value[11..13], 10);
+    const minute = try std.fmt.parseInt(u8, value[14..16], 10);
+    const second = try std.fmt.parseInt(u8, value[17..19], 10);
+    if (year < 1 or hour > 23 or minute > 59 or second > 59)
+        return error.InvalidRfc3339;
+    const month = std.enums.fromInt(std.time.epoch.Month, month_number) orelse
+        return error.InvalidRfc3339;
+    if (day == 0 or day > std.time.epoch.getDaysInMonth(@intCast(year), month))
+        return error.InvalidRfc3339;
+
+    var timezone_index: usize = 19;
+    if (timezone_index < value.len and value[timezone_index] == '.') {
+        timezone_index += 1;
+        const fraction_start = timezone_index;
+        while (timezone_index < value.len and std.ascii.isDigit(value[timezone_index])) {
+            timezone_index += 1;
+        }
+        if (timezone_index == fraction_start) return error.InvalidRfc3339;
+    }
+
+    var offset_seconds: i64 = 0;
+    if (timezone_index < value.len and value[timezone_index] == 'Z') {
+        if (timezone_index + 1 != value.len) return error.InvalidRfc3339;
+    } else {
+        if (timezone_index + 6 != value.len or
+            (value[timezone_index] != '+' and value[timezone_index] != '-') or
+            value[timezone_index + 3] != ':')
+        {
+            return error.InvalidRfc3339;
+        }
+        const offset_hour = try std.fmt.parseInt(u8, value[timezone_index + 1 .. timezone_index + 3], 10);
+        const offset_minute = try std.fmt.parseInt(u8, value[timezone_index + 4 .. timezone_index + 6], 10);
+        if (offset_hour > 23 or offset_minute > 59) return error.InvalidRfc3339;
+        const magnitude = @as(i64, offset_hour) * 3600 + @as(i64, offset_minute) * 60;
+        offset_seconds = if (value[timezone_index] == '+') magnitude else -magnitude;
+    }
+
+    const adjusted_year = year - @intFromBool(month_number <= 2);
+    const era = @divFloor(adjusted_year, 400);
+    const year_of_era = adjusted_year - era * 400;
+    const adjusted_month = @as(i64, month_number) +
+        (if (month_number > 2) @as(i64, -3) else @as(i64, 9));
+    const day_of_year = @divFloor(153 * adjusted_month + 2, 5) + day - 1;
+    const day_of_era = year_of_era * 365 + @divFloor(year_of_era, 4) -
+        @divFloor(year_of_era, 100) + day_of_year;
+    const days_since_epoch = era * 146_097 + day_of_era - 719_468;
+    const local_seconds = days_since_epoch * std.time.s_per_day +
+        @as(i64, hour) * std.time.s_per_hour +
+        @as(i64, minute) * std.time.s_per_min +
+        second;
+    return local_seconds - offset_seconds;
 }
 
 /// Run the azd auth token command and capture stdout.
@@ -117,10 +190,10 @@ fn runCommand(allocator: std.mem.Allocator, scope: []const u8, tenant_id: ?[]con
 
 test "parseAzdResponse" {
     const body =
-        \\{"token":"azd-tok-123","expiresOn":"1743523200"}
+        \\{"token":"azd-tok-123","expiresOn":"2025-04-01T12:30:45Z"}
     ;
     const token = try parseAzdResponse(std.testing.allocator, body);
     defer std.testing.allocator.free(token.token);
     try std.testing.expectEqualStrings("azd-tok-123", token.token);
-    try std.testing.expectEqual(@as(i64, 1743523200), token.expires_on);
+    try std.testing.expectEqual(@as(i64, 1743510645), token.expires_on);
 }

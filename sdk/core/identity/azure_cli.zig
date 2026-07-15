@@ -90,7 +90,11 @@ fn parseCliResponse(allocator: std.mem.Allocator, body: []const u8) !AccessToken
     }
 
     const token = try allocator.dupe(u8, access_token);
-    return .{ .token = token, .expires_on = expires_on };
+    return .{
+        .token = token,
+        .expires_on = expires_on,
+        .allocator = allocator,
+    };
 }
 
 /// Run the Azure CLI command and capture stdout.

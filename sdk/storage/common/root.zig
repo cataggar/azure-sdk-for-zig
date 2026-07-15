@@ -60,6 +60,7 @@ pub const StorageSharedKeyCredential = struct {
 
         // 5. Set Authorization header.
         const auth = try std.fmt.allocPrint(allocator, "SharedKey {s}:{s}", .{ self.account_name, signature });
+        defer allocator.free(auth);
         try request.setHeader("Authorization", auth);
     }
 };
@@ -158,7 +159,6 @@ test "StorageSharedKeyCredential signRequest produces real HMAC" {
 
     try cred.signRequest(&req);
     const auth = req.headers.get("Authorization").?;
-    defer allocator.free(auth);
     // Must start with "SharedKey myaccount:" followed by a 44-char base64 signature.
     try std.testing.expect(std.mem.startsWith(u8, auth, "SharedKey myaccount:"));
     try std.testing.expect(auth.len == "SharedKey myaccount:".len + 44);

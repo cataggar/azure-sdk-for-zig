@@ -26,7 +26,11 @@ test "AVSClient.privateClouds().listInSubscription pages mock results" {
             _: core.context.Context,
         ) anyerror!core.credentials.AccessToken {
             const tok = try testing.allocator.dupe(u8, "stub-token");
-            return .{ .token = tok, .expires_on = std.math.maxInt(i64) };
+            return .{
+                .token = tok,
+                .expires_on = std.math.maxInt(i64),
+                .allocator = testing.allocator,
+            };
         }
     };
     var credential = core.credentials.TokenCredential{ .getTokenFn = &Stub.getTokenFn };
@@ -71,7 +75,11 @@ test "Maintenances.list omits null optional query params" {
             _: core.context.Context,
         ) anyerror!core.credentials.AccessToken {
             const tok = try testing.allocator.dupe(u8, "stub-token");
-            return .{ .token = tok, .expires_on = std.math.maxInt(i64) };
+            return .{
+                .token = tok,
+                .expires_on = std.math.maxInt(i64),
+                .allocator = testing.allocator,
+            };
         }
     };
     var credential = core.credentials.TokenCredential{ .getTokenFn = &Stub.getTokenFn };
@@ -113,7 +121,11 @@ test "Maintenances.list appends populated optional query params with percent-enc
             _: core.context.Context,
         ) anyerror!core.credentials.AccessToken {
             const tok = try testing.allocator.dupe(u8, "stub-token");
-            return .{ .token = tok, .expires_on = std.math.maxInt(i64) };
+            return .{
+                .token = tok,
+                .expires_on = std.math.maxInt(i64),
+                .allocator = testing.allocator,
+            };
         }
     };
     var credential = core.credentials.TokenCredential{ .getTokenFn = &Stub.getTokenFn };

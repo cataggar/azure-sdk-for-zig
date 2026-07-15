@@ -77,11 +77,18 @@ pub const ClientAssertionCredential = struct {
         );
         defer allocator.free(url);
 
+        const encoded_client_id = try core.url.percentEncode(allocator, self.client_id);
+        defer allocator.free(encoded_client_id);
+        const encoded_assertion = try core.url.percentEncode(allocator, assertion);
+        defer allocator.free(encoded_assertion);
+        const encoded_scope = try core.url.percentEncode(allocator, scope);
+        defer allocator.free(encoded_scope);
+
         // Build form body.
         const body = try std.fmt.allocPrint(
             allocator,
             "grant_type=client_credentials&client_id={s}&client_assertion_type=urn%3Aietf%3Aparams%3Aoauth%3Aclient-assertion-type%3Ajwt-bearer&client_assertion={s}&scope={s}",
-            .{ self.client_id, assertion, scope },
+            .{ encoded_client_id, encoded_assertion, encoded_scope },
         );
         defer allocator.free(body);
 
@@ -112,7 +119,11 @@ fn parseTokenResponse(allocator: std.mem.Allocator, body: []const u8) !AccessTok
         return error.InvalidTokenResponse;
 
     const token = try allocator.dupe(u8, parsed.access_token);
-    return .{ .token = token, .expires_on = currentTimestamp() + parsed.expires_in };
+    return .{
+        .token = token,
+        .expires_on = currentTimestamp() + parsed.expires_in,
+        .allocator = allocator,
+    };
 }
 
 fn currentTimestamp() i64 {

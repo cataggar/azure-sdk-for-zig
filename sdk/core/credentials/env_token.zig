@@ -42,9 +42,12 @@ pub const EnvTokenCredential = struct {
         _: context_mod.Context,
     ) anyerror!token.AccessToken {
         const self: *EnvTokenCredential = @alignCast(@fieldParentPtr("credential", cred));
-        // BearerTokenAuthPolicy takes ownership and frees this, so hand back
-        // an allocator-owned copy rather than the borrowed env slice.
+        // Return an explicitly owned copy; AccessToken carries its allocator.
         const owned = try self.allocator.dupe(u8, self.token);
-        return .{ .token = owned, .expires_on = far_future_unix };
+        return .{
+            .token = owned,
+            .expires_on = far_future_unix,
+            .allocator = self.allocator,
+        };
     }
 };
