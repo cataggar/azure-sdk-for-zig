@@ -126,10 +126,12 @@ pub const RetryOptions = struct {
 
 pub const KeyClientOptions = struct {
     retry: RetryOptions = .{},
+    scope: []const u8 = default_scope,
 };
 
 pub const CryptographyClientOptions = struct {
     retry: RetryOptions = .{},
+    scope: []const u8 = default_scope,
 };
 
 pub const CreateRsaKeyOptions = struct {
@@ -249,6 +251,8 @@ pub const Signature = struct {
 
 const PipelineState = struct {
     allocator: std.mem.Allocator,
+    scope: []u8,
+    scopes: [1][]const u8,
     retry: RetryPolicy,
     auth: BearerTokenAuthPolicy,
     policies: [2]*HttpPolicy,
@@ -257,18 +261,21 @@ const PipelineState = struct {
         allocator: std.mem.Allocator,
         credential: *TokenCredential,
         retry_options: RetryOptions,
+        scope: []const u8,
     ) !*PipelineState {
         const self = try allocator.create(PipelineState);
+        errdefer allocator.destroy(self);
+        const owned_scope = try allocator.dupe(u8, scope);
+        errdefer allocator.free(owned_scope);
         var retry = RetryPolicy.init();
         retry.max_retries = retry_options.max_retries;
         retry.initial_delay_ms = retry_options.initial_delay_ms;
         retry.max_delay_ms = retry_options.max_delay_ms;
-        self.* = .{
-            .allocator = allocator,
-            .retry = retry,
-            .auth = BearerTokenAuthPolicy.init(allocator, credential, &.{default_scope}),
-            .policies = undefined,
-        };
+        self.allocator = allocator;
+        self.scope = owned_scope;
+        self.scopes = .{self.scope};
+        self.retry = retry;
+        self.auth = BearerTokenAuthPolicy.init(allocator, credential, &self.scopes);
         self.policies = .{ self.retry.asPolicy(), self.auth.asPolicy() };
         return self;
     }
@@ -280,6 +287,7 @@ const PipelineState = struct {
     fn deinit(self: *PipelineState) void {
         const allocator = self.allocator;
         self.auth.deinit();
+        allocator.free(self.scope);
         allocator.destroy(self);
     }
 };
@@ -301,7 +309,12 @@ pub const KeyClient = struct {
         try validateVaultUrl(normalized_url);
         const owned_url = try allocator.dupe(u8, normalized_url);
         errdefer allocator.free(owned_url);
-        const pipeline_state = try PipelineState.create(allocator, credential, options.retry);
+        const pipeline_state = try PipelineState.create(
+            allocator,
+            credential,
+            options.retry,
+            options.scope,
+        );
         return .{
             .vault_url = owned_url,
             .transport = transport,
@@ -561,7 +574,12 @@ pub const CryptographyClient = struct {
         if (parsed_key_id.version == null) return error.VersionedKeyIdRequired;
         const owned_key_id = try allocator.dupe(u8, key_id);
         errdefer allocator.free(owned_key_id);
-        const pipeline_state = try PipelineState.create(allocator, credential, options.retry);
+        const pipeline_state = try PipelineState.create(
+            allocator,
+            credential,
+            options.retry,
+            options.scope,
+        );
         return .{
             .key_id = owned_key_id,
             .transport = transport,
@@ -1077,7 +1095,7 @@ test "create RSA key authenticates, escapes JSON, and disables retries" {
         "https://vault.example/",
         credential.asCredential(),
         service_mock.asTransport(),
-        .{},
+        .{ .scope = "https://vault.usgovcloudapi.net/.default" },
     );
     defer client.deinit();
 
@@ -1090,6 +1108,11 @@ test "create RSA key authenticates, escapes JSON, and disables retries" {
         "https://vault.example/keys/ssh-ca/create?api-version=2025-07-01",
         service_mock.last_url.?,
     );
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        credential_mock.last_body.?,
+        "scope=https%3A%2F%2Fvault.usgovcloudapi.net%2F.default",
+    ) != null);
     try std.testing.expectEqualStrings("Bearer test-token", service_mock.last_headers.get("Authorization").?);
     try std.testing.expectEqualStrings(
         "{\"kty\":\"RSA\",\"key_size\":3072,\"key_ops\":[\"sign\",\"verify\"],\"attributes\":{\"enabled\":true,\"exportable\":false},\"tags\":{\"operation-id\":\"quoted \\\"value\\\"\"}}",
