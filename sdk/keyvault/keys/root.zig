@@ -227,7 +227,11 @@ pub const KeyVaultKey = struct {
         if (!self.hasOperation(.verify)) return error.KeyMustAllowVerify;
         if (self.modulus == null or self.exponent == null) return error.KeyMustHaveRsaPublicMaterial;
         const modulus = self.modulus.?;
-        if (modulus.len != 384 or modulus[0] & 0x80 == 0) return error.KeyMustBeRsa3072;
+        if ((modulus.len != 256 and modulus.len != 384 and modulus.len != 512) or
+            modulus[0] & 0x80 == 0)
+        {
+            return error.UnsupportedRsaKeySize;
+        }
         if (self.version == null) return error.KeyMustHaveExplicitVersion;
     }
 };
@@ -335,7 +339,8 @@ pub const KeyClient = struct {
         try validateKeyName(name);
         if (options.key_type != .rsa and options.key_type != .rsa_hsm)
             return error.KeyTypeMustBeRsa;
-        if (options.key_size != 3072) return error.InvalidRsaKeySize;
+        if (options.key_size != 2048 and options.key_size != 3072 and options.key_size != 4096)
+            return error.InvalidRsaKeySize;
         if (!options.enabled) return error.DisabledKeyNotAllowed;
         if (options.exportable) return error.ExportableKeyNotAllowed;
         try validateCaOperations(options.operations);
@@ -1095,7 +1100,7 @@ test "create RSA key authenticates, escapes JSON, and disables retries" {
     try std.testing.expectEqualSlices(u8, &.{ 0x80, 0x01 }, key.modulus.?);
     try std.testing.expectEqualSlices(u8, &.{ 0x01, 0x00, 0x01 }, key.exponent.?);
     try std.testing.expectEqualStrings("quoted \"value\"", key.tagValue("operation-id").?);
-    try std.testing.expectError(error.KeyMustBeRsa3072, key.validateSshCertificateAuthority());
+    try std.testing.expectError(error.UnsupportedRsaKeySize, key.validateSshCertificateAuthority());
     allocator.free(key.modulus.?);
     const modulus = try allocator.alloc(u8, 384);
     @memset(modulus, 0);
@@ -1334,7 +1339,7 @@ test "unsafe SSH CA create options fail before the network call" {
     );
     try std.testing.expectError(
         error.InvalidRsaKeySize,
-        client.createRsaKey(allocator, "ssh-ca", .{ .key_size = 2048 }),
+        client.createRsaKey(allocator, "ssh-ca", .{ .key_size = 2056 }),
     );
     try std.testing.expectError(
         error.OnlySignAndVerifyOperationsAllowed,
