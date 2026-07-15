@@ -26,6 +26,7 @@ pub fn main(init: std.process.Init) !void {
     var cli_cred = identity.AzureCliCredential.init(gpa, init.io);
 
     var http_transport = core.http.StdHttpTransport.init(gpa, init.io);
+    defer http_transport.deinit();
 
     var client = try arm_avs.AVSClient.init(gpa, .{
         .subscription_id = subscription_id,
