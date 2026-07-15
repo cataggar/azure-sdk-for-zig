@@ -145,6 +145,7 @@ pub const RetryPolicy = struct {
         next: []*HttpPolicy,
         final_transport: *HttpTransport,
     ) !Response {
+        if (!request.retryable) return callNext(request, next, final_transport);
         const self: *RetryPolicy = @alignCast(@fieldParentPtr("policy", policy));
         var attempt: u32 = 0;
         var prng = std.Random.DefaultPrng.init(@truncate(@as(u128, @bitCast(nanoTimestamp()))));
@@ -154,7 +155,7 @@ pub const RetryPolicy = struct {
                 if (!isRetryable(resp.status_code) or attempt >= self.max_retries) return resp;
 
                 // Check for Retry-After header (seconds).
-                const retry_after_ms = parseRetryAfter(resp) orelse 0;
+                const retry_after_ms = retryAfterDelayMs(resp);
 
                 var r = resp;
                 r.deinit();
@@ -192,6 +193,11 @@ pub const RetryPolicy = struct {
             resp.headers.get("retry-after") orelse
             return null;
         return std.fmt.parseInt(u64, value, 10) catch null;
+    }
+
+    fn retryAfterDelayMs(resp: Response) u64 {
+        const seconds = parseRetryAfter(resp) orelse return 0;
+        return std.math.mul(u64, seconds, 1000) catch std.math.maxInt(u64);
     }
 };
 
@@ -245,25 +251,30 @@ pub const BearerTokenAuthPolicy = struct {
         var token_str = self.cached_token;
         if (token_str == null or now >= self.cached_expires_on - refresh_buffer) {
             const ctx = @import("../context.zig").Context.none;
-            const fresh = try self.credential.getToken(
+            var fresh = try self.credential.getToken(
                 .{ .scopes = self.scopes },
                 ctx,
             );
-            // Cache the token — free old cache, dupe fresh, free original.
+            defer fresh.deinit();
+            const replacement = try self.allocator.dupe(u8, fresh.token);
             if (self.cached_token) |old| self.allocator.free(old);
-            self.cached_token = try self.allocator.dupe(u8, fresh.token);
+            self.cached_token = replacement;
             self.cached_expires_on = fresh.expires_on;
-            self.allocator.free(fresh.token);
             token_str = self.cached_token;
         }
 
         // Build and cache the "Bearer {token}" header value.
-        if (self.cached_auth_value) |old| self.allocator.free(old);
-        self.cached_auth_value = try std.fmt.allocPrint(
-            self.allocator,
-            "Bearer {s}",
-            .{token_str.?},
-        );
+        const old_auth_value = self.cached_auth_value;
+        {
+            self.cached_auth_value = null;
+            errdefer self.cached_auth_value = old_auth_value;
+            self.cached_auth_value = try std.fmt.allocPrint(
+                self.allocator,
+                "Bearer {s}",
+                .{token_str.?},
+            );
+        }
+        if (old_auth_value) |old| self.allocator.free(old);
         try request.setHeader("Authorization", self.cached_auth_value.?);
         return callNext(request, next, final_transport);
     }
@@ -292,8 +303,7 @@ pub const RequestIdPolicy = struct {
         var prng = std.Random.DefaultPrng.init(seed);
         const id = uuid_mod.Uuid.init(prng.random());
         const id_str = id.toString();
-        const id_owned = try request.allocator.dupe(u8, &id_str);
-        try request.setHeader("x-ms-client-request-id", id_owned);
+        try request.setHeader("x-ms-client-request-id", &id_str);
         return callNext(request, next, final_transport);
     }
 };
@@ -430,7 +440,6 @@ test "RequestIdPolicy injects x-ms-client-request-id" {
     var resp = try pipeline_inst.send(&req);
     defer resp.deinit();
     const request_id = req.headers.get("x-ms-client-request-id").?;
-    defer allocator.free(request_id);
     // UUID format: 8-4-4-4-12 = 36 chars.
     try std.testing.expectEqual(@as(usize, 36), request_id.len);
     try std.testing.expectEqual(@as(u8, '-'), request_id[8]);
@@ -447,7 +456,11 @@ test "BearerTokenAuthPolicy injects Authorization header" {
             _: @import("../context.zig").Context,
         ) anyerror!creds.AccessToken {
             const token = try allocator.dupe(u8, "stub-token");
-            return .{ .token = token, .expires_on = unixTimestampSeconds() + 3600 };
+            return .{
+                .token = token,
+                .expires_on = unixTimestampSeconds() + 3600,
+                .allocator = allocator,
+            };
         }
     };
     var credential = creds.TokenCredential{ .getTokenFn = &Stub.getTokenFn };
@@ -484,6 +497,19 @@ test "RetryPolicy passes through 200 without retry" {
     var resp = try pip.send(&req);
     defer resp.deinit();
     try std.testing.expectEqual(@as(u16, 200), resp.status_code);
+}
+
+test "RetryPolicy converts Retry-After seconds to milliseconds" {
+    var headers = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer headers.deinit();
+    try headers.put("Retry-After", "10");
+    const response = Response{
+        .status_code = 429,
+        .headers = headers,
+        .body = @constCast(&.{}),
+        .allocator = std.testing.allocator,
+    };
+    try std.testing.expectEqual(@as(u64, 10_000), RetryPolicy.retryAfterDelayMs(response));
 }
 
 test "RetryPolicy passes through 404 without retry" {
@@ -535,6 +561,25 @@ test "RetryPolicy retries 429 then succeeds" {
     defer resp.deinit();
     try std.testing.expectEqual(@as(u16, 200), resp.status_code);
     try std.testing.expectEqual(@as(usize, 2), seq.call_count);
+}
+
+test "RetryPolicy bypasses retries for non-retryable requests" {
+    const allocator = std.testing.allocator;
+    var seq = transport.SequenceMockTransport.init(allocator, &.{
+        .{ .status = 500, .body = "error" },
+        .{ .status = 200, .body = "ok" },
+    });
+    var retry = RetryPolicy.init();
+    retry.initial_delay_ms = 0;
+    var policy_ptrs = [_]*HttpPolicy{retry.asPolicy()};
+    var pip = HttpPipeline{ .policies = &policy_ptrs, .transport_impl = seq.asTransport() };
+    var req = Request.init(allocator, .POST, "https://example.com/create");
+    defer req.deinit();
+    req.retryable = false;
+    var resp = try pip.send(&req);
+    defer resp.deinit();
+    try std.testing.expectEqual(@as(u16, 500), resp.status_code);
+    try std.testing.expectEqual(@as(usize, 1), seq.call_count);
 }
 
 test "RetryPolicy gives up after max retries" {

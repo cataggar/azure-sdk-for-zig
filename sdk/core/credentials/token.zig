@@ -6,6 +6,13 @@ pub const AccessToken = struct {
     token: []const u8,
     /// Unix timestamp in seconds when the token expires.
     expires_on: i64,
+    /// Allocator that owns `token`, or null when the token is borrowed.
+    allocator: ?std.mem.Allocator = null,
+
+    pub fn deinit(self: *AccessToken) void {
+        if (self.allocator) |allocator| allocator.free(self.token);
+        self.* = undefined;
+    }
 };
 
 /// Scopes to request when obtaining a token.
@@ -82,15 +89,13 @@ pub const CachedTokenCredential = struct {
         }
 
         // Fetch fresh token.
-        const fresh = try self.inner.getToken(request_context, ctx);
+        var fresh = try self.inner.getToken(request_context, ctx);
+        defer fresh.deinit();
 
-        // Cache it (take ownership of the token string).
+        const replacement = try self.allocator.dupe(u8, fresh.token);
         if (self.cached_token) |old| self.allocator.free(old);
-        self.cached_token = try self.allocator.dupe(u8, fresh.token);
+        self.cached_token = replacement;
         self.cached_expires_on = fresh.expires_on;
-
-        // Free the original token from the inner credential since we duped it.
-        self.allocator.free(fresh.token);
 
         return .{ .token = self.cached_token.?, .expires_on = self.cached_expires_on };
     }
@@ -120,7 +125,11 @@ test "CachedTokenCredential caches token" {
             call_count += 1;
             const token = try allocator.dupe(u8, "test-token");
             // Expires far in the future.
-            return .{ .token = token, .expires_on = currentTimestamp() + 7200 };
+            return .{
+                .token = token,
+                .expires_on = currentTimestamp() + 7200,
+                .allocator = allocator,
+            };
         }
     };
 

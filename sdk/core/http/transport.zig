@@ -31,6 +31,7 @@ pub const Request = struct {
     headers: std.StringHashMap([]const u8),
     body: ?[]const u8 = null,
     allocator: std.mem.Allocator,
+    retryable: bool = true,
 
     pub fn init(allocator: std.mem.Allocator, method: Method, request_url: []const u8) Request {
         return .{
@@ -43,11 +44,23 @@ pub const Request = struct {
     }
 
     pub fn setHeader(self: *Request, key: []const u8, value: []const u8) !void {
-        try self.headers.put(key, value);
+        const owned_key = try self.allocator.dupe(u8, key);
+        errdefer self.allocator.free(owned_key);
+        const owned_value = try self.allocator.dupe(u8, value);
+        errdefer self.allocator.free(owned_value);
+
+        const entry = try self.headers.getOrPut(owned_key);
+        if (entry.found_existing) {
+            self.allocator.free(owned_key);
+            self.allocator.free(entry.value_ptr.*);
+        } else {
+            entry.key_ptr.* = owned_key;
+        }
+        entry.value_ptr.* = owned_value;
     }
 
     pub fn deinit(self: *Request) void {
-        self.headers.deinit();
+        deinitOwnedHeaders(self.allocator, &self.headers);
     }
 };
 
@@ -64,13 +77,7 @@ pub const Response = struct {
 
     pub fn deinit(self: *Response) void {
         self.allocator.free(self.body);
-        // Free heap-allocated header keys/values from StdHttpTransport.
-        var it = self.headers.iterator();
-        while (it.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            self.allocator.free(entry.value_ptr.*);
-        }
-        self.headers.deinit();
+        deinitOwnedHeaders(self.allocator, &self.headers);
     }
 };
 
@@ -89,15 +96,18 @@ pub const HttpTransport = struct {
 /// Default transport backed by `std.http.Client`.
 ///
 /// Requires `std.Io` (threaded or evented) for TLS, DNS, and socket I/O.
+/// The transport reuses one client and its connection pool across requests.
+/// It is not thread-safe; callers must serialize access or provide their own
+/// synchronization.
 pub const StdHttpTransport = struct {
     allocator: std.mem.Allocator,
-    io: std.Io,
+    client: std.http.Client,
     transport: HttpTransport,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) StdHttpTransport {
         return .{
             .allocator = allocator,
-            .io = io,
+            .client = .{ .allocator = allocator, .io = io },
             .transport = .{ .sendFn = &sendImpl },
         };
     }
@@ -106,40 +116,37 @@ pub const StdHttpTransport = struct {
         return &self.transport;
     }
 
+    pub fn deinit(self: *StdHttpTransport) void {
+        self.client.deinit();
+    }
+
     fn sendImpl(transport: *HttpTransport, request: *Request) !Response {
         const self: *StdHttpTransport = @alignCast(@fieldParentPtr("transport", transport));
         const allocator = self.allocator;
 
-        var client: std.http.Client = .{ .allocator = allocator, .io = self.io };
-        defer client.deinit();
-
         // Convert request headers to std.http.Header slices.
         //
-        // In Zig 0.16's `std.http.Client`, only `extra_headers` is actually
-        // emitted on the request line; `privileged_headers` is the allow-list
-        // of headers retained across cross-origin redirects. Auth headers
-        // therefore need to be in BOTH so they are sent on the initial
-        // request AND preserved across same-origin redirects.
+        // Authenticated requests must not follow redirects because
+        // `extra_headers` are retained across cross-origin redirects.
         var extra = std.ArrayList(std.http.Header).empty;
         defer extra.deinit(allocator);
-        var privileged = std.ArrayList(std.http.Header).empty;
-        defer privileged.deinit(allocator);
+        var authenticated = false;
 
         var it = request.headers.iterator();
         while (it.next()) |entry| {
             const header = std.http.Header{ .name = entry.key_ptr.*, .value = entry.value_ptr.* };
             try extra.append(allocator, header);
             if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, "Authorization")) {
-                try privileged.append(allocator, header);
+                authenticated = true;
             }
         }
 
         const uri = try std.Uri.parse(request.url);
 
         // Use lower-level API to access response headers.
-        var req = try client.request(request.method.toStd(), uri, .{
+        var req = try self.client.request(request.method.toStd(), uri, .{
             .extra_headers = extra.items,
-            .privileged_headers = privileged.items,
+            .redirect_behavior = if (authenticated) .not_allowed else @enumFromInt(3),
         });
         defer req.deinit();
 
@@ -161,7 +168,7 @@ pub const StdHttpTransport = struct {
 
         // Capture response headers before reading body (body invalidates head strings).
         var resp_headers = std.StringHashMap([]const u8).init(allocator);
-        errdefer resp_headers.deinit();
+        errdefer deinitOwnedHeaders(allocator, &resp_headers);
         var header_it = response.head.iterateHeaders();
         while (header_it.next()) |hdr| {
             const name = try allocator.dupe(u8, hdr.name);
@@ -220,6 +227,9 @@ pub const MockTransport = struct {
     transport: HttpTransport,
     last_method: ?Method = null,
     last_url: ?[]u8 = null,
+    last_headers: std.StringHashMap([]const u8),
+    last_body: ?[]u8 = null,
+    last_retryable: ?bool = null,
     response_headers_list: []const HeaderPair = &.{},
 
     pub fn init(allocator: std.mem.Allocator, status: u16, body: []const u8) MockTransport {
@@ -230,6 +240,7 @@ pub const MockTransport = struct {
             .transport = .{ .sendFn = &sendImpl },
             .last_method = null,
             .last_url = null,
+            .last_headers = std.StringHashMap([]const u8).init(allocator),
         };
     }
 
@@ -239,6 +250,8 @@ pub const MockTransport = struct {
 
     pub fn deinit(self: *MockTransport) void {
         if (self.last_url) |u| self.allocator.free(u);
+        if (self.last_body) |body| self.allocator.free(body);
+        deinitOwnedHeaders(self.allocator, &self.last_headers);
     }
 
     fn sendImpl(transport: *HttpTransport, request: *Request) !Response {
@@ -246,14 +259,38 @@ pub const MockTransport = struct {
         self.last_method = request.method;
         if (self.last_url) |old| self.allocator.free(old);
         self.last_url = try self.allocator.dupe(u8, request.url);
+        if (self.last_body) |old| self.allocator.free(old);
+        self.last_body = if (request.body) |body|
+            try self.allocator.dupe(u8, body)
+        else
+            null;
+        clearOwnedHeaders(self.allocator, &self.last_headers);
+        var request_headers = request.headers.iterator();
+        while (request_headers.next()) |header| {
+            const name = try self.allocator.dupe(u8, header.key_ptr.*);
+            errdefer self.allocator.free(name);
+            const value = try self.allocator.dupe(u8, header.value_ptr.*);
+            errdefer self.allocator.free(value);
+            try self.last_headers.put(name, value);
+        }
+        self.last_retryable = request.retryable;
 
         const body_copy = try self.allocator.dupe(u8, self.response_body);
         var headers = std.StringHashMap([]const u8).init(self.allocator);
+        errdefer deinitOwnedHeaders(self.allocator, &headers);
         for (self.response_headers_list) |hdr| {
             const k = try self.allocator.dupe(u8, hdr.name);
             errdefer self.allocator.free(k);
             const v = try self.allocator.dupe(u8, hdr.value);
-            try headers.put(k, v);
+            errdefer self.allocator.free(v);
+            const entry = try headers.getOrPut(k);
+            if (entry.found_existing) {
+                self.allocator.free(k);
+                self.allocator.free(entry.value_ptr.*);
+            } else {
+                entry.key_ptr.* = k;
+            }
+            entry.value_ptr.* = v;
         }
         return .{
             .status_code = self.response_status,
@@ -263,6 +300,26 @@ pub const MockTransport = struct {
         };
     }
 };
+
+fn clearOwnedHeaders(
+    allocator: std.mem.Allocator,
+    headers: *std.StringHashMap([]const u8),
+) void {
+    var iterator = headers.iterator();
+    while (iterator.next()) |entry| {
+        allocator.free(entry.key_ptr.*);
+        allocator.free(entry.value_ptr.*);
+    }
+    headers.clearRetainingCapacity();
+}
+
+fn deinitOwnedHeaders(
+    allocator: std.mem.Allocator,
+    headers: *std.StringHashMap([]const u8),
+) void {
+    clearOwnedHeaders(allocator, headers);
+    headers.deinit();
+}
 
 /// A transport that returns a sequence of canned responses — for retry testing.
 pub const SequenceMockTransport = struct {
@@ -308,6 +365,8 @@ test "request init and set header" {
     defer req.deinit();
     try req.setHeader("Accept", "application/json");
     try std.testing.expectEqualStrings("application/json", req.headers.get("Accept").?);
+    try req.setHeader("Accept", "application/xml");
+    try std.testing.expectEqualStrings("application/xml", req.headers.get("Accept").?);
 }
 
 test "response isSuccess" {
@@ -332,4 +391,5 @@ test "mock transport" {
     try std.testing.expectEqual(@as(u16, 200), resp.status_code);
     try std.testing.expectEqualStrings("{\"status\":\"ok\"}", resp.body);
     try std.testing.expectEqual(Method.POST, mock.last_method.?);
+    try std.testing.expectEqualStrings("https://vault.azure.net/secrets/mysecret", mock.last_url.?);
 }

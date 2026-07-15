@@ -15,10 +15,10 @@ pub const WorkloadIdentityCredential = struct {
     transport: *core.http.HttpTransport,
     credential: TokenCredential,
 
-    tenant_id: []const u8,
-    client_id: []const u8,
-    token_file_path: []const u8,
-    authority_host: []const u8 = "https://login.microsoftonline.com",
+    tenant_id: []u8,
+    client_id: []u8,
+    token_file_path: []u8,
+    authority_host: []u8,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -26,19 +26,45 @@ pub const WorkloadIdentityCredential = struct {
         tenant_id: []const u8,
         client_id: []const u8,
         token_file_path: []const u8,
-    ) WorkloadIdentityCredential {
+    ) !WorkloadIdentityCredential {
+        const owned_tenant_id = try allocator.dupe(u8, tenant_id);
+        errdefer allocator.free(owned_tenant_id);
+        const owned_client_id = try allocator.dupe(u8, client_id);
+        errdefer allocator.free(owned_client_id);
+        const owned_token_file_path = try allocator.dupe(u8, token_file_path);
+        errdefer allocator.free(owned_token_file_path);
+        const authority_host = try allocator.dupe(u8, "https://login.microsoftonline.com");
+        errdefer allocator.free(authority_host);
         return .{
             .allocator = allocator,
             .transport = transport,
             .credential = .{ .getTokenFn = &getTokenImpl },
-            .tenant_id = tenant_id,
-            .client_id = client_id,
-            .token_file_path = token_file_path,
+            .tenant_id = owned_tenant_id,
+            .client_id = owned_client_id,
+            .token_file_path = owned_token_file_path,
+            .authority_host = authority_host,
         };
     }
 
     pub fn asCredential(self: *WorkloadIdentityCredential) *TokenCredential {
         return &self.credential;
+    }
+
+    pub fn setAuthorityHost(
+        self: *WorkloadIdentityCredential,
+        authority_host: []const u8,
+    ) !void {
+        const replacement = try self.allocator.dupe(u8, authority_host);
+        self.allocator.free(self.authority_host);
+        self.authority_host = replacement;
+    }
+
+    pub fn deinit(self: *WorkloadIdentityCredential) void {
+        self.allocator.free(self.tenant_id);
+        self.allocator.free(self.client_id);
+        self.allocator.free(self.token_file_path);
+        self.allocator.free(self.authority_host);
+        self.* = undefined;
     }
 
     fn getTokenImpl(
@@ -50,8 +76,8 @@ pub const WorkloadIdentityCredential = struct {
         const allocator = self.allocator;
 
         // Read the federated token from the projected file.
-        const assertion = readTokenFile(self.token_file_path) catch
-            return error.WorkloadTokenFileNotFound;
+        const assertion = try readTokenFile(allocator, self.token_file_path);
+        defer allocator.free(assertion);
 
         const scope = if (request_context.scopes.len > 0)
             request_context.scopes[0]
@@ -65,6 +91,13 @@ pub const WorkloadIdentityCredential = struct {
         });
         defer allocator.free(url);
 
+        const encoded_client_id = try core.url.percentEncode(allocator, self.client_id);
+        defer allocator.free(encoded_client_id);
+        const encoded_assertion = try core.url.percentEncode(allocator, assertion);
+        defer allocator.free(encoded_assertion);
+        const encoded_scope = try core.url.percentEncode(allocator, scope);
+        defer allocator.free(encoded_scope);
+
         const body = try std.fmt.allocPrint(
             allocator,
             "grant_type=client_credentials" ++
@@ -72,7 +105,7 @@ pub const WorkloadIdentityCredential = struct {
                 "&client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer" ++
                 "&client_assertion={s}" ++
                 "&scope={s}",
-            .{ self.client_id, assertion, scope },
+            .{ encoded_client_id, encoded_assertion, encoded_scope },
         );
         defer allocator.free(body);
 
@@ -94,30 +127,36 @@ pub const WorkloadIdentityCredential = struct {
     }
 };
 
-fn readTokenFile(path: []const u8) ![]const u8 {
+fn readTokenFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     var threaded: std.Io.Threaded = .init_single_threaded;
     const io = threaded.io();
     const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch
         return error.WorkloadTokenFileNotFound;
     defer file.close(io);
-    // Token files are small (typically < 4KB JWT).
-    var buf: [8192]u8 = undefined;
-    const n = file.readStreaming(io, &.{&buf}) catch return error.WorkloadTokenFileNotFound;
-    // Trim trailing whitespace/newlines.
-    const trimmed = std.mem.trimEnd(u8, buf[0..n], " \t\r\n");
-    return trimmed;
+    var reader_buffer: [4096]u8 = undefined;
+    var reader = file.readerStreaming(io, &reader_buffer);
+    const contents = reader.interface.allocRemaining(allocator, .limited(8192)) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.StreamTooLong => return error.WorkloadTokenFileTooLarge,
+        else => return error.WorkloadTokenFileReadFailed,
+    };
+    defer allocator.free(contents);
+    const trimmed = std.mem.trim(u8, contents, " \t\r\n");
+    if (trimmed.len == 0) return error.WorkloadTokenFileEmpty;
+    return allocator.dupe(u8, trimmed);
 }
 
 test "WorkloadIdentityCredential fields" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 200, "{}");
-    const cred = WorkloadIdentityCredential.init(
+    var cred = try WorkloadIdentityCredential.init(
         allocator,
         mock.asTransport(),
         "tenant",
         "client",
         "/var/run/secrets/azure/tokens/azure-identity-token",
     );
+    defer cred.deinit();
     try std.testing.expectEqualStrings("tenant", cred.tenant_id);
     try std.testing.expectEqualStrings("client", cred.client_id);
 }

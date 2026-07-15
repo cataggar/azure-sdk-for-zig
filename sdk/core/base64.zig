@@ -5,6 +5,8 @@ const std = @import("std");
 
 const encoder = std.base64.standard.Encoder;
 const decoder = std.base64.standard.Decoder;
+const url_encoder = std.base64.url_safe_no_pad.Encoder;
+const url_decoder = std.base64.url_safe_no_pad.Decoder;
 
 /// Base64-encode `data`, returning an allocator-owned slice.
 pub fn encode(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
@@ -18,7 +20,25 @@ pub fn encode(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
 pub fn decode(allocator: std.mem.Allocator, encoded: []const u8) ![]u8 {
     const size = try decoder.calcSizeForSlice(encoded);
     const buf = try allocator.alloc(u8, size);
+    errdefer allocator.free(buf);
     try decoder.decode(buf, encoded);
+    return buf;
+}
+
+/// Base64url-encode `data` without padding, as required by Azure Key Vault.
+pub fn urlEncode(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
+    const size = url_encoder.calcSize(data.len);
+    const buf = try allocator.alloc(u8, size);
+    _ = url_encoder.encode(buf, data);
+    return buf;
+}
+
+/// Decode unpadded base64url data.
+pub fn urlDecode(allocator: std.mem.Allocator, encoded: []const u8) ![]u8 {
+    const size = try url_decoder.calcSizeForSlice(encoded);
+    const buf = try allocator.alloc(u8, size);
+    errdefer allocator.free(buf);
+    try url_decoder.decode(buf, encoded);
     return buf;
 }
 
@@ -68,6 +88,23 @@ test "base64 empty" {
     const encoded = try encode(allocator, "");
     defer allocator.free(encoded);
     try std.testing.expectEqualStrings("", encoded);
+}
+
+test "base64url round-trip without padding" {
+    const allocator = std.testing.allocator;
+    const encoded = try urlEncode(allocator, &.{ 0xfb, 0xff, 0xfe });
+    defer allocator.free(encoded);
+    try std.testing.expectEqualStrings("-__-", encoded);
+    const decoded = try urlDecode(allocator, encoded);
+    defer allocator.free(decoded);
+    try std.testing.expectEqualSlices(u8, &.{ 0xfb, 0xff, 0xfe }, decoded);
+}
+
+test "invalid base64url does not leak" {
+    try std.testing.expectError(
+        error.InvalidCharacter,
+        urlDecode(std.testing.allocator, "a!"),
+    );
 }
 
 test "hmacSha256Base64 known vector" {

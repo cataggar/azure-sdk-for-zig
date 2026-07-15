@@ -19,10 +19,10 @@ pub const EnvironmentCredential = struct {
     credential: TokenCredential,
 
     // Captured from env at init time.
-    tenant_id: []const u8,
-    client_id: []const u8,
-    client_secret: ?[]const u8 = null,
-    authority_host: []const u8 = "https://login.microsoftonline.com",
+    tenant_id: []u8,
+    client_id: []u8,
+    client_secret: []u8,
+    authority_host: []u8,
 
     /// Reads environment variables eagerly. Returns `error.EnvironmentNotConfigured`
     /// if the required vars are missing.
@@ -31,12 +31,21 @@ pub const EnvironmentCredential = struct {
         transport: *core.http.HttpTransport,
         env: anytype,
     ) !EnvironmentCredential {
-        const tenant_id = envGet(env, "AZURE_TENANT_ID") orelse return error.EnvironmentNotConfigured;
-        const client_id = envGet(env, "AZURE_CLIENT_ID") orelse return error.EnvironmentNotConfigured;
-        const client_secret = envGet(env, "AZURE_CLIENT_SECRET");
-        const authority = envGet(env, "AZURE_AUTHORITY_HOST") orelse "https://login.microsoftonline.com";
+        const tenant_source = envGet(env, "AZURE_TENANT_ID") orelse return error.EnvironmentNotConfigured;
+        const client_source = envGet(env, "AZURE_CLIENT_ID") orelse return error.EnvironmentNotConfigured;
+        const secret_source = envGet(env, "AZURE_CLIENT_SECRET") orelse
+            return error.EnvironmentNotConfigured;
+        const authority_source = envGet(env, "AZURE_AUTHORITY_HOST") orelse
+            "https://login.microsoftonline.com";
 
-        if (client_secret == null) return error.EnvironmentNotConfigured;
+        const tenant_id = try allocator.dupe(u8, tenant_source);
+        errdefer allocator.free(tenant_id);
+        const client_id = try allocator.dupe(u8, client_source);
+        errdefer allocator.free(client_id);
+        const client_secret = try allocator.dupe(u8, secret_source);
+        errdefer allocator.free(client_secret);
+        const authority_host = try allocator.dupe(u8, authority_source);
+        errdefer allocator.free(authority_host);
 
         return .{
             .allocator = allocator,
@@ -45,12 +54,20 @@ pub const EnvironmentCredential = struct {
             .tenant_id = tenant_id,
             .client_id = client_id,
             .client_secret = client_secret,
-            .authority_host = authority,
+            .authority_host = authority_host,
         };
     }
 
     pub fn asCredential(self: *EnvironmentCredential) *TokenCredential {
         return &self.credential;
+    }
+
+    pub fn deinit(self: *EnvironmentCredential) void {
+        self.allocator.free(self.tenant_id);
+        self.allocator.free(self.client_id);
+        self.allocator.free(self.client_secret);
+        self.allocator.free(self.authority_host);
+        self.* = undefined;
     }
 
     fn getTokenImpl(
@@ -66,7 +83,7 @@ pub const EnvironmentCredential = struct {
             self.transport,
             self.tenant_id,
             self.client_id,
-            self.client_secret.?,
+            self.client_secret,
         );
         inner.authority_host = self.authority_host;
         return inner.asCredential().getToken(request_context, ctx);
@@ -121,6 +138,7 @@ test "EnvironmentCredential with secret" {
     try env.put("AZURE_CLIENT_SECRET", "s");
 
     var cred = try EnvironmentCredential.init(allocator, mock.asTransport(), env);
+    defer cred.deinit();
     const token = try cred.asCredential().getToken(
         .{ .scopes = &.{"https://management.azure.com/.default"} },
         Context.none,
