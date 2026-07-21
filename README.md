@@ -112,7 +112,7 @@ azure-core-amqp: azure-uamqp-zig (pure Zig AMQP 1.0)
 | `azure_messaging_eventhubs_checkpointstore_blob` | Blob-backed checkpoint store |
 | `azure_messaging_servicebus` | `ServiceBusSenderClient`, `ServiceBusReceiverClient`, `ServiceBusAdministrationClient` |
 | `azure_kusto_data` | `KustoClient` (experimental buffered and progressive query plus management support) |
-| `azure_kusto_ingest` | `StreamingIngestClient` plus queued-ingestion resource discovery/snapshot selection; upload, queue post, status polling, and managed queued fallback are not implemented |
+| `azure_kusto_ingest` | `StreamingIngestClient`, `QueuedIngestClient`, and queued-ingestion resource discovery |
 
 ### Complete SAS Blob and Queue operations
 
@@ -226,11 +226,70 @@ executor, and custom time source. Otherwise, externally serialize it.
 `DataManagementCommandExecutor` borrows a `KustoConnection`, which remains
 serialized-use only. `selectResource` returns an owned resource plus attempt
 context; call `reportAttempt` after a later upload/post attempt to update
-deterministic account ranking. This module does not upload data, post queues,
-or poll ingestion status.
+deterministic account ranking.
 
 Use `default_resource_database` (`"NetDefaultDB"`) unless a service
 environment requires another management database.
+
+### Kusto queued ingestion
+
+`QueuedIngestClient` uses a borrowed `ResourceManager` to select a temporary
+Blob container and secured-ready queue. It accepts the same
+`StreamingIngestSource` variants as direct ingestion: bytes, local files,
+one-shot readers, replay-reader factories, and existing Blob URIs. Existing
+Blob URIs are queued without uploading. Other sources are gzip-compressed for
+text formats, block-uploaded through complete-SAS Blob APIs, then queued
+through a complete-SAS Queue API. Storage requests never carry Kusto bearer
+authorization.
+
+```zig
+const std = @import("std");
+
+var executor = DataManagementCommandExecutor.initWithConnection(connection);
+var io_thread = std.Io.Threaded.init_single_threaded;
+var manager = try ResourceManager.init(
+    allocator,
+    io_thread.io(),
+    executor.asExecutor(),
+    default_resource_database,
+    .{},
+);
+defer manager.deinit();
+
+var client = QueuedIngestClient.initWithConnectionAndResourceManager(connection, &manager);
+var submission = try client.ingest(
+    allocator,
+    .{ .database = "db", .table = "events" },
+    .{ .file = "events.ndjson" },
+    .{ .format = .json, .mapping_name = "EventsMapping" },
+);
+defer submission.deinit(allocator);
+```
+
+`QueuedIngestionResult.outcome` distinguishes `.queue_accepted`,
+`.queue_rejected`, `.queue_unknown`, and `.pre_queue_failed`. Queue acceptance
+only means the queue POST succeeded—not that Kusto finished ingestion. The
+result owns its stable source ID and safe resource-attempt contexts. A
+received Blob rejection may fail over only with a replayable source; after an
+accepted Blob upload, a received Queue rejection can try another queue
+resource even for a one-shot source. An ambiguous queue POST is never retried
+to avoid duplicate ingestion. Callers borrowing a manager must keep it, its executor, transport, and any shared
+`KustoConnection` alive, and serialize calls when its executor uses a
+connection. `initWithConnection` creates a short-lived manager per call when
+one is not injected; use `initWithConnectionAndResourceManager` to retain
+resource caching and ranking across calls.
+
+Queued source IDs are nonzero canonical UUIDs (`8-4-4-4-12` hexadecimal);
+uppercase input is normalized to lowercase. Only `report_method = .queue` is
+currently supported. `.table` and `.queue_and_table` are rejected locally
+because status-table reporting is not implemented yet.
+
+For local `.gz` and `.zip` files, automatic and `.none` compression upload the
+existing compressed bytes unchanged, preserve that extension in the temporary
+blob name, and omit `RawDataSize` unless `raw_size` supplies the original
+uncompressed length. `.gzip` deliberately recompresses an input file.
+Existing Blob URIs are queued as-is, so explicit `.gzip` or `.none`
+compression modes are rejected rather than silently ignored.
 
 ### Kusto request properties, timeouts, and retries
 

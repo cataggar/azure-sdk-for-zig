@@ -100,7 +100,7 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    _ = b.addModule("azure_storage_queues", .{
+    const queues_mod = b.addModule("azure_storage_queues", .{
         .root_source_file = b.path("sdk/storage/queues/root.zig"),
         .target = target,
         .imports = &.{
@@ -172,6 +172,9 @@ pub fn build(b: *std.Build) void {
             .{ .name = "azure_core", .module = core_mod },
             .{ .name = "azure_kusto_common", .module = kusto_common_mod },
             .{ .name = "azure_kusto_data", .module = kusto_data_mod },
+            .{ .name = "azure_storage_blobs", .module = blobs_mod },
+            .{ .name = "azure_storage_common", .module = storage_common_mod },
+            .{ .name = "azure_storage_queues", .module = queues_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
@@ -441,7 +444,7 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
 
-    // Kusto ingest tests — needs core + kusto_common
+    // Kusto ingest tests — needs core + Kusto + complete-SAS storage clients
     {
         const t = b.addTest(.{
             .root_module = b.createModule(.{
@@ -452,6 +455,9 @@ pub fn build(b: *std.Build) void {
                     .{ .name = "azure_core", .module = core_mod },
                     .{ .name = "azure_kusto_common", .module = kusto_common_mod },
                     .{ .name = "azure_kusto_data", .module = kusto_data_mod },
+                    .{ .name = "azure_storage_blobs", .module = blobs_mod },
+                    .{ .name = "azure_storage_common", .module = storage_common_mod },
+                    .{ .name = "azure_storage_queues", .module = queues_mod },
                     .{ .name = "serde", .module = serde_mod },
                 },
             }),

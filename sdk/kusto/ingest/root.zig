@@ -1,14 +1,13 @@
 ///! Azure Kusto (Data Explorer) ingestion clients.
 ///!
-///! Provides experimental direct streaming ingestion via
-///! `StreamingIngestClient`. Queued ingestion and managed queued fallback
-///! are represented by API placeholders that return explicit
-///! not-implemented errors.
+///! Provides experimental direct streaming and queued ingestion. Managed
+///! queued fallback remains intentionally unimplemented.
 const std = @import("std");
 const core = @import("azure_core");
 const kusto_common = @import("azure_kusto_common");
 const streaming = @import("streaming.zig");
 const resources = @import("resources.zig");
+const queued = @import("queued.zig");
 
 pub const ConnectionProperties = kusto_common.ConnectionProperties;
 pub const DataFormat = kusto_common.DataFormat;
@@ -36,6 +35,9 @@ pub const BlobUriSource = streaming.BlobUriSource;
 pub const SourceKind = streaming.SourceKind;
 pub const StreamingIngestSource = streaming.StreamingIngestSource;
 pub const ValidationPolicy = streaming.ValidationPolicy;
+pub const IngestionReportLevel = streaming.IngestionReportLevel;
+pub const IngestionReportMethod = streaming.IngestionReportMethod;
+pub const QueuedCompression = streaming.QueuedCompression;
 pub const StreamingRetryOptions = streaming.StreamingRetryOptions;
 pub const IngestionResult = streaming.IngestionResult;
 pub const IngestionStatus = streaming.IngestionStatus;
@@ -58,6 +60,11 @@ pub const ResourceManagerOptions = resources.ResourceManagerOptions;
 pub const ResourceManager = resources.ResourceManager;
 pub const TimeSource = resources.TimeSource;
 pub const default_resource_database = resources.default_resource_database;
+pub const QueuedSubmissionOutcome = queued.QueuedSubmissionOutcome;
+pub const QueuedResourceOperation = queued.QueuedResourceOperation;
+pub const QueuedResourceAttemptOutcome = queued.QueuedResourceAttemptOutcome;
+pub const QueuedResourceAttempt = queued.QueuedResourceAttempt;
+pub const QueuedIngestionResult = queued.QueuedIngestionResult;
 
 test {
     _ = @import("resources.zig");
@@ -65,57 +72,7 @@ test {
 
 // ─────────────── QueuedIngestClient ──────────────────
 
-/// Queued ingestion is planned but not implemented.
-pub const QueuedIngestClient = struct {
-    runtime: Runtime,
-    dm_url: ?[]u8 = null,
-
-    const Runtime = union(enum) {
-        legacy: struct {
-            connection: ConnectionProperties,
-            pipeline: core.pipeline.HttpPipeline,
-        },
-        shared: *KustoConnection,
-    };
-
-    pub fn init(connection: ConnectionProperties, transport: *core.http.HttpTransport) QueuedIngestClient {
-        return .{
-            .runtime = .{ .legacy = .{
-                .connection = connection,
-                .pipeline = .{ .policies = &.{}, .transport_impl = transport },
-            } },
-        };
-    }
-
-    /// Creates a client borrowing `connection`.
-    ///
-    /// The connection must outlive this client and all copies of it. Shared
-    /// clients are not thread-safe; serialize use of the client and connection.
-    /// This client does not deinitialize the borrowed connection.
-    pub fn initWithConnection(connection: *KustoConnection) QueuedIngestClient {
-        return .{ .runtime = .{ .shared = connection } };
-    }
-
-    pub fn ingestFromBlob(self: *QueuedIngestClient, allocator: std.mem.Allocator, properties: IngestionProperties, blob_url: []const u8) !IngestionResult {
-        _ = self;
-        _ = allocator;
-        _ = properties;
-        _ = blob_url;
-        return error.QueuedIngestionNotImplemented;
-    }
-
-    pub fn ingestFromBlobResult(self: *QueuedIngestClient, allocator: std.mem.Allocator, properties: IngestionProperties, blob_url: []const u8) !KustoResult(IngestionResult) {
-        _ = self;
-        _ = allocator;
-        _ = properties;
-        _ = blob_url;
-        return error.QueuedIngestionNotImplemented;
-    }
-
-    pub fn deinit(self: *QueuedIngestClient, allocator: std.mem.Allocator) void {
-        if (self.dm_url) |url| allocator.free(url);
-    }
-};
+pub const QueuedIngestClient = queued.QueuedIngestClient;
 
 // ─────────────── ManagedIngestClient ─────────────────
 
@@ -534,7 +491,7 @@ test "IngestionResult deinit through Result" {
     try std.testing.expectEqualStrings("ingestion-id", result.ok.ingestion_id.?);
 }
 
-test "QueuedIngestClient does not send placeholder requests" {
+test "QueuedIngestClient requires a resource manager" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 200, "{}");
     defer mock.deinit();
@@ -549,12 +506,12 @@ test "QueuedIngestClient does not send placeholder requests" {
         .format = .json,
     };
     try std.testing.expectError(
-        error.QueuedIngestionNotImplemented,
+        error.QueuedIngestionResourceManagerRequired,
         client.ingestFromBlob(allocator, properties, "https://storage.blob.core.windows.net/container/blob.json"),
     );
     try std.testing.expect(mock.last_url == null);
     try std.testing.expectError(
-        error.QueuedIngestionNotImplemented,
+        error.QueuedIngestionResourceManagerRequired,
         client.ingestFromBlobResult(allocator, properties, "https://storage.blob.core.windows.net/container/blob.json"),
     );
     try std.testing.expect(mock.last_url == null);

@@ -43,6 +43,76 @@ pub const DataFormat = enum {
             .psv => "PSV",
         };
     }
+
+    /// Lowercase wire value used in queued-ingestion additional properties.
+    pub fn toQueuedString(self: DataFormat) []const u8 {
+        return switch (self) {
+            .csv => "csv",
+            .tsv => "tsv",
+            .json => "json",
+            .multi_json => "multijson",
+            .avro => "avro",
+            .parquet => "parquet",
+            .orc => "orc",
+            .scsv => "scsv",
+            .sohsv => "sohsv",
+            .psv => "psv",
+        };
+    }
+
+    pub fn shouldGzipForQueuedIngestion(self: DataFormat) bool {
+        return switch (self) {
+            .avro, .parquet, .orc => false,
+            else => true,
+        };
+    }
+
+    /// Returns the Kusto ingestion-mapping kind, which is distinct from the
+    /// wire data-format spelling used by queued-ingestion messages.
+    pub fn toIngestionMappingKind(self: DataFormat) []const u8 {
+        return switch (self) {
+            .csv, .tsv, .scsv, .sohsv, .psv => "Csv",
+            .json, .multi_json => "Json",
+            .avro => "Avro",
+            .parquet => "Parquet",
+            .orc => "Orc",
+        };
+    }
+};
+
+/// Kusto queued-ingestion validation policy. The service interprets these
+/// numeric values according to its validation-options and implications enums.
+pub const ValidationPolicy = struct {
+    validation_options: ?u32 = null,
+    validation_implications: ?u32 = null,
+};
+
+pub const IngestionReportLevel = enum {
+    failures_only,
+    none,
+    failures_and_successes,
+
+    pub fn toString(self: IngestionReportLevel) []const u8 {
+        return switch (self) {
+            .failures_only => "FailuresOnly",
+            .none => "None",
+            .failures_and_successes => "FailuresAndSuccesses",
+        };
+    }
+};
+
+pub const IngestionReportMethod = enum {
+    queue,
+    table,
+    queue_and_table,
+
+    pub fn toString(self: IngestionReportMethod) []const u8 {
+        return switch (self) {
+            .queue => "Queue",
+            .table => "Table",
+            .queue_and_table => "QueueAndTable",
+        };
+    }
 };
 
 // ─────────────── Connection Properties ───────────────
@@ -1387,6 +1457,19 @@ pub const IngestionProperties = struct {
     mapping_name: ?[]const u8 = null,
     flush_immediately: bool = false,
     drop_by_tags: ?[]const []const u8 = null,
+    /// Tags are sent as queued-ingestion extent tags.
+    tags: []const []const u8 = &.{},
+    /// Kusto deduplication tags, encoded as `ingestIfNotExists`.
+    ingest_if_not_exists: []const []const u8 = &.{},
+    validation_policy: ?ValidationPolicy = null,
+    report_level: IngestionReportLevel = .failures_only,
+    report_method: IngestionReportMethod = .queue,
+    creation_time_unix_ms: ?i64 = null,
+    ignore_first_record: bool = false,
+    /// Used by queued ingestion for a stable message and temporary-blob ID.
+    source_id: ?[]const u8 = null,
+    /// Exact raw source size. Existing blob sources may leave this null.
+    raw_size: ?u64 = null,
 };
 
 // ─────────────────────── Tests ───────────────────────
@@ -2021,6 +2104,18 @@ test "DataFormat toString" {
     try std.testing.expectEqualStrings("Json", DataFormat.json.toString());
     try std.testing.expectEqualStrings("MultiJson", DataFormat.multi_json.toString());
     try std.testing.expectEqualStrings("Parquet", DataFormat.parquet.toString());
+}
+
+test "DataFormat maps queued ingestion mapping kinds" {
+    try std.testing.expectEqualStrings("Csv", DataFormat.tsv.toIngestionMappingKind());
+    try std.testing.expectEqualStrings("Csv", DataFormat.scsv.toIngestionMappingKind());
+    try std.testing.expectEqualStrings("Csv", DataFormat.sohsv.toIngestionMappingKind());
+    try std.testing.expectEqualStrings("Csv", DataFormat.psv.toIngestionMappingKind());
+    try std.testing.expectEqualStrings("Json", DataFormat.json.toIngestionMappingKind());
+    try std.testing.expectEqualStrings("Json", DataFormat.multi_json.toIngestionMappingKind());
+    try std.testing.expectEqualStrings("Avro", DataFormat.avro.toIngestionMappingKind());
+    try std.testing.expectEqualStrings("Parquet", DataFormat.parquet.toIngestionMappingKind());
+    try std.testing.expectEqualStrings("Orc", DataFormat.orc.toIngestionMappingKind());
 }
 
 test "ClientRequestProperties toJson default" {
