@@ -11,6 +11,9 @@ pub const ConnectionProperties = kusto_common.ConnectionProperties;
 pub const ClientRequestProperties = kusto_common.ClientRequestProperties;
 pub const KustoConnection = kusto_common.KustoConnection;
 pub const KustoConnectionOptions = kusto_common.KustoConnectionOptions;
+pub const KustoMetadataMode = kusto_common.KustoMetadataMode;
+pub const KustoCloudInfo = kusto_common.KustoCloudInfo;
+pub const KustoCloudInfoCache = kusto_common.KustoCloudInfoCache;
 pub const KustoRetryOptions = kusto_common.KustoRetryOptions;
 
 // ─────────────────── Response Types ──────────────────
@@ -129,14 +132,14 @@ pub const KustoClient = struct {
 
     /// Execute a KQL query. Uses v2 REST endpoint.
     pub fn executeQuery(self: *KustoClient, allocator: std.mem.Allocator, database: []const u8, query: []const u8, properties: ?ClientRequestProperties) !KustoResponseDataSet {
-        const url = try std.fmt.allocPrint(allocator, "{s}/v2/rest/query", .{self.clusterUrl()});
+        const url = try std.fmt.allocPrint(allocator, "{s}/v2/rest/query", .{self.engineUrl()});
         defer allocator.free(url);
         return self.executeInternal(allocator, url, database, query, properties, true);
     }
 
     /// Execute a management command (starts with `.`). Uses v1 REST endpoint.
     pub fn executeMgmt(self: *KustoClient, allocator: std.mem.Allocator, database: []const u8, command: []const u8, properties: ?ClientRequestProperties) !KustoResponseDataSet {
-        const url = try std.fmt.allocPrint(allocator, "{s}/v1/rest/mgmt", .{self.clusterUrl()});
+        const url = try std.fmt.allocPrint(allocator, "{s}/v1/rest/mgmt", .{self.engineUrl()});
         defer allocator.free(url);
         return self.executeInternal(allocator, url, database, command, properties, false);
     }
@@ -152,12 +155,12 @@ pub const KustoClient = struct {
 
     /// `Result(...)` variants of the execute methods.
     pub fn executeQueryResult(self: *KustoClient, allocator: std.mem.Allocator, database: []const u8, query: []const u8, properties: ?ClientRequestProperties) !core.errors.Result(KustoResponseDataSet) {
-        const url = try std.fmt.allocPrint(allocator, "{s}/v2/rest/query", .{self.clusterUrl()});
+        const url = try std.fmt.allocPrint(allocator, "{s}/v2/rest/query", .{self.engineUrl()});
         defer allocator.free(url);
         return self.executeInternalResult(allocator, url, database, query, properties, true);
     }
     pub fn executeMgmtResult(self: *KustoClient, allocator: std.mem.Allocator, database: []const u8, command: []const u8, properties: ?ClientRequestProperties) !core.errors.Result(KustoResponseDataSet) {
-        const url = try std.fmt.allocPrint(allocator, "{s}/v1/rest/mgmt", .{self.clusterUrl()});
+        const url = try std.fmt.allocPrint(allocator, "{s}/v1/rest/mgmt", .{self.engineUrl()});
         defer allocator.free(url);
         return self.executeInternalResult(allocator, url, database, command, properties, false);
     }
@@ -220,10 +223,10 @@ pub const KustoClient = struct {
         return .{ .ok = try parseResponseDataSet(allocator, resp.body) };
     }
 
-    fn clusterUrl(self: *const KustoClient) []const u8 {
+    fn engineUrl(self: *const KustoClient) []const u8 {
         return switch (self.runtime) {
             .legacy => |legacy| legacy.connection.cluster_url,
-            .shared => |connection| connection.clusterUrl(),
+            .shared => |connection| connection.engineUrl(),
         };
     }
 
@@ -586,7 +589,7 @@ test "shared KustoClient authenticates queries" {
             .credential = credential.asCredential(),
         },
         mock.asTransport(),
-        .{},
+        .{ .metadata_mode = .disabled },
     );
     defer connection.deinit();
 
@@ -615,6 +618,36 @@ test "shared KustoClient authenticates queries" {
     );
 }
 
+test "shared KustoClient uses explicit engine endpoint for queries" {
+    const allocator = std.testing.allocator;
+    var credential = TestTokenCredential{};
+    var mock = core.http.MockTransport.init(allocator, 200, "[]");
+    defer mock.deinit();
+    const connection = try KustoConnection.init(
+        allocator,
+        .{
+            .cluster_url = "https://cluster.kusto.windows.net",
+            .credential = credential.asCredential(),
+        },
+        mock.asTransport(),
+        .{
+            .metadata_mode = .disabled,
+            .engine_endpoint = "https://query-engine.kusto.windows.net",
+            .data_management_endpoint = "https://ingest-dm.kusto.windows.net",
+        },
+    );
+    defer connection.deinit();
+
+    var client = KustoClient.initWithConnection(connection, .{});
+    var result = try client.executeQuery(allocator, "db", "print 1", null);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqualStrings(
+        "https://query-engine.kusto.windows.net/v2/rest/query",
+        mock.last_url.?,
+    );
+}
+
 test "copied shared KustoClient remains usable" {
     const allocator = std.testing.allocator;
     var credential = TestTokenCredential{};
@@ -627,7 +660,7 @@ test "copied shared KustoClient remains usable" {
             .credential = credential.asCredential(),
         },
         mock.asTransport(),
-        .{},
+        .{ .metadata_mode = .disabled },
     );
     defer connection.deinit();
 
@@ -677,11 +710,14 @@ test "shared KustoClient retries queries" {
             .credential = credential.asCredential(),
         },
         sequence.asTransport(),
-        .{ .retry = .{
-            .max_retries = 1,
-            .initial_delay_ms = 0,
-            .max_delay_ms = 0,
-        } },
+        .{
+            .metadata_mode = .disabled,
+            .retry = .{
+                .max_retries = 1,
+                .initial_delay_ms = 0,
+                .max_delay_ms = 0,
+            },
+        },
     );
     defer connection.deinit();
 
@@ -709,11 +745,14 @@ test "shared KustoClient does not retry management commands" {
             .credential = credential.asCredential(),
         },
         sequence.asTransport(),
-        .{ .retry = .{
-            .max_retries = 1,
-            .initial_delay_ms = 0,
-            .max_delay_ms = 0,
-        } },
+        .{
+            .metadata_mode = .disabled,
+            .retry = .{
+                .max_retries = 1,
+                .initial_delay_ms = 0,
+                .max_delay_ms = 0,
+            },
+        },
     );
     defer connection.deinit();
 

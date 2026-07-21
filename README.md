@@ -138,7 +138,24 @@ The existing client constructors remain unauthenticated compatibility APIs only.
 
 `withAadAppKey` is deprecated and inert for connection creation. It is rejected with `AadAppKeyAuthenticationUnsupported`; supply an `azure_core.credentials.TokenCredential` instead.
 
-The public-cloud Kusto scope is the default. An explicit scope override is available; cloud metadata and sovereign-cloud scope discovery remain planned.
+Metadata discovery is enabled by default for authenticated connections. Before acquiring a token, the connection makes an unauthenticated, no-follow `GET` request to `/v1/rest/auth/metadata` on the engine endpoint. The response provides login authority details and `KustoServiceResourceId`; the resource ID is used to derive the token scope. Only a 404 or an empty metadata response uses the public-cloud fallback. When the caller supplies a `KustoCloudInfoCache`, discovered metadata is cached for reuse.
+
+Every initial, discovered, or explicitly configured endpoint is validated before token acquisition. Kusto accepts the current well-known public and sovereign Kusto domains by default; custom or private front-door hosts must be added as exact entries in `additional_trusted_hosts` (wildcards and suffix matches are not accepted). A malformed or untrusted endpoint is rejected before the credential is called. For Private Link, use the normal public cluster hostname and configure private DNS; do not pass a `privatelink` URL as the cluster endpoint.
+
+Use `KustoConnectionOptions` to override discovery when needed:
+
+```zig
+const options = KustoConnectionOptions{
+    .engine_endpoint = "https://mycluster.kusto.windows.net",
+    .data_management_endpoint = "https://ingest-mycluster.kusto.windows.net",
+    .token_scope = "https://kusto.kusto.windows.net/.default",
+};
+const connection = try KustoConnection.init(allocator, properties, transport, options);
+```
+
+Set `.metadata_mode = .disabled` for offline or custom bootstrap control. Trust validation still runs with discovery disabled, and the token scope defaults to the public-cloud scope unless `token_scope` is explicitly provided. Explicit endpoint and scope overrides are still subject to endpoint validation.
+
+Metadata can expose the login authority for a sovereign or private cloud, but `TokenCredential` is an opaque credential boundary: Kusto cannot reconfigure a generic credential at runtime. Callers using those clouds must construct or configure their credential for the discovered authority themselves; do not assume that every `azure_core` credential supports runtime authority changes.
 
 ### Infrastructure
 
