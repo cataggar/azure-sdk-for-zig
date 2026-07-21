@@ -251,7 +251,7 @@ pub const ResourceAttempt = struct {
     generation: u64,
 
     pub fn deinit(self: *ResourceAttempt, allocator: std.mem.Allocator) void {
-        allocator.free(self.account_name);
+        if (self.account_name.len != 0) allocator.free(self.account_name);
         self.* = undefined;
     }
 };
@@ -259,12 +259,16 @@ pub const ResourceAttempt = struct {
 pub const ResourceSelection = struct {
     resource: StorageResource,
     attempt: ResourceAttempt,
+    /// The service-issued identity context paired with this resource snapshot.
+    /// It is secret and must be used only inside the queued-ingestion message.
+    authorization_context: AuthorizationContext = .{ .value = &.{} },
     stale: bool = false,
     refresh_failure: ?kusto_common.KustoError = null,
 
     pub fn deinit(self: *ResourceSelection, allocator: std.mem.Allocator) void {
         self.resource.deinit(allocator);
         self.attempt.deinit(allocator);
+        self.authorization_context.deinit(allocator);
         if (self.refresh_failure) |*failure| failure.deinit();
         self.* = undefined;
     }
@@ -683,6 +687,18 @@ pub const ResourceManager = struct {
     /// Select a resource without wrapping it in a snapshot. This is the
     /// selection API intended for queued-ingestion work once it is added.
     pub fn selectResource(self: *ResourceManager, kind: ResourceKind) !ResourceSelectionResult {
+        return self.selectResourceExcluding(kind, &.{});
+    }
+
+    /// Selects a resource while preferring accounts not already attempted by
+    /// the current logical operation. If every available account is excluded,
+    /// selection falls back to the ranked set so a single-account deployment
+    /// can still retry a received rejection.
+    pub fn selectResourceExcluding(
+        self: *ResourceManager,
+        kind: ResourceKind,
+        excluded_attempts: []const ResourceAttempt,
+    ) !ResourceSelectionResult {
         var lease_result = try self.getSnapshot();
         switch (lease_result) {
             .err => |*failure| {
@@ -699,7 +715,11 @@ pub const ResourceManager = struct {
 
                 self.mutex.lockUncancelable(self.io);
                 defer self.mutex.unlock(self.io);
-                const choice_index = try self.nextSelectionIndex(kind, choices);
+                const choice_index = try self.nextSelectionIndex(
+                    kind,
+                    choices,
+                    excluded_attempts,
+                );
                 const resource = try choices[choice_index].clone(self.allocator);
                 errdefer {
                     var mutable_resource = resource;
@@ -707,10 +727,18 @@ pub const ResourceManager = struct {
                 }
                 const account_name = try self.allocator.dupe(u8, choices[choice_index].account_name);
                 errdefer self.allocator.free(account_name);
-                const refresh_failure = if (owned_lease.refresh_failure) |*failure|
+                var refresh_failure = if (owned_lease.refresh_failure) |*failure|
                     try cloneKustoError(self.allocator, failure)
                 else
                     null;
+                errdefer if (refresh_failure) |*failure| failure.deinit();
+                const authorization_context = try owned_lease.snapshot.authorization_context.clone(
+                    self.allocator,
+                );
+                errdefer {
+                    var mutable_context = authorization_context;
+                    mutable_context.deinit(self.allocator);
+                }
                 return .{ .ok = .{
                     .resource = resource,
                     .attempt = .{
@@ -718,6 +746,7 @@ pub const ResourceManager = struct {
                         .account_name = account_name,
                         .generation = owned_lease.snapshot.generation,
                     },
+                    .authorization_context = authorization_context,
                     .stale = owned_lease.stale,
                     .refresh_failure = refresh_failure,
                 } };
@@ -740,6 +769,38 @@ pub const ResourceManager = struct {
         } else {
             score.score = std.math.sub(i32, score.score, 1) catch std.math.minInt(i32);
         }
+    }
+
+    /// Records an attempt known to have selected one of this manager's
+    /// resources without allocating. This is for post-acceptance paths where
+    /// an allocation failure must not replace an already accepted operation.
+    pub fn reportAttemptNoAlloc(
+        self: *ResourceManager,
+        attempt: *const ResourceAttempt,
+        success: bool,
+    ) void {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        for (self.account_scores.items) |*score| {
+            if (!std.mem.eql(u8, score.account_name, attempt.account_name)) continue;
+            if (success) {
+                score.score = std.math.add(i32, score.score, 1) catch std.math.maxInt(i32);
+            } else {
+                score.score = std.math.sub(i32, score.score, 1) catch std.math.minInt(i32);
+            }
+            return;
+        }
+        std.debug.assert(false);
+    }
+
+    /// Releases a selection using the allocator that owns every selection
+    /// member. Callers using a different per-operation allocator must use this
+    /// method instead of `ResourceSelection.deinit` directly.
+    pub fn deinitSelection(
+        self: *ResourceManager,
+        selection: *ResourceSelection,
+    ) void {
+        selection.deinit(self.allocator);
     }
 
     fn refresh(self: *ResourceManager) !RefreshResult {
@@ -829,6 +890,7 @@ pub const ResourceManager = struct {
         self: *ResourceManager,
         kind: ResourceKind,
         choices: []const StorageResource,
+        excluded_attempts: []const ResourceAttempt,
     ) !usize {
         if (choices.len == 0) return error.NoUsableIngestionResource;
         const ordered = try self.allocator.alloc(usize, choices.len);
@@ -843,17 +905,25 @@ pub const ResourceManager = struct {
         self.cursors[cursor_index] +%= 1;
 
         var account_count: usize = 0;
+        var eligible_account_count: usize = 0;
         var previous_account: ?[]const u8 = null;
         for (ordered) |choice_index| {
             const account_name = choices[choice_index].account_name;
             if (previous_account == null or !std.mem.eql(u8, previous_account.?, account_name)) {
                 account_count += 1;
+                if (!accountWasAttempted(account_name, excluded_attempts))
+                    eligible_account_count += 1;
                 previous_account = account_name;
             }
         }
         std.debug.assert(account_count != 0);
-        const target_account = cursor % account_count;
-        const resource_round = cursor / account_count;
+        const use_exclusions = eligible_account_count != 0;
+        const selection_account_count = if (use_exclusions)
+            eligible_account_count
+        else
+            account_count;
+        const target_account = cursor % selection_account_count;
+        const resource_round = cursor / selection_account_count;
         var account_index: usize = 0;
         var ordered_index: usize = 0;
         while (ordered_index < ordered.len) {
@@ -864,6 +934,10 @@ pub const ResourceManager = struct {
                 std.mem.eql(u8, account_name, choices[ordered[group_end]].account_name))
             {
                 group_end += 1;
+            }
+            if (use_exclusions and accountWasAttempted(account_name, excluded_attempts)) {
+                ordered_index = group_end;
+                continue;
             }
             if (account_index == target_account) {
                 const group_len = group_end - ordered_index;
@@ -886,6 +960,16 @@ pub const ResourceManager = struct {
         return &self.account_scores.items[self.account_scores.items.len - 1];
     }
 };
+
+fn accountWasAttempted(
+    account_name: []const u8,
+    attempts: []const ResourceAttempt,
+) bool {
+    for (attempts) |attempt| {
+        if (std.mem.eql(u8, account_name, attempt.account_name)) return true;
+    }
+    return false;
+}
 
 const resource_kind_count = @typeInfo(ResourceKind).@"enum".fields.len;
 

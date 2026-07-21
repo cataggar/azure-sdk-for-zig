@@ -31,6 +31,15 @@ pub const RequestCompression = enum {
     gzip,
 };
 
+/// Compression applied while a queued-ingestion client uploads a temporary
+/// blob. `automatic` gzip-compresses text formats and leaves binary formats
+/// unchanged, matching the Kusto queued-ingestion reference clients.
+pub const QueuedCompression = enum {
+    automatic,
+    gzip,
+    none,
+};
+
 /// Describes a reader opened by a replay factory.
 ///
 /// `deinitFn`, when supplied, is called exactly once after `HttpPipeline.open`
@@ -118,10 +127,9 @@ pub const StreamingIngestSource = union(enum) {
 
 /// Typed validation-policy shape used by queued ingestion protocols. Direct
 /// streaming does not support it, so a non-null value is rejected locally.
-pub const ValidationPolicy = struct {
-    validation_options: ?u32 = null,
-    validation_implications: ?u32 = null,
-};
+pub const ValidationPolicy = kusto_common.ValidationPolicy;
+pub const IngestionReportLevel = kusto_common.IngestionReportLevel;
+pub const IngestionReportMethod = kusto_common.IngestionReportMethod;
 
 /// Bounded Kusto-layer retry options. Generic pipeline retries remain disabled
 /// for every streaming request because an upload body is consumed by `open`.
@@ -159,8 +167,15 @@ pub const IngestOptions = struct {
     creation_time_unix_ms: ?i64 = null,
     validation_policy: ?ValidationPolicy = null,
     tags: []const []const u8 = &.{},
+    drop_by_tags: []const []const u8 = &.{},
     ingest_if_not_exists: []const []const u8 = &.{},
     ignore_first_record: bool = false,
+    report_level: IngestionReportLevel = .failures_only,
+    report_method: IngestionReportMethod = .queue,
+    queued_compression: QueuedCompression = .automatic,
+    /// Maximum temporary-blob resource attempts. Queue attempts use this same
+    /// bound and are retried only after a received rejection.
+    queued_max_resource_attempts: u32 = 3,
 };
 
 pub const IngestionStatus = enum {
@@ -578,7 +593,8 @@ fn validateOptions(
         return error.StreamingCreationTimeUnsupported;
     if (options.validation_policy != null)
         return error.StreamingValidationPolicyUnsupported;
-    if (options.tags.len != 0 or options.ingest_if_not_exists.len != 0)
+    if (options.tags.len != 0 or options.drop_by_tags.len != 0 or
+        options.ingest_if_not_exists.len != 0)
         return error.StreamingExtentTagsUnsupported;
     if (options.ignore_first_record)
         return error.StreamingIgnoreFirstRecordUnsupported;
