@@ -184,7 +184,7 @@ test "ChainedTokenCredential uses first success" {
 test "DefaultAzureCredential remains valid after return and move" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"managed-identity-token","expires_in":3600}
+        \\{"access_token":"managed-identity-token","expires_in":"3600","expires_on":"1743523200"}
     );
     defer mock.deinit();
 
