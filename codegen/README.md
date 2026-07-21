@@ -54,6 +54,16 @@ component into a single wasm executable.
 | `scripts/sync.sh`                 | Resyncs `rest/<pkg>/` from the canonical spec; overwrites only `src/models.zig` by default. |
 | `fixtures/`                       | Small JSON code-model fixtures used by emitter tests.  |
 
+`fixtures/container_registry.json` is the checked-in wire contract for
+Container Registry API `2021-07-01`. Regenerate it from the canonical
+`azure-rest-api-specs` checkout with:
+
+```bash
+cd codegen/tcgc-component
+AZURE_REST_API_SPECS=/path/to/azure-rest-api-specs \
+  npm run fixture:container-registry
+```
+
 ## Branch model
 
 Each generated package lives on its own **orphan branch** named

@@ -7,24 +7,30 @@
   "main": "src/index.js",
   "tspMain": "src/index.js",
   "scripts": {
-    "bundle": "esbuild src/wasi-entry.js --bundle --format=esm --platform=node --target=es2022 --outfile=dist/bundled.js --external:node:* --log-level=warning",
-    "build": "npm run bundle && jco componentize dist/bundled.js --wit wit/component.wit --world-name codegen --out tcgc.wasm",
+    "build": "node scripts/build-component.mjs",
     "build:stub": "jco componentize src/stub.js --wit wit/component.wit --world-name codegen --out tcgc-stub.wasm",
     "clean": "rm -rf dist tcgc.wasm tcgc-stub.wasm",
-    "dev": "node src/cli.js"
+    "dev": "node src/cli.js",
+    "fixture:container-registry": "node scripts/generate-container-registry-fixture.mjs",
+    "test": "node --test src/*.test.js"
   },
   "dependencies": {
-    "@typespec/compiler": "1.12.0",
-    "@typespec/http": "1.12.0",
-    "@typespec/rest": "0.82.0",
-    "@typespec/versioning": "0.82.0",
     "@azure-tools/typespec-azure-core": "0.68.0",
     "@azure-tools/typespec-azure-resource-manager": "0.68.0",
-    "@azure-tools/typespec-client-generator-core": "0.68.0"
+    "@azure-tools/typespec-client-generator-core": "0.68.0",
+    "@typespec/compiler": "1.12.0",
+    "@typespec/events": "0.82.0",
+    "@typespec/http": "1.12.0",
+    "@typespec/openapi": "1.12.0",
+    "@typespec/rest": "0.82.0",
+    "@typespec/sse": "0.82.0",
+    "@typespec/streams": "0.82.0",
+    "@typespec/versioning": "0.82.0",
+    "@typespec/xml": "0.82.0"
   },
   "devDependencies": {
-    "@bytecodealliance/jco": "^1.19.0",
     "@bytecodealliance/componentize-js": "^0.20.0",
+    "@bytecodealliance/jco": "^1.19.0",
     "esbuild": "^0.25.0"
   }
 }
