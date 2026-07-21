@@ -112,7 +112,7 @@ azure-core-amqp: azure-uamqp-zig (pure Zig AMQP 1.0)
 | `azure_messaging_eventhubs_checkpointstore_blob` | Blob-backed checkpoint store |
 | `azure_messaging_servicebus` | `ServiceBusSenderClient`, `ServiceBusReceiverClient`, `ServiceBusAdministrationClient` |
 | `azure_kusto_data` | `KustoClient` (experimental buffered and progressive query plus management support) |
-| `azure_kusto_ingest` | `StreamingIngestClient` for direct, bounded-memory streaming ingestion; queued ingestion and managed queued fallback are not implemented |
+| `azure_kusto_ingest` | `StreamingIngestClient` plus queued-ingestion resource discovery/snapshot selection; upload, queue post, status polling, and managed queued fallback are not implemented |
 
 ### Complete SAS Blob and Queue operations
 
@@ -207,6 +207,30 @@ defer result.deinit(allocator);
 Raw sources use incremental request gzip by default; set `.compression = .none` to send an uncompressed request body. Direct URI sources use the protocol's `sourceKind=uri` JSON body and require `.compression = .none`. Direct streaming accepts CSV, TSV, SCsv, SOHsv, PSV, JSON, MultiJSON, and Avro; JSON, MultiJSON, and Avro require a named mapping. Named mappings are URL-encoded and supported; inline mappings, extent tags/`ingest_if_not_exists`, creation time, validation policy, and first-record skipping are queued-ingestion properties and fail locally before a transport call.
 
 One-shot readers are never retried. Bytes, files, URI sources, and explicit `ReplayReaderFactory` sources may retry only after a received retryable non-2xx response, reopening the source for each attempt while retaining one logical source ID. Source-aware retries honor bounded `Retry-After` delays and otherwise use bounded exponential backoff. A received failure is `.known_not_accepted`; an upload or transport failure after transport entry is `.unknown` and is never replayed. `JsonRows(Row).ndjson` and `.mapping` provide typed serde JSON/NDJSON bytes and a named-mapping definition helper.
+
+### Kusto queued-ingestion resource discovery
+
+`ResourceManager` discovers service-issued resources with non-retryable,
+authenticated data-management commands (`.get ingestion resources` and
+`.get kusto identity token`). It owns immutable deep-copy snapshot leases,
+deduplicates and classifies queue/blob/table resources, honors SAS `se`
+expiration with safety skew and a separate hard-expiration boundary, and never
+formats SAS URIs or authorization contexts. Expired snapshots are served only
+when refresh receives a classified transient Kusto failure and the SAS has not
+actually expired; malformed, local, authentication, and permanent failures
+surface normally.
+
+The manager synchronizes its cache and ranking state, but executes refreshes
+outside its lock. Concurrent manager use requires a thread-safe allocator,
+executor, and custom time source. Otherwise, externally serialize it.
+`DataManagementCommandExecutor` borrows a `KustoConnection`, which remains
+serialized-use only. `selectResource` returns an owned resource plus attempt
+context; call `reportAttempt` after a later upload/post attempt to update
+deterministic account ranking. This module does not upload data, post queues,
+or poll ingestion status.
+
+Use `default_resource_database` (`"NetDefaultDB"`) unless a service
+environment requires another management database.
 
 ### Kusto request properties, timeouts, and retries
 

@@ -155,7 +155,7 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    _ = b.addModule("azure_kusto_data", .{
+    const kusto_data_mod = b.addModule("azure_kusto_data", .{
         .root_source_file = b.path("sdk/kusto/data/root.zig"),
         .target = target,
         .imports = &.{
@@ -171,6 +171,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
             .{ .name = "azure_kusto_common", .module = kusto_common_mod },
+            .{ .name = "azure_kusto_data", .module = kusto_data_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
@@ -450,6 +451,7 @@ pub fn build(b: *std.Build) void {
                 .imports = &.{
                     .{ .name = "azure_core", .module = core_mod },
                     .{ .name = "azure_kusto_common", .module = kusto_common_mod },
+                    .{ .name = "azure_kusto_data", .module = kusto_data_mod },
                     .{ .name = "serde", .module = serde_mod },
                 },
             }),
