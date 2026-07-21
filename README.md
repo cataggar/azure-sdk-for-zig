@@ -8,7 +8,7 @@
 
 Pure Zig implementation of Azure service clients with **zero C dependencies**.
 
-**53 source files · 219 tests · Zig 0.16+**
+**60 source files · 358 tests · Zig 0.16+**
 
 ## Quick Start
 
@@ -166,9 +166,45 @@ Metadata can expose the login authority for a sovereign or private cloud, but `T
 - In the current synchronous buffered transport, the client timeout bounds retries and backoff only; it cannot interrupt an in-flight `std.http` request. Hard cancellation is deferred to future streaming and cancellation transport work.
 - Explicit application, user, version, and request-ID headers override defaults. Results expose owned `client_request_id` and `activity_id`; dataset `deinit` frees them.
 - Buffered result rows are strict about matching the declared column width by default. Set `ClientRequestProperties.setClientResultsReaderAllowVaryingRowWidths` only for services that intentionally emit uneven rows; missing cells remain absent and extra cells are preserved as unknown raw JSON.
-- V2 buffered decoding requires a `DataSetHeader` first and `DataSetCompletion` last. It reconstructs progressive or fragmented `DataAppend`/`DataReplace` frames by table ID, treats row-embedded OneAPI errors as partial results, retains unknown frames, and exposes table/row iterators plus ID, kind, primary, properties, and status selectors. Network streaming, cancellation, and comptime typed conversion remain future work.
+- V2 buffered decoding requires a `DataSetHeader` first and `DataSetCompletion` last. It reconstructs progressive or fragmented `DataAppend`/`DataReplace` frames by table ID, treats row-embedded OneAPI errors as partial results, retains unknown frames, and exposes table/row iterators plus ID, kind, primary, properties, and status selectors. Network streaming and cancellation remain future work.
 - Queries may retry; management operations and streaming ingestion remain non-retryable.
 - Kusto `*Result` APIs return `KustoResult(T)`: `.ok`, `.partial` (possibly unreliable decoded buffered tables plus an owned `KustoError`), or `.err`; call `deinit`. A streaming `.err` records `.known_not_accepted` for a received non-2xx response and `.unknown` with the transport cause after transport entry fails, while pre-transport credential/policy errors stay in the outer Zig error union. Permanent and partial failures are never retryable.
+
+### Typed KQL and result rows
+
+Use `azure_kusto_data.kql.QueryParameters` to declare parameter types once. Its generated `Name` enum is the only runtime value accepted by `kql.Builder.parameter`, and `bind` copies values into `ClientRequestProperties.Parameters`; values are never interpolated into CSL.
+
+```zig
+const kusto = @import("azure_kusto_data");
+const Params = struct { account: []const u8, minimum: i64 };
+const Binding = kusto.kql.QueryParameters(Params);
+
+var properties = try Binding.bind(allocator, .{ .account = user_input, .minimum = 10 });
+defer properties.deinit(allocator);
+var query = try kusto.kql.Builder(Binding).init(allocator);
+defer query.deinit();
+try query.literal("StormEvents | where ");
+try query.identifier("Account");
+try query.literal(" == ");
+try query.parameter(.account);
+try query.literal(" | take ");
+try query.parameter(.minimum);
+var dataset = try client.executeQuery(allocator, "db", query.bytes(), properties);
+defer dataset.deinit(allocator);
+```
+
+`literal` is comptime-trusted KQL. Runtime identifiers, strings, and parameter references are bracketed or escaped and UTF-8 validated; `unsafeRaw` is the only unescaped runtime path. `kql.DateTime`, `Timespan`, `Decimal`, `Guid`, and `dynamic(value)` provide explicit typed parameter values; their source slices are borrowed only while `bind` runs.
+
+Typed result rows scan a table schema once and allocate values independent of the dataset. Call the decoder's `deinitRow` (or the typed iterator's `deinitRow`) for every successful row. `KustoDateTime`, `KustoTimespan`, `KustoDecimal`, `KustoGuid`, `KustoDynamic`, strings, and cloned `KustoValue` fields are owned decoded values.
+
+```zig
+const Row = struct { Account: []u8, Count: i64 };
+const table = dataset.primaryTable().?;
+const Decoder = kusto.KustoRowDecoder(Row);
+const decoder = try table.rowDecoder(Row);
+var row = try decoder.rowAs(&table.rows[0], allocator);
+defer Decoder.deinitRow(&row, allocator);
+```
 
 ### Infrastructure
 

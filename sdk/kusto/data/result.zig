@@ -72,6 +72,26 @@ pub const KustoValue = union(enum) {
         self.* = .null;
     }
 
+    /// Duplicates every allocator-owned payload so the result survives its
+    /// source dataset's `deinit`.
+    pub fn clone(self: KustoValue, allocator: std.mem.Allocator) !KustoValue {
+        return switch (self) {
+            .null => .null,
+            .string => |value| .{ .string = try allocator.dupe(u8, value) },
+            .bool => |value| .{ .bool = value },
+            .int => |value| .{ .int = value },
+            .long => |value| .{ .long = value },
+            .real => |value| .{ .real = value },
+            .real_raw => |value| .{ .real_raw = try allocator.dupe(u8, value) },
+            .decimal => |value| .{ .decimal = try allocator.dupe(u8, value) },
+            .datetime => |value| .{ .datetime = try allocator.dupe(u8, value) },
+            .timespan => |value| .{ .timespan = try allocator.dupe(u8, value) },
+            .guid => |value| .{ .guid = try allocator.dupe(u8, value) },
+            .dynamic => |value| .{ .dynamic = try allocator.dupe(u8, value) },
+            .unknown => |value| .{ .unknown = try allocator.dupe(u8, value) },
+        };
+    }
+
     pub fn asString(self: KustoValue) ?[]const u8 {
         return switch (self) {
             .string => |value| value,
@@ -139,6 +159,13 @@ pub const KustoValue = union(enum) {
     pub fn asGuid(self: KustoValue) ?[]const u8 {
         return switch (self) {
             .guid => |value| value,
+            else => null,
+        };
+    }
+
+    pub fn asDynamic(self: KustoValue) ?[]const u8 {
+        return switch (self) {
+            .dynamic => |value| value,
             else => null,
         };
     }
@@ -245,7 +272,461 @@ pub const KustoResultTable = struct {
     pub fn rowIterator(self: *const KustoResultTable) RowIterator {
         return .{ .rows = self.rows };
     }
+
+    /// Creates a decoder which resolves the requested schema once.
+    pub fn rowDecoder(self: *const KustoResultTable, comptime T: type) !KustoRowDecoder(T) {
+        return KustoRowDecoder(T).init(self);
+    }
+
+    /// Returns an iterator which borrows this table and yields owned rows.
+    pub fn typedRows(
+        self: *const KustoResultTable,
+        comptime T: type,
+        allocator: std.mem.Allocator,
+    ) !KustoTypedRowIterator(T) {
+        return .{
+            .decoder = try self.rowDecoder(T),
+            .rows = self.rows,
+            .allocator = allocator,
+        };
+    }
 };
+
+/// An owned decoded datetime lexical value. Unlike `kql.DateTime`, this owns
+/// its bytes and therefore remains valid after the source dataset is freed.
+pub const KustoDateTime = struct {
+    value: []u8,
+
+    pub fn deinit(self: *KustoDateTime, allocator: std.mem.Allocator) void {
+        allocator.free(self.value);
+        self.* = undefined;
+    }
+};
+
+/// An owned decoded timespan lexical value.
+pub const KustoTimespan = struct {
+    value: []u8,
+
+    pub fn deinit(self: *KustoTimespan, allocator: std.mem.Allocator) void {
+        allocator.free(self.value);
+        self.* = undefined;
+    }
+};
+
+/// An owned decoded decimal lexical value.
+pub const KustoDecimal = struct {
+    value: []u8,
+
+    pub fn deinit(self: *KustoDecimal, allocator: std.mem.Allocator) void {
+        allocator.free(self.value);
+        self.* = undefined;
+    }
+};
+
+/// An owned decoded GUID lexical value.
+pub const KustoGuid = struct {
+    value: []u8,
+
+    pub fn deinit(self: *KustoGuid, allocator: std.mem.Allocator) void {
+        allocator.free(self.value);
+        self.* = undefined;
+    }
+};
+
+/// Exact owned JSON for a Kusto `dynamic` cell.
+pub const KustoDynamic = struct {
+    raw_json: []u8,
+
+    pub fn deinit(self: *KustoDynamic, allocator: std.mem.Allocator) void {
+        allocator.free(self.raw_json);
+        self.* = undefined;
+    }
+};
+
+/// A schema-validated, allocation-free mapping from Zig fields to table cells.
+pub fn KustoRowDecoder(comptime T: type) type {
+    validateRowType(T);
+    const fields = std.meta.fields(T);
+
+    return struct {
+        const Self = @This();
+
+        columns: []const KustoResultColumn,
+        mapping: [fields.len]usize,
+
+        /// Resolves all requested columns once and rejects ambiguous schemas.
+        pub fn init(table: *const KustoResultTable) !Self {
+            const missing_column = std.math.maxInt(usize);
+            var mapping: [fields.len]usize = [_]usize{missing_column} ** fields.len;
+            for (table.columns, 0..) |column, column_index| {
+                inline for (fields, 0..) |meta_field, field_index| {
+                    if (std.mem.eql(u8, column.name, rowColumnName(T, meta_field.name))) {
+                        if (mapping[field_index] != missing_column)
+                            return error.DuplicateKustoColumn;
+                        mapping[field_index] = column_index;
+                    }
+                }
+            }
+            inline for (mapping) |column_index| {
+                if (column_index == missing_column)
+                    return error.MissingKustoColumn;
+            }
+            return .{ .columns = table.columns, .mapping = mapping };
+        }
+
+        /// Converts a borrowed result row into a wholly allocator-owned `T`.
+        pub fn rowAs(
+            self: *const Self,
+            row: *const KustoResultRow,
+            allocator: std.mem.Allocator,
+        ) !T {
+            if (row.columns.ptr != self.columns.ptr or row.columns.len != self.columns.len)
+                return error.KustoRowSchemaMismatch;
+
+            var result: T = undefined;
+            var initialized: [fields.len]bool = [_]bool{false} ** fields.len;
+            errdefer {
+                inline for (fields, 0..) |meta_field, field_index| {
+                    if (initialized[field_index])
+                        deinitDecodedField(meta_field.type, &@field(result, meta_field.name), allocator);
+                }
+            }
+
+            inline for (fields, 0..) |meta_field, field_index| {
+                const column_index = self.mapping[field_index];
+                if (column_index >= row.values.len) return error.MissingKustoCell;
+                @field(result, meta_field.name) = try decodeField(
+                    meta_field.type,
+                    allocator,
+                    &row.values[column_index],
+                );
+                initialized[field_index] = true;
+            }
+            return result;
+        }
+
+        pub fn deinitRow(value: *T, allocator: std.mem.Allocator) void {
+            deinitDecodedRow(T, value, allocator);
+        }
+    };
+}
+
+/// Deinitializes all allocations owned by an owned typed result row.
+pub fn deinitRow(value: anytype, allocator: std.mem.Allocator) void {
+    const pointer = @typeInfo(@TypeOf(value));
+    const T = switch (pointer) {
+        .pointer => |item| item.child,
+        else => @compileError("result.deinitRow requires a pointer to a row struct"),
+    };
+    validateRowType(T);
+    deinitDecodedRow(T, value, allocator);
+}
+
+/// An iterator that owns its precomputed decoder and borrows table rows.
+pub fn KustoTypedRowIterator(comptime T: type) type {
+    return struct {
+        const Self = @This();
+
+        decoder: KustoRowDecoder(T),
+        rows: []const KustoResultRow,
+        allocator: std.mem.Allocator,
+        index: usize = 0,
+
+        /// Returns one owned row at a time; call `deinitRow` for every result.
+        pub fn next(self: *Self) !?T {
+            if (self.index >= self.rows.len) return null;
+            defer self.index += 1;
+            return try self.decoder.rowAs(&self.rows[self.index], self.allocator);
+        }
+
+        pub fn deinitRow(value: *T, allocator: std.mem.Allocator) void {
+            deinitDecodedRow(T, value, allocator);
+        }
+    };
+}
+
+fn validateRowType(comptime T: type) void {
+    const info = switch (@typeInfo(T)) {
+        .@"struct" => |item| item,
+        else => @compileError("KustoRowDecoder requires a non-tuple struct row type"),
+    };
+    if (info.is_tuple)
+        @compileError("KustoRowDecoder requires a non-tuple struct row type");
+    validateKustoColumnMappings(T);
+    inline for (std.meta.fields(T), 0..) |meta_field, field_index| {
+        validateDecodedFieldType(T, meta_field.name, meta_field.type);
+        const requested_name = rowColumnName(T, meta_field.name);
+        inline for (std.meta.fields(T)[field_index + 1 ..]) |other| {
+            if (std.mem.eql(u8, requested_name, rowColumnName(T, other.name))) {
+                @compileError(std.fmt.comptimePrint(
+                    "Kusto row fields '{s}' and '{s}' both request column '{s}'",
+                    .{ meta_field.name, other.name, requested_name },
+                ));
+            }
+        }
+    }
+}
+
+fn validateKustoColumnMappings(comptime T: type) void {
+    if (!@hasDecl(T, "kusto_columns")) return;
+    const Mapping = @TypeOf(@field(T, "kusto_columns"));
+    const mapping_info = switch (@typeInfo(Mapping)) {
+        .@"struct" => |item| item,
+        else => @compileError("kusto_columns must be a non-tuple struct literal"),
+    };
+    if (mapping_info.is_tuple)
+        @compileError("kusto_columns must be a non-tuple struct literal");
+    inline for (std.meta.fields(Mapping)) |mapping_field| {
+        if (!hasRowField(T, mapping_field.name)) {
+            @compileError(std.fmt.comptimePrint(
+                "kusto_columns contains unknown Zig field '{s}'",
+                .{mapping_field.name},
+            ));
+        }
+        const name = comptimeByteString(@field(T.kusto_columns, mapping_field.name));
+        if (name.len == 0) {
+            @compileError(std.fmt.comptimePrint(
+                "kusto_columns target for '{s}' must not be empty",
+                .{mapping_field.name},
+            ));
+        }
+    }
+}
+
+fn hasRowField(comptime T: type, comptime name: []const u8) bool {
+    inline for (std.meta.fields(T)) |meta_field| {
+        if (std.mem.eql(u8, meta_field.name, name)) return true;
+    }
+    return false;
+}
+
+fn rowColumnName(comptime T: type, comptime field_name: []const u8) []const u8 {
+    if (!@hasDecl(T, "kusto_columns")) return field_name;
+    inline for (std.meta.fields(@TypeOf(T.kusto_columns))) |mapping_field| {
+        if (std.mem.eql(u8, mapping_field.name, field_name))
+            return comptimeByteString(@field(T.kusto_columns, mapping_field.name));
+    }
+    return field_name;
+}
+
+fn comptimeByteString(comptime value: anytype) []const u8 {
+    const T = @TypeOf(value);
+    return switch (@typeInfo(T)) {
+        .array => |array| if (array.child == u8)
+            value[0..]
+        else
+            @compileError("kusto_columns targets must be byte strings"),
+        .pointer => |pointer| switch (pointer.size) {
+            .slice => if (pointer.child == u8)
+                value
+            else
+                @compileError("kusto_columns targets must be byte strings"),
+            .one => switch (@typeInfo(pointer.child)) {
+                .array => |array| if (array.child == u8)
+                    value[0..]
+                else
+                    @compileError("kusto_columns targets must be byte strings"),
+                else => @compileError("kusto_columns targets must be byte strings"),
+            },
+            else => @compileError("kusto_columns targets must be byte strings"),
+        },
+        else => @compileError("kusto_columns targets must be byte strings"),
+    };
+}
+
+fn validateDecodedFieldType(
+    comptime Row: type,
+    comptime field_name: []const u8,
+    comptime T: type,
+) void {
+    switch (@typeInfo(T)) {
+        .optional => |item| {
+            if (@typeInfo(item.child) == .optional) {
+                @compileError(std.fmt.comptimePrint(
+                    "Kusto row field '{s}.{s}' cannot use nested optional type {s}",
+                    .{ @typeName(Row), field_name, @typeName(T) },
+                ));
+            }
+            validateDecodedFieldType(Row, field_name, item.child);
+            return;
+        },
+        else => {},
+    }
+    if (hasCustomDecode(T)) {
+        validateCustomDecode(T);
+        validateCustomDeinit(T);
+        return;
+    }
+    if (T == bool or T == i32 or T == i64 or T == f64 or
+        T == []u8 or T == []const u8 or T == KustoValue or
+        T == KustoDateTime or T == KustoTimespan or T == KustoDecimal or
+        T == KustoGuid or T == KustoDynamic)
+        return;
+    @compileError(std.fmt.comptimePrint(
+        "Kusto row field '{s}.{s}' has unsupported type {s}; supported types are bool, i32, i64, f64, []u8, []const u8, KustoValue, KustoDateTime, KustoTimespan, KustoDecimal, KustoGuid, KustoDynamic, optional forms, or a kustoDecode hook",
+        .{ @typeName(Row), field_name, @typeName(T) },
+    ));
+}
+
+fn hasCustomDecode(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .@"struct" => @hasDecl(T, "kustoDecode"),
+        .@"union" => @hasDecl(T, "kustoDecode"),
+        .@"enum" => @hasDecl(T, "kustoDecode"),
+        .@"opaque" => @hasDecl(T, "kustoDecode"),
+        else => false,
+    };
+}
+
+fn hasCustomDeinit(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .@"struct" => @hasDecl(T, "deinit"),
+        .@"union" => @hasDecl(T, "deinit"),
+        .@"enum" => @hasDecl(T, "deinit"),
+        .@"opaque" => @hasDecl(T, "deinit"),
+        else => false,
+    };
+}
+
+fn validateCustomDecode(comptime T: type) void {
+    const function_info = switch (@typeInfo(@TypeOf(T.kustoDecode))) {
+        .@"fn" => |item| item,
+        else => @compileError("kustoDecode must be a function"),
+    };
+    if (function_info.params.len != 2 or
+        function_info.params[0].type != std.mem.Allocator or
+        function_info.params[1].type != *const KustoValue)
+    {
+        @compileError(std.fmt.comptimePrint(
+            "{s}.kustoDecode must have signature fn (std.mem.Allocator, *const KustoValue) !@This()",
+            .{@typeName(T)},
+        ));
+    }
+    const return_type = function_info.return_type orelse @compileError("kustoDecode must return an error union");
+    const error_union = switch (@typeInfo(return_type)) {
+        .error_union => |item| item,
+        else => @compileError("kustoDecode must return an error union"),
+    };
+    if (error_union.payload != T) {
+        @compileError(std.fmt.comptimePrint(
+            "{s}.kustoDecode must return !@This()",
+            .{@typeName(T)},
+        ));
+    }
+}
+
+fn validateCustomDeinit(comptime T: type) void {
+    if (!hasCustomDeinit(T)) return;
+    const function_info = switch (@typeInfo(@TypeOf(T.deinit))) {
+        .@"fn" => |item| item,
+        else => @compileError("deinit must be a function"),
+    };
+    if (function_info.params.len != 2 or
+        function_info.params[0].type != *T or
+        function_info.params[1].type != std.mem.Allocator or
+        function_info.return_type != void)
+    {
+        @compileError(std.fmt.comptimePrint(
+            "{s}.deinit must have signature fn (*@This(), std.mem.Allocator) void",
+            .{@typeName(T)},
+        ));
+    }
+}
+
+fn decodeField(comptime T: type, allocator: std.mem.Allocator, value: *const KustoValue) !T {
+    return switch (@typeInfo(T)) {
+        .optional => |item| if (value.isNull())
+            null
+        else
+            try decodeNonOptional(item.child, allocator, value),
+        else => blk: {
+            if (value.isNull()) return error.RequiredKustoValueIsNull;
+            break :blk try decodeNonOptional(T, allocator, value);
+        },
+    };
+}
+
+fn decodeNonOptional(comptime T: type, allocator: std.mem.Allocator, value: *const KustoValue) !T {
+    if (comptime hasCustomDecode(T))
+        return T.kustoDecode(allocator, value);
+    if (T == bool) return value.asBool() orelse error.IncompatibleKustoValue;
+    if (T == i32) return value.asI32() orelse error.IncompatibleKustoValue;
+    if (T == i64) return value.asI64() orelse error.IncompatibleKustoValue;
+    if (T == f64) return typedReal(value.*) orelse error.IncompatibleKustoValue;
+    if (T == []u8 or T == []const u8) {
+        const text = value.asString() orelse return error.IncompatibleKustoValue;
+        return try allocator.dupe(u8, text);
+    }
+    if (T == KustoValue) return try value.clone(allocator);
+    if (T == KustoDateTime) {
+        const text = value.asDateTime() orelse return error.IncompatibleKustoValue;
+        return .{ .value = try allocator.dupe(u8, text) };
+    }
+    if (T == KustoTimespan) {
+        const text = value.asTimespan() orelse return error.IncompatibleKustoValue;
+        return .{ .value = try allocator.dupe(u8, text) };
+    }
+    if (T == KustoDecimal) {
+        const text = value.asDecimal() orelse return error.IncompatibleKustoValue;
+        return .{ .value = try allocator.dupe(u8, text) };
+    }
+    if (T == KustoGuid) {
+        const text = value.asGuid() orelse return error.IncompatibleKustoValue;
+        return .{ .value = try allocator.dupe(u8, text) };
+    }
+    if (T == KustoDynamic) {
+        const raw = value.asDynamic() orelse return error.IncompatibleKustoValue;
+        return .{ .raw_json = try allocator.dupe(u8, raw) };
+    }
+    unreachable;
+}
+
+fn typedReal(value: KustoValue) ?f64 {
+    return switch (value) {
+        .real => |number| number,
+        .real_raw => |raw| {
+            if (std.mem.eql(u8, raw, "\"NaN\"")) return std.math.nan(f64);
+            if (std.mem.eql(u8, raw, "\"Infinity\"") or
+                std.mem.eql(u8, raw, "\"+Infinity\""))
+                return std.math.inf(f64);
+            if (std.mem.eql(u8, raw, "\"-Infinity\""))
+                return -std.math.inf(f64);
+            return null;
+        },
+        else => null,
+    };
+}
+
+fn deinitDecodedRow(comptime T: type, value: *T, allocator: std.mem.Allocator) void {
+    inline for (std.meta.fields(T)) |meta_field| {
+        deinitDecodedField(meta_field.type, &@field(value.*, meta_field.name), allocator);
+    }
+}
+
+fn deinitDecodedField(comptime T: type, value: *T, allocator: std.mem.Allocator) void {
+    switch (@typeInfo(T)) {
+        .optional => {
+            if (value.*) |*child| deinitDecodedField(@typeInfo(T).optional.child, child, allocator);
+            return;
+        },
+        else => {},
+    }
+    if (T == []u8 or T == []const u8) {
+        allocator.free(value.*);
+        return;
+    }
+    if (T == KustoValue) {
+        value.deinit(allocator);
+        return;
+    }
+    if (T == KustoDateTime or T == KustoTimespan or T == KustoDecimal or
+        T == KustoGuid or T == KustoDynamic)
+    {
+        value.deinit(allocator);
+        return;
+    }
+    if (comptime hasCustomDeinit(T)) value.deinit(allocator);
+}
 
 /// The raw JSON and ordinal for a buffered response frame. `raw_json` borrows
 /// the containing dataset's `raw_response`; it is not a second response copy.
@@ -2469,6 +2950,259 @@ test "complex result parsing releases all allocation failures" {
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
         parseAllocationFixture,
+        .{},
+    );
+}
+
+const TypedHook = struct {
+    text: []u8,
+
+    pub fn kustoDecode(allocator: std.mem.Allocator, value: *const KustoValue) !@This() {
+        const text = value.asString() orelse return error.TypedHookExpectedString;
+        return .{ .text = try allocator.dupe(u8, text) };
+    }
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.text);
+        self.* = undefined;
+    }
+};
+
+const FailingTypedHook = struct {
+    pub fn kustoDecode(_: std.mem.Allocator, _: *const KustoValue) !@This() {
+        return error.TypedHookRejected;
+    }
+};
+
+fn decodeTypedFixture(allocator: std.mem.Allocator) !DecodeOutcome {
+    return decode(
+        allocator,
+        \\{"Tables":[{"TableName":"Rows","Columns":[
+        \\ {"ColumnName":"Name","ColumnType":"string"},{"ColumnName":"Count","ColumnType":"long"},{"ColumnName":"Flag","ColumnType":"bool"},{"ColumnName":"Small","ColumnType":"int"},{"ColumnName":"Rate","ColumnType":"real"},{"ColumnName":"When","ColumnType":"datetime"},{"ColumnName":"Span","ColumnType":"timespan"},{"ColumnName":"Amount","ColumnType":"decimal"},{"ColumnName":"Id","ColumnType":"guid"},{"ColumnName":"Payload","ColumnType":"dynamic"},{"ColumnName":"NullName","ColumnType":"string"}
+        \\],"Rows":[["Ada",42,true,7,1.25,"2026-01-02T03:04:05Z","01:02:03","12.340","123e4567-e89b-12d3-a456-426614174000",{"nested":[1,2]},null],["Grace",43,false,8,2.5,"2026-01-03T03:04:05Z","02:03:04","13.340","123e4567-e89b-12d3-a456-426614174001",{"nested":[3]},null]]}]}
+    ,
+        .{},
+        .query,
+    );
+}
+
+test "typed rows map reordered and renamed columns into owned values" {
+    const Row = struct {
+        count: i64,
+        name: []u8,
+        enabled: bool,
+        optional_name: ?[]const u8,
+
+        pub const kusto_columns = .{
+            .count = "Count",
+            .name = "Name",
+            .enabled = "Flag",
+            .optional_name = "NullName",
+        };
+    };
+    const Decoder = KustoRowDecoder(Row);
+    var decoded = try decodeTypedFixture(std.testing.allocator);
+    defer decoded.deinit(std.testing.allocator);
+    const table = &decoded.dataset.tables[0];
+    const decoder = try table.rowDecoder(Row);
+    var row = try decoder.rowAs(&table.rows[0], std.testing.allocator);
+    defer Decoder.deinitRow(&row, std.testing.allocator);
+    try std.testing.expectEqual(@as(i64, 42), row.count);
+    try std.testing.expectEqualStrings("Ada", row.name);
+    try std.testing.expect(row.enabled);
+    try std.testing.expect(row.optional_name == null);
+
+    const IntRow = struct { Small: i32 };
+    const int_decoder = try table.rowDecoder(IntRow);
+    var int_row = try int_decoder.rowAs(&table.rows[0], std.testing.allocator);
+    defer KustoRowDecoder(IntRow).deinitRow(&int_row, std.testing.allocator);
+    try std.testing.expectEqual(@as(i32, 7), int_row.Small);
+}
+
+test "typed rows support scalars semantic values and KustoValue cloning" {
+    const Row = struct {
+        Name: KustoValue,
+        Small: i64,
+        Rate: f64,
+        When: KustoDateTime,
+        Span: KustoTimespan,
+        Amount: KustoDecimal,
+        Id: KustoGuid,
+        Payload: KustoDynamic,
+    };
+    const Decoder = KustoRowDecoder(Row);
+    var decoded = try decodeTypedFixture(std.testing.allocator);
+    const table = &decoded.dataset.tables[0];
+    const decoder = try table.rowDecoder(Row);
+    var row = try decoder.rowAs(&table.rows[0], std.testing.allocator);
+    decoded.deinit(std.testing.allocator);
+    defer Decoder.deinitRow(&row, std.testing.allocator);
+    try std.testing.expectEqualStrings("Ada", row.Name.asString().?);
+    try std.testing.expectEqual(@as(i64, 7), row.Small);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.25), row.Rate, 0.001);
+    try std.testing.expectEqualStrings("2026-01-02T03:04:05Z", row.When.value);
+    try std.testing.expectEqualStrings("01:02:03", row.Span.value);
+    try std.testing.expectEqualStrings("12.340", row.Amount.value);
+    try std.testing.expectEqualStrings("123e4567-e89b-12d3-a456-426614174000", row.Id.value);
+    try std.testing.expectEqualStrings("{\"nested\":[1,2]}", row.Payload.raw_json);
+}
+
+test "typed rows decode documented non-finite real values" {
+    const Row = struct { Value: f64 };
+    const Decoder = KustoRowDecoder(Row);
+    var decoded = try decode(
+        std.testing.allocator,
+        \\{"Tables":[{"TableName":"Reals","Columns":[{"ColumnName":"Value","ColumnType":"real"}],"Rows":[["NaN"],["Infinity"],["-Infinity"],[1e999]]}]}
+    ,
+        .{},
+        .query,
+    );
+    defer decoded.deinit(std.testing.allocator);
+    const table = &decoded.dataset.tables[0];
+    const decoder = try table.rowDecoder(Row);
+
+    var nan_row = try decoder.rowAs(&table.rows[0], std.testing.allocator);
+    defer Decoder.deinitRow(&nan_row, std.testing.allocator);
+    try std.testing.expect(std.math.isNan(nan_row.Value));
+
+    var positive_row = try decoder.rowAs(&table.rows[1], std.testing.allocator);
+    defer Decoder.deinitRow(&positive_row, std.testing.allocator);
+    try std.testing.expect(std.math.isPositiveInf(positive_row.Value));
+
+    var negative_row = try decoder.rowAs(&table.rows[2], std.testing.allocator);
+    defer Decoder.deinitRow(&negative_row, std.testing.allocator);
+    try std.testing.expect(std.math.isNegativeInf(negative_row.Value));
+
+    try std.testing.expectError(
+        error.IncompatibleKustoValue,
+        decoder.rowAs(&table.rows[3], std.testing.allocator),
+    );
+}
+
+test "typed rows reject missing duplicate null and incompatible cells" {
+    const Missing = struct { Absent: []u8 };
+    var decoded = try decodeTypedFixture(std.testing.allocator);
+    defer decoded.deinit(std.testing.allocator);
+    const table = &decoded.dataset.tables[0];
+    try std.testing.expectError(error.MissingKustoColumn, table.rowDecoder(Missing));
+
+    const RequiredNull = struct { NullName: []u8 };
+    const null_decoder = try table.rowDecoder(RequiredNull);
+    try std.testing.expectError(
+        error.RequiredKustoValueIsNull,
+        null_decoder.rowAs(&table.rows[0], std.testing.allocator),
+    );
+
+    const Incompatible = struct { Count: bool };
+    const incompatible_decoder = try table.rowDecoder(Incompatible);
+    try std.testing.expectError(
+        error.IncompatibleKustoValue,
+        incompatible_decoder.rowAs(&table.rows[0], std.testing.allocator),
+    );
+
+    const NotDynamic = struct { Name: KustoDynamic };
+    const not_dynamic_decoder = try table.rowDecoder(NotDynamic);
+    try std.testing.expectError(
+        error.IncompatibleKustoValue,
+        not_dynamic_decoder.rowAs(&table.rows[0], std.testing.allocator),
+    );
+
+    const LaterFailure = struct {
+        Name: []u8,
+        Count: bool,
+    };
+    const later_failure_decoder = try table.rowDecoder(LaterFailure);
+    try std.testing.expectError(
+        error.IncompatibleKustoValue,
+        later_failure_decoder.rowAs(&table.rows[0], std.testing.allocator),
+    );
+
+    var duplicate = try decode(
+        std.testing.allocator,
+        \\{"Tables":[{"TableName":"Duplicate","Columns":[{"ColumnName":"Name","ColumnType":"string"},{"ColumnName":"Name","ColumnType":"string"}],"Rows":[["one","two"]]}]}
+    ,
+        .{},
+        .query,
+    );
+    defer duplicate.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.DuplicateKustoColumn,
+        duplicate.dataset.tables[0].rowDecoder(struct { Name: []u8 }),
+    );
+}
+
+test "typed rows reject missing varying-width cells and schema mismatches" {
+    const Row = struct { B: i64 };
+    var varying = try decode(
+        std.testing.allocator,
+        \\{"Tables":[{"TableName":"Rows","Columns":[{"ColumnName":"A","ColumnType":"string"},{"ColumnName":"B","ColumnType":"long"}],"Rows":[["only-a"]]}]}
+    ,
+        .{ .allow_varying_row_widths = true },
+        .query,
+    );
+    defer varying.deinit(std.testing.allocator);
+    const decoder = try varying.dataset.tables[0].rowDecoder(Row);
+    try std.testing.expectError(
+        error.MissingKustoCell,
+        decoder.rowAs(&varying.dataset.tables[0].rows[0], std.testing.allocator),
+    );
+
+    var another = try decodeTypedFixture(std.testing.allocator);
+    defer another.deinit(std.testing.allocator);
+    const name_decoder = try varying.dataset.tables[0].rowDecoder(struct { A: []u8 });
+    try std.testing.expectError(
+        error.KustoRowSchemaMismatch,
+        name_decoder.rowAs(&another.dataset.tables[0].rows[0], std.testing.allocator),
+    );
+}
+
+test "typed rows support custom conversion hooks and typed iteration" {
+    const Row = struct { Name: TypedHook };
+    const Decoder = KustoRowDecoder(Row);
+    var decoded = try decodeTypedFixture(std.testing.allocator);
+    defer decoded.deinit(std.testing.allocator);
+    const table = &decoded.dataset.tables[0];
+    const decoder = try table.rowDecoder(Row);
+    var row = try decoder.rowAs(&table.rows[0], std.testing.allocator);
+    defer Decoder.deinitRow(&row, std.testing.allocator);
+    try std.testing.expectEqualStrings("Ada", row.Name.text);
+
+    const Failing = struct { Name: FailingTypedHook };
+    const failing_decoder = try table.rowDecoder(Failing);
+    try std.testing.expectError(
+        error.TypedHookRejected,
+        failing_decoder.rowAs(&table.rows[0], std.testing.allocator),
+    );
+
+    const IteratorRow = struct { Count: i64 };
+    const Iterator = KustoTypedRowIterator(IteratorRow);
+    var rows = try table.typedRows(IteratorRow, std.testing.allocator);
+    var first = (try rows.next()).?;
+    defer Iterator.deinitRow(&first, std.testing.allocator);
+    var second = (try rows.next()).?;
+    defer Iterator.deinitRow(&second, std.testing.allocator);
+    try std.testing.expectEqual(@as(i64, 42), first.Count);
+    try std.testing.expectEqual(@as(i64, 43), second.Count);
+    try std.testing.expect((try rows.next()) == null);
+}
+
+fn typedRowAllocationFixture(allocator: std.mem.Allocator) !void {
+    const Row = struct {
+        Name: []u8,
+        Payload: KustoDynamic,
+    };
+    const Decoder = KustoRowDecoder(Row);
+    var decoded = try decodeTypedFixture(allocator);
+    defer decoded.deinit(allocator);
+    const decoder = try decoded.dataset.tables[0].rowDecoder(Row);
+    var row = try decoder.rowAs(&decoded.dataset.tables[0].rows[0], allocator);
+    defer Decoder.deinitRow(&row, allocator);
+}
+
+test "typed row conversion releases every allocation failure path" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        typedRowAllocationFixture,
         .{},
     );
 }

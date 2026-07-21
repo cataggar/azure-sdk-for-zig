@@ -6,6 +6,7 @@ const std = @import("std");
 const core = @import("azure_core");
 const serde = @import("serde");
 const kusto_common = @import("azure_kusto_common");
+pub const kql = @import("kql.zig");
 const result = @import("result.zig");
 
 pub const ConnectionProperties = kusto_common.ConnectionProperties;
@@ -34,6 +35,14 @@ pub const KustoValue = result.KustoValue;
 pub const KustoResultColumn = result.KustoResultColumn;
 pub const KustoResultRow = result.KustoResultRow;
 pub const KustoResultTable = result.KustoResultTable;
+pub const KustoDateTime = result.KustoDateTime;
+pub const KustoTimespan = result.KustoTimespan;
+pub const KustoDecimal = result.KustoDecimal;
+pub const KustoGuid = result.KustoGuid;
+pub const KustoDynamic = result.KustoDynamic;
+pub const KustoRowDecoder = result.KustoRowDecoder;
+pub const KustoTypedRowIterator = result.KustoTypedRowIterator;
+pub const deinitRow = result.deinitRow;
 pub const KustoFramePayload = result.KustoFramePayload;
 pub const KustoUnknownFrame = result.KustoUnknownFrame;
 pub const KustoFrame = result.KustoFrame;
@@ -43,6 +52,13 @@ pub const FrameIterator = result.FrameIterator;
 pub const KustoResponseDataSet = result.KustoResponseDataSet;
 pub const DecodeOutcome = result.DecodeOutcome;
 pub const decodeResponseDataSet = result.decode;
+pub const QueryParameters = kql.QueryParameters;
+pub const KqlBuilder = kql.Builder;
+pub const KqlDateTime = kql.DateTime;
+pub const KqlTimespan = kql.Timespan;
+pub const KqlDecimal = kql.Decimal;
+pub const KqlGuid = kql.Guid;
+pub const dynamic = kql.dynamic;
 
 pub const KustoClientOptions = struct {
     application_name: []const u8 = "azure-sdk-zig",
@@ -872,6 +888,54 @@ test "KustoClient honors varying-result-width request property" {
         mock.last_body.?,
         "\"client_results_reader_allow_varying_row_widths\":true",
     ) != null);
+}
+
+test "typed parameter bindings stay in properties rather than query text" {
+    const Params = struct {
+        secret: []const u8,
+        limit: i64,
+    };
+    const Binding = QueryParameters(Params);
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200, empty_v2_response);
+    defer mock.deinit();
+    var client = KustoClient.init(
+        .{ .cluster_url = "https://cluster.kusto.windows.net" },
+        mock.asTransport(),
+        .{},
+    );
+    var properties = try Binding.bind(allocator, .{
+        .secret = "'; .drop table T //",
+        .limit = 7,
+    });
+    defer properties.deinit(allocator);
+    var query = try kql.Builder(Binding).init(allocator);
+    defer query.deinit();
+    try query.literal("StormEvents | where Secret == ");
+    try query.parameter(.secret);
+    try query.literal(" | take ");
+    try query.parameter(.limit);
+    var dataset = try client.executeQuery(allocator, "db", query.bytes(), properties);
+    defer dataset.deinit(allocator);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const wire = try serde.json.fromSlice(
+        struct { csl: []const u8 },
+        arena.allocator(),
+        mock.last_body.?,
+    );
+    try std.testing.expectEqualStrings(
+        "declare query_parameters (['secret']:string, ['limit']:long);\nStormEvents | where Secret == ['secret'] | take ['limit']",
+        wire.csl,
+    );
+    try std.testing.expect(std.mem.indexOf(u8, wire.csl, "drop table") == null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        mock.last_body.?,
+        "\"secret\":\"\\\"'; .drop table T //\\\"\"",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(u8, mock.last_body.?, "\"limit\":\"long(7)\"") != null);
 }
 
 test {
