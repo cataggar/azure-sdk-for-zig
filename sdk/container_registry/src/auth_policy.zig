@@ -14,6 +14,10 @@ const CancellationToken = core.http.CancellationToken;
 const default_aad_scope = "https://containerregistry.azure.net/.default";
 const default_api_version = "2021-07-01";
 const default_expiry_skew_seconds: i64 = 300;
+// Small fixed LRU bounds keep cache scans predictable for long-lived clients.
+const max_refresh_token_entries: usize = 32;
+const max_access_token_entries: usize = 128;
+const max_route_entries: usize = 128;
 
 pub const Authentication = union(enum) {
     credential: *core.credentials.TokenCredential,
@@ -36,7 +40,9 @@ pub const Options = struct {
     aad_scope: []const u8 = default_aad_scope,
     /// ACR authentication API version.
     api_version: []const u8 = default_api_version,
-    /// Additional exact HTTPS hosts trusted for registry requests and realms.
+    /// Additional trusted HTTPS origins. A hostname implies port 443; use an
+    /// absolute origin such as `https://registry.example:8443` for another
+    /// port.
     expected_hosts: []const []const u8 = &.{},
     /// Tokens at or within this many seconds of expiry are refreshed.
     expiry_skew_seconds: i64 = default_expiry_skew_seconds,
@@ -50,6 +56,7 @@ const RefreshTokenEntry = struct {
     tenant: []u8,
     token: []u8,
     expires_on: i64,
+    last_used: u64,
 
     fn deinit(self: *RefreshTokenEntry, allocator: std.mem.Allocator) void {
         allocator.free(self.realm);
@@ -67,6 +74,7 @@ const AccessTokenEntry = struct {
     scope: []u8,
     token: []u8,
     expires_on: i64,
+    last_used: u64,
 
     fn deinit(self: *AccessTokenEntry, allocator: std.mem.Allocator) void {
         allocator.free(self.realm);
@@ -82,6 +90,7 @@ const RouteEntry = struct {
     method: core.http.Method,
     url: []u8,
     challenge: BearerChallenge,
+    last_used: u64,
 
     fn deinit(self: *RouteEntry, allocator: std.mem.Allocator) void {
         allocator.free(self.url);
@@ -90,14 +99,82 @@ const RouteEntry = struct {
     }
 };
 
+const TrustedOrigin = struct {
+    host: []u8,
+    port: u16,
+
+    fn deinit(self: *TrustedOrigin, allocator: std.mem.Allocator) void {
+        allocator.free(self.host);
+        self.* = undefined;
+    }
+};
+
+const FlightKind = enum {
+    refresh,
+    access,
+};
+
+const FlightState = enum {
+    running,
+    succeeded,
+    failed,
+};
+
+const TokenFlight = struct {
+    kind: FlightKind,
+    realm: []u8,
+    service: []u8,
+    tenant: []u8,
+    scope: []u8,
+    condition: std.Io.Condition = .init,
+    state: FlightState = .running,
+    participants: usize = 1,
+    token: ?[]u8 = null,
+    failure: ?anyerror = null,
+
+    fn init(
+        allocator: std.mem.Allocator,
+        kind: FlightKind,
+        realm_value: []const u8,
+        service_value: []const u8,
+        tenant_value: []const u8,
+        scope_value: []const u8,
+    ) !TokenFlight {
+        const realm = try allocator.dupe(u8, realm_value);
+        errdefer allocator.free(realm);
+        const service = try allocator.dupe(u8, service_value);
+        errdefer allocator.free(service);
+        const tenant = try allocator.dupe(u8, tenant_value);
+        errdefer allocator.free(tenant);
+        const scope = try allocator.dupe(u8, scope_value);
+        errdefer allocator.free(scope);
+        return .{
+            .kind = kind,
+            .realm = realm,
+            .service = service,
+            .tenant = tenant,
+            .scope = scope,
+        };
+    }
+
+    fn deinit(self: *TokenFlight, allocator: std.mem.Allocator) void {
+        allocator.free(self.realm);
+        allocator.free(self.service);
+        allocator.free(self.tenant);
+        allocator.free(self.scope);
+        if (self.token) |token| allocator.free(token);
+        self.* = undefined;
+    }
+};
+
 /// ACR Bearer challenge policy. The policy validates every destination before
 /// sending, performs token bootstrap calls without redirects, and replays a
-/// challenged request at most once.
+/// challenged request at most once. Concurrent use requires thread-safe
+/// allocator, credential, and clock dependencies.
 pub const ChallengeAuthenticationPolicy = struct {
     allocator: std.mem.Allocator,
     endpoint: []u8,
-    endpoint_host: []u8,
-    expected_hosts: [][]u8,
+    trusted_origins: []TrustedOrigin,
     authentication: Authentication,
     tenant_id: ?[]u8,
     aad_scope: []u8,
@@ -106,12 +183,12 @@ pub const ChallengeAuthenticationPolicy = struct {
     time_source: ?TimeSource,
     io: std.Io,
     mutex: std.Io.Mutex = .init,
-    refresh_finished: std.Io.Condition = .init,
-    refreshing: bool = false,
     waiting_callers: usize = 0,
+    cache_clock: u64 = 0,
     refresh_tokens: std.ArrayList(RefreshTokenEntry) = .empty,
     access_tokens: std.ArrayList(AccessTokenEntry) = .empty,
     routes: std.ArrayList(RouteEntry) = .empty,
+    token_flights: std.ArrayList(*TokenFlight) = .empty,
     policy: HttpPolicy,
 
     pub fn init(
@@ -126,14 +203,12 @@ pub const ChallengeAuthenticationPolicy = struct {
 
         const normalized_endpoint = try normalizeEndpoint(allocator, endpoint);
         errdefer allocator.free(normalized_endpoint);
-        const endpoint_host = try extractHost(allocator, normalized_endpoint);
-        errdefer allocator.free(endpoint_host);
-        const expected_hosts = try copyExpectedHosts(
+        const trusted_origins = try copyTrustedOrigins(
             allocator,
-            endpoint_host,
+            normalized_endpoint,
             options.expected_hosts,
         );
-        errdefer deinitStringSlice(allocator, expected_hosts);
+        errdefer deinitTrustedOrigins(allocator, trusted_origins);
 
         const tenant_id = if (options.tenant_id) |tenant|
             try allocator.dupe(u8, tenant)
@@ -148,8 +223,7 @@ pub const ChallengeAuthenticationPolicy = struct {
         return .{
             .allocator = allocator,
             .endpoint = normalized_endpoint,
-            .endpoint_host = endpoint_host,
-            .expected_hosts = expected_hosts,
+            .trusted_origins = trusted_origins,
             .authentication = authentication,
             .tenant_id = tenant_id,
             .aad_scope = aad_scope,
@@ -168,19 +242,19 @@ pub const ChallengeAuthenticationPolicy = struct {
     /// Requires that no callers are using or waiting on this policy.
     pub fn deinit(self: *ChallengeAuthenticationPolicy) void {
         self.mutex.lockUncancelable(self.io);
-        std.debug.assert(!self.refreshing);
         std.debug.assert(self.waiting_callers == 0);
+        std.debug.assert(self.token_flights.items.len == 0);
         for (self.refresh_tokens.items) |*entry| entry.deinit(self.allocator);
         self.refresh_tokens.deinit(self.allocator);
         for (self.access_tokens.items) |*entry| entry.deinit(self.allocator);
         self.access_tokens.deinit(self.allocator);
         for (self.routes.items) |*entry| entry.deinit(self.allocator);
         self.routes.deinit(self.allocator);
+        self.token_flights.deinit(self.allocator);
         self.mutex.unlock(self.io);
 
         self.allocator.free(self.endpoint);
-        self.allocator.free(self.endpoint_host);
-        deinitStringSlice(self.allocator, self.expected_hosts);
+        deinitTrustedOrigins(self.allocator, self.trusted_origins);
         if (self.tenant_id) |tenant| self.allocator.free(tenant);
         self.allocator.free(self.aad_scope);
         self.allocator.free(self.api_version);
@@ -366,84 +440,52 @@ pub const ChallengeAuthenticationPolicy = struct {
         cancellation: ?*const CancellationToken,
         transport: *HttpTransport,
     ) ![]u8 {
-        while (true) {
-            try checkCancelled(cancellation);
-            const current_time = self.now();
-            self.mutex.lockUncancelable(self.io);
-            if (self.findValidAccessTokenLocked(challenge, current_time)) |token| {
-                const copy = self.allocator.dupe(u8, token) catch |err| {
-                    self.mutex.unlock(self.io);
-                    return err;
-                };
-                self.mutex.unlock(self.io);
-                return copy;
-            }
-            if (self.refreshing) {
-                if (cancellation == null) {
-                    self.waiting_callers += 1;
-                    self.refresh_finished.waitUncancelable(self.io, &self.mutex);
-                    self.waiting_callers -= 1;
-                    self.mutex.unlock(self.io);
-                } else {
-                    self.mutex.unlock(self.io);
-                    while (true) {
-                        try checkCancelled(cancellation);
-                        self.io.sleep(.fromMilliseconds(1), .awake) catch {};
-                        self.mutex.lockUncancelable(self.io);
-                        if (!self.refreshing) {
-                            self.mutex.unlock(self.io);
-                            break;
-                        }
-                        self.mutex.unlock(self.io);
-                    }
-                }
-                continue;
-            }
-            self.refreshing = true;
-            self.mutex.unlock(self.io);
-            break;
-        }
-
-        errdefer self.finishRefresh();
-        const token = switch (self.authentication) {
-            .anonymous => try self.exchangeAccessToken(
-                challenge,
-                "",
-                .password,
-                cancellation,
-                transport,
-            ),
-            .credential => |credential| blk: {
-                const refresh_token = try self.acquireRefreshToken(
-                    challenge,
-                    credential,
-                    cancellation,
-                    transport,
-                );
-                defer self.allocator.free(refresh_token);
-                break :blk try self.exchangeAccessToken(
-                    challenge,
-                    refresh_token,
-                    .refresh_token,
-                    cancellation,
-                    transport,
-                );
-            },
-        };
-        errdefer self.allocator.free(token);
-        const expires_on = try jwtExpiry(self.allocator, token);
-        if (!isTokenValid(expires_on, self.now(), self.expiry_skew_seconds))
-            return error.AcrTokenExpired;
-
+        try checkCancelled(cancellation);
+        const current_time = self.now();
         self.mutex.lockUncancelable(self.io);
-        self.storeAccessTokenLocked(challenge, token, expires_on) catch |err| {
+        self.pruneAccessTokensLocked(current_time);
+        if (self.findValidAccessTokenLocked(challenge, current_time)) |token| {
+            const copy = self.allocator.dupe(u8, token) catch |err| {
+                self.mutex.unlock(self.io);
+                return err;
+            };
+            self.mutex.unlock(self.io);
+            return copy;
+        }
+        if (self.findRunningFlightLocked(.access, challenge)) |flight| {
+            flight.participants += 1;
+            self.waiting_callers += 1;
+            return self.waitForFlightLocked(flight, cancellation);
+        }
+        const flight = self.createFlightLocked(.access, challenge) catch |err| {
             self.mutex.unlock(self.io);
             return err;
         };
-        self.refreshing = false;
-        self.refresh_finished.broadcast(self.io);
         self.mutex.unlock(self.io);
-        return token;
+
+        const token = self.requestAccessToken(
+            challenge,
+            cancellation,
+            transport,
+        ) catch |err| return self.failFlight(flight, err);
+        const expires_on = jwtExpiry(self.allocator, token) catch |err| {
+            self.allocator.free(token);
+            return self.failFlight(flight, err);
+        };
+        if (!isTokenValid(expires_on, self.now(), self.expiry_skew_seconds)) {
+            self.allocator.free(token);
+            return self.failFlight(flight, error.AcrTokenExpired);
+        }
+
+        self.mutex.lockUncancelable(self.io);
+        self.pruneAccessTokensLocked(self.now());
+        self.storeAccessTokenLocked(challenge, token, expires_on) catch |err| {
+            self.allocator.free(token);
+            self.completeFlightFailureLocked(flight, err);
+            return self.consumeFlightResultLocked(flight, false);
+        };
+        self.completeFlightSuccessLocked(flight, token);
+        return self.consumeFlightResultLocked(flight, false);
     }
 
     fn acquireRefreshToken(
@@ -453,8 +495,10 @@ pub const ChallengeAuthenticationPolicy = struct {
         cancellation: ?*const CancellationToken,
         transport: *HttpTransport,
     ) ![]u8 {
+        try checkCancelled(cancellation);
         const current_time = self.now();
         self.mutex.lockUncancelable(self.io);
+        self.pruneRefreshTokensLocked(current_time);
         if (self.findValidRefreshTokenLocked(challenge, current_time)) |token| {
             const copy = self.allocator.dupe(u8, token) catch |err| {
                 self.mutex.unlock(self.io);
@@ -463,35 +507,92 @@ pub const ChallengeAuthenticationPolicy = struct {
             self.mutex.unlock(self.io);
             return copy;
         }
-        self.mutex.unlock(self.io);
-
-        try checkCancelled(cancellation);
-        const scopes = [_][]const u8{self.aad_scope};
-        var aad_token = try credential.getToken(
-            .{ .scopes = &scopes },
-            core.context.Context.none,
-        );
-        defer aad_token.deinit();
-        try checkCancelled(cancellation);
-
-        const refresh_token = try self.exchangeRefreshToken(
-            challenge,
-            aad_token.token,
-            cancellation,
-            transport,
-        );
-        errdefer self.allocator.free(refresh_token);
-        const expires_on = try jwtExpiry(self.allocator, refresh_token);
-        if (!isTokenValid(expires_on, self.now(), self.expiry_skew_seconds))
-            return error.AcrRefreshTokenExpired;
-
-        self.mutex.lockUncancelable(self.io);
-        self.storeRefreshTokenLocked(challenge, refresh_token, expires_on) catch |err| {
+        if (self.findRunningFlightLocked(.refresh, challenge)) |flight| {
+            flight.participants += 1;
+            self.waiting_callers += 1;
+            return self.waitForFlightLocked(flight, cancellation);
+        }
+        const flight = self.createFlightLocked(.refresh, challenge) catch |err| {
             self.mutex.unlock(self.io);
             return err;
         };
         self.mutex.unlock(self.io);
-        return refresh_token;
+
+        const scopes = [_][]const u8{self.aad_scope};
+        var aad_token = credential.getToken(
+            .{ .scopes = &scopes },
+            core.context.Context.none,
+        ) catch |err| return self.failFlight(flight, err);
+        defer aad_token.deinit();
+        checkCancelled(cancellation) catch |err| return self.failFlight(flight, err);
+
+        const refresh_token = self.exchangeRefreshToken(
+            challenge,
+            aad_token.token,
+            cancellation,
+            transport,
+        ) catch |err| return self.failFlight(flight, err);
+        const expires_on = jwtExpiry(self.allocator, refresh_token) catch |err| {
+            self.allocator.free(refresh_token);
+            return self.failFlight(flight, err);
+        };
+        if (!isTokenValid(expires_on, self.now(), self.expiry_skew_seconds)) {
+            self.allocator.free(refresh_token);
+            return self.failFlight(flight, error.AcrRefreshTokenExpired);
+        }
+
+        self.mutex.lockUncancelable(self.io);
+        self.pruneRefreshTokensLocked(self.now());
+        self.storeRefreshTokenLocked(challenge, refresh_token, expires_on) catch |err| {
+            self.allocator.free(refresh_token);
+            self.completeFlightFailureLocked(flight, err);
+            return self.consumeFlightResultLocked(flight, false);
+        };
+        self.completeFlightSuccessLocked(flight, refresh_token);
+        return self.consumeFlightResultLocked(flight, false);
+    }
+
+    fn requestAccessToken(
+        self: *ChallengeAuthenticationPolicy,
+        challenge: *const BearerChallenge,
+        cancellation: ?*const CancellationToken,
+        transport: *HttpTransport,
+    ) ![]u8 {
+        return switch (self.authentication) {
+            .anonymous => self.exchangeAccessToken(
+                challenge,
+                "",
+                .password,
+                cancellation,
+                transport,
+            ),
+            .credential => |credential| blk: {
+                var retried = false;
+                while (true) {
+                    const refresh_token = try self.acquireRefreshToken(
+                        challenge,
+                        credential,
+                        cancellation,
+                        transport,
+                    );
+                    defer self.allocator.free(refresh_token);
+                    const access_token = self.exchangeAccessToken(
+                        challenge,
+                        refresh_token,
+                        .refresh_token,
+                        cancellation,
+                        transport,
+                    ) catch |err| {
+                        if (!isRefreshTokenRejection(err)) return err;
+                        self.invalidateRefreshToken(challenge, refresh_token);
+                        if (retried) return err;
+                        retried = true;
+                        continue;
+                    };
+                    break :blk access_token;
+                }
+            },
+        };
     }
 
     fn exchangeRefreshToken(
@@ -513,7 +614,14 @@ pub const ChallengeAuthenticationPolicy = struct {
             try appendFormField(self.allocator, &body, &first, "tenant", tenant);
         }
         try appendFormField(self.allocator, &body, &first, "access_token", aad_token);
-        return self.sendTokenRequest(url, body.items, "refresh_token", cancellation, transport);
+        return self.sendTokenRequest(
+            url,
+            body.items,
+            "refresh_token",
+            false,
+            cancellation,
+            transport,
+        );
     }
 
     const AccessGrant = enum {
@@ -539,7 +647,14 @@ pub const ChallengeAuthenticationPolicy = struct {
         try appendFormField(self.allocator, &body, &first, "service", challenge.service);
         try appendFormField(self.allocator, &body, &first, "scope", challenge.scope);
         try appendFormField(self.allocator, &body, &first, "refresh_token", refresh_token);
-        return self.sendTokenRequest(url, body.items, "access_token", cancellation, transport);
+        return self.sendTokenRequest(
+            url,
+            body.items,
+            "access_token",
+            grant == .refresh_token,
+            cancellation,
+            transport,
+        );
     }
 
     fn sendTokenRequest(
@@ -547,6 +662,7 @@ pub const ChallengeAuthenticationPolicy = struct {
         url: []const u8,
         body: []const u8,
         response_field: []const u8,
+        classify_refresh_rejection: bool,
         cancellation: ?*const CancellationToken,
         transport: *HttpTransport,
     ) ![]u8 {
@@ -561,21 +677,36 @@ pub const ChallengeAuthenticationPolicy = struct {
         var response = try transport.send(&request);
         defer response.deinit();
         try checkCancelled(cancellation);
-        if (response.status_code != 200) return error.AcrTokenExchangeFailed;
-        return parseTokenResponse(self.allocator, response.body, response_field);
+        if (response.status_code == 401) return error.AcrTokenEndpointUnauthorized;
+        if (response.status_code == 403) return error.AcrTokenEndpointForbidden;
+        if (response.status_code != 200) {
+            if (classify_refresh_rejection and
+                try isProtocolRefreshTokenRejection(self.allocator, response.body))
+            {
+                return error.AcrRefreshTokenRejected;
+            }
+            return error.AcrTokenExchangeFailed;
+        }
+        return parseTokenResponse(self.allocator, response.body, response_field) catch |err| {
+            if (err == error.InvalidAcrTokenResponse and
+                classify_refresh_rejection and
+                try isProtocolRefreshTokenRejection(self.allocator, response.body))
+            {
+                return error.AcrRefreshTokenRejected;
+            }
+            return err;
+        };
     }
 
     fn validateRequestUrl(self: *ChallengeAuthenticationPolicy, url: []const u8) !void {
-        const hosts: []const []const u8 = @ptrCast(self.expected_hosts);
-        try core.url.validateHttpsUrl(url, hosts);
+        try validateTrustedHttpsUrl(url, self.trusted_origins);
     }
 
     fn validateChallenge(
         self: *ChallengeAuthenticationPolicy,
         challenge: *const BearerChallenge,
     ) !void {
-        const hosts: []const []const u8 = @ptrCast(self.expected_hosts);
-        try core.url.validateHttpsUrl(challenge.realm, hosts);
+        try validateTrustedHttpsUrl(challenge.realm, self.trusted_origins);
         const realm_uri = std.Uri.parse(challenge.realm) catch return error.InvalidChallengeRealm;
         if (realm_uri.query != null or realm_uri.fragment != null)
             return error.InvalidChallengeRealm;
@@ -585,12 +716,16 @@ pub const ChallengeAuthenticationPolicy = struct {
         };
         if (!std.mem.eql(u8, path, "/oauth2/token")) return error.InvalidChallengeRealm;
 
-        const realm_host = try extractHost(self.allocator, challenge.realm);
-        defer self.allocator.free(realm_host);
-        if (!std.ascii.eqlIgnoreCase(realm_host, challenge.service))
+        var host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
+        const realm_host = realm_uri.getHost(&host_buffer) catch
+            return error.InvalidChallengeRealm;
+        if (!serviceMatchesOrigin(
+            challenge.service,
+            realm_host.bytes,
+            effectiveHttpsPort(realm_uri),
+        )) {
             return error.UntrustedChallengeService;
-        if (!hostExpected(hosts, challenge.service))
-            return error.UntrustedChallengeService;
+        }
         if (challenge.tenant) |challenge_tenant| {
             if (challenge_tenant.len == 0) return error.InvalidChallengeTenant;
             if (self.tenant_id) |configured| {
@@ -607,9 +742,11 @@ pub const ChallengeAuthenticationPolicy = struct {
         const route_url = requestRoute(request.url);
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
-        for (self.routes.items) |entry| {
-            if (entry.method == request.method and std.mem.eql(u8, entry.url, route_url))
+        for (self.routes.items) |*entry| {
+            if (entry.method == request.method and std.mem.eql(u8, entry.url, route_url)) {
+                entry.last_used = self.nextUseLocked();
                 return try entry.challenge.clone(self.allocator);
+            }
         }
         return null;
     }
@@ -628,6 +765,7 @@ pub const ChallengeAuthenticationPolicy = struct {
             const replacement = try challenge.clone(self.allocator);
             entry.challenge.deinit();
             entry.challenge = replacement;
+            entry.last_used = self.nextUseLocked();
             return;
         }
 
@@ -635,10 +773,13 @@ pub const ChallengeAuthenticationPolicy = struct {
         errdefer self.allocator.free(url_copy);
         var challenge_copy = try challenge.clone(self.allocator);
         errdefer challenge_copy.deinit();
+        if (self.routes.items.len >= max_route_entries)
+            self.evictLeastRecentlyUsedRouteLocked();
         try self.routes.append(self.allocator, .{
             .method = request.method,
             .url = url_copy,
             .challenge = challenge_copy,
+            .last_used = self.nextUseLocked(),
         });
     }
 
@@ -659,15 +800,35 @@ pub const ChallengeAuthenticationPolicy = struct {
         }
     }
 
+    fn invalidateRefreshToken(
+        self: *ChallengeAuthenticationPolicy,
+        challenge: *const BearerChallenge,
+        rejected_token: []const u8,
+    ) void {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        for (self.refresh_tokens.items, 0..) |*entry, index| {
+            if (!refreshKeyMatches(entry, challenge, self.effectiveTenant(challenge)) or
+                !std.mem.eql(u8, entry.token, rejected_token))
+            {
+                continue;
+            }
+            var removed = self.refresh_tokens.swapRemove(index);
+            removed.deinit(self.allocator);
+            return;
+        }
+    }
+
     fn findValidRefreshTokenLocked(
         self: *ChallengeAuthenticationPolicy,
         challenge: *const BearerChallenge,
         current_time: i64,
     ) ?[]const u8 {
-        for (self.refresh_tokens.items) |entry| {
-            if (refreshKeyMatches(&entry, challenge, self.effectiveTenant(challenge)) and
+        for (self.refresh_tokens.items) |*entry| {
+            if (refreshKeyMatches(entry, challenge, self.effectiveTenant(challenge)) and
                 isTokenValid(entry.expires_on, current_time, self.expiry_skew_seconds))
             {
+                entry.last_used = self.nextUseLocked();
                 return entry.token;
             }
         }
@@ -679,10 +840,11 @@ pub const ChallengeAuthenticationPolicy = struct {
         challenge: *const BearerChallenge,
         current_time: i64,
     ) ?[]const u8 {
-        for (self.access_tokens.items) |entry| {
-            if (accessKeyMatches(&entry, challenge, self.effectiveTenant(challenge)) and
+        for (self.access_tokens.items) |*entry| {
+            if (accessKeyMatches(entry, challenge, self.effectiveTenant(challenge)) and
                 isTokenValid(entry.expires_on, current_time, self.expiry_skew_seconds))
             {
+                entry.last_used = self.nextUseLocked();
                 return entry.token;
             }
         }
@@ -702,6 +864,7 @@ pub const ChallengeAuthenticationPolicy = struct {
             self.allocator.free(entry.token);
             entry.token = replacement;
             entry.expires_on = expires_on;
+            entry.last_used = self.nextUseLocked();
             return;
         }
 
@@ -713,12 +876,15 @@ pub const ChallengeAuthenticationPolicy = struct {
         errdefer self.allocator.free(tenant_copy);
         const token_copy = try self.allocator.dupe(u8, token);
         errdefer self.allocator.free(token_copy);
+        if (self.refresh_tokens.items.len >= max_refresh_token_entries)
+            self.evictLeastRecentlyUsedRefreshTokenLocked();
         try self.refresh_tokens.append(self.allocator, .{
             .realm = realm,
             .service = service,
             .tenant = tenant_copy,
             .token = token_copy,
             .expires_on = expires_on,
+            .last_used = self.nextUseLocked(),
         });
     }
 
@@ -735,6 +901,7 @@ pub const ChallengeAuthenticationPolicy = struct {
             self.allocator.free(entry.token);
             entry.token = replacement;
             entry.expires_on = expires_on;
+            entry.last_used = self.nextUseLocked();
             return;
         }
 
@@ -748,6 +915,8 @@ pub const ChallengeAuthenticationPolicy = struct {
         errdefer self.allocator.free(scope);
         const token_copy = try self.allocator.dupe(u8, token);
         errdefer self.allocator.free(token_copy);
+        if (self.access_tokens.items.len >= max_access_token_entries)
+            self.evictLeastRecentlyUsedAccessTokenLocked();
         try self.access_tokens.append(self.allocator, .{
             .realm = realm,
             .service = service,
@@ -755,14 +924,234 @@ pub const ChallengeAuthenticationPolicy = struct {
             .scope = scope,
             .token = token_copy,
             .expires_on = expires_on,
+            .last_used = self.nextUseLocked(),
         });
     }
 
-    fn finishRefresh(self: *ChallengeAuthenticationPolicy) void {
-        self.mutex.lockUncancelable(self.io);
-        self.refreshing = false;
-        self.refresh_finished.broadcast(self.io);
+    fn pruneRefreshTokensLocked(
+        self: *ChallengeAuthenticationPolicy,
+        current_time: i64,
+    ) void {
+        var index: usize = 0;
+        while (index < self.refresh_tokens.items.len) {
+            if (isTokenValid(
+                self.refresh_tokens.items[index].expires_on,
+                current_time,
+                self.expiry_skew_seconds,
+            )) {
+                index += 1;
+                continue;
+            }
+            var removed = self.refresh_tokens.swapRemove(index);
+            removed.deinit(self.allocator);
+        }
+    }
+
+    fn pruneAccessTokensLocked(
+        self: *ChallengeAuthenticationPolicy,
+        current_time: i64,
+    ) void {
+        var index: usize = 0;
+        while (index < self.access_tokens.items.len) {
+            if (isTokenValid(
+                self.access_tokens.items[index].expires_on,
+                current_time,
+                self.expiry_skew_seconds,
+            )) {
+                index += 1;
+                continue;
+            }
+            var removed = self.access_tokens.swapRemove(index);
+            removed.deinit(self.allocator);
+        }
+    }
+
+    fn evictLeastRecentlyUsedRefreshTokenLocked(
+        self: *ChallengeAuthenticationPolicy,
+    ) void {
+        var oldest_index: usize = 0;
+        for (self.refresh_tokens.items[1..], 1..) |entry, index| {
+            if (entry.last_used < self.refresh_tokens.items[oldest_index].last_used)
+                oldest_index = index;
+        }
+        var removed = self.refresh_tokens.swapRemove(oldest_index);
+        removed.deinit(self.allocator);
+    }
+
+    fn evictLeastRecentlyUsedAccessTokenLocked(
+        self: *ChallengeAuthenticationPolicy,
+    ) void {
+        var oldest_index: usize = 0;
+        for (self.access_tokens.items[1..], 1..) |entry, index| {
+            if (entry.last_used < self.access_tokens.items[oldest_index].last_used)
+                oldest_index = index;
+        }
+        var removed = self.access_tokens.swapRemove(oldest_index);
+        removed.deinit(self.allocator);
+    }
+
+    fn evictLeastRecentlyUsedRouteLocked(
+        self: *ChallengeAuthenticationPolicy,
+    ) void {
+        var oldest_index: usize = 0;
+        for (self.routes.items[1..], 1..) |entry, index| {
+            if (entry.last_used < self.routes.items[oldest_index].last_used)
+                oldest_index = index;
+        }
+        var removed = self.routes.swapRemove(oldest_index);
+        removed.deinit(self.allocator);
+    }
+
+    fn nextUseLocked(self: *ChallengeAuthenticationPolicy) u64 {
+        self.cache_clock +%= 1;
+        if (self.cache_clock == 0) self.cache_clock = 1;
+        return self.cache_clock;
+    }
+
+    fn findRunningFlightLocked(
+        self: *ChallengeAuthenticationPolicy,
+        kind: FlightKind,
+        challenge: *const BearerChallenge,
+    ) ?*TokenFlight {
+        for (self.token_flights.items) |flight| {
+            if (flight.state == .running and
+                flightKeyMatches(flight, kind, challenge, self.effectiveTenant(challenge)))
+            {
+                return flight;
+            }
+        }
+        return null;
+    }
+
+    fn createFlightLocked(
+        self: *ChallengeAuthenticationPolicy,
+        kind: FlightKind,
+        challenge: *const BearerChallenge,
+    ) !*TokenFlight {
+        const flight = try self.allocator.create(TokenFlight);
+        errdefer self.allocator.destroy(flight);
+        flight.* = try TokenFlight.init(
+            self.allocator,
+            kind,
+            challenge.realm,
+            challenge.service,
+            self.effectiveTenant(challenge) orelse "",
+            if (kind == .access) challenge.scope else "",
+        );
+        errdefer flight.deinit(self.allocator);
+        try self.token_flights.append(self.allocator, flight);
+        return flight;
+    }
+
+    fn waitForFlightLocked(
+        self: *ChallengeAuthenticationPolicy,
+        flight: *TokenFlight,
+        cancellation: ?*const CancellationToken,
+    ) ![]u8 {
+        if (cancellation == null) {
+            while (flight.state == .running)
+                flight.condition.waitUncancelable(self.io, &self.mutex);
+            return self.consumeFlightResultLocked(flight, true);
+        }
+
         self.mutex.unlock(self.io);
+        while (true) {
+            checkCancelled(cancellation) catch |err|
+                return self.leaveFlightWait(flight, err);
+            self.io.sleep(.fromMilliseconds(1), .awake) catch |err|
+                return self.leaveFlightWait(flight, err);
+            self.mutex.lockUncancelable(self.io);
+            if (flight.state != .running)
+                return self.consumeFlightResultLocked(flight, true);
+            self.mutex.unlock(self.io);
+        }
+    }
+
+    fn leaveFlightWait(
+        self: *ChallengeAuthenticationPolicy,
+        flight: *TokenFlight,
+        failure: anyerror,
+    ) anyerror![]u8 {
+        self.mutex.lockUncancelable(self.io);
+        self.waiting_callers -= 1;
+        self.releaseFlightLocked(flight);
+        self.mutex.unlock(self.io);
+        return failure;
+    }
+
+    fn failFlight(
+        self: *ChallengeAuthenticationPolicy,
+        flight: *TokenFlight,
+        failure: anyerror,
+    ) anyerror![]u8 {
+        self.mutex.lockUncancelable(self.io);
+        self.completeFlightFailureLocked(flight, failure);
+        return self.consumeFlightResultLocked(flight, false);
+    }
+
+    fn completeFlightSuccessLocked(
+        self: *ChallengeAuthenticationPolicy,
+        flight: *TokenFlight,
+        token: []u8,
+    ) void {
+        std.debug.assert(flight.state == .running);
+        flight.token = token;
+        flight.state = .succeeded;
+        flight.condition.broadcast(self.io);
+    }
+
+    fn completeFlightFailureLocked(
+        self: *ChallengeAuthenticationPolicy,
+        flight: *TokenFlight,
+        failure: anyerror,
+    ) void {
+        std.debug.assert(flight.state == .running);
+        flight.failure = failure;
+        flight.state = .failed;
+        flight.condition.broadcast(self.io);
+    }
+
+    fn consumeFlightResultLocked(
+        self: *ChallengeAuthenticationPolicy,
+        flight: *TokenFlight,
+        waiter: bool,
+    ) ![]u8 {
+        std.debug.assert(flight.state != .running);
+        var token: ?[]u8 = null;
+        var failure: ?anyerror = null;
+        switch (flight.state) {
+            .running => unreachable,
+            .succeeded => {
+                token = self.allocator.dupe(u8, flight.token.?) catch |err| blk: {
+                    failure = err;
+                    break :blk null;
+                };
+            },
+            .failed => failure = flight.failure.?,
+        }
+        if (waiter) self.waiting_callers -= 1;
+        self.releaseFlightLocked(flight);
+        self.mutex.unlock(self.io);
+        if (failure) |err| return err;
+        return token.?;
+    }
+
+    fn releaseFlightLocked(
+        self: *ChallengeAuthenticationPolicy,
+        flight: *TokenFlight,
+    ) void {
+        std.debug.assert(flight.participants > 0);
+        flight.participants -= 1;
+        if (flight.participants != 0) return;
+        std.debug.assert(flight.state != .running);
+        for (self.token_flights.items, 0..) |candidate, index| {
+            if (candidate != flight) continue;
+            _ = self.token_flights.swapRemove(index);
+            flight.deinit(self.allocator);
+            self.allocator.destroy(flight);
+            return;
+        }
+        unreachable;
     }
 
     fn effectiveTenant(
@@ -841,34 +1230,59 @@ fn normalizeEndpoint(allocator: std.mem.Allocator, endpoint: []const u8) ![]u8 {
         endpoint);
 }
 
-fn extractHost(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
-    const uri = std.Uri.parse(raw) catch return error.InvalidUrl;
-    if (uri.host == null) return error.InvalidUrl;
-    var buffer: [std.Io.net.HostName.max_len]u8 = undefined;
-    const host = uri.getHost(&buffer) catch return error.InvalidUrl;
-    return allocator.dupe(u8, host.bytes);
-}
-
-fn copyExpectedHosts(
+fn copyTrustedOrigins(
     allocator: std.mem.Allocator,
-    endpoint_host: []const u8,
+    endpoint: []const u8,
     additional: []const []const u8,
-) ![][]u8 {
-    const hosts = try allocator.alloc([]u8, additional.len + 1);
-    errdefer allocator.free(hosts);
+) ![]TrustedOrigin {
+    const origins = try allocator.alloc(TrustedOrigin, additional.len + 1);
+    errdefer allocator.free(origins);
     var initialized: usize = 0;
     errdefer {
-        for (hosts[0..initialized]) |host| allocator.free(host);
+        for (origins[0..initialized]) |*origin| origin.deinit(allocator);
     }
 
-    hosts[0] = try allocator.dupe(u8, endpoint_host);
+    origins[0] = try trustedOriginFromUrl(allocator, endpoint);
     initialized += 1;
-    for (additional, 0..) |host, index| {
-        try validateExpectedHost(host);
-        hosts[index + 1] = try allocator.dupe(u8, host);
+    for (additional, 0..) |value, index| {
+        origins[index + 1] = if (std.mem.indexOf(u8, value, "://") != null)
+            try trustedOriginFromUrl(allocator, value)
+        else blk: {
+            try validateExpectedHost(value);
+            break :blk .{
+                .host = try allocator.dupe(u8, value),
+                .port = 443,
+            };
+        };
         initialized += 1;
     }
-    return hosts;
+    return origins;
+}
+
+fn trustedOriginFromUrl(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+) !TrustedOrigin {
+    const uri = std.Uri.parse(raw) catch return error.InvalidExpectedOrigin;
+    if (!std.ascii.eqlIgnoreCase(uri.scheme, "https"))
+        return error.InvalidExpectedOrigin;
+    if (uri.host == null or uri.user != null or uri.password != null or
+        uri.query != null or uri.fragment != null)
+    {
+        return error.InvalidExpectedOrigin;
+    }
+    const path = if (uri.path.isEmpty()) "" else switch (uri.path) {
+        .raw => |value| value,
+        .percent_encoded => |value| value,
+    };
+    if (path.len != 0 and !std.mem.eql(u8, path, "/"))
+        return error.InvalidExpectedOrigin;
+    var host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
+    const host = uri.getHost(&host_buffer) catch return error.InvalidExpectedOrigin;
+    return .{
+        .host = try allocator.dupe(u8, host.bytes),
+        .port = effectiveHttpsPort(uri),
+    };
 }
 
 fn validateExpectedHost(host: []const u8) !void {
@@ -879,16 +1293,56 @@ fn validateExpectedHost(host: []const u8) !void {
     }
 }
 
-fn deinitStringSlice(allocator: std.mem.Allocator, values: [][]u8) void {
-    for (values) |value| allocator.free(value);
-    allocator.free(values);
+fn deinitTrustedOrigins(
+    allocator: std.mem.Allocator,
+    origins: []TrustedOrigin,
+) void {
+    for (origins) |*origin| origin.deinit(allocator);
+    allocator.free(origins);
 }
 
-fn hostExpected(hosts: []const []const u8, value: []const u8) bool {
-    for (hosts) |host| {
-        if (std.ascii.eqlIgnoreCase(host, value)) return true;
+fn validateTrustedHttpsUrl(
+    raw: []const u8,
+    trusted_origins: []const TrustedOrigin,
+) !void {
+    const uri = std.Uri.parse(raw) catch return error.InvalidUrl;
+    if (!std.ascii.eqlIgnoreCase(uri.scheme, "https")) return error.HttpsRequired;
+    if (uri.host == null or uri.user != null or uri.password != null or
+        uri.fragment != null)
+    {
+        return error.InvalidUrl;
     }
-    return false;
+    var host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
+    const host = uri.getHost(&host_buffer) catch return error.InvalidUrl;
+    const port = effectiveHttpsPort(uri);
+    for (trusted_origins) |origin| {
+        if (origin.port == port and
+            std.ascii.eqlIgnoreCase(origin.host, host.bytes))
+        {
+            return;
+        }
+    }
+    return error.UnexpectedHost;
+}
+
+fn effectiveHttpsPort(uri: std.Uri) u16 {
+    return uri.port orelse 443;
+}
+
+fn serviceMatchesOrigin(
+    service: []const u8,
+    host: []const u8,
+    port: u16,
+) bool {
+    if (std.ascii.eqlIgnoreCase(service, host)) return true;
+    var authority_buffer: [std.Io.net.HostName.max_len + 8]u8 = undefined;
+    const authority = if (std.mem.indexOfScalar(u8, host, ':') != null)
+        std.fmt.bufPrint(&authority_buffer, "[{s}]:{d}", .{ host, port }) catch
+            unreachable
+    else
+        std.fmt.bufPrint(&authority_buffer, "{s}:{d}", .{ host, port }) catch
+            unreachable;
+    return std.ascii.eqlIgnoreCase(service, authority);
 }
 
 fn requestRoute(url: []const u8) []const u8 {
@@ -917,8 +1371,62 @@ fn accessKeyMatches(
         std.mem.eql(u8, entry.scope, challenge.scope);
 }
 
+fn flightKeyMatches(
+    flight: *const TokenFlight,
+    kind: FlightKind,
+    challenge: *const BearerChallenge,
+    tenant: ?[]const u8,
+) bool {
+    return flight.kind == kind and
+        std.mem.eql(u8, flight.realm, challenge.realm) and
+        std.mem.eql(u8, flight.service, challenge.service) and
+        std.mem.eql(u8, flight.tenant, tenant orelse "") and
+        (kind == .refresh or std.mem.eql(u8, flight.scope, challenge.scope));
+}
+
 fn isTokenValid(expires_on: i64, now: i64, skew: i64) bool {
     return expires_on > now and now < expires_on -| skew;
+}
+
+fn isRefreshTokenRejection(err: anyerror) bool {
+    return err == error.AcrTokenEndpointUnauthorized or
+        err == error.AcrTokenEndpointForbidden or
+        err == error.AcrRefreshTokenRejected;
+}
+
+fn isProtocolRefreshTokenRejection(
+    allocator: std.mem.Allocator,
+    body: []const u8,
+) !bool {
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, body, .{}) catch |err|
+        switch (err) {
+            error.OutOfMemory => return err,
+            else => return false,
+        };
+    defer parsed.deinit();
+    if (parsed.value != .object) return false;
+    if (parsed.value.object.get("error")) |oauth_error| {
+        if (oauth_error == .string and
+            (std.ascii.eqlIgnoreCase(oauth_error.string, "invalid_grant") or
+                std.ascii.eqlIgnoreCase(oauth_error.string, "invalid_token") or
+                std.ascii.eqlIgnoreCase(oauth_error.string, "unauthorized")))
+        {
+            return true;
+        }
+    }
+    const errors = parsed.value.object.get("errors") orelse return false;
+    if (errors != .array) return false;
+    for (errors.array.items) |acr_error| {
+        if (acr_error != .object) continue;
+        const code = acr_error.object.get("code") orelse continue;
+        if (code == .string and
+            (std.ascii.eqlIgnoreCase(code.string, "UNAUTHORIZED") or
+                std.ascii.eqlIgnoreCase(code.string, "INVALID_TOKEN")))
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 fn setBearerHeader(request: *Request, token: []const u8) !void {
@@ -967,8 +1475,11 @@ fn parseTokenResponse(
     body: []const u8,
     field: []const u8,
 ) ![]u8 {
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, body, .{}) catch
-        return error.InvalidAcrTokenResponse;
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, body, .{}) catch |err|
+        switch (err) {
+            error.OutOfMemory => return err,
+            else => return error.InvalidAcrTokenResponse,
+        };
     defer parsed.deinit();
     if (parsed.value != .object) return error.InvalidAcrTokenResponse;
     const token = parsed.value.object.get(field) orelse
@@ -989,11 +1500,17 @@ fn jwtExpiry(allocator: std.mem.Allocator, token: []const u8) !i64 {
         payload = payload[0 .. payload.len - 1];
     if (payload.len == 0) return error.InvalidAcrToken;
 
-    const decoded = core.base64.urlDecode(allocator, payload) catch
-        return error.InvalidAcrToken;
+    const decoded = core.base64.urlDecode(allocator, payload) catch |err|
+        switch (err) {
+            error.OutOfMemory => return err,
+            else => return error.InvalidAcrToken,
+        };
     defer allocator.free(decoded);
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, decoded, .{}) catch
-        return error.InvalidAcrToken;
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, decoded, .{}) catch |err|
+        switch (err) {
+            error.OutOfMemory => return err,
+            else => return error.InvalidAcrToken,
+        };
     defer parsed.deinit();
     if (parsed.value != .object) return error.InvalidAcrToken;
     const expires = parsed.value.object.get("exp") orelse return error.InvalidAcrToken;
@@ -1085,6 +1602,29 @@ fn makeChallenge(
     );
 }
 
+fn parseTestChallenge(
+    allocator: std.mem.Allocator,
+    realm: []const u8,
+    service: []const u8,
+    scope: []const u8,
+    tenant: ?[]const u8,
+) !BearerChallenge {
+    const base = try makeChallenge(allocator, realm, service, scope);
+    defer allocator.free(base);
+    if (tenant) |value| {
+        const header = try std.fmt.allocPrint(
+            allocator,
+            "{s},tenant=\"{s}\"",
+            .{ base, value },
+        );
+        defer allocator.free(header);
+        const values = [_][]const u8{header};
+        return challenge_mod.parseBearerChallenge(allocator, &values);
+    }
+    const values = [_][]const u8{base};
+    return challenge_mod.parseBearerChallenge(allocator, &values);
+}
+
 fn capturedUrl(
     transport: *const core.http.SequenceMockTransport,
     index: usize,
@@ -1127,6 +1667,70 @@ fn sendBuffered(
     defer request.deinit();
     return pipeline.send(&request);
 }
+
+fn testResponse(
+    allocator: std.mem.Allocator,
+    status_code: u16,
+    body: []const u8,
+) !Response {
+    return .{
+        .status_code = status_code,
+        .headers = std.StringHashMap([]const u8).init(allocator),
+        .body = try allocator.dupe(u8, body),
+        .allocator = allocator,
+        .response_headers = core.http.ResponseHeaders.init(allocator),
+    };
+}
+
+const ParallelAccessTransport = struct {
+    allocator: std.mem.Allocator,
+    refresh_body: []const u8,
+    access_one_body: []const u8,
+    access_two_body: []const u8,
+    exchange_calls: std.atomic.Value(usize) = .init(0),
+    access_calls: std.atomic.Value(usize) = .init(0),
+    access_release: std.Io.Semaphore = .{},
+    transport: HttpTransport,
+
+    fn init(
+        allocator: std.mem.Allocator,
+        refresh_body: []const u8,
+        access_one_body: []const u8,
+        access_two_body: []const u8,
+    ) ParallelAccessTransport {
+        return .{
+            .allocator = allocator,
+            .refresh_body = refresh_body,
+            .access_one_body = access_one_body,
+            .access_two_body = access_two_body,
+            .transport = .{ .sendFn = &sendImpl },
+        };
+    }
+
+    fn asTransport(self: *ParallelAccessTransport) *HttpTransport {
+        return &self.transport;
+    }
+
+    fn sendImpl(transport: *HttpTransport, request: *Request) !Response {
+        const self: *ParallelAccessTransport =
+            @alignCast(@fieldParentPtr("transport", transport));
+        if (std.mem.indexOf(u8, request.url, "/oauth2/exchange") != null) {
+            _ = self.exchange_calls.fetchAdd(1, .monotonic);
+            return testResponse(self.allocator, 200, self.refresh_body);
+        }
+        if (std.mem.indexOf(u8, request.url, "/oauth2/token") == null)
+            return error.UnexpectedMockRequest;
+        _ = self.access_calls.fetchAdd(1, .monotonic);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.access_release.waitUncancelable(io);
+        const body = request.body orelse return error.MissingMockRequestBody;
+        if (std.mem.indexOf(u8, body, "repository%3Aone%3Apull") != null)
+            return testResponse(self.allocator, 200, self.access_one_body);
+        if (std.mem.indexOf(u8, body, "repository%3Atwo%3Apull") != null)
+            return testResponse(self.allocator, 200, self.access_two_body);
+        return error.UnexpectedMockScope;
+    }
+};
 
 test "authenticated challenge flow uses form encoding and caches both tokens" {
     const allocator = std.testing.allocator;
@@ -1646,7 +2250,7 @@ test "concurrent token acquisition is single flight" {
         const waiting = policy.waiting_callers;
         policy.mutex.unlock(policy.io);
         if (waiting > 0) break;
-        io.sleep(.fromMilliseconds(1), .awake) catch {};
+        try io.sleep(.fromMilliseconds(1), .awake);
     }
     release.post(io);
     first_thread.join();
@@ -2013,4 +2617,943 @@ test "streaming cancellation is preserved before transport" {
         pipeline.open(&request, .{ .cancellation = &cancellation }),
     );
     try std.testing.expectEqual(@as(usize, 0), transport.call_count);
+}
+
+test "trusted origins compare HTTPS host and effective port" {
+    const allocator = std.testing.allocator;
+    const unused = [_]core.http.SequenceMockTransport.CannedResponse{
+        .{ .status = 200, .body = "{}" },
+    };
+    var unused_transport = core.http.SequenceMockTransport.init(allocator, &unused);
+    var default_policy = try ChallengeAuthenticationPolicy.init(
+        allocator,
+        "https://registry.example",
+        .anonymous,
+        .{},
+    );
+    defer default_policy.deinit();
+
+    try std.testing.expectError(
+        error.UnexpectedHost,
+        sendBuffered(
+            allocator,
+            &default_policy,
+            unused_transport.asTransport(),
+            .GET,
+            "https://registry.example:8443/v2/_catalog",
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 0), unused_transport.call_count);
+
+    const untrusted_challenge = try makeChallenge(
+        allocator,
+        "https://registry.example:8443/oauth2/token",
+        "registry.example:8443",
+        "registry:catalog:*",
+    );
+    defer allocator.free(untrusted_challenge);
+    const untrusted_headers = [_]core.http.MockTransport.HeaderPair{
+        .{ .name = "WWW-Authenticate", .value = untrusted_challenge },
+    };
+    const untrusted_responses = [_]core.http.SequenceMockTransport.CannedResponse{
+        .{ .status = 401, .body = "", .headers = &untrusted_headers },
+    };
+    var untrusted_transport = core.http.SequenceMockTransport.init(
+        allocator,
+        &untrusted_responses,
+    );
+    try std.testing.expectError(
+        error.UnexpectedHost,
+        sendBuffered(
+            allocator,
+            &default_policy,
+            untrusted_transport.asTransport(),
+            .GET,
+            "https://registry.example/v2/_catalog",
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 1), untrusted_transport.call_count);
+
+    var hostname_policy = try ChallengeAuthenticationPolicy.init(
+        allocator,
+        "https://registry.example",
+        .anonymous,
+        .{ .expected_hosts = &.{"auth.example"} },
+    );
+    defer hostname_policy.deinit();
+    try std.testing.expectError(
+        error.UnexpectedHost,
+        sendBuffered(
+            allocator,
+            &hostname_policy,
+            unused_transport.asTransport(),
+            .GET,
+            "https://auth.example:8443/v2/_catalog",
+        ),
+    );
+
+    const access_token = try makeJwt(allocator, 4_102_444_800, "port-8443");
+    defer allocator.free(access_token);
+    const access_body = try makeTokenResponse(allocator, "access_token", access_token);
+    defer allocator.free(access_body);
+    const challenge = try makeChallenge(
+        allocator,
+        "https://registry.example:8443/oauth2/token",
+        "REGISTRY.EXAMPLE:8443",
+        "registry:catalog:*",
+    );
+    defer allocator.free(challenge);
+    const headers = [_]core.http.MockTransport.HeaderPair{
+        .{ .name = "WWW-Authenticate", .value = challenge },
+    };
+    const responses = [_]core.http.SequenceMockTransport.CannedResponse{
+        .{ .status = 401, .body = "", .headers = &headers },
+        .{ .status = 200, .body = access_body },
+        .{ .status = 200, .body = "{}" },
+    };
+    var explicit_transport = core.http.SequenceMockTransport.init(allocator, &responses);
+    var explicit_policy = try ChallengeAuthenticationPolicy.init(
+        allocator,
+        "https://registry.example",
+        .anonymous,
+        .{ .expected_hosts = &.{"https://registry.example:8443"} },
+    );
+    defer explicit_policy.deinit();
+
+    var response = try sendBuffered(
+        allocator,
+        &explicit_policy,
+        explicit_transport.asTransport(),
+        .GET,
+        "https://REGISTRY.example:8443/v2/_catalog",
+    );
+    defer response.deinit();
+    try std.testing.expectEqual(@as(u16, 200), response.status_code);
+    try std.testing.expectEqual(@as(usize, 3), explicit_transport.call_count);
+    try std.testing.expectEqualStrings(
+        "https://registry.example:8443/oauth2/token?api-version=2021-07-01",
+        capturedUrl(&explicit_transport, 1),
+    );
+    try std.testing.expect(explicit_transport.captured_authorization[2]);
+}
+
+test "cached refresh rejection invalidates exact token and recovers once" {
+    const allocator = std.testing.allocator;
+    var clock = TestClock{ .value = 1_000 };
+    var credential = TestCredential.init();
+    const stale_refresh = try makeJwt(allocator, 5_000, "stale-refresh");
+    defer allocator.free(stale_refresh);
+    const fresh_refresh = try makeJwt(allocator, 6_000, "fresh-refresh");
+    defer allocator.free(fresh_refresh);
+    const other_refresh = try makeJwt(allocator, 6_000, "other-refresh");
+    defer allocator.free(other_refresh);
+    const access_token = try makeJwt(allocator, 4_000, "recovered-access");
+    defer allocator.free(access_token);
+    const refresh_body = try makeTokenResponse(allocator, "refresh_token", fresh_refresh);
+    defer allocator.free(refresh_body);
+    const access_body = try makeTokenResponse(allocator, "access_token", access_token);
+    defer allocator.free(access_body);
+    const responses = [_]core.http.SequenceMockTransport.CannedResponse{
+        .{ .status = 401, .body = "{\"errors\":[{\"code\":\"UNAUTHORIZED\"}]}" },
+        .{ .status = 200, .body = refresh_body },
+        .{ .status = 200, .body = access_body },
+    };
+    var transport = core.http.SequenceMockTransport.init(allocator, &responses);
+    var policy = try ChallengeAuthenticationPolicy.init(
+        allocator,
+        "https://registry.example",
+        .{ .credential = &credential.credential },
+        .{
+            .expiry_skew_seconds = 10,
+            .time_source = clock.source(),
+        },
+    );
+    defer policy.deinit();
+    var challenge = try parseTestChallenge(
+        allocator,
+        "https://registry.example/oauth2/token",
+        "registry.example",
+        "repository:one:pull",
+        null,
+    );
+    defer challenge.deinit();
+    var other_challenge = try parseTestChallenge(
+        allocator,
+        "https://registry.example/oauth2/token",
+        "registry.example",
+        "repository:one:pull",
+        "other-tenant",
+    );
+    defer other_challenge.deinit();
+    {
+        policy.mutex.lockUncancelable(policy.io);
+        defer policy.mutex.unlock(policy.io);
+        try policy.storeRefreshTokenLocked(&challenge, stale_refresh, 5_000);
+        try policy.storeRefreshTokenLocked(&other_challenge, other_refresh, 6_000);
+    }
+
+    const token = try policy.acquireAccessToken(
+        &challenge,
+        null,
+        transport.asTransport(),
+    );
+    defer allocator.free(token);
+    try std.testing.expectEqualStrings(access_token, token);
+    try std.testing.expectEqual(@as(usize, 3), transport.call_count);
+    try std.testing.expectEqual(@as(usize, 1), credential.calls.load(.monotonic));
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        countCapturedUrl(&transport, "/oauth2/exchange"),
+    );
+    try std.testing.expectEqual(
+        @as(usize, 2),
+        countCapturedUrl(&transport, "/oauth2/token"),
+    );
+    try std.testing.expect(std.mem.indexOf(u8, capturedBody(&transport, 0), stale_refresh) != null);
+    try std.testing.expect(std.mem.indexOf(u8, capturedBody(&transport, 2), fresh_refresh) != null);
+    {
+        policy.mutex.lockUncancelable(policy.io);
+        defer policy.mutex.unlock(policy.io);
+        const cached = policy.findValidRefreshTokenLocked(&challenge, clock.value).?;
+        try std.testing.expectEqualStrings(fresh_refresh, cached);
+        const other_cached = policy.findValidRefreshTokenLocked(
+            &other_challenge,
+            clock.value,
+        ).?;
+        try std.testing.expectEqualStrings(other_refresh, other_cached);
+        try std.testing.expectEqual(@as(usize, 2), policy.refresh_tokens.items.len);
+    }
+}
+
+test "refresh rejection retry is bounded and unrelated failures are not retried" {
+    const allocator = std.testing.allocator;
+    var clock = TestClock{ .value = 1_000 };
+    var credential = TestCredential.init();
+    const stale_refresh = try makeJwt(allocator, 5_000, "stale");
+    defer allocator.free(stale_refresh);
+    const rejected_refresh = try makeJwt(allocator, 6_000, "rejected");
+    defer allocator.free(rejected_refresh);
+    const refresh_body = try makeTokenResponse(allocator, "refresh_token", rejected_refresh);
+    defer allocator.free(refresh_body);
+    const responses = [_]core.http.SequenceMockTransport.CannedResponse{
+        .{ .status = 403, .body = "{}" },
+        .{ .status = 200, .body = refresh_body },
+        .{ .status = 200, .body = "{\"error\":\"invalid_grant\"}" },
+    };
+    var transport = core.http.SequenceMockTransport.init(allocator, &responses);
+    var policy = try ChallengeAuthenticationPolicy.init(
+        allocator,
+        "https://registry.example",
+        .{ .credential = &credential.credential },
+        .{
+            .expiry_skew_seconds = 10,
+            .time_source = clock.source(),
+        },
+    );
+    defer policy.deinit();
+    var challenge = try parseTestChallenge(
+        allocator,
+        "https://registry.example/oauth2/token",
+        "registry.example",
+        "repository:one:pull",
+        null,
+    );
+    defer challenge.deinit();
+    {
+        policy.mutex.lockUncancelable(policy.io);
+        defer policy.mutex.unlock(policy.io);
+        try policy.storeRefreshTokenLocked(&challenge, stale_refresh, 5_000);
+    }
+
+    try std.testing.expectError(
+        error.AcrRefreshTokenRejected,
+        policy.acquireAccessToken(&challenge, null, transport.asTransport()),
+    );
+    try std.testing.expectEqual(@as(usize, 3), transport.call_count);
+    try std.testing.expectEqual(@as(usize, 1), credential.calls.load(.monotonic));
+    {
+        policy.mutex.lockUncancelable(policy.io);
+        defer policy.mutex.unlock(policy.io);
+        try std.testing.expectEqual(@as(usize, 0), policy.refresh_tokens.items.len);
+    }
+
+    var unrelated_credential = TestCredential.init();
+    const unrelated_responses = [_]core.http.SequenceMockTransport.CannedResponse{
+        .{ .status = 500, .body = "{\"errors\":[{\"code\":\"UNAVAILABLE\"}]}" },
+    };
+    var unrelated_transport = core.http.SequenceMockTransport.init(
+        allocator,
+        &unrelated_responses,
+    );
+    var unrelated_policy = try ChallengeAuthenticationPolicy.init(
+        allocator,
+        "https://registry.example",
+        .{ .credential = &unrelated_credential.credential },
+        .{
+            .expiry_skew_seconds = 10,
+            .time_source = clock.source(),
+        },
+    );
+    defer unrelated_policy.deinit();
+    {
+        unrelated_policy.mutex.lockUncancelable(unrelated_policy.io);
+        defer unrelated_policy.mutex.unlock(unrelated_policy.io);
+        try unrelated_policy.storeRefreshTokenLocked(&challenge, stale_refresh, 5_000);
+    }
+    try std.testing.expectError(
+        error.AcrTokenExchangeFailed,
+        unrelated_policy.acquireAccessToken(
+            &challenge,
+            null,
+            unrelated_transport.asTransport(),
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 1), unrelated_transport.call_count);
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        unrelated_credential.calls.load(.monotonic),
+    );
+    {
+        unrelated_policy.mutex.lockUncancelable(unrelated_policy.io);
+        defer unrelated_policy.mutex.unlock(unrelated_policy.io);
+        const cached = unrelated_policy.findValidRefreshTokenLocked(
+            &challenge,
+            clock.value,
+        ).?;
+        try std.testing.expectEqualStrings(stale_refresh, cached);
+    }
+}
+
+test "token endpoint preserves authentication rejection classification" {
+    const allocator = std.testing.allocator;
+    var policy = try ChallengeAuthenticationPolicy.init(
+        allocator,
+        "https://registry.example",
+        .anonymous,
+        .{},
+    );
+    defer policy.deinit();
+    const url = "https://registry.example/oauth2/token";
+    const responses = [_]core.http.SequenceMockTransport.CannedResponse{
+        .{ .status = 401, .body = "{}" },
+        .{ .status = 403, .body = "{}" },
+        .{ .status = 200, .body = "{\"errors\":[{\"code\":\"UNAUTHORIZED\"}]}" },
+    };
+    var transport = core.http.SequenceMockTransport.init(allocator, &responses);
+    try std.testing.expectError(
+        error.AcrTokenEndpointUnauthorized,
+        policy.sendTokenRequest(
+            url,
+            "",
+            "access_token",
+            true,
+            null,
+            transport.asTransport(),
+        ),
+    );
+    try std.testing.expectError(
+        error.AcrTokenEndpointForbidden,
+        policy.sendTokenRequest(
+            url,
+            "",
+            "access_token",
+            true,
+            null,
+            transport.asTransport(),
+        ),
+    );
+    try std.testing.expectError(
+        error.AcrRefreshTokenRejected,
+        policy.sendTokenRequest(
+            url,
+            "",
+            "access_token",
+            true,
+            null,
+            transport.asTransport(),
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 3), transport.call_count);
+}
+
+test "token caches prune expired entries and preserve valid keys" {
+    const allocator = std.testing.allocator;
+    var clock = TestClock{ .value = 1_000 };
+    var policy = try ChallengeAuthenticationPolicy.init(
+        allocator,
+        "https://registry.example",
+        .anonymous,
+        .{
+            .expiry_skew_seconds = 10,
+            .time_source = clock.source(),
+        },
+    );
+    defer policy.deinit();
+    var expired_access = try parseTestChallenge(
+        allocator,
+        "https://registry.example/oauth2/token",
+        "registry.example",
+        "repository:expired:pull",
+        null,
+    );
+    defer expired_access.deinit();
+    var valid_access = try parseTestChallenge(
+        allocator,
+        "https://registry.example/oauth2/token",
+        "registry.example",
+        "repository:valid:pull",
+        null,
+    );
+    defer valid_access.deinit();
+    var expired_refresh = try parseTestChallenge(
+        allocator,
+        "https://registry.example/oauth2/token",
+        "registry.example",
+        "repository:one:pull",
+        "expired-tenant",
+    );
+    defer expired_refresh.deinit();
+    var valid_refresh = try parseTestChallenge(
+        allocator,
+        "https://registry.example/oauth2/token",
+        "registry.example",
+        "repository:one:pull",
+        "valid-tenant",
+    );
+    defer valid_refresh.deinit();
+
+    {
+        policy.mutex.lockUncancelable(policy.io);
+        defer policy.mutex.unlock(policy.io);
+        try policy.storeAccessTokenLocked(&expired_access, "expired-access", 1_005);
+        try policy.storeAccessTokenLocked(&valid_access, "valid-access", 5_000);
+        try policy.storeRefreshTokenLocked(&expired_refresh, "expired-refresh", 1_005);
+        try policy.storeRefreshTokenLocked(&valid_refresh, "valid-refresh", 5_000);
+        policy.pruneAccessTokensLocked(clock.value);
+        policy.pruneRefreshTokensLocked(clock.value);
+        try std.testing.expectEqual(@as(usize, 1), policy.access_tokens.items.len);
+        try std.testing.expectEqual(@as(usize, 1), policy.refresh_tokens.items.len);
+        try std.testing.expect(
+            policy.findValidAccessTokenLocked(&expired_access, clock.value) == null,
+        );
+        try std.testing.expect(
+            policy.findValidRefreshTokenLocked(&expired_refresh, clock.value) == null,
+        );
+        try std.testing.expectEqualStrings(
+            "valid-access",
+            policy.findValidAccessTokenLocked(&valid_access, clock.value).?,
+        );
+        try std.testing.expectEqualStrings(
+            "valid-refresh",
+            policy.findValidRefreshTokenLocked(&valid_refresh, clock.value).?,
+        );
+    }
+}
+
+test "bounded caches evict least recently used keys without mixups" {
+    const allocator = std.testing.allocator;
+    var clock = TestClock{ .value = 1_000 };
+    var policy = try ChallengeAuthenticationPolicy.init(
+        allocator,
+        "https://registry.example",
+        .anonymous,
+        .{
+            .expiry_skew_seconds = 10,
+            .time_source = clock.source(),
+        },
+    );
+    defer policy.deinit();
+
+    for (0..max_access_token_entries) |index| {
+        const scope = try std.fmt.allocPrint(
+            allocator,
+            "repository:access-{d}:pull",
+            .{index},
+        );
+        defer allocator.free(scope);
+        const token = try std.fmt.allocPrint(allocator, "access-token-{d}", .{index});
+        defer allocator.free(token);
+        var challenge = try parseTestChallenge(
+            allocator,
+            "https://registry.example/oauth2/token",
+            "registry.example",
+            scope,
+            null,
+        );
+        defer challenge.deinit();
+        policy.mutex.lockUncancelable(policy.io);
+        {
+            defer policy.mutex.unlock(policy.io);
+            try policy.storeAccessTokenLocked(&challenge, token, 5_000);
+        }
+    }
+    var access_zero = try parseTestChallenge(
+        allocator,
+        "https://registry.example/oauth2/token",
+        "registry.example",
+        "repository:access-0:pull",
+        null,
+    );
+    defer access_zero.deinit();
+    var access_one = try parseTestChallenge(
+        allocator,
+        "https://registry.example/oauth2/token",
+        "registry.example",
+        "repository:access-1:pull",
+        null,
+    );
+    defer access_one.deinit();
+    const overflow_scope = try std.fmt.allocPrint(
+        allocator,
+        "repository:access-{d}:pull",
+        .{max_access_token_entries},
+    );
+    defer allocator.free(overflow_scope);
+    var access_overflow = try parseTestChallenge(
+        allocator,
+        "https://registry.example/oauth2/token",
+        "registry.example",
+        overflow_scope,
+        null,
+    );
+    defer access_overflow.deinit();
+    {
+        policy.mutex.lockUncancelable(policy.io);
+        defer policy.mutex.unlock(policy.io);
+        try std.testing.expectEqualStrings(
+            "access-token-0",
+            policy.findValidAccessTokenLocked(&access_zero, clock.value).?,
+        );
+        try policy.storeAccessTokenLocked(
+            &access_overflow,
+            "access-token-overflow",
+            5_000,
+        );
+        try std.testing.expectEqual(max_access_token_entries, policy.access_tokens.items.len);
+        try std.testing.expect(
+            policy.findValidAccessTokenLocked(&access_one, clock.value) == null,
+        );
+        try std.testing.expectEqualStrings(
+            "access-token-0",
+            policy.findValidAccessTokenLocked(&access_zero, clock.value).?,
+        );
+        try std.testing.expectEqualStrings(
+            "access-token-overflow",
+            policy.findValidAccessTokenLocked(&access_overflow, clock.value).?,
+        );
+    }
+
+    for (0..max_refresh_token_entries) |index| {
+        const tenant = try std.fmt.allocPrint(allocator, "tenant-{d}", .{index});
+        defer allocator.free(tenant);
+        const token = try std.fmt.allocPrint(allocator, "refresh-token-{d}", .{index});
+        defer allocator.free(token);
+        var challenge = try parseTestChallenge(
+            allocator,
+            "https://registry.example/oauth2/token",
+            "registry.example",
+            "repository:refresh:pull",
+            tenant,
+        );
+        defer challenge.deinit();
+        policy.mutex.lockUncancelable(policy.io);
+        {
+            defer policy.mutex.unlock(policy.io);
+            try policy.storeRefreshTokenLocked(&challenge, token, 5_000);
+        }
+    }
+    var refresh_zero = try parseTestChallenge(
+        allocator,
+        "https://registry.example/oauth2/token",
+        "registry.example",
+        "repository:refresh:pull",
+        "tenant-0",
+    );
+    defer refresh_zero.deinit();
+    var refresh_one = try parseTestChallenge(
+        allocator,
+        "https://registry.example/oauth2/token",
+        "registry.example",
+        "repository:refresh:pull",
+        "tenant-1",
+    );
+    defer refresh_one.deinit();
+    const overflow_tenant = try std.fmt.allocPrint(
+        allocator,
+        "tenant-{d}",
+        .{max_refresh_token_entries},
+    );
+    defer allocator.free(overflow_tenant);
+    var refresh_overflow = try parseTestChallenge(
+        allocator,
+        "https://registry.example/oauth2/token",
+        "registry.example",
+        "repository:refresh:pull",
+        overflow_tenant,
+    );
+    defer refresh_overflow.deinit();
+    {
+        policy.mutex.lockUncancelable(policy.io);
+        defer policy.mutex.unlock(policy.io);
+        try std.testing.expectEqualStrings(
+            "refresh-token-0",
+            policy.findValidRefreshTokenLocked(&refresh_zero, clock.value).?,
+        );
+        try policy.storeRefreshTokenLocked(
+            &refresh_overflow,
+            "refresh-token-overflow",
+            5_000,
+        );
+        try std.testing.expectEqual(max_refresh_token_entries, policy.refresh_tokens.items.len);
+        try std.testing.expect(
+            policy.findValidRefreshTokenLocked(&refresh_one, clock.value) == null,
+        );
+        try std.testing.expectEqualStrings(
+            "refresh-token-0",
+            policy.findValidRefreshTokenLocked(&refresh_zero, clock.value).?,
+        );
+        try std.testing.expectEqualStrings(
+            "refresh-token-overflow",
+            policy.findValidRefreshTokenLocked(&refresh_overflow, clock.value).?,
+        );
+    }
+
+    var route_challenge = try parseTestChallenge(
+        allocator,
+        "https://registry.example/oauth2/token",
+        "registry.example",
+        "repository:route:pull",
+        null,
+    );
+    defer route_challenge.deinit();
+    for (0..max_route_entries) |index| {
+        const url = try std.fmt.allocPrint(
+            allocator,
+            "https://registry.example/v2/route-{d}/tags/list",
+            .{index},
+        );
+        defer allocator.free(url);
+        var request = Request.init(allocator, .GET, url);
+        defer request.deinit();
+        try policy.storeRoute(&request, &route_challenge);
+    }
+    var route_zero_request = Request.init(
+        allocator,
+        .GET,
+        "https://registry.example/v2/route-0/tags/list",
+    );
+    defer route_zero_request.deinit();
+    var route_one_request = Request.init(
+        allocator,
+        .GET,
+        "https://registry.example/v2/route-1/tags/list",
+    );
+    defer route_one_request.deinit();
+    const overflow_url = try std.fmt.allocPrint(
+        allocator,
+        "https://registry.example/v2/route-{d}/tags/list",
+        .{max_route_entries},
+    );
+    defer allocator.free(overflow_url);
+    var overflow_request = Request.init(allocator, .GET, overflow_url);
+    defer overflow_request.deinit();
+    var touched_route = (try policy.findRoute(&route_zero_request)).?;
+    touched_route.deinit();
+    try policy.storeRoute(&overflow_request, &route_challenge);
+    try std.testing.expectEqual(max_route_entries, policy.routes.items.len);
+    try std.testing.expect((try policy.findRoute(&route_one_request)) == null);
+    var retained_route = (try policy.findRoute(&route_zero_request)).?;
+    defer retained_route.deinit();
+    var newest_route = (try policy.findRoute(&overflow_request)).?;
+    defer newest_route.deinit();
+    try std.testing.expectEqualStrings(route_challenge.scope, retained_route.scope);
+    try std.testing.expectEqualStrings(route_challenge.scope, newest_route.scope);
+}
+
+test "different access keys refresh concurrently while sharing refresh flight" {
+    const allocator = std.testing.allocator;
+    var clock = TestClock{ .value = 1_000 };
+    var credential = TestCredential.init();
+    const refresh_token = try makeJwt(allocator, 5_000, "shared-refresh");
+    defer allocator.free(refresh_token);
+    const access_one = try makeJwt(allocator, 4_000, "parallel-one");
+    defer allocator.free(access_one);
+    const access_two = try makeJwt(allocator, 4_000, "parallel-two");
+    defer allocator.free(access_two);
+    const refresh_body = try makeTokenResponse(allocator, "refresh_token", refresh_token);
+    defer allocator.free(refresh_body);
+    const access_one_body = try makeTokenResponse(allocator, "access_token", access_one);
+    defer allocator.free(access_one_body);
+    const access_two_body = try makeTokenResponse(allocator, "access_token", access_two);
+    defer allocator.free(access_two_body);
+    var transport = ParallelAccessTransport.init(
+        allocator,
+        refresh_body,
+        access_one_body,
+        access_two_body,
+    );
+    var policy = try ChallengeAuthenticationPolicy.init(
+        allocator,
+        "https://registry.example",
+        .{ .credential = &credential.credential },
+        .{
+            .expiry_skew_seconds = 10,
+            .time_source = clock.source(),
+        },
+    );
+    defer policy.deinit();
+    var challenge_one = try parseTestChallenge(
+        allocator,
+        "https://registry.example/oauth2/token",
+        "registry.example",
+        "repository:one:pull",
+        null,
+    );
+    defer challenge_one.deinit();
+    var challenge_two = try parseTestChallenge(
+        allocator,
+        "https://registry.example/oauth2/token",
+        "registry.example",
+        "repository:two:pull",
+        null,
+    );
+    defer challenge_two.deinit();
+
+    const AcquireContext = struct {
+        policy: *ChallengeAuthenticationPolicy,
+        challenge: *const BearerChallenge,
+        transport: *HttpTransport,
+        token: ?[]u8 = null,
+        err: ?anyerror = null,
+
+        fn run(self: *@This()) void {
+            self.token = self.policy.acquireAccessToken(
+                self.challenge,
+                null,
+                self.transport,
+            ) catch |err| {
+                self.err = err;
+                return;
+            };
+        }
+    };
+    var first = AcquireContext{
+        .policy = &policy,
+        .challenge = &challenge_one,
+        .transport = transport.asTransport(),
+    };
+    var second = AcquireContext{
+        .policy = &policy,
+        .challenge = &challenge_two,
+        .transport = transport.asTransport(),
+    };
+    const first_thread = try std.Thread.spawn(.{}, AcquireContext.run, .{&first});
+    const second_thread = std.Thread.spawn(.{}, AcquireContext.run, .{&second}) catch |err| {
+        transport.access_release.post(policy.io);
+        first_thread.join();
+        return err;
+    };
+    var parallel = false;
+    for (0..1_000) |_| {
+        if (transport.access_calls.load(.monotonic) == 2) {
+            parallel = true;
+            break;
+        }
+        try policy.io.sleep(.fromMilliseconds(1), .awake);
+    }
+    transport.access_release.post(policy.io);
+    transport.access_release.post(policy.io);
+    first_thread.join();
+    second_thread.join();
+    defer if (first.token) |token| allocator.free(token);
+    defer if (second.token) |token| allocator.free(token);
+
+    try std.testing.expect(parallel);
+    try std.testing.expect(first.err == null);
+    try std.testing.expect(second.err == null);
+    try std.testing.expectEqualStrings(access_one, first.token.?);
+    try std.testing.expectEqualStrings(access_two, second.token.?);
+    try std.testing.expectEqual(@as(usize, 1), credential.calls.load(.monotonic));
+    try std.testing.expectEqual(@as(usize, 1), transport.exchange_calls.load(.monotonic));
+    try std.testing.expectEqual(@as(usize, 2), transport.access_calls.load(.monotonic));
+}
+
+test "same-key flight wakes waiters with the leader failure" {
+    const allocator = std.testing.allocator;
+    var clock = TestClock{ .value = 1_000 };
+    var entered: std.Io.Semaphore = .{};
+    var release: std.Io.Semaphore = .{};
+    var credential = TestCredential.init();
+    credential.fail = true;
+    credential.entered = &entered;
+    credential.release = &release;
+    const responses = [_]core.http.SequenceMockTransport.CannedResponse{
+        .{ .status = 200, .body = "{}" },
+    };
+    var transport = core.http.SequenceMockTransport.init(allocator, &responses);
+    var policy = try ChallengeAuthenticationPolicy.init(
+        allocator,
+        "https://registry.example",
+        .{ .credential = &credential.credential },
+        .{
+            .expiry_skew_seconds = 10,
+            .time_source = clock.source(),
+        },
+    );
+    defer policy.deinit();
+    var challenge = try parseTestChallenge(
+        allocator,
+        "https://registry.example/oauth2/token",
+        "registry.example",
+        "repository:one:pull",
+        null,
+    );
+    defer challenge.deinit();
+
+    const AcquireContext = struct {
+        policy: *ChallengeAuthenticationPolicy,
+        challenge: *const BearerChallenge,
+        transport: *HttpTransport,
+        err: ?anyerror = null,
+
+        fn run(self: *@This()) void {
+            const token = self.policy.acquireAccessToken(
+                self.challenge,
+                null,
+                self.transport,
+            ) catch |err| {
+                self.err = err;
+                return;
+            };
+            self.policy.allocator.free(token);
+        }
+    };
+    var first = AcquireContext{
+        .policy = &policy,
+        .challenge = &challenge,
+        .transport = transport.asTransport(),
+    };
+    var second = first;
+    const first_thread = try std.Thread.spawn(.{}, AcquireContext.run, .{&first});
+    entered.waitUncancelable(policy.io);
+    const second_thread = std.Thread.spawn(.{}, AcquireContext.run, .{&second}) catch |err| {
+        release.post(policy.io);
+        first_thread.join();
+        return err;
+    };
+    while (true) {
+        policy.mutex.lockUncancelable(policy.io);
+        const waiting = policy.waiting_callers;
+        policy.mutex.unlock(policy.io);
+        if (waiting > 0) break;
+        try policy.io.sleep(.fromMilliseconds(1), .awake);
+    }
+    release.post(policy.io);
+    first_thread.join();
+    second_thread.join();
+
+    try std.testing.expectEqual(error.MockCredentialFailure, first.err.?);
+    try std.testing.expectEqual(error.MockCredentialFailure, second.err.?);
+    try std.testing.expectEqual(@as(usize, 1), credential.calls.load(.monotonic));
+    try std.testing.expectEqual(@as(usize, 0), transport.call_count);
+}
+
+test "cancelling a same-key waiter leaves the leader race safe" {
+    const allocator = std.testing.allocator;
+    var clock = TestClock{ .value = 1_000 };
+    var entered: std.Io.Semaphore = .{};
+    var release: std.Io.Semaphore = .{};
+    var credential = TestCredential.init();
+    credential.entered = &entered;
+    credential.release = &release;
+    const refresh_token = try makeJwt(allocator, 5_000, "refresh");
+    defer allocator.free(refresh_token);
+    const access_token = try makeJwt(allocator, 4_000, "access");
+    defer allocator.free(access_token);
+    const refresh_body = try makeTokenResponse(allocator, "refresh_token", refresh_token);
+    defer allocator.free(refresh_body);
+    const access_body = try makeTokenResponse(allocator, "access_token", access_token);
+    defer allocator.free(access_body);
+    const responses = [_]core.http.SequenceMockTransport.CannedResponse{
+        .{ .status = 200, .body = refresh_body },
+        .{ .status = 200, .body = access_body },
+    };
+    var transport = core.http.SequenceMockTransport.init(allocator, &responses);
+    var policy = try ChallengeAuthenticationPolicy.init(
+        allocator,
+        "https://registry.example",
+        .{ .credential = &credential.credential },
+        .{
+            .expiry_skew_seconds = 10,
+            .time_source = clock.source(),
+        },
+    );
+    defer policy.deinit();
+    var challenge = try parseTestChallenge(
+        allocator,
+        "https://registry.example/oauth2/token",
+        "registry.example",
+        "repository:one:pull",
+        null,
+    );
+    defer challenge.deinit();
+    var cancellation = CancellationToken{};
+
+    const AcquireContext = struct {
+        policy: *ChallengeAuthenticationPolicy,
+        challenge: *const BearerChallenge,
+        cancellation: ?*const CancellationToken,
+        transport: *HttpTransport,
+        token: ?[]u8 = null,
+        err: ?anyerror = null,
+
+        fn run(self: *@This()) void {
+            self.token = self.policy.acquireAccessToken(
+                self.challenge,
+                self.cancellation,
+                self.transport,
+            ) catch |err| {
+                self.err = err;
+                return;
+            };
+        }
+    };
+    var leader = AcquireContext{
+        .policy = &policy,
+        .challenge = &challenge,
+        .cancellation = null,
+        .transport = transport.asTransport(),
+    };
+    var waiter = AcquireContext{
+        .policy = &policy,
+        .challenge = &challenge,
+        .cancellation = &cancellation,
+        .transport = transport.asTransport(),
+    };
+    const leader_thread = try std.Thread.spawn(.{}, AcquireContext.run, .{&leader});
+    entered.waitUncancelable(policy.io);
+    const waiter_thread = std.Thread.spawn(.{}, AcquireContext.run, .{&waiter}) catch |err| {
+        release.post(policy.io);
+        leader_thread.join();
+        return err;
+    };
+    while (true) {
+        policy.mutex.lockUncancelable(policy.io);
+        const waiting = policy.waiting_callers;
+        policy.mutex.unlock(policy.io);
+        if (waiting > 0) break;
+        try policy.io.sleep(.fromMilliseconds(1), .awake);
+    }
+    cancellation.cancel();
+    waiter_thread.join();
+    release.post(policy.io);
+    leader_thread.join();
+    defer if (leader.token) |token| allocator.free(token);
+    defer if (waiter.token) |token| allocator.free(token);
+
+    try std.testing.expectEqual(error.OperationCancelled, waiter.err.?);
+    try std.testing.expect(leader.err == null);
+    try std.testing.expectEqualStrings(access_token, leader.token.?);
+    try std.testing.expectEqual(@as(usize, 1), credential.calls.load(.monotonic));
+    try std.testing.expectEqual(@as(usize, 2), transport.call_count);
 }

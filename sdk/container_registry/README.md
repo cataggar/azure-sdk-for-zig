@@ -19,10 +19,15 @@ try service.checkDockerV2Support(allocator);
 
 Use `.authentication = .anonymous` only for intentional anonymous access.
 The generated dependency is available as `acr.protocol`.
-By default only the endpoint host is trusted. Add explicit
-`authentication_options.expected_hosts` entries for known ACR data endpoints;
-requests and challenge realms on every other host are rejected before tokens
+By default only the endpoint HTTPS origin is trusted. Hostname-only
+`authentication_options.expected_hosts` entries imply port 443; use an
+explicit origin such as `https://registry.example:8443` to trust another port.
+Requests and challenge realms on every other origin are rejected before tokens
 are sent.
+
+Long-lived clients use bounded LRU caches: 128 routes, 128 scoped access
+tokens, and 32 refresh tokens. Tokens that reach the configured expiry skew
+are pruned before lookup or insertion.
 
 Local development uses relative package dependencies. Release branches replace
 them with immutable `azure_sdk` and `azure_rest_container_registry` Git
