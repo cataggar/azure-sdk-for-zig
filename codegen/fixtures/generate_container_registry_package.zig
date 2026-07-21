@@ -43,7 +43,7 @@ const generated_tests =
     \\
     \\const Mock = struct {
     \\    allocator: std.mem.Allocator,
-    \\    mode: enum { blob, multipart, cancel },
+    \\    mode: enum { blob, redirect, multipart, cancel },
     \\    transport: core.http.HttpTransport = undefined,
     \\    calls: usize = 0,
     \\
@@ -62,6 +62,10 @@ const generated_tests =
     \\            .blob => .{
     \\                200,
     \\                try self.blobResponse(request, &response_headers),
+    \\            },
+    \\            .redirect => .{
+    \\                307,
+    \\                try self.redirectResponse(request, &response_headers),
     \\            },
     \\            .multipart => .{
     \\                200,
@@ -96,6 +100,19 @@ const generated_tests =
     \\        try response_headers.append("Content-Length", "4");
     \\        try response_headers.append("Docker-Content-Digest", "sha256:abc");
     \\        return self.allocator.dupe(u8, "blob");
+    \\    }
+    \\
+    \\    fn redirectResponse(
+    \\        self: *@This(),
+    \\        request: *core.http.Request,
+    \\        response_headers: *core.http.ResponseHeaders,
+    \\    ) ![]u8 {
+    \\        try std.testing.expectEqual(
+    \\            core.http.RedirectPolicy.not_allowed,
+    \\            request.redirect_policy,
+    \\        );
+    \\        try response_headers.append("Location", "https://storage.example/blob");
+    \\        return self.allocator.alloc(u8, 0);
     \\    }
     \\
     \\    fn multipartResponse(self: *@This(), request: *core.http.Request) ![]u8 {
@@ -147,6 +164,49 @@ const generated_tests =
     \\        ),
     \\    );
     \\    try std.testing.expectEqual(@as(usize, 1), blob_mock.calls);
+    \\
+    \\    var redirect_mock = Mock.init(allocator, .redirect);
+    \\    const redirect_pipeline = core.pipeline.HttpPipeline{
+    \\        .policies = &empty,
+    \\        .transport_impl = &redirect_mock.transport,
+    \\    };
+    \\    root = clients.ContainerRegistryClient.initWithPipeline(
+    \\        allocator,
+    \\        redirect_pipeline,
+    \\        .{ .endpoint = "https://registry.example" },
+    \\    );
+    \\    blob_client = root.containerRegistryBlob();
+    \\    const redirected_blob = try blob_client.getBlob(
+    \\        allocator,
+    \\        "team/app",
+    \\        "sha256:abc",
+    \\    );
+    \\    switch (redirected_blob) {
+    \\        .status_307 => |result| {
+    \\            defer allocator.free(result.headers.location);
+    \\            try std.testing.expectEqualStrings(
+    \\                "https://storage.example/blob",
+    \\                result.headers.location,
+    \\            );
+    \\        },
+    \\        else => return error.UnexpectedStatus,
+    \\    }
+    \\    const redirected_exists = try blob_client.checkBlobExists(
+    \\        allocator,
+    \\        "team/app",
+    \\        "sha256:abc",
+    \\    );
+    \\    switch (redirected_exists) {
+    \\        .status_307 => |result| {
+    \\            defer allocator.free(result.headers.location);
+    \\            try std.testing.expectEqualStrings(
+    \\                "https://storage.example/blob",
+    \\                result.headers.location,
+    \\            );
+    \\        },
+    \\        else => return error.UnexpectedStatus,
+    \\    }
+    \\    try std.testing.expectEqual(@as(usize, 2), redirect_mock.calls);
     \\
     \\    var multipart_mock = Mock.init(allocator, .multipart);
     \\    const multipart_pipeline = core.pipeline.HttpPipeline{

@@ -249,6 +249,10 @@ test "Container Registry golden preserves protocol fidelity" {
     try testing.expect(std.mem.indexOf(u8, clients, "multipart/form-data; boundary=azure-sdk-for-zig-acr-boundary") != null);
     try testing.expect(std.mem.indexOf(u8, clients, "pub const GetBlobResult = union(enum)") != null);
     try testing.expect(std.mem.indexOf(u8, clients, "status_307: struct") != null);
+    try testing.expectEqual(
+        @as(usize, 2),
+        std.mem.count(u8, clients, "req.redirect_policy = .not_allowed;"),
+    );
     try testing.expect(std.mem.indexOf(u8, clients, "status_404: struct") != null);
     try testing.expect(std.mem.indexOf(u8, clients, "status_206: struct") != null);
     try testing.expect(std.mem.indexOf(u8, clients, "pub const CancelUploadResult") == null);

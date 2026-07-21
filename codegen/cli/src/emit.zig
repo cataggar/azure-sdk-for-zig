@@ -1041,6 +1041,9 @@ fn renderRequestSetup(
         \\        defer req.deinit();
         \\
     , .{verb});
+    if (hasModeledRedirect(m)) {
+        try w.writeAll("        req.redirect_policy = .not_allowed;\n");
+    }
 
     for (m.header_parameters) |hp| {
         if (m.body_parameter) |bp| {
@@ -1119,6 +1122,24 @@ fn renderRequestSetup(
             }
         }
     }
+}
+
+fn hasModeledRedirect(m: cm.Method) bool {
+    if (statusesContainRedirect(m.response.status_codes)) return true;
+    for (m.responses) |response| {
+        if (statusesContainRedirect(response.status_codes)) return true;
+    }
+    return false;
+}
+
+fn statusesContainRedirect(statuses: []const std.json.Value) bool {
+    for (statuses) |status| {
+        switch (status) {
+            .integer => |value| if (value >= 300 and value < 400) return true,
+            else => {},
+        }
+    }
+    return false;
 }
 
 fn bodyParameterIsOptional(m: cm.Method) bool {
