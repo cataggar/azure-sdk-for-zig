@@ -28,8 +28,8 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    const blobs_mod = b.addModule("azure_storage_blobs", .{
-        .root_source_file = b.path("sdk/storage/blobs/root.zig"),
+    const storage_common_mod = b.addModule("azure_storage_common", .{
+        .root_source_file = b.path("sdk/storage/common/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
@@ -37,11 +37,12 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    _ = b.addModule("azure_storage_common", .{
-        .root_source_file = b.path("sdk/storage/common/root.zig"),
+    const blobs_mod = b.addModule("azure_storage_blobs", .{
+        .root_source_file = b.path("sdk/storage/blobs/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_storage_common", .module = storage_common_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
@@ -104,6 +105,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_storage_common", .module = storage_common_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
@@ -316,6 +318,7 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 .imports = &.{
                     .{ .name = "azure_core", .module = core_mod },
+                    .{ .name = "azure_storage_common", .module = storage_common_mod },
                     .{ .name = "serde", .module = serde_mod },
                 },
             }),

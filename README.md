@@ -95,11 +95,11 @@ azure-core-amqp: azure-uamqp-zig (pure Zig AMQP 1.0)
 
 | Package | Clients |
 |---------|---------|
-| `azure_storage_blobs` | `BlobClient`, `BlobContainerClient` |
-| `azure_storage_queues` | `QueueClient`, `QueueServiceClient` |
+| `azure_storage_blobs` | `BlobClient`, `BlobContainerClient`, `SasBlobClient` |
+| `azure_storage_queues` | `QueueClient`, `QueueServiceClient`, `SasQueueClient` |
 | `azure_storage_files_shares` | `ShareClient`, `ShareDirectoryClient`, `ShareFileClient` |
 | `azure_storage_files_datalake` | `DataLakeFileSystemClient`, `DataLakeFileClient` |
-| `azure_storage_common` | `StorageSharedKeyCredential`, `SasBuilder` |
+| `azure_storage_common` | `StorageSharedKeyCredential`, `SasBuilder`, complete-SAS helpers |
 | `azure_keyvault_secrets` | `SecretClient` |
 | `azure_keyvault_keys` | `KeyClient`, `CryptographyClient` |
 | `azure_keyvault_certificates` | `CertificateClient` |
@@ -113,6 +113,35 @@ azure-core-amqp: azure-uamqp-zig (pure Zig AMQP 1.0)
 | `azure_messaging_servicebus` | `ServiceBusSenderClient`, `ServiceBusReceiverClient`, `ServiceBusAdministrationClient` |
 | `azure_kusto_data` | `KustoClient` (experimental buffered and progressive query plus management support) |
 | `azure_kusto_ingest` | `StreamingIngestClient` for direct, bounded-memory streaming ingestion; queued ingestion and managed queued fallback are not implemented |
+
+### Complete SAS Blob and Queue operations
+
+`SasBlobClient` and `SasQueueClient` take an allocator, a complete
+service-issued HTTPS SAS URI, and an `HttpTransport`—never a credential or a
+caller-supplied pipeline. Existing SAS queries remain opaque and are redacted
+by formatting. Requests have no `Authorization` header, disable retries, and
+reject redirects.
+
+```zig
+var blob = try blobs.SasBlobClient.init(allocator, blob_sas_uri, transport);
+defer blob.deinit();
+const upload = try blob.uploadFile("data.ndjson", .{});
+
+var queue = try queues.SasQueueClient.init(allocator, queue_sas_uri, transport);
+defer queue.deinit();
+const submitted = try queue.sendMessage(ingestion_message_bytes);
+```
+
+Blob sources have exact sizes: byte slices derive theirs, files are checked
+before and after opening, and `uploadReader` requires a supplied size. Sources
+are consumed once. Uploads up to 256 MiB stream as `Put Blob`; larger uploads
+stream 4 MiB blocks by default. A single request is capped at 5,000 MiB;
+blocks are capped at 100 MiB and 50,000 blocks (about 4.77 TiB total) before
+an ordered block-list commit. Queue messages are Base64-encoded inside the
+Azure Queue XML envelope. Outcomes are `.accepted`, `.rejected` after a
+received non-2xx status, or `.unknown` after transport failure; no Kusto
+resource discovery, queued-ingestion schema, retry, or status handling is
+included.
 
 Kusto datasets and non-null ingestion IDs are allocator-owned; call their `deinit` methods when finished. Buffered Kusto datasets retain the raw response and tagged `KustoFrame` slices (including unknown V2 frames), decode V1 plus normal, progressive, and fragmented V2 tables into owned `KustoValue` values (null, strings, booleans, integers, reals, and Kusto lexical types), and preserve dynamic or unknown cells as raw JSON. Progressive query events instead own one exact raw V2 frame at a time and retain only table schemas and row counts in stream state.
 

@@ -1,6 +1,27 @@
 const std = @import("std");
 const core = @import("azure_core");
 
+const sas = @import("sas.zig");
+
+pub const SasBlobClient = sas.SasBlobClient;
+pub const CompleteSasBlobClient = sas.CompleteSasBlobClient;
+pub const BlobUploadSource = sas.BlobUploadSource;
+pub const BlobUploadSourceKind = sas.BlobUploadSourceKind;
+pub const BorrowedReaderSource = sas.BorrowedReaderSource;
+pub const BlobUploadOptions = sas.BlobUploadOptions;
+pub const BlobUploadOutcome = sas.BlobUploadOutcome;
+pub const BlobUploadPhase = sas.BlobUploadPhase;
+pub const default_single_upload_max_bytes = sas.default_single_upload_max_bytes;
+pub const max_single_upload_bytes = sas.max_single_upload_bytes;
+pub const default_block_size = sas.default_block_size;
+pub const max_block_size = sas.max_block_size;
+pub const max_block_count = sas.max_block_count;
+pub const max_upload_bytes = sas.max_upload_bytes;
+
+test {
+    std.testing.refAllDecls(sas);
+}
+
 // ─────────────────────────── Models ───────────────────────────
 
 pub const BlobProperties = struct {
