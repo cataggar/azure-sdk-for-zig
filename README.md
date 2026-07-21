@@ -112,7 +112,7 @@ azure-core-amqp: azure-uamqp-zig (pure Zig AMQP 1.0)
 | `azure_kusto_data` | `KustoClient` (experimental buffered query and management support) |
 | `azure_kusto_ingest` | `StreamingIngestClient` (experimental direct streaming ingestion); queued ingestion and managed queued fallback are planned, not implemented |
 
-Kusto datasets and non-null ingestion IDs are allocator-owned; call their `deinit` methods when finished.
+Kusto datasets and non-null ingestion IDs are allocator-owned; call their `deinit` methods when finished. Buffered Kusto datasets retain the raw response and tagged `KustoFrame` slices (including unknown V2 frames), decode V1 plus normal, progressive, and fragmented V2 tables into owned `KustoValue` values (null, strings, booleans, integers, reals, and Kusto lexical types), and preserve dynamic or unknown cells as raw JSON.
 
 ### Kusto authentication and connections
 
@@ -165,6 +165,8 @@ Metadata can expose the login authority for a sovereign or private cloud, but `T
 - Query requests default to a 4-minute server timeout and management requests to 10 minutes. Explicit server timeouts range from 1 second through 1 hour with millisecond precision; the client budget defaults to the server timeout plus 30 seconds. `no_request_timeout` requests the maximum server timeout.
 - In the current synchronous buffered transport, the client timeout bounds retries and backoff only; it cannot interrupt an in-flight `std.http` request. Hard cancellation is deferred to future streaming and cancellation transport work.
 - Explicit application, user, version, and request-ID headers override defaults. Results expose owned `client_request_id` and `activity_id`; dataset `deinit` frees them.
+- Buffered result rows are strict about matching the declared column width by default. Set `ClientRequestProperties.setClientResultsReaderAllowVaryingRowWidths` only for services that intentionally emit uneven rows; missing cells remain absent and extra cells are preserved as unknown raw JSON.
+- V2 buffered decoding requires a `DataSetHeader` first and `DataSetCompletion` last. It reconstructs progressive or fragmented `DataAppend`/`DataReplace` frames by table ID, treats row-embedded OneAPI errors as partial results, retains unknown frames, and exposes table/row iterators plus ID, kind, primary, properties, and status selectors. Network streaming, cancellation, and comptime typed conversion remain future work.
 - Queries may retry; management operations and streaming ingestion remain non-retryable.
 - Kusto `*Result` APIs return `KustoResult(T)`: `.ok`, `.partial` (possibly unreliable decoded buffered tables plus an owned `KustoError`), or `.err`; call `deinit`. A streaming `.err` records `.known_not_accepted` for a received non-2xx response and `.unknown` with the transport cause after transport entry fails, while pre-transport credential/policy errors stay in the outer Zig error union. Permanent and partial failures are never retryable.
 
