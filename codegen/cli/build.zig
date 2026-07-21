@@ -87,6 +87,55 @@ pub fn build(b: *std.Build) void {
     const generated_fixture_dir =
         generate_fixture.addOutputDirectoryArg("container-registry-package");
 
+    const generate_container_registry = b.addRunArtifact(fixture_generator);
+    generate_container_registry.setCwd(b.path("."));
+    generate_container_registry.has_side_effects = true;
+    generate_container_registry.addArg(
+        b.option(
+            []const u8,
+            "container-registry-output",
+            "Container Registry package output directory",
+        ) orelse "../../rest/container_registry",
+    );
+    const azure_core_commit = b.option(
+        []const u8,
+        "azure-core-commit",
+        "azure-sdk-for-zig commit for an independently consumable package",
+    );
+    const azure_core_hash = b.option(
+        []const u8,
+        "azure-core-hash",
+        "Zig package hash for -Dazure-core-commit",
+    );
+    if ((azure_core_commit == null) != (azure_core_hash == null)) {
+        std.debug.panic(
+            "-Dazure-core-commit and -Dazure-core-hash must be supplied together",
+            .{},
+        );
+    }
+    if (azure_core_commit) |commit| {
+        generate_container_registry.addArgs(&.{
+            "--azure-core-commit",
+            commit,
+            "--azure-core-hash",
+            azure_core_hash.?,
+        });
+    } else {
+        generate_container_registry.addArgs(&.{
+            "--azure-sdk-path",
+            b.option(
+                []const u8,
+                "azure-sdk-path",
+                "Local azure_sdk dependency path in generated build.zig.zon",
+            ) orelse "../..",
+        });
+    }
+    const generate_container_registry_step = b.step(
+        "generate-container-registry-package",
+        "Regenerate rest/container_registry from the checked-in TypeSpec fixture",
+    );
+    generate_container_registry_step.dependOn(&generate_container_registry.step);
+
     const azure_sdk_dep = b.dependency("azure_sdk", .{
         .target = host_target,
         .optimize = optimize,

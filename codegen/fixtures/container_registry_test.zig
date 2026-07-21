@@ -53,6 +53,172 @@ fn expectMethodSet(
     }
 }
 
+fn renderWireContract(
+    allocator: std.mem.Allocator,
+    model: cm.CodeModel,
+) ![]u8 {
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    errdefer output.deinit();
+    const writer = &output.writer;
+
+    for (model.clients) |client| {
+        for (client.methods) |method| {
+            try writer.print(
+                "{s}|{s}|{s}|{s}|P[",
+                .{
+                    method.name,
+                    method.http_method,
+                    method.path,
+                    method.uri_template orelse "-",
+                },
+            );
+            try writeWireParameters(writer, method.path_parameters, true);
+            try writer.writeAll("]|Q[");
+            try writeWireParameters(writer, method.query_parameters, false);
+            try writer.writeAll("]|H[");
+            try writeWireParameters(writer, method.header_parameters, false);
+            try writer.writeAll("]|B[");
+            if (method.body_parameter) |body| {
+                try writer.print(
+                    "{s}:{s}:",
+                    .{ body.serialization_kind, body.content_type },
+                );
+                try writeTypeRef(writer, body.body_type);
+            } else {
+                try writer.writeByte('-');
+            }
+            try writer.writeAll("]|R[");
+            for (method.responses, 0..) |response, response_index| {
+                if (response_index != 0) try writer.writeByte(';');
+                for (response.status_codes, 0..) |status, status_index| {
+                    if (status_index != 0) try writer.writeByte(',');
+                    switch (status) {
+                        .integer => |value| try writer.print("{d}", .{value}),
+                        .string => |value| try writer.writeAll(value),
+                        else => try writer.writeByte('?'),
+                    }
+                }
+                try writer.print(":{s}:", .{response.body_kind});
+                try writeTypeRef(writer, response.response_type);
+                try writer.writeByte(':');
+                if (response.headers.len == 0) {
+                    try writer.writeByte('-');
+                } else {
+                    for (response.headers, 0..) |header, header_index| {
+                        if (header_index != 0) try writer.writeByte(',');
+                        try writer.print(
+                            "{s}:{s}:",
+                            .{
+                                header.wire_name,
+                                if (header.optional) "optional" else "required",
+                            },
+                        );
+                        try writeTypeRef(writer, header.header_type);
+                    }
+                }
+            }
+            try writer.writeAll("]\n");
+        }
+    }
+
+    return try output.toOwnedSlice();
+}
+
+fn writeWireParameters(
+    writer: *std.Io.Writer,
+    parameters: []const cm.WireParameter,
+    include_path_metadata: bool,
+) !void {
+    if (parameters.len == 0) {
+        try writer.writeByte('-');
+        return;
+    }
+    for (parameters, 0..) |parameter, index| {
+        if (index != 0) try writer.writeByte(',');
+        const source_value = parameter.source.name orelse
+            parameter.source.value orelse "-";
+        try writer.print(
+            "{s}={s}:{s}:{s}",
+            .{
+                parameter.wire_name,
+                parameter.source.kind,
+                source_value,
+                if (parameter.optional) "optional" else "required",
+            },
+        );
+        if (include_path_metadata) {
+            try writer.print(
+                ":{s}:{s}",
+                .{
+                    parameter.path_encoding orelse "-",
+                    if (parameter.allow_reserved orelse false)
+                        "reserved"
+                    else
+                        "encoded",
+                },
+            );
+        }
+    }
+}
+
+fn writeTypeRef(writer: *std.Io.Writer, type_ref: ?cm.TypeRef) !void {
+    const value = type_ref orelse {
+        try writer.writeByte('-');
+        return;
+    };
+    try writer.writeAll(value.kind);
+    switch (value.value) {
+        .string => |name| try writer.print(":{s}", .{name}),
+        else => {},
+    }
+}
+
+test "Container Registry fixture pins every operation wire signature" {
+    const testing = std.testing;
+    var parsed = try std.json.parseFromSlice(
+        cm.CodeModel,
+        testing.allocator,
+        @embedFile("container_registry.json"),
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed.deinit();
+
+    const actual = try renderWireContract(testing.allocator, parsed.value);
+    defer testing.allocator.free(actual);
+    const expected =
+        \\check_docker_v2_support|get|/v2/|/v2/{?api%2Dversion}|P[-]|Q[api-version=client:api_version:required]|H[-]|B[-]|R[200:none:-:-]
+        \\get_manifest|get|/v2/{name}/manifests/{reference}|/v2/{name}/manifests/{reference}{?api%2Dversion}|P[name=user:name:required:repository:encoded,reference=user:reference:required:segment:encoded]|Q[api-version=client:api_version:required]|H[accept=user:accept:optional]|B[-]|R[200:json:Model:ManifestWrapper:-]
+        \\create_manifest|put|/v2/{name}/manifests/{reference}|/v2/{name}/manifests/{reference}{?api%2Dversion}|P[name=user:name:required:repository:encoded,reference=user:reference:required:segment:encoded]|Q[api-version=client:api_version:required]|H[Content-Type=constant:application/vnd.docker.distribution.manifest.v2+json:required]|B[json:application/vnd.docker.distribution.manifest.v2+json:Model:Manifest]|R[201:none:-:Location:required:Scalar:string,Content-Length:required:Scalar:int64,Docker-Content-Digest:required:Scalar:string]
+        \\delete_manifest|delete|/v2/{name}/manifests/{reference}|/v2/{name}/manifests/{reference}{?api%2Dversion}|P[name=user:name:required:repository:encoded,reference=user:reference:required:segment:encoded]|Q[api-version=client:api_version:required]|H[-]|B[-]|R[202:none:-:-;404:none:-:-]
+        \\get_repositories|get|/acr/v1/_catalog|/acr/v1/_catalog{?api%2Dversion,last,n}|P[-]|Q[api-version=client:api_version:required,last=user:last:optional,n=user:n:optional]|H[Accept=constant:application/json:required]|B[-]|R[200:json:Model:Repositories:Link:optional:Scalar:string]
+        \\get_properties|get|/acr/v1/{name}|/acr/v1/{name}{?api%2Dversion}|P[name=user:name:required:repository:encoded]|Q[api-version=client:api_version:required]|H[Accept=constant:application/json:required]|B[-]|R[200:json:Model:ContainerRepositoryProperties:-]
+        \\delete_repository|delete|/acr/v1/{name}|/acr/v1/{name}{?api%2Dversion}|P[name=user:name:required:repository:encoded]|Q[api-version=client:api_version:required]|H[-]|B[-]|R[202:none:-:-;404:none:-:-]
+        \\update_properties|patch|/acr/v1/{name}|/acr/v1/{name}{?api%2Dversion}|P[name=user:name:required:repository:encoded]|Q[api-version=client:api_version:required]|H[Content-Type=constant:application/json:optional,Accept=constant:application/json:required]|B[json:application/json:Model:RepositoryChangeableAttributes]|R[200:json:Model:ContainerRepositoryProperties:-]
+        \\get_tags|get|/acr/v1/{name}/_tags|/acr/v1/{name}/_tags{?api%2Dversion,last,n,orderby,digest}|P[name=user:name:required:repository:encoded]|Q[api-version=client:api_version:required,last=user:last:optional,n=user:n:optional,orderby=user:orderby:optional,digest=user:digest:optional]|H[Accept=constant:application/json:required]|B[-]|R[200:json:Model:TagList:Link:optional:Scalar:string]
+        \\get_tag_properties|get|/acr/v1/{name}/_tags/{reference}|/acr/v1/{name}/_tags/{reference}{?api%2Dversion}|P[name=user:name:required:repository:encoded,reference=user:reference:required:segment:encoded]|Q[api-version=client:api_version:required]|H[Accept=constant:application/json:required]|B[-]|R[200:json:Model:ArtifactTagProperties:-]
+        \\update_tag_attributes|patch|/acr/v1/{name}/_tags/{reference}|/acr/v1/{name}/_tags/{reference}{?api%2Dversion}|P[name=user:name:required:repository:encoded,reference=user:reference:required:segment:encoded]|Q[api-version=client:api_version:required]|H[Content-Type=constant:application/json:optional,Accept=constant:application/json:required]|B[json:application/json:Model:TagChangeableAttributes]|R[200:json:Model:ArtifactTagProperties:-]
+        \\delete_tag|delete|/acr/v1/{name}/_tags/{reference}|/acr/v1/{name}/_tags/{reference}{?api%2Dversion}|P[name=user:name:required:repository:encoded,reference=user:reference:required:segment:encoded]|Q[api-version=client:api_version:required]|H[-]|B[-]|R[202:none:-:-;404:none:-:-]
+        \\get_manifests|get|/acr/v1/{name}/_manifests|/acr/v1/{name}/_manifests{?api%2Dversion,last,n,orderby}|P[name=user:name:required:repository:encoded]|Q[api-version=client:api_version:required,last=user:last:optional,n=user:n:optional,orderby=user:orderby:optional]|H[Accept=constant:application/json:required]|B[-]|R[200:json:Model:AcrManifests:Link:optional:Scalar:string]
+        \\get_manifest_properties|get|/acr/v1/{name}/_manifests/{digest}|/acr/v1/{name}/_manifests/{digest}{?api%2Dversion}|P[name=user:name:required:repository:encoded,digest=user:digest:required:segment:encoded]|Q[api-version=client:api_version:required]|H[Accept=constant:application/json:required]|B[-]|R[200:json:Model:ArtifactManifestProperties:-]
+        \\update_manifest_properties|patch|/acr/v1/{name}/_manifests/{digest}|/acr/v1/{name}/_manifests/{digest}{?api%2Dversion}|P[name=user:name:required:repository:encoded,digest=user:digest:required:segment:encoded]|Q[api-version=client:api_version:required]|H[Content-Type=constant:application/json:optional,Accept=constant:application/json:required]|B[json:application/json:Model:ManifestChangeableAttributes]|R[200:json:Model:ArtifactManifestProperties:-]
+        \\get_blob|get|/v2/{name}/blobs/{digest}|/v2/{name}/blobs/{digest}{?api%2Dversion}|P[name=user:name:required:repository:encoded,digest=user:digest:required:segment:encoded]|Q[api-version=client:api_version:required]|H[Accept=constant:application/octet-stream:required]|B[-]|R[200:raw:Scalar:bytes:Content-Length:required:Scalar:int64,Docker-Content-Digest:required:Scalar:string;307:none:-:Location:required:Scalar:string]
+        \\check_blob_exists|head|/v2/{name}/blobs/{digest}|/v2/{name}/blobs/{digest}{?api%2Dversion}|P[name=user:name:required:repository:encoded,digest=user:digest:required:segment:encoded]|Q[api-version=client:api_version:required]|H[-]|B[-]|R[200:none:-:Content-Length:required:Scalar:int64,Docker-Content-Digest:required:Scalar:string;307:none:-:Location:required:Scalar:string]
+        \\delete_blob|delete|/v2/{name}/blobs/{digest}|/v2/{name}/blobs/{digest}{?api%2Dversion}|P[name=user:name:required:repository:encoded,digest=user:digest:required:segment:encoded]|Q[api-version=client:api_version:required]|H[-]|B[-]|R[202:none:-:Docker-Content-Digest:required:Scalar:string]
+        \\mount_blob|post|/v2/{name}/blobs/uploads/|/v2/{name}/blobs/uploads/{?api%2Dversion,from,mount}|P[name=user:name:required:repository:encoded]|Q[api-version=client:api_version:required,from=user:from:required,mount=user:mount:required]|H[-]|B[-]|R[201:none:-:Location:required:Scalar:string,Docker-Upload-UUID:required:Scalar:string,Docker-Content-Digest:required:Scalar:string]
+        \\get_upload_status|get|/{nextBlobUuidLink}|/{+nextBlobUuidLink}{?api%2Dversion}|P[nextBlobUuidLink=user:next_blob_uuid_link:required:greedy:reserved]|Q[api-version=client:api_version:required]|H[-]|B[-]|R[204:none:-:Range:required:Scalar:string,Docker-Upload-UUID:required:Scalar:string]
+        \\upload_chunk|patch|/{nextBlobUuidLink}|/{+nextBlobUuidLink}{?api%2Dversion}|P[nextBlobUuidLink=user:next_blob_uuid_link:required:greedy:reserved]|Q[api-version=client:api_version:required]|H[Content-Type=constant:application/octet-stream:required]|B[raw:application/octet-stream:Scalar:bytes]|R[202:none:-:Location:required:Scalar:string,Range:required:Scalar:string,Docker-Upload-UUID:required:Scalar:string]
+        \\complete_upload|put|/{nextBlobUuidLink}|/{+nextBlobUuidLink}{?api%2Dversion,digest}|P[nextBlobUuidLink=user:next_blob_uuid_link:required:greedy:reserved]|Q[api-version=client:api_version:required,digest=user:digest:required]|H[Content-Type=constant:application/octet-stream:optional]|B[raw:application/octet-stream:Scalar:bytes]|R[201:none:-:Location:required:Scalar:string,Range:required:Scalar:string,Docker-Content-Digest:required:Scalar:string]
+        \\cancel_upload|delete|/{nextBlobUuidLink}|/{+nextBlobUuidLink}{?api%2Dversion}|P[nextBlobUuidLink=user:next_blob_uuid_link:required:greedy:reserved]|Q[api-version=client:api_version:required]|H[-]|B[-]|R[204:none:-:-]
+        \\start_upload|post|/v2/{name}/blobs/uploads/|/v2/{name}/blobs/uploads/{?api%2Dversion}|P[name=user:name:required:repository:encoded]|Q[api-version=client:api_version:required]|H[-]|B[-]|R[202:none:-:Location:required:Scalar:string,Range:required:Scalar:string,Docker-Upload-UUID:required:Scalar:string]
+        \\get_chunk|get|/v2/{name}/blobs/{digest}|/v2/{name}/blobs/{digest}{?api%2Dversion}|P[name=user:name:required:repository:encoded,digest=user:digest:required:segment:encoded]|Q[api-version=client:api_version:required]|H[range=user:range:required,Accept=constant:application/octet-stream:required]|B[-]|R[206:raw:Scalar:bytes:Content-Length:required:Scalar:int64,Content-Range:required:Scalar:string]
+        \\check_chunk_exists|head|/v2/{name}/blobs/{digest}|/v2/{name}/blobs/{digest}{?api%2Dversion}|P[name=user:name:required:repository:encoded,digest=user:digest:required:segment:encoded]|Q[api-version=client:api_version:required]|H[range=user:range:required]|B[-]|R[200:none:-:Content-Length:required:Scalar:int64,Content-Range:required:Scalar:string]
+        \\exchange_aad_access_token_for_acr_refresh_token|post|/oauth2/exchange|/oauth2/exchange|P[-]|Q[-]|H[content-type=constant:multipart/form-data:required,Accept=constant:application/json:required]|B[multipart:multipart/form-data:Model:MultipartBodyParameter]|R[200:json:Model:AcrRefreshToken:-]
+        \\exchange_acr_refresh_token_for_acr_access_token|post|/oauth2/token|/oauth2/token|P[-]|Q[-]|H[content-type=constant:multipart/form-data:required,Accept=constant:application/json:required]|B[multipart:multipart/form-data:Model:MultipartBodyParameter]|R[200:json:Model:AcrAccessToken:-]
+        \\get_acr_access_token_from_login|get|/oauth2/token|/oauth2/token{?api%2Dversion,service,scope}|P[-]|Q[api-version=client:api_version:required,service=user:service:required,scope=user:scope:required]|H[Accept=constant:application/json:required]|B[-]|R[200:json:Model:AcrAccessToken:-]
+    ++ "\n";
+    try testing.expectEqualStrings(expected, actual);
+}
+
 test "Container Registry fixture preserves the complete wire contract" {
     const testing = std.testing;
     var parsed = try std.json.parseFromSlice(

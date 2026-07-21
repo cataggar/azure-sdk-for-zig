@@ -164,6 +164,39 @@ A REST release does not require an SDK release unless its API or behavior
 changes what the SDK consumes. An SDK release always pins the exact REST
 revision used during testing.
 
+### Container Registry Commands
+
+`rest/container_registry` is regenerated from the checked-in TypeSpec code
+model and includes generator-owned contract tests:
+
+```bash
+(cd codegen/cli && zig build generate-container-registry-package)
+(cd rest/container_registry && zig build test --summary all)
+```
+
+When the canonical API changes, refresh
+`codegen/fixtures/container_registry.json` first using the command documented
+in `codegen/README.md`, then run the package generation command above.
+
+For a release commit, generate complete immutable dependency metadata before
+splitting the package to its orphan branch:
+
+```bash
+SDK_COMMIT="$(git rev-parse origin/main)"
+SDK_HASH="$(zig fetch "git+https://github.com/cataggar/azure-sdk-for-zig#$SDK_COMMIT")"
+(cd codegen/cli && zig build generate-container-registry-package \
+  -Dazure-core-commit="$SDK_COMMIT" \
+  -Dazure-core-hash="$SDK_HASH")
+(cd rest/container_registry && zig build test --summary all)
+git add rest/container_registry
+git commit -m "rest/container_registry: release generated package"
+REST_COMMIT="$(git subtree split --prefix=rest/container_registry HEAD)"
+git push origin "$REST_COMMIT:refs/heads/rest/container_registry"
+```
+
+The release generation is still deterministic: the commit and Zig package
+hash are explicit inputs, and no generated package file is edited afterward.
+
 ## Versioning
 
 - REST package versions describe the generated protocol surface.

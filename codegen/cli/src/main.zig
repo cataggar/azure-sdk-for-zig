@@ -16,7 +16,8 @@
 //! Architecture summary:
 //!   * `main` parses argv (positional: spec-dir, out-dir; flag:
 //!     --package-name, --package-version, --display-name,
-//!     --azure-core-commit, --no-fmt).
+//!     --azure-core-commit, --azure-core-hash, --azure-sdk-path,
+//!     --no-fmt).
 //!   * Calls `tcgc.compile(/spec, emitter-options-json)` via the
 //!     hand-rolled canonical-ABI binding in `tcgc_import.zig`.
 //!   * Parses the JSON code model via `codemodel.zig` (std.json).
@@ -45,7 +46,8 @@ const usage =
     \\  codegen-cli <spec-dir> <out-dir>
     \\              [--package-name <name>] [--package-version <ver>]
     \\              [--display-name <label>]
-    \\              [--azure-core-commit <sha>] [--no-fmt]
+    \\              [--azure-core-commit <sha> --azure-core-hash <hash>]
+    \\              [--azure-sdk-path <path>] [--no-fmt]
     \\
 ;
 
@@ -63,6 +65,8 @@ pub fn main(init: std.process.Init) !u8 {
     var package_version: ?[]const u8 = null;
     var display_name: ?[]const u8 = null;
     var azure_core_commit: ?[]const u8 = null;
+    var azure_core_hash: ?[]const u8 = null;
+    var azure_sdk_path: ?[]const u8 = null;
     var run_fmt = true;
 
     while (it.next()) |a| {
@@ -74,6 +78,10 @@ pub fn main(init: std.process.Init) !u8 {
             display_name = it.next() orelse return die("--display-name requires a value");
         } else if (std.mem.eql(u8, a, "--azure-core-commit")) {
             azure_core_commit = it.next() orelse return die("--azure-core-commit requires a value");
+        } else if (std.mem.eql(u8, a, "--azure-core-hash")) {
+            azure_core_hash = it.next() orelse return die("--azure-core-hash requires a value");
+        } else if (std.mem.eql(u8, a, "--azure-sdk-path")) {
+            azure_sdk_path = it.next() orelse return die("--azure-sdk-path requires a value");
         } else if (std.mem.eql(u8, a, "--no-fmt")) {
             run_fmt = false;
         } else if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
@@ -94,6 +102,12 @@ pub fn main(init: std.process.Init) !u8 {
 
     const sd = spec_dir orelse return die("missing positional: <spec-dir>");
     const od = out_dir orelse return die("missing positional: <out-dir>");
+    if ((azure_core_commit == null) != (azure_core_hash == null)) {
+        return die("--azure-core-commit and --azure-core-hash must be supplied together");
+    }
+    if (azure_core_commit != null and azure_sdk_path != null) {
+        return die("--azure-sdk-path cannot be combined with --azure-core-commit");
+    }
 
     const sd_owned = try allocator.dupe(u8, sd);
     defer allocator.free(sd_owned);
@@ -133,6 +147,14 @@ pub fn main(init: std.process.Init) !u8 {
     var commit_buf: ?[]u8 = null;
     defer if (commit_buf) |b| allocator.free(b);
     if (azure_core_commit) |c| commit_buf = try allocator.dupe(u8, c);
+
+    var hash_buf: ?[]u8 = null;
+    defer if (hash_buf) |b| allocator.free(b);
+    if (azure_core_hash) |h| hash_buf = try allocator.dupe(u8, h);
+
+    var sdk_path_buf: ?[]u8 = null;
+    defer if (sdk_path_buf) |b| allocator.free(b);
+    if (azure_sdk_path) |p| sdk_path_buf = try allocator.dupe(u8, p);
 
     // ── Build emitter-options JSON ────────────────────────────────────
     //
@@ -217,6 +239,8 @@ pub fn main(init: std.process.Init) !u8 {
         .package_name = pkg_buf,
         .display_name = display_buf,
         .azure_core_commit = commit_buf,
+        .azure_core_hash = hash_buf,
+        .azure_sdk_path = sdk_path_buf orelse "../azure-sdk-for-zig",
         .run_zig_fmt = run_fmt,
     });
 
