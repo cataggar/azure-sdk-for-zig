@@ -280,9 +280,56 @@ one is not injected; use `initWithConnectionAndResourceManager` to retain
 resource caching and ranking across calls.
 
 Queued source IDs are nonzero canonical UUIDs (`8-4-4-4-12` hexadecimal);
-uppercase input is normalized to lowercase. Only `report_method = .queue` is
-currently supported. `.table` and `.queue_and_table` are rejected locally
-because status-table reporting is not implemented yet.
+uppercase input is normalized to lowercase. `.table` and `.queue_and_table`
+create the reference-compatible `Pending` Azure Table entity *before* Queue
+submission, then put its service-issued complete-SAS URI and exact source-ID
+partition/row keys in `IngestionStatusInTable`. The initial entity and all
+tracking allocations complete before the Queue POST. Only a known accepted
+Queue POST leaves an owned `StatusTrackingHandle` on the result; rejected,
+unknown, and pre-Queue outcomes never expose a pollable handle.
+
+```zig
+var submission = try client.ingest(
+    allocator,
+    .{ .database = "db", .table = "events" },
+    .{ .file = "events.ndjson" },
+    .{
+        .format = .json,
+        .mapping_name = "EventsMapping",
+        .report_level = .failures_and_successes,
+        .report_method = .queue_and_table,
+    },
+);
+defer submission.deinit(allocator);
+
+if (submission.takeTracking()) |owned_tracking| {
+    var tracking = owned_tracking;
+    defer tracking.deinit();
+    var polled = try tracking.poll(allocator, .{ .timeout_ms = 5 * 60 * 1_000 });
+    defer polled.deinit(allocator);
+    switch (polled) {
+        .status => |value| switch (value.status) {
+            .succeeded => {}, // terminal ingestion success
+            .failed, .skipped, .partially_succeeded => {}, // terminal non-success
+            .queued, .unknown => {}, // terminal queued/future service value
+            .pending => unreachable,
+        },
+        .stopped => {}, // timeout, cancellation, or a status-resource error
+    }
+}
+```
+
+`QueuedIngestionResult.outcome == .queue_accepted` is never terminal
+ingestion success. Polling reads only the service-issued status-table SAS
+resource with no bearer authentication, retries idempotent transient/ambiguous
+GETs within its explicit budget, and treats auth, other permanent HTTP, and
+malformed-entity responses as non-ingestion stops. `StatusPollOptions`
+configures interval, timeout, retry backoff, bounded jitter, cancellation, and
+clock/sleep/random seams. The handle borrows the transport and is
+single-owner—not concurrent-safe; the manager and Kusto connection need not
+survive after a handle was created. `report_level = .none` deliberately
+creates no handle; use `.failures_and_successes` when a terminal success must
+be observed through the table.
 
 For local `.gz` and `.zip` files, automatic and `.none` compression upload the
 existing compressed bytes unchanged, preserve that extension in the temporary

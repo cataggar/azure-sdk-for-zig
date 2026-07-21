@@ -67,7 +67,14 @@ pub const SasQueueClient = struct {
         try request.setHeader("Content-Type", "application/xml");
         try request.setHeader("x-ms-version", storage_api_version);
         request.body = body;
-        return sas.send(self.transport, &request, null);
+        const outcome = try sas.send(self.transport, &request, null);
+        return switch (outcome) {
+            .accepted => |value| if (value.status_code == 201)
+                outcome
+            else
+                .{ .rejected = .{ .status_code = value.status_code } },
+            .rejected, .unknown => outcome,
+        };
     }
 };
 
@@ -148,6 +155,24 @@ test "SAS queue reports received rejection and validates message size" {
     const too_large = [_]u8{0} ** (max_queue_message_bytes + 1);
     try std.testing.expectError(error.QueueMessageTooLarge, client.sendMessage(&too_large));
     try std.testing.expectEqual(@as(usize, 1), transport.call_count);
+}
+
+test "SAS queue requires the protocol success status" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 204, "");
+    defer transport.deinit();
+    var client = try SasQueueClient.init(
+        allocator,
+        "https://account.queue.core.windows.net/queue?sig=opaque",
+        transport.asTransport(),
+    );
+    defer client.deinit();
+
+    const outcome = try client.sendMessage("message");
+    switch (outcome) {
+        .rejected => |value| try std.testing.expectEqual(@as(u16, 204), value.status_code),
+        .accepted, .unknown => return error.TestUnexpectedResult,
+    }
 }
 
 test "SAS queue preserves accepted status when response draining fails" {
