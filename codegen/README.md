@@ -69,8 +69,9 @@ rest/<package_name>
 - The orphan branch references `azure_core` (and friends) from `main`
   through a pinned git URL+hash in `build.zig.zon`.
 
-See `../../../../session-state/.../plan.md` (committed for the PR) for the
-full plan, naming rules, and phased rollout.
+See [`../doc/package-branch-model.md`](../doc/package-branch-model.md) for the
+long-term generated REST and hand-written SDK branch, package, dependency, and
+release conventions.
 
 ## How to regenerate one package
 
