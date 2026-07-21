@@ -96,13 +96,18 @@ defer uploaded.deinit(allocator);
 
 var downloaded = try content.downloadManifest(uploaded.digest);
 defer downloaded.deinit(allocator);
+
+const delete_outcome = try content.deleteManifest(uploaded.digest);
+// Both .accepted and .not_found are successful, idempotent outcomes.
+_ = delete_outcome;
 ```
 
 Manifest bytes are never parsed or reserialized. Upload and download validate
 the exact-byte SHA-256 digest, downloads send the mature SDK Accept list, and
 both directions enforce the 4 MiB manifest limit. Omitting the upload
-reference uses the computed digest; deletes require a digest. The `*Result`
-variants preserve structured Azure HTTP errors.
+reference uses the computed digest; deletes require a digest. Download limits
+apply to decoded bytes; `Content-Length` is exact only for identity responses.
+The `*Result` variants preserve structured ACR service errors.
 
 Long-lived clients use bounded LRU caches: 128 routes, 128 scoped access
 tokens, and 32 refresh tokens. Tokens that reach the configured expiry skew

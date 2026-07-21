@@ -2,6 +2,7 @@ const std = @import("std");
 const core = @import("azure_core");
 const client_mod = @import("client.zig");
 const digest_mod = @import("digest.zig");
+const service_error = @import("service_error.zig");
 
 pub const max_manifest_size: usize = 4 * 1024 * 1024;
 
@@ -54,9 +55,50 @@ pub const DownloadManifestResult = struct {
     }
 };
 
-pub const UploadManifestResponse = core.errors.Result(UploadManifestResult);
-pub const DownloadManifestResponse = core.errors.Result(DownloadManifestResult);
-pub const DeleteManifestResponse = core.errors.Result(void);
+pub const UploadManifestResponse = ContentResult(UploadManifestResult);
+pub const DownloadManifestResponse = ContentResult(DownloadManifestResult);
+pub const DeleteManifestResponse = ContentResult(client_mod.DeleteOutcome);
+
+fn ContentResult(comptime T: type) type {
+    return union(enum) {
+        ok: T,
+        err: service_error.ServiceError,
+
+        const Self = @This();
+
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            switch (self.*) {
+                .ok => |*payload| {
+                    if (comptime hasPayloadDeinit(T)) payload.deinit(allocator);
+                },
+                .err => |*failure| failure.deinit(),
+            }
+            self.* = undefined;
+        }
+
+        pub fn isOk(self: Self) bool {
+            return self == .ok;
+        }
+
+        pub fn errorCode(self: Self) ?[]const u8 {
+            return switch (self) {
+                .ok => null,
+                .err => |failure| failure.code,
+            };
+        }
+
+        pub fn unwrap(self: *Self, fail_error: anyerror) anyerror!T {
+            switch (self.*) {
+                .ok => |value| return value,
+                .err => |*failure| {
+                    std.log.warn("{f}", .{failure.*});
+                    failure.deinit();
+                    return fail_error;
+                },
+            }
+        }
+    };
+}
 
 pub const ContainerRegistryContentClientOptions = client_mod.ContainerRegistryClientOptions;
 
@@ -135,7 +177,7 @@ pub const ContainerRegistryContentClient = struct {
 
         if (operation.status_code != 201) {
             if (operation.isSuccess()) return error.UnexpectedResponseStatus;
-            return .{ .err = try self.azureErrorFromOperation(operation) };
+            return .{ .err = try self.serviceErrorFromOperation(operation) };
         }
 
         const returned_digest = try requiredHeader(
@@ -179,21 +221,22 @@ pub const ContainerRegistryContentClient = struct {
         defer operation.deinit();
         if (operation.status_code != 200) {
             if (operation.isSuccess()) return error.UnexpectedResponseStatus;
-            return .{ .err = try self.azureErrorFromOperation(operation) };
+            return .{ .err = try self.serviceErrorFromOperation(operation) };
         }
 
-        const content_length_value = try requiredHeader(
-            self.allocator,
-            operation,
-            .content_length,
-        );
-        const content_length = std.fmt.parseInt(
-            usize,
-            content_length_value,
-            10,
-        ) catch return error.InvalidContentLength;
-        if (content_length == 0) return error.InvalidContentLength;
-        if (content_length > max_manifest_size) return error.ManifestTooLarge;
+        const body_encoding = try responseBodyEncoding(self.allocator, operation);
+        const content_length = try responseContentLength(self.allocator, operation);
+        const expected_length: ?usize = switch (body_encoding) {
+            .identity => content_length orelse return error.MissingContentLength,
+            .encoded => null,
+        };
+        if (expected_length) |length| {
+            if (length > max_manifest_size) return error.ManifestTooLarge;
+        }
+        const capacity_hint = if (content_length) |length|
+            if (length <= max_manifest_size) length else 0
+        else
+            0;
 
         const returned_digest = try requiredHeader(
             self.allocator,
@@ -210,7 +253,8 @@ pub const ContainerRegistryContentClient = struct {
         const buffered = try readManifestBody(
             self.allocator,
             operation,
-            content_length,
+            capacity_hint,
+            expected_length,
         );
         errdefer self.allocator.free(buffered.bytes);
         try operation.finish();
@@ -237,7 +281,7 @@ pub const ContainerRegistryContentClient = struct {
     pub fn deleteManifest(
         self: *ContainerRegistryContentClient,
         digest: []const u8,
-    ) !void {
+    ) !client_mod.DeleteOutcome {
         var result = try self.deleteManifestResult(digest);
         return result.unwrap(error.ManifestDeleteFailed);
     }
@@ -255,12 +299,13 @@ pub const ContainerRegistryContentClient = struct {
 
         var response = try self.pipeline().send(&request);
         defer response.deinit();
-        if (response.status_code == 202) return .{ .ok = {} };
+        if (response.status_code == 202) return .{ .ok = .accepted };
+        if (response.status_code == 404) return .{ .ok = .not_found };
         if (response.isSuccess()) return error.UnexpectedResponseStatus;
-        return .{ .err = core.errors.errorFromResponse(
+        return .{ .err = try service_error.ServiceError.fromResponse(
             self.allocator,
-            response,
-        ).? };
+            &response,
+        ) };
     }
 
     fn pipeline(self: *ContainerRegistryContentClient) *core.pipeline.HttpPipeline {
@@ -299,10 +344,10 @@ pub const ContainerRegistryContentClient = struct {
         );
     }
 
-    fn azureErrorFromOperation(
+    fn serviceErrorFromOperation(
         self: *ContainerRegistryContentClient,
         operation: *core.http.HttpOperation,
-    ) !core.errors.AzureError {
+    ) !service_error.ServiceError {
         const reader = try operation.reader();
         const body = reader.allocRemaining(
             self.allocator,
@@ -319,8 +364,13 @@ pub const ContainerRegistryContentClient = struct {
             .allocator = self.allocator,
         };
         defer response.deinit();
+        var failure = try service_error.ServiceError.fromResponse(
+            self.allocator,
+            &response,
+        );
+        errdefer failure.deinit();
         try operation.finish();
-        return core.errors.errorFromResponse(self.allocator, response).?;
+        return failure;
     }
 };
 
@@ -371,13 +421,11 @@ fn validateRepositoryName(repository_name: []const u8) !void {
 }
 
 const RequiredHeader = enum {
-    content_length,
     docker_content_digest,
     content_type,
 
     fn name(self: RequiredHeader) []const u8 {
         return switch (self) {
-            .content_length => "Content-Length",
             .docker_content_digest => "Docker-Content-Digest",
             .content_type => "Content-Type",
         };
@@ -393,7 +441,6 @@ fn requiredHeader(
     defer allocator.free(values);
     if (values.len == 0) {
         return switch (header) {
-            .content_length => error.MissingContentLength,
             .docker_content_digest => error.MissingDockerContentDigest,
             .content_type => error.MissingContentType,
         };
@@ -401,12 +448,54 @@ fn requiredHeader(
     if (values.len != 1) return error.AmbiguousResponseHeader;
     if (values[0].len == 0) {
         return switch (header) {
-            .content_length => error.InvalidContentLength,
             .docker_content_digest => error.MalformedDigest,
             .content_type => error.InvalidContentType,
         };
     }
     return values[0];
+}
+
+const ResponseBodyEncoding = enum {
+    identity,
+    encoded,
+};
+
+fn responseBodyEncoding(
+    allocator: std.mem.Allocator,
+    operation: *const core.http.HttpOperation,
+) !ResponseBodyEncoding {
+    const values = try operation.getHeaderValues(allocator, "Content-Encoding");
+    defer allocator.free(values);
+    if (values.len == 0) return .identity;
+
+    var saw_encoding = false;
+    var is_encoded = false;
+    for (values) |value| {
+        var encodings = std.mem.splitScalar(u8, value, ',');
+        while (encodings.next()) |raw_encoding| {
+            const encoding = std.mem.trim(u8, raw_encoding, " \t");
+            if (encoding.len == 0) return error.InvalidContentEncoding;
+            saw_encoding = true;
+            if (!std.ascii.eqlIgnoreCase(encoding, "identity")) is_encoded = true;
+        }
+    }
+    if (!saw_encoding) return error.InvalidContentEncoding;
+    return if (is_encoded) .encoded else .identity;
+}
+
+fn responseContentLength(
+    allocator: std.mem.Allocator,
+    operation: *const core.http.HttpOperation,
+) !?usize {
+    const values = try operation.getHeaderValues(allocator, "Content-Length");
+    defer allocator.free(values);
+    if (values.len == 0) return null;
+    if (values.len != 1) return error.AmbiguousResponseHeader;
+    if (values[0].len == 0) return error.InvalidContentLength;
+    const length = std.fmt.parseInt(usize, values[0], 10) catch
+        return error.InvalidContentLength;
+    if (length == 0) return error.InvalidContentLength;
+    return length;
 }
 
 const BufferedManifest = struct {
@@ -417,11 +506,14 @@ const BufferedManifest = struct {
 fn readManifestBody(
     allocator: std.mem.Allocator,
     operation: *core.http.HttpOperation,
-    expected_length: usize,
+    capacity_hint: usize,
+    expected_length: ?usize,
 ) !BufferedManifest {
     var body: std.ArrayList(u8) = .empty;
     defer body.deinit(allocator);
-    try body.ensureTotalCapacityPrecise(allocator, expected_length);
+    if (capacity_hint > 0) {
+        try body.ensureTotalCapacityPrecise(allocator, capacity_hint);
+    }
 
     var digest = digest_mod.Sha256Digest{};
     const reader = try operation.reader();
@@ -434,17 +526,28 @@ fn readManifestBody(
         };
         if (count == 0) break;
         if (count > max_manifest_size - total) return error.ManifestTooLarge;
-        if (count > expected_length -| total) return error.ContentLengthMismatch;
+        if (expected_length) |length| {
+            if (count > length -| total) return error.ContentLengthMismatch;
+        }
         try body.appendSlice(allocator, buffer[0..count]);
         digest.update(buffer[0..count]);
         total += count;
     }
-    if (total != expected_length) return error.ContentLengthMismatch;
+    if (expected_length) |length| {
+        if (total != length) return error.ContentLengthMismatch;
+    }
 
     return .{
         .bytes = try body.toOwnedSlice(allocator),
         .digest = digest.final(),
     };
+}
+
+fn hasPayloadDeinit(comptime T: type) bool {
+    if (@typeInfo(T) != .@"struct") return false;
+    if (!@hasDecl(T, "deinit")) return false;
+    const info = @typeInfo(@TypeOf(T.deinit));
+    return info == .@"fn" and info.@"fn".params.len == 2;
 }
 
 fn testClient(
@@ -696,6 +799,21 @@ test "download validates reference returned digest and required headers" {
         client.downloadManifest("latest"),
     );
 
+    const identity_mismatch_headers = [_]core.http.MockTransport.HeaderPair{
+        .{ .name = "Content-Encoding", .value = "identity" },
+        .{ .name = "Content-Length", .value = "18" },
+        .{ .name = "Docker-Content-Digest", .value = &expected_digest },
+        .{
+            .name = "Content-Type",
+            .value = "application/vnd.oci.image.manifest.v1+json",
+        },
+    };
+    transport.response_headers_list = &identity_mismatch_headers;
+    try std.testing.expectError(
+        error.ContentLengthMismatch,
+        client.downloadManifest("latest"),
+    );
+
     try std.testing.expectError(
         error.UnsupportedDigestAlgorithm,
         client.downloadManifest(
@@ -706,7 +824,58 @@ test "download validates reference returned digest and required headers" {
         error.MalformedDigest,
         client.downloadManifest("sha256:bad"),
     );
-    try std.testing.expectEqual(@as(usize, 5), transport.call_count);
+    try std.testing.expectEqual(@as(usize, 6), transport.call_count);
+}
+
+test "download treats compressed content length as an encoded hint" {
+    const allocator = std.testing.allocator;
+    const manifest = "{\"schemaVersion\":2}";
+    const expected_digest = digest_mod.computeSha256Digest(manifest);
+    const gzip_headers = [_]core.http.MockTransport.HeaderPair{
+        .{ .name = "Content-Encoding", .value = "gzip" },
+        .{ .name = "Content-Length", .value = "11" },
+        .{ .name = "Docker-Content-Digest", .value = &expected_digest },
+        .{
+            .name = "Content-Type",
+            .value = "application/vnd.oci.image.manifest.v1+json",
+        },
+    };
+    var transport = core.http.MockTransport.init(allocator, 200, manifest);
+    defer transport.deinit();
+    transport.response_headers_list = &gzip_headers;
+    var client = try testClient(allocator, transport.asTransport());
+    defer client.deinit();
+
+    var gzip_result = try client.downloadManifest("gzip");
+    defer gzip_result.deinit(allocator);
+    try std.testing.expectEqualStrings(manifest, gzip_result.bytes);
+
+    const other_encoding_headers = [_]core.http.MockTransport.HeaderPair{
+        .{ .name = "Content-Encoding", .value = "br" },
+        .{ .name = "Content-Length", .value = "4194305" },
+        .{ .name = "Docker-Content-Digest", .value = &expected_digest },
+        .{
+            .name = "Content-Type",
+            .value = "application/vnd.oci.image.manifest.v1+json",
+        },
+    };
+    transport.response_headers_list = &other_encoding_headers;
+    var other_result = try client.downloadManifest("other");
+    defer other_result.deinit(allocator);
+    try std.testing.expectEqualStrings(manifest, other_result.bytes);
+
+    const chunked_encoded_headers = [_]core.http.MockTransport.HeaderPair{
+        .{ .name = "Content-Encoding", .value = "gzip" },
+        .{ .name = "Docker-Content-Digest", .value = &expected_digest },
+        .{
+            .name = "Content-Type",
+            .value = "application/vnd.oci.image.manifest.v1+json",
+        },
+    };
+    transport.response_headers_list = &chunked_encoded_headers;
+    var chunked_result = try client.downloadManifest("chunked");
+    defer chunked_result.deinit(allocator);
+    try std.testing.expectEqualStrings(manifest, chunked_result.bytes);
 }
 
 test "manifest size limit allows boundary and rejects declared and streamed excess" {
@@ -761,6 +930,27 @@ test "manifest size limit allows boundary and rejects declared and streamed exce
     );
     try std.testing.expectEqual(@as(usize, 2), transport.stream_abort_count);
 
+    const compressed_boundary_headers = [_]core.http.MockTransport.HeaderPair{
+        .{ .name = "Content-Encoding", .value = "gzip" },
+        .{ .name = "Content-Length", .value = "1024" },
+        .{ .name = "Docker-Content-Digest", .value = &boundary_digest },
+        .{
+            .name = "Content-Type",
+            .value = "application/vnd.oci.image.manifest.v1+json",
+        },
+    };
+    transport.response_body = boundary;
+    transport.response_headers_list = &compressed_boundary_headers;
+    var compressed_boundary = try client.downloadManifest("compressed-boundary");
+    defer compressed_boundary.deinit(allocator);
+    try std.testing.expectEqual(max_manifest_size, compressed_boundary.bytes.len);
+
+    transport.response_body = streamed_excess;
+    try std.testing.expectError(
+        error.ManifestTooLarge,
+        client.downloadManifest("compressed-too-large"),
+    );
+
     transport.response_status = 201;
     transport.response_body = "";
     const upload_headers = [_]core.http.MockTransport.HeaderPair{
@@ -777,7 +967,7 @@ test "manifest size limit allows boundary and rejects declared and streamed exce
     );
 }
 
-test "delete requires digest and exposes structured Azure errors" {
+test "delete requires digest and treats missing manifests as success" {
     const allocator = std.testing.allocator;
     const digest = digest_mod.computeSha256Digest("manifest");
     var transport = core.http.MockTransport.init(allocator, 202, "");
@@ -785,7 +975,19 @@ test "delete requires digest and exposes structured Azure errors" {
     var client = try testClient(allocator, transport.asTransport());
     defer client.deinit();
 
-    try client.deleteManifest(&digest);
+    var accepted_response = try client.deleteManifestResult(&digest);
+    defer accepted_response.deinit(allocator);
+    switch (accepted_response) {
+        .ok => |outcome| try std.testing.expectEqual(
+            client_mod.DeleteOutcome.accepted,
+            outcome,
+        ),
+        .err => return error.UnexpectedServiceError,
+    }
+    try std.testing.expectEqual(
+        client_mod.DeleteOutcome.accepted,
+        try client.deleteManifest(&digest),
+    );
     try std.testing.expectEqual(core.http.Method.DELETE, transport.last_method.?);
     try std.testing.expect(
         std.mem.indexOf(u8, transport.last_url.?, "sha256%3A") != null,
@@ -797,29 +999,43 @@ test "delete requires digest and exposes structured Azure errors" {
 
     transport.response_status = 404;
     transport.response_body =
-        "{\"error\":{\"code\":\"ManifestUnknown\",\"message\":\"not found\"}}";
-    var response = try client.deleteManifestResult(&digest);
-    defer response.deinit(allocator);
-    switch (response) {
-        .err => |azure_error| {
-            try std.testing.expectEqual(@as(u16, 404), azure_error.status_code);
-            try std.testing.expectEqualStrings(
-                "ManifestUnknown",
-                azure_error.error_code.?,
-            );
-            try std.testing.expectEqualStrings("not found", azure_error.message.?);
+        "{\"errors\":[{\"code\":\"MANIFEST_UNKNOWN\",\"message\":\"not found\"}]}";
+    try std.testing.expectEqual(
+        client_mod.DeleteOutcome.not_found,
+        try client.deleteManifest(&digest),
+    );
+    var missing_response = try client.deleteManifestResult(&digest);
+    defer missing_response.deinit(allocator);
+    switch (missing_response) {
+        .ok => |outcome| try std.testing.expectEqual(
+            client_mod.DeleteOutcome.not_found,
+            outcome,
+        ),
+        .err => return error.UnexpectedServiceError,
+    }
+
+    transport.response_status = 500;
+    transport.response_body =
+        "{\"errors\":[{\"code\":\"UNAVAILABLE\",\"message\":\"try later\"}]}";
+    var failure_response = try client.deleteManifestResult(&digest);
+    defer failure_response.deinit(allocator);
+    switch (failure_response) {
+        .err => |failure| {
+            try std.testing.expectEqual(@as(u16, 500), failure.status_code);
+            try std.testing.expectEqualStrings("UNAVAILABLE", failure.code.?);
+            try std.testing.expectEqualStrings("try later", failure.message.?);
         },
-        .ok => return error.ExpectedAzureError,
+        .ok => return error.ExpectedServiceError,
     }
 }
 
-test "streaming manifest operations expose structured Azure errors" {
+test "streaming manifest operations expose shared structured ACR errors" {
     const allocator = std.testing.allocator;
     const manifest = "{\"schemaVersion\":2}";
     var transport = core.http.MockTransport.init(
         allocator,
         400,
-        "{\"error\":{\"code\":\"ManifestInvalid\",\"message\":\"bad manifest\"}}",
+        "{\"errors\":[{\"code\":\"MANIFEST_INVALID\",\"message\":\"bad manifest\",\"detail\":{\"field\":\"schemaVersion\"}}]}",
     );
     defer transport.deinit();
     var client = try testClient(allocator, transport.asTransport());
@@ -831,30 +1047,50 @@ test "streaming manifest operations expose structured Azure errors" {
     );
     defer upload_response.deinit(allocator);
     switch (upload_response) {
-        .err => |azure_error| {
-            try std.testing.expectEqual(@as(u16, 400), azure_error.status_code);
+        .err => |failure| {
+            try std.testing.expectEqual(@as(u16, 400), failure.status_code);
+            try std.testing.expectEqualStrings("MANIFEST_INVALID", failure.code.?);
+            try std.testing.expectEqualStrings("bad manifest", failure.message.?);
+            try std.testing.expectEqual(@as(usize, 1), failure.errors.len);
             try std.testing.expectEqualStrings(
-                "ManifestInvalid",
-                azure_error.error_code.?,
+                "{\"field\":\"schemaVersion\"}",
+                failure.errors[0].detail.?,
             );
         },
-        .ok => return error.ExpectedAzureError,
+        .ok => return error.ExpectedServiceError,
     }
 
     transport.response_status = 404;
     transport.response_body =
-        "{\"error\":{\"code\":\"ManifestUnknown\",\"message\":\"not found\"}}";
+        "{\"errors\":[{\"code\":\"MANIFEST_UNKNOWN\",\"message\":\"not found\"}]}";
     var download_response = try client.downloadManifestResult("missing");
     defer download_response.deinit(allocator);
     switch (download_response) {
-        .err => |azure_error| {
-            try std.testing.expectEqual(@as(u16, 404), azure_error.status_code);
-            try std.testing.expectEqualStrings(
-                "ManifestUnknown",
-                azure_error.error_code.?,
-            );
+        .err => |failure| {
+            try std.testing.expectEqual(@as(u16, 404), failure.status_code);
+            try std.testing.expectEqualStrings("MANIFEST_UNKNOWN", failure.code.?);
+            try std.testing.expectEqualStrings("not found", failure.message.?);
         },
-        .ok => return error.ExpectedAzureError,
+        .ok => return error.ExpectedServiceError,
+    }
+
+    const malformed_body =
+        "{\"error\":{\"code\":\"MANIFEST_INVALID\",\"message\":\"legacy shape\"}}";
+    transport.response_status = 400;
+    transport.response_body = malformed_body;
+    var malformed_response = try client.uploadManifestResult(
+        manifest,
+        .{ .reference = "malformed" },
+    );
+    defer malformed_response.deinit(allocator);
+    switch (malformed_response) {
+        .err => |failure| {
+            try std.testing.expectEqual(@as(u16, 400), failure.status_code);
+            try std.testing.expect(failure.malformed);
+            try std.testing.expect(failure.code == null);
+            try std.testing.expectEqualStrings(malformed_body, failure.raw_body.?);
+        },
+        .ok => return error.ExpectedServiceError,
     }
 
     transport.response_status = 204;
