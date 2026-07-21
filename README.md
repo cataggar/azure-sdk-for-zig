@@ -109,8 +109,10 @@ azure-core-amqp: azure-uamqp-zig (pure Zig AMQP 1.0)
 | `azure_messaging_eventhubs` | `ProducerClient`, `ConsumerClient` |
 | `azure_messaging_eventhubs_checkpointstore_blob` | Blob-backed checkpoint store |
 | `azure_messaging_servicebus` | `ServiceBusSenderClient`, `ServiceBusReceiverClient`, `ServiceBusAdministrationClient` |
-| `azure_kusto_data` | `KustoClient` (queries + management) |
-| `azure_kusto_ingest` | `StreamingIngestClient`, `QueuedIngestClient`, `ManagedIngestClient` |
+| `azure_kusto_data` | `KustoClient` (experimental buffered query and management support) |
+| `azure_kusto_ingest` | `StreamingIngestClient` (experimental direct streaming ingestion); queued ingestion and managed queued fallback are planned, not implemented |
+
+Kusto datasets and non-null ingestion IDs are allocator-owned; call their `deinit` methods when finished.
 
 ### Infrastructure
 
