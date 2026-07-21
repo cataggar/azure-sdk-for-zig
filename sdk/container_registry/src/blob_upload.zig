@@ -790,7 +790,6 @@ fn cleanupUpload(context: UploadContext, session: *Session) !void {
     var request = core.http.Request.init(context.allocator, .DELETE, request_url);
     defer request.deinit();
     request.redirect_policy = .not_allowed;
-    try request.setHeader("Content-Length", "0");
 
     var operation = try context.pipeline.open(&request, .{});
     defer operation.deinit();
@@ -804,7 +803,7 @@ fn failAfterCleanup(
     session: *Session,
     failure: anyerror,
 ) anyerror!BlobUploadResponse {
-    cleanupUpload(context, session) catch |cleanup_error| return cleanup_error;
+    cleanupUpload(context, session) catch {};
     return failure;
 }
 
@@ -813,12 +812,8 @@ fn serviceFailureAfterCleanup(
     session: *Session,
     failure_value: service_error.ServiceError,
 ) !BlobUploadResponse {
-    var failure = failure_value;
-    cleanupUpload(context, session) catch |cleanup_error| {
-        failure.deinit();
-        return cleanup_error;
-    };
-    return .{ .err = failure };
+    cleanupUpload(context, session) catch {};
+    return .{ .err = failure_value };
 }
 
 fn buildStartUrl(context: UploadContext) ![]u8 {
@@ -1117,4 +1112,104 @@ fn isRetryablePreTransportError(failure: anyerror) bool {
         => false,
         else => true,
     };
+}
+
+const CleanupTestServer = struct {
+    io: std.Io,
+    server: *std.Io.net.Server,
+    saw_delete: bool = false,
+    saw_content_length: bool = false,
+    saw_transfer_encoding: bool = false,
+    failure: ?anyerror = null,
+
+    fn run(self: *CleanupTestServer) void {
+        self.serve() catch |err| {
+            self.failure = err;
+        };
+    }
+
+    fn serve(self: *CleanupTestServer) !void {
+        const stream = try self.server.accept(self.io);
+        defer stream.close(self.io);
+        var read_buffer: [1024]u8 = undefined;
+        var reader = std.Io.net.Stream.Reader.init(stream, self.io, &read_buffer);
+        var write_buffer: [512]u8 = undefined;
+        var writer = std.Io.net.Stream.Writer.init(stream, self.io, &write_buffer);
+
+        const request_line = (reader.interface.takeDelimiter('\n') catch
+            return error.ServerHeaderReadFailed) orelse
+            return error.ServerHeaderReadFailed;
+        self.saw_delete = std.mem.startsWith(u8, request_line, "DELETE ");
+        while (true) {
+            const raw_line = (reader.interface.takeDelimiter('\n') catch
+                return error.ServerHeaderReadFailed) orelse
+                return error.ServerHeaderReadFailed;
+            const line = std.mem.trimEnd(u8, raw_line, "\r");
+            if (line.len == 0) break;
+            if (std.ascii.startsWithIgnoreCase(line, "content-length:"))
+                self.saw_content_length = true;
+            if (std.ascii.startsWithIgnoreCase(line, "transfer-encoding:"))
+                self.saw_transfer_encoding = true;
+        }
+
+        try writer.interface.writeAll(
+            "HTTP/1.1 500 Internal Server Error\r\n" ++
+                "Content-Length: 0\r\n" ++
+                "Connection: close\r\n\r\n",
+        );
+        try writer.interface.flush();
+    }
+};
+
+test "cleanup uses standard bodiless DELETE framing and reports its own failure" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var address: std.Io.net.IpAddress = .{ .ip4 = .loopback(0) };
+    var server = try address.listen(io, .{ .reuse_address = true });
+    var server_active = true;
+    defer if (server_active) server.deinit(io);
+    var server_context = CleanupTestServer{
+        .io = io,
+        .server = &server,
+    };
+    const endpoint = try std.fmt.allocPrint(
+        allocator,
+        "http://127.0.0.1:{d}",
+        .{server.socket.address.getPort()},
+    );
+    defer allocator.free(endpoint);
+    const location = try std.fmt.allocPrint(
+        allocator,
+        "{s}/v2/team/app/blobs/uploads/id",
+        .{endpoint},
+    );
+    var session = Session{
+        .allocator = allocator,
+        .location = location,
+        .upload_uuid = try allocator.dupe(u8, "id"),
+    };
+    defer session.deinit();
+    var transport = core.http.StdHttpTransport.init(allocator, io);
+    defer transport.deinit();
+    var pipeline = core.pipeline.HttpPipeline{
+        .policies = &.{},
+        .transport_impl = transport.asTransport(),
+    };
+
+    const thread = try std.Thread.spawn(.{}, CleanupTestServer.run, .{&server_context});
+    const cleanup_result = cleanupUpload(.{
+        .allocator = allocator,
+        .pipeline = &pipeline,
+        .endpoint = endpoint,
+        .api_version = "2021-07-01",
+        .repository_name = "team/app",
+    }, &session);
+    server.deinit(io);
+    server_active = false;
+    thread.join();
+    if (server_context.failure) |failure| return failure;
+    try std.testing.expectError(error.UploadCleanupFailed, cleanup_result);
+    try std.testing.expect(server_context.saw_delete);
+    try std.testing.expect(!server_context.saw_content_length);
+    try std.testing.expect(!server_context.saw_transfer_encoding);
 }

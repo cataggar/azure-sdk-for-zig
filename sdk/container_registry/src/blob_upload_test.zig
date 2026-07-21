@@ -1064,6 +1064,36 @@ test "blob upload preserves cancellation and cancels the session" {
     try std.testing.expectEqual(core.http.Method.DELETE, transport.captures[2].method);
 }
 
+test "blob upload preserves cancellation when cleanup fails" {
+    const allocator = std.testing.allocator;
+    var cancellation = core.http.CancellationToken{};
+    const actions = [_]TestAction{
+        .{ .response = .{
+            .status = 202,
+            .headers = successHeaders("/upload/id", "0-0", "id"),
+        } },
+        .{ .fail = .{
+            .after_bytes = 2,
+            .cause = error.OperationCancelled,
+            .cancel = true,
+        } },
+        .{ .response = .{ .status = 500 } },
+    };
+    var transport = ScriptedTransport.init(allocator, &actions);
+    transport.cancellation = &cancellation;
+    var reader = std.Io.Reader.fixed("cancel");
+    try std.testing.expectError(
+        error.OperationCancelled,
+        testUpload(
+            allocator,
+            &transport,
+            &reader,
+            .{ .cancellation = &cancellation },
+        ),
+    );
+    try std.testing.expectEqual(core.http.Method.DELETE, transport.captures[2].method);
+}
+
 test "blob upload returns structured service errors after cleanup" {
     const allocator = std.testing.allocator;
     const actions = [_]TestAction{
@@ -1091,7 +1121,7 @@ test "blob upload returns structured service errors after cleanup" {
     try std.testing.expectEqual(core.http.Method.DELETE, transport.captures[2].method);
 }
 
-test "blob upload reports deterministic cleanup failure" {
+test "blob upload preserves structured service errors when cleanup fails" {
     const allocator = std.testing.allocator;
     const actions = [_]TestAction{
         .{ .response = .{
@@ -1106,10 +1136,15 @@ test "blob upload reports deterministic cleanup failure" {
     };
     var transport = ScriptedTransport.init(allocator, &actions);
     var reader = std.Io.Reader.fixed("bad");
-    try std.testing.expectError(
-        error.UploadCleanupFailed,
-        testUpload(allocator, &transport, &reader, .{}),
-    );
+    var response = try testUpload(allocator, &transport, &reader, .{});
+    defer response.deinit();
+    switch (response) {
+        .err => |failure| {
+            try std.testing.expectEqual(@as(u16, 400), failure.status_code);
+            try std.testing.expectEqualStrings("BLOB_UPLOAD_INVALID", failure.code.?);
+        },
+        .ok => return error.ExpectedServiceError,
+    }
     try std.testing.expectEqual(@as(usize, 3), transport.deinit_count);
 }
 
