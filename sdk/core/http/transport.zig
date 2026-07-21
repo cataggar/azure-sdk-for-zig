@@ -913,7 +913,16 @@ const StdStreamingOperation = struct {
         self.redirect_buffer = try allocator.alloc(u8, 8 * 1024);
 
         const uri = try std.Uri.parse(request.url);
+        const accept_encoding = getHeaderFromMap(
+            &self.request_headers,
+            "Accept-Encoding",
+        );
+        var standard_headers: std.http.Client.Request.Headers = .{};
+        if (accept_encoding) |value| {
+            standard_headers.accept_encoding = .{ .override = value };
+        }
         self.request = try self.shared_client.client.request(request.method.toStd(), uri, .{
+            .headers = standard_headers,
             .extra_headers = self.extra_headers,
             .redirect_behavior = .unhandled,
         });
@@ -986,7 +995,9 @@ const StdStreamingOperation = struct {
             errdefer self.allocator.free(name);
             const value = try self.allocator.dupe(u8, entry.value_ptr.*);
             errdefer self.allocator.free(value);
-            try extra.append(self.allocator, .{ .name = name, .value = value });
+            if (!std.ascii.eqlIgnoreCase(name, "Accept-Encoding")) {
+                try extra.append(self.allocator, .{ .name = name, .value = value });
+            }
             try self.request_headers.put(name, value);
         }
         self.extra_headers = try extra.toOwnedSlice(self.allocator);
@@ -2248,8 +2259,26 @@ test "standard transport preserves configured client for streaming uploads and d
             case.encoding,
             case.encoded_response,
             case.chunked_response,
+            null,
         );
     }
+}
+
+test "standard transport explicit accept encoding overrides defaults" {
+    try runStdStreamingCase(
+        null,
+        "gzip",
+        "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\x03\x2b\x2e\x29\x4a\x4d\xcc\x4d\x4d\x51\x48\xce\xcf\x2d\x28\x4a\x2d\x2e\x06\x32\x81\x54\x41\x7e\x5e\x71\x2a\x00\xa6\x80\xb4\x50\x1c\x00\x00\x00",
+        false,
+        "identity",
+    );
+    try runStdStreamingCase(
+        null,
+        "zstd",
+        "\x28\xb5\x2f\xfd\x04\x58\xe1\x00\x00\x73\x74\x72\x65\x61\x6d\x65\x64\x20\x63\x6f\x6d\x70\x72\x65\x73\x73\x65\x64\x20\x72\x65\x73\x70\x6f\x6e\x73\x65\xa9\xca\xdc\xf0",
+        false,
+        "zstd",
+    );
 }
 
 fn runStdStreamingCase(
@@ -2257,6 +2286,7 @@ fn runStdStreamingCase(
     encoding: []const u8,
     encoded_response: []const u8,
     chunked_response: bool,
+    explicit_accept_encoding: ?[]const u8,
 ) !void {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
@@ -2286,6 +2316,9 @@ fn runStdStreamingCase(
     var transport = StdHttpTransport.initWithClient(allocator, configured_client);
     var request = Request.init(allocator, .POST, url);
     defer request.deinit();
+    if (explicit_accept_encoding) |value| {
+        try request.setHeader("Accept-Encoding", value);
+    }
     var source = std.Io.Reader.fixed("streaming upload body");
     var operation = transport.asTransport().open(&request, .{
         .body = .{ .reader = &source, .content_length = content_length },
@@ -2323,6 +2356,11 @@ fn runStdStreamingCase(
     if (context.failure) |failure| return failure;
     try std.testing.expectEqualStrings("streaming upload body", context.received[0..context.received_len]);
     try std.testing.expectEqual(content_length == null, context.saw_chunked);
+    try std.testing.expectEqual(@as(usize, 1), context.accept_encoding_count);
+    try std.testing.expectEqualStrings(
+        explicit_accept_encoding orelse "zstd, gzip, deflate",
+        context.acceptEncoding(),
+    );
 }
 
 const LocalHttpServer = struct {
@@ -2334,7 +2372,14 @@ const LocalHttpServer = struct {
     received: [128]u8 = undefined,
     received_len: usize = 0,
     saw_chunked: bool = false,
+    accept_encoding: [128]u8 = undefined,
+    accept_encoding_len: usize = 0,
+    accept_encoding_count: usize = 0,
     failure: ?anyerror = null,
+
+    fn acceptEncoding(self: *const LocalHttpServer) []const u8 {
+        return self.accept_encoding[0..self.accept_encoding_len];
+    }
 
     fn run(self: *LocalHttpServer) void {
         self.serve() catch |err| {
@@ -2363,6 +2408,15 @@ const LocalHttpServer = struct {
             } else if (std.ascii.startsWithIgnoreCase(line, "transfer-encoding:")) {
                 const value = std.mem.trim(u8, line["transfer-encoding:".len..], " ");
                 self.saw_chunked = std.ascii.eqlIgnoreCase(value, "chunked");
+            } else if (std.ascii.startsWithIgnoreCase(line, "accept-encoding:")) {
+                const value = std.mem.trim(u8, line["accept-encoding:".len..], " ");
+                self.accept_encoding_count += 1;
+                if (self.accept_encoding_count == 1) {
+                    if (value.len > self.accept_encoding.len)
+                        return error.AcceptEncodingTooLong;
+                    @memcpy(self.accept_encoding[0..value.len], value);
+                    self.accept_encoding_len = value.len;
+                }
             }
         }
 

@@ -41,6 +41,60 @@ fn capturedHeader(
     return null;
 }
 
+fn expectRedirectedBlobDownload(
+    allocator: std.mem.Allocator,
+    body: []const u8,
+    requested_digest: []const u8,
+    service_digest: ?[]const u8,
+    expected_error: ?anyerror,
+) !void {
+    const redirect_headers = [_]core.http.MockTransport.HeaderPair{
+        .{ .name = "Location", .value = "https://storage.example/blob" },
+    };
+    var content_length_buffer: [32]u8 = undefined;
+    const content_length = try std.fmt.bufPrint(
+        &content_length_buffer,
+        "{d}",
+        .{body.len},
+    );
+    var final_headers = [_]core.http.MockTransport.HeaderPair{
+        .{ .name = "Content-Length", .value = content_length },
+        .{
+            .name = "Docker-Content-Digest",
+            .value = service_digest orelse "",
+        },
+    };
+    const final_header_count: usize = if (service_digest == null) 1 else 2;
+    const responses = [_]core.http.SequenceMockTransport.CannedResponse{
+        .{ .status = 307, .body = "", .headers = &redirect_headers },
+        .{
+            .status = 200,
+            .body = body,
+            .headers = final_headers[0..final_header_count],
+        },
+    };
+    var transport = core.http.SequenceMockTransport.init(allocator, &responses);
+    var client = try testClient(allocator, transport.asTransport());
+    defer client.deinit();
+
+    if (expected_error) |expected| {
+        try std.testing.expectError(
+            expected,
+            client.downloadBlob(requested_digest, .{}),
+        );
+    } else {
+        var result = try client.downloadBlob(requested_digest, .{});
+        defer result.deinit();
+        try std.testing.expectEqualStrings(body, result.bytes);
+        try std.testing.expectEqualStrings(requested_digest, result.digest);
+    }
+    try std.testing.expectEqual(@as(usize, 2), transport.call_count);
+    try std.testing.expectEqualStrings(
+        "https://storage.example/blob",
+        transport.capturedUrl(1),
+    );
+}
+
 const DownloadTestTransport = struct {
     const Header = core.http.MockTransport.HeaderPair;
     const ResponseSpec = struct {
@@ -401,7 +455,6 @@ test "streaming blob ownership supports finish abort cancellation and exact fail
     const expected_digest = digest_mod.computeSha256Digest(body);
     const headers = [_]core.http.MockTransport.HeaderPair{
         .{ .name = "Content-Length", .value = "8" },
-        .{ .name = "Docker-Content-Digest", .value = &expected_digest },
     };
     var transport = core.http.MockTransport.init(allocator, 200, body);
     defer transport.deinit();
@@ -505,7 +558,6 @@ test "sequential ranged download validates 206 ranges and exact digest" {
     const headers_1 = [_]DownloadTestTransport.Header{
         .{ .name = "Content-Length", .value = "4" },
         .{ .name = "Content-Range", .value = "bytes 0-3/10" },
-        .{ .name = "Docker-Content-Digest", .value = &expected_digest },
     };
     const headers_2 = [_]DownloadTestTransport.Header{
         .{ .name = "Content-Length", .value = "4" },
@@ -547,7 +599,6 @@ test "ranged download accepts full 200 and terminal 416" {
     const expected_digest = digest_mod.computeSha256Digest(body);
     const full_headers = [_]DownloadTestTransport.Header{
         .{ .name = "Content-Length", .value = "9" },
-        .{ .name = "Docker-Content-Digest", .value = &expected_digest },
     };
     const full_responses = [_]DownloadTestTransport.ResponseSpec{
         .{ .status = 200, .body = body, .headers = &full_headers },
@@ -603,6 +654,115 @@ test "ranged download accepts full 200 and terminal 416" {
             &empty_digest,
             &empty_output.writer,
             .{},
+        ),
+    );
+}
+
+test "ranged and fallback downloads validate optional service digest and full bytes" {
+    const allocator = std.testing.allocator;
+    const requested_digest = digest_mod.computeSha256Digest("range");
+    const other_digest = digest_mod.computeSha256Digest("other");
+    const range_headers = [_]DownloadTestTransport.Header{
+        .{ .name = "Content-Length", .value = "5" },
+        .{ .name = "Content-Range", .value = "bytes 0-4/5" },
+    };
+    const range_responses = [_]DownloadTestTransport.ResponseSpec{
+        .{ .status = 206, .body = "wrong", .headers = &range_headers },
+    };
+    var range_transport = DownloadTestTransport.init(allocator, &range_responses);
+    var range_client = try testClient(allocator, range_transport.asTransport());
+    defer range_client.deinit();
+    var range_output: std.Io.Writer.Allocating = .init(allocator);
+    defer range_output.deinit();
+    try std.testing.expectError(
+        error.RequestedDigestMismatch,
+        range_client.downloadBlobToWriter(
+            &requested_digest,
+            &range_output.writer,
+            .{ .range_size = 5 },
+        ),
+    );
+
+    const mismatched_range_headers = [_]DownloadTestTransport.Header{
+        .{ .name = "Content-Length", .value = "5" },
+        .{ .name = "Content-Range", .value = "bytes 0-4/5" },
+        .{ .name = "Docker-Content-Digest", .value = &other_digest },
+    };
+    const mismatched_range_responses = [_]DownloadTestTransport.ResponseSpec{
+        .{
+            .status = 206,
+            .body = "range",
+            .headers = &mismatched_range_headers,
+        },
+    };
+    var mismatched_range_transport = DownloadTestTransport.init(
+        allocator,
+        &mismatched_range_responses,
+    );
+    var mismatched_range_client = try testClient(
+        allocator,
+        mismatched_range_transport.asTransport(),
+    );
+    defer mismatched_range_client.deinit();
+    var mismatched_range_output: std.Io.Writer.Allocating = .init(allocator);
+    defer mismatched_range_output.deinit();
+    try std.testing.expectError(
+        error.ServiceDigestMismatch,
+        mismatched_range_client.downloadBlobToWriter(
+            &requested_digest,
+            &mismatched_range_output.writer,
+            .{ .range_size = 5 },
+        ),
+    );
+
+    const fallback_headers = [_]DownloadTestTransport.Header{
+        .{ .name = "Content-Length", .value = "5" },
+    };
+    const fallback_responses = [_]DownloadTestTransport.ResponseSpec{
+        .{ .status = 200, .body = "wrong", .headers = &fallback_headers },
+    };
+    var fallback_transport = DownloadTestTransport.init(allocator, &fallback_responses);
+    var fallback_client = try testClient(allocator, fallback_transport.asTransport());
+    defer fallback_client.deinit();
+    var fallback_output: std.Io.Writer.Allocating = .init(allocator);
+    defer fallback_output.deinit();
+    try std.testing.expectError(
+        error.RequestedDigestMismatch,
+        fallback_client.downloadBlobToWriter(
+            &requested_digest,
+            &fallback_output.writer,
+            .{ .range_size = 5 },
+        ),
+    );
+
+    const mismatched_fallback_headers = [_]DownloadTestTransport.Header{
+        .{ .name = "Content-Length", .value = "5" },
+        .{ .name = "Docker-Content-Digest", .value = &other_digest },
+    };
+    const mismatched_fallback_responses = [_]DownloadTestTransport.ResponseSpec{
+        .{
+            .status = 200,
+            .body = "range",
+            .headers = &mismatched_fallback_headers,
+        },
+    };
+    var mismatched_fallback_transport = DownloadTestTransport.init(
+        allocator,
+        &mismatched_fallback_responses,
+    );
+    var mismatched_fallback_client = try testClient(
+        allocator,
+        mismatched_fallback_transport.asTransport(),
+    );
+    defer mismatched_fallback_client.deinit();
+    var mismatched_fallback_output: std.Io.Writer.Allocating = .init(allocator);
+    defer mismatched_fallback_output.deinit();
+    try std.testing.expectError(
+        error.ServiceDigestMismatch,
+        mismatched_fallback_client.downloadBlobToWriter(
+            &requested_digest,
+            &mismatched_fallback_output.writer,
+            .{ .range_size = 5 },
         ),
     );
 }
@@ -795,11 +955,39 @@ test "range validation rejects malformed offsets spans lengths encodings and tot
     );
 }
 
-test "blob downloads validate requested and service SHA-256 digests" {
+test "direct blob downloads allow absent service digest and validate present digests" {
     const allocator = std.testing.allocator;
     const body = "digest bytes";
     const requested_digest = digest_mod.computeSha256Digest(body);
     const other_digest = digest_mod.computeSha256Digest("other");
+    const missing_headers = [_]core.http.MockTransport.HeaderPair{
+        .{ .name = "Content-Length", .value = "12" },
+    };
+    var missing_transport = core.http.MockTransport.init(allocator, 200, body);
+    defer missing_transport.deinit();
+    missing_transport.response_headers_list = &missing_headers;
+    var missing_client = try testClient(allocator, missing_transport.asTransport());
+    defer missing_client.deinit();
+    var missing_result = try missing_client.downloadBlob(&requested_digest, .{});
+    missing_result.deinit();
+
+    var missing_content_transport = core.http.MockTransport.init(
+        allocator,
+        200,
+        "wrong bytes!",
+    );
+    defer missing_content_transport.deinit();
+    missing_content_transport.response_headers_list = &missing_headers;
+    var missing_content_client = try testClient(
+        allocator,
+        missing_content_transport.asTransport(),
+    );
+    defer missing_content_client.deinit();
+    try std.testing.expectError(
+        error.RequestedDigestMismatch,
+        missing_content_client.downloadBlob(&requested_digest, .{}),
+    );
+
     const service_headers = [_]core.http.MockTransport.HeaderPair{
         .{ .name = "Content-Length", .value = "12" },
         .{ .name = "Docker-Content-Digest", .value = &other_digest },
@@ -903,6 +1091,42 @@ test "cross-origin blob redirects strip credentials and insecure redirects fail"
     try std.testing.expectError(
         error.HttpsRequired,
         client.downloadBlob(&digest, .{}),
+    );
+}
+
+test "redirected blob downloads allow absent service digest and validate present digests" {
+    const allocator = std.testing.allocator;
+    const body = "redirected";
+    const requested_digest = digest_mod.computeSha256Digest(body);
+    const other_digest = digest_mod.computeSha256Digest("other");
+
+    try expectRedirectedBlobDownload(
+        allocator,
+        body,
+        &requested_digest,
+        null,
+        null,
+    );
+    try expectRedirectedBlobDownload(
+        allocator,
+        body,
+        &requested_digest,
+        &requested_digest,
+        null,
+    );
+    try expectRedirectedBlobDownload(
+        allocator,
+        body,
+        &requested_digest,
+        &other_digest,
+        error.ServiceDigestMismatch,
+    );
+    try expectRedirectedBlobDownload(
+        allocator,
+        "wrong body",
+        &requested_digest,
+        null,
+        error.RequestedDigestMismatch,
     );
 }
 

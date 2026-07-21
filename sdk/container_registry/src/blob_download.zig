@@ -115,15 +115,18 @@ pub const BlobDownloadStream = struct {
         allocator: std.mem.Allocator,
         operation: *core.http.HttpOperation,
         requested_digest: []const u8,
-        service_digest: []const u8,
+        service_digest: ?[]const u8,
         content_length: u64,
         decoded_content_length: ?u64,
         cancellation: ?*const core.http.CancellationToken,
     ) !BlobDownloadStream {
         const owned_digest = try allocator.dupe(u8, requested_digest);
         errdefer allocator.free(owned_digest);
-        const owned_service_digest = try allocator.dupe(u8, service_digest);
-        errdefer allocator.free(owned_service_digest);
+        const owned_service_digest = if (service_digest) |value|
+            try allocator.dupe(u8, value)
+        else
+            null;
+        errdefer if (owned_service_digest) |value| allocator.free(value);
 
         return .{
             .allocator = allocator,
@@ -212,7 +215,7 @@ pub const BlobDownloadStream = struct {
 
     pub fn deinit(self: *BlobDownloadStream) void {
         self.operation.deinit();
-        self.allocator.free(self.reader_impl.service_digest);
+        if (self.reader_impl.service_digest) |value| self.allocator.free(value);
         self.allocator.free(self.digest);
         self.* = undefined;
     }
@@ -223,7 +226,7 @@ const ValidatingReader = struct {
     operation: *core.http.HttpOperation,
     source: *std.Io.Reader,
     requested_digest: []const u8,
-    service_digest: []u8,
+    service_digest: ?[]u8,
     expected_length: ?u64,
     cancellation: ?*const core.http.CancellationToken,
     hasher: digest_mod.Sha256Digest = .{},
@@ -235,7 +238,7 @@ const ValidatingReader = struct {
     fn init(
         operation: *core.http.HttpOperation,
         requested_digest: []const u8,
-        service_digest: []u8,
+        service_digest: ?[]u8,
         expected_length: ?u64,
         cancellation: ?*const core.http.CancellationToken,
     ) ValidatingReader {
@@ -313,9 +316,11 @@ const ValidatingReader = struct {
             self.failure = error.RequestedDigestMismatch;
             return error.RequestedDigestMismatch;
         }
-        if (!std.ascii.eqlIgnoreCase(&self.computed_digest, self.service_digest)) {
-            self.failure = error.DigestMismatch;
-            return error.DigestMismatch;
+        if (self.service_digest) |service_digest| {
+            if (!std.ascii.eqlIgnoreCase(&self.computed_digest, service_digest)) {
+                self.failure = error.DigestMismatch;
+                return error.DigestMismatch;
+            }
         }
         self.complete = true;
     }
@@ -459,7 +464,6 @@ pub const BlobDownloadClient = struct {
         const service_digest = try serviceDigest(
             self.allocator,
             operation,
-            true,
             requested_digest,
         );
 
@@ -467,7 +471,7 @@ pub const BlobDownloadClient = struct {
             self.allocator,
             operation,
             requested_digest,
-            service_digest.?,
+            service_digest,
             content_length,
             expected_decoded_length,
             options.cancellation,
@@ -538,7 +542,6 @@ pub const BlobDownloadClient = struct {
                     _ = try serviceDigest(
                         self.allocator,
                         operation,
-                        true,
                         requested_digest,
                     );
                     const content_length = try requiredContentLength(
@@ -608,7 +611,6 @@ pub const BlobDownloadClient = struct {
                     _ = try serviceDigest(
                         self.allocator,
                         operation,
-                        false,
                         requested_digest,
                     );
 
@@ -662,7 +664,6 @@ pub const BlobDownloadClient = struct {
                     _ = try serviceDigest(
                         self.allocator,
                         operation,
-                        false,
                         requested_digest,
                     );
                     try ensureEmptyBody(operation, options.cancellation);
@@ -849,7 +850,6 @@ fn requiredContentRange(
 fn serviceDigest(
     allocator: std.mem.Allocator,
     operation: *const core.http.HttpOperation,
-    required: bool,
     requested_digest: []const u8,
 ) !?[]const u8 {
     const values = try operation.getHeaderValues(
@@ -857,10 +857,7 @@ fn serviceDigest(
         "Docker-Content-Digest",
     );
     defer allocator.free(values);
-    if (values.len == 0) {
-        if (required) return error.MissingDockerContentDigest;
-        return null;
-    }
+    if (values.len == 0) return null;
     if (values.len != 1) return error.AmbiguousResponseHeader;
     try digest_mod.validateSha256Digest(values[0]);
     if (!(try digest_mod.sha256DigestsEqual(values[0], requested_digest)))

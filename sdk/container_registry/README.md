@@ -171,7 +171,9 @@ the configured decoded-byte bound. Writer downloads request sequential ranges
 and retry only classified HTTP/read/transport failures from the last
 successfully written offset, so retries never replay confirmed bytes. A server
 may return a full `200`, ranged `206`, or terminal `416`; every length, range,
-total, requested digest, and returned service digest is checked.
+total, requested digest, and returned service digest is checked. Blob responses
+may omit `Docker-Content-Digest`; full decoded bytes are always verified against
+the requested digest, and any service digest that is present is also validated.
 
 Core redirect handling follows ACR `307` responses over HTTPS, removes
 `Authorization`, cookies, proxy authorization, and `Host` on cross-origin
