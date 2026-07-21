@@ -2,10 +2,11 @@ const std = @import("std");
 const acr = @import("azure_sdk_container_registry");
 const support = @import("acr_example_support");
 
-const config_bytes =
-    \\{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]},"config":{}}
-;
-const layer_bytes = "azure-sdk-for-zig minimal OCI layer\n";
+const config_bytes = "{}";
+const artifact_type = "application/vnd.azure.sdk-for-zig.example.v1";
+const layer_media_type =
+    "application/vnd.azure.sdk-for-zig.example.layer.v1";
+const layer_bytes = "azure-sdk-for-zig OCI artifact payload\n";
 
 pub fn main(init: std.process.Init) !void {
     try support.requireOptIn(
@@ -41,14 +42,34 @@ pub fn main(init: std.process.Init) !void {
     defer config.deinit();
     var layer = try content.uploadBlobBytes(layer_bytes, .{});
     defer layer.deinit();
+    const expected_config_digest = acr.computeSha256Digest(config_bytes);
+    const expected_layer_digest = acr.computeSha256Digest(layer_bytes);
+    if (config.size != config_bytes.len or
+        !try acr.sha256DigestsEqual(config.digest, &expected_config_digest))
+    {
+        return error.ContainerRegistryConfigDescriptorMismatch;
+    }
+    if (layer.size != layer_bytes.len or
+        !try acr.sha256DigestsEqual(layer.digest, &expected_layer_digest))
+    {
+        return error.ContainerRegistryLayerDescriptorMismatch;
+    }
     const manifest_bytes = try std.fmt.allocPrint(
         init.gpa,
         "{{\"schemaVersion\":2,\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\"," ++
-            "\"config\":{{\"mediaType\":\"application/vnd.oci.image.config.v1+json\"," ++
+            "\"artifactType\":\"{s}\"," ++
+            "\"config\":{{\"mediaType\":\"application/vnd.oci.empty.v1+json\"," ++
             "\"digest\":\"{s}\",\"size\":{d}}},\"layers\":[{{\"mediaType\":" ++
-            "\"application/vnd.oci.image.layer.v1.tar\",\"digest\":\"{s}\"," ++
+            "\"{s}\",\"digest\":\"{s}\"," ++
             "\"size\":{d}}}]}}",
-        .{ config.digest, config.size, layer.digest, layer.size },
+        .{
+            artifact_type,
+            config.digest,
+            config.size,
+            layer_media_type,
+            layer.digest,
+            layer.size,
+        },
     );
     defer init.gpa.free(manifest_bytes);
 
@@ -61,6 +82,11 @@ pub fn main(init: std.process.Init) !void {
     defer downloaded.deinit(init.gpa);
     if (!std.mem.eql(u8, manifest_bytes, downloaded.bytes))
         return error.ContainerRegistryManifestRoundTripMismatch;
+    const expected_manifest_digest = acr.computeSha256Digest(manifest_bytes);
+    if (!try acr.sha256DigestsEqual(
+        uploaded.digest,
+        &expected_manifest_digest,
+    )) return error.ContainerRegistryManifestDescriptorMismatch;
 
     var blobs = try acr.BlobDownloadClient.init(
         init.gpa,
@@ -69,6 +95,12 @@ pub fn main(init: std.process.Init) !void {
         session.clientOptions(),
     );
     defer blobs.deinit();
+    var pulled_config = try blobs.downloadBlob(config.digest, .{
+        .max_size = 1024,
+    });
+    defer pulled_config.deinit();
+    if (!std.mem.eql(u8, config_bytes, pulled_config.bytes))
+        return error.ContainerRegistryConfigRoundTripMismatch;
     var pulled_layer = try blobs.downloadBlob(layer.digest, .{
         .max_size = 1024 * 1024,
     });

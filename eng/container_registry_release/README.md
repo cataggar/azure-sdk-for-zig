@@ -9,17 +9,29 @@ The release is intentionally two-stage:
 
 1. `scripts/container-registry-release.sh prepare-rest` regenerates
    `.release/container_registry/publish/rest` with the common SDK pin and tests
-   it independently.
-2. Publish that directory to `rest/container_registry`.
+   a disposable copy independently.
+2. `scripts/container-registry-release.sh publish-rest --dry-run` validates the
+   prospective commit; rerun without `--dry-run` to publish it to
+   `rest/container_registry`.
 3. `scripts/container-registry-release.sh prepare-sdk <rest-commit>` fetches
-   the published REST commit, computes its Zig package hash, writes both
-   immutable pins into `.release/container_registry/publish/sdk`, and tests
-   the SDK, examples, and unconfigured live-test skip.
-4. Publish the SDK directory to `sdk/container_registry`.
+   the current remote REST branch tip, requires exact commit equality, validates
+   the archived package root/name/dependencies, computes its Zig package hash,
+   writes both immutable pins into `.release/container_registry/publish/sdk`,
+   and tests a disposable copy, examples, and unconfigured live-test skip.
+4. Use `publish-sdk --dry-run`, then `publish-sdk`, for
+   `sdk/container_registry`.
 
-No REST hash is guessed before the REST orphan commit exists. `verify` (also
-available as `dry-run`) uses the same generated REST package and a sibling path
-dependency for the SDK, exactly mirroring the two package roots without
-creating branches or tags.
+Staging copies only tracked files explicitly declared by each package's
+`build.zig.zon`; generation and tests use external disposable caches. Stage
+validation rejects undeclared files, `.zig-cache`, `zig-pkg`, `zig-out`, and
+other publication artifacts. Publication is fail-fast and trap-cleaned:
+missing branches get one initial orphan commit, while existing branches get
+normal descendant commits and fast-forward pushes. Force-push is never used;
+forced removal is limited to trap cleanup of the disposable worktree.
 
-See `doc/package-branch-model.md` for exact publication commands.
+No REST hash is guessed before the REST release commit exists. `verify` (also
+available as `dry-run`) mirrors both package roots without creating remote refs.
+`self-test` exercises invalid main/mismatched REST commits plus initial and
+subsequent publication dry-runs against an isolated local bare remote.
+
+See `doc/package-branch-model.md` for the complete workflow.

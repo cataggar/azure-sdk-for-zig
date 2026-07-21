@@ -210,31 +210,23 @@ The common dependency pin is recorded in
 hash. The REST stage is
 `.release/container_registry/publish/rest`.
 
-Publish the staged REST package from a disposable worktree (the commands below
-are intentionally explicit and are not run by the preparation tool):
+Preview the exact initial-or-descendant REST commit without changing the
+remote, then publish it:
 
 ```bash
-ROOT="$(git rev-parse --show-toplevel)"
-REST_STAGE="$ROOT/.release/container_registry/publish/rest"
-REST_WORKTREE="${ROOT}-rest-container-registry-release"
-git worktree add --detach "$REST_WORKTREE" HEAD
-(
-  cd "$REST_WORKTREE"
-  git switch --orphan rest-container-registry-release
-  git rm -rf .
-  cp -R "$REST_STAGE/." .
-  git add -A
-  git commit -m "rest/container_registry: release generated package"
-  git push origin HEAD:refs/heads/rest/container_registry
-)
-REST_COMMIT="$(git ls-remote origin refs/heads/rest/container_registry | cut -f1)"
-git worktree remove "$REST_WORKTREE"
+scripts/container-registry-release.sh publish-rest --dry-run
+scripts/container-registry-release.sh publish-rest
+REST_COMMIT="$(
+  git ls-remote origin refs/heads/rest/container_registry | cut -f1
+)"
 ```
 
 The SDK cannot contain an honest immutable REST hash until that orphan commit
 exists. After REST publication, the second stage fetches that exact commit,
-computes (or verifies a supplied) Zig package hash, applies both immutable
-dependency pins, and tests the publishable SDK package:
+requires it to equal the current remote release-branch tip, archives and
+validates the package root/name/dependency structure, computes (or verifies a
+supplied) Zig package hash from those exact bytes, applies both immutable
+dependency pins, and tests a disposable copy of the publishable SDK package:
 
 ```bash
 scripts/container-registry-release.sh prepare-sdk "$REST_COMMIT"
@@ -244,25 +236,36 @@ The SDK stage is `.release/container_registry/publish/sdk`. Publish it only
 after inspecting its two URL/hash pins:
 
 ```bash
-ROOT="$(git rev-parse --show-toplevel)"
-SDK_STAGE="$ROOT/.release/container_registry/publish/sdk"
-SDK_WORKTREE="${ROOT}-sdk-container-registry-release"
-git worktree add --detach "$SDK_WORKTREE" HEAD
-(
-  cd "$SDK_WORKTREE"
-  git switch --orphan sdk-container-registry-release
-  git rm -rf .
-  cp -R "$SDK_STAGE/." .
-  git add -A
-  git commit -m "sdk/container_registry: release package"
-  git push origin HEAD:refs/heads/sdk/container_registry
-)
-git worktree remove "$SDK_WORKTREE"
+scripts/container-registry-release.sh publish-sdk --dry-run
+scripts/container-registry-release.sh publish-sdk
 ```
 
-This two-stage process never invents a REST commit or hash. Both preparation
-commands are deterministic, create only ignored `.release/` staging, and never
-create branches, tags, commits, or remote refs themselves.
+The publication commands create disposable no-checkout worktrees and install
+only validated stage files. Cleanup traps remove temporary worktrees and local
+branches on success or failure. A missing release branch gets an orphan root;
+an existing release branch is fetched and the new commit must descend directly
+from its current tip. Pushes are ordinary fast-forwards and never force.
+
+Staging uses only tracked SDK files in the package's explicit `.paths`
+manifest. Generated REST output is checked against its own `.paths` manifest.
+Neither staging nor publication copies ignored/untracked trees, and validation
+rejects `.zig-cache`, `zig-pkg`, `zig-out`, `.release`, or any undeclared
+top-level entry. Builds run from disposable copies with external local/global
+Zig caches, so publishable directories remain byte-clean.
+
+Run the isolated workflow regression tests at any time:
+
+```bash
+scripts/container-registry-release.sh self-test
+```
+
+They use a local bare remote to prove that a main commit and a mismatched REST
+package are rejected, initial and subsequent publication dry-runs have the
+correct parentage, cleanup succeeds, and a normal local fast-forward push
+works. They never create GitHub branches or tags.
+
+This two-stage process never invents a REST commit or hash. Preparation creates
+only ignored `.release/` staging; publication is always an explicit command.
 
 ## Versioning
 

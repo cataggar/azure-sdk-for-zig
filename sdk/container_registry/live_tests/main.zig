@@ -121,9 +121,10 @@ test "live ACR metadata, transfers, non-seekable upload, range resume, redirects
     );
     defer downloads.deinit();
 
-    const config_bytes =
-        \\{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]},"config":{}}
-    ;
+    const config_bytes = "{}";
+    const artifact_type = "application/vnd.azure.sdk-for-zig.live-test.v1";
+    const layer_media_type =
+        "application/vnd.azure.sdk-for-zig.live-test.layer.v1";
     const layer_bytes = try allocator.alloc(u8, 96 * 1024);
     defer allocator.free(layer_bytes);
     for (layer_bytes, 0..) |*byte, index| byte.* = @truncate(index *% 31 +% 7);
@@ -142,13 +143,16 @@ test "live ACR metadata, transfers, non-seekable upload, range resume, redirects
     const manifest_bytes = try std.fmt.allocPrint(
         allocator,
         "{{\"schemaVersion\":2,\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\"," ++
-            "\"config\":{{\"mediaType\":\"application/vnd.oci.image.config.v1+json\"," ++
+            "\"artifactType\":\"{s}\"," ++
+            "\"config\":{{\"mediaType\":\"application/vnd.oci.empty.v1+json\"," ++
             "\"digest\":\"{s}\",\"size\":{d}}},\"layers\":[{{\"mediaType\":" ++
-            "\"application/vnd.oci.image.layer.v1.tar\",\"digest\":\"{s}\"," ++
+            "\"{s}\",\"digest\":\"{s}\"," ++
             "\"size\":{d}}}]}}",
         .{
+            artifact_type,
             config_blob.digest,
             config_blob.size,
+            layer_media_type,
             layer_blob.digest,
             layer_blob.size,
         },
@@ -187,6 +191,8 @@ test "live ACR metadata, transfers, non-seekable upload, range resume, redirects
     try std.testing.expect(session.transport.redirect_count > 0);
 
     session.transport.inject_range_failure = true;
+    session.transport.range_failure_injected = false;
+    session.transport.range_request_count = 0;
     var ranged_output: std.Io.Writer.Allocating = .init(allocator);
     defer ranged_output.deinit();
     var ranged = try downloads.downloadBlobToWriter(
@@ -200,8 +206,16 @@ test "live ACR metadata, transfers, non-seekable upload, range resume, redirects
         layer_bytes,
         ranged_output.writer.buffered(),
     );
+    try std.testing.expect(session.transport.range_failure_injected);
     try std.testing.expect(session.transport.range_request_count >= 2);
-    try std.testing.expect(session.transport.sawResumedRange());
+    try std.testing.expectEqual(
+        @as(u64, 0),
+        session.transport.range_starts[0],
+    );
+    try std.testing.expectEqual(
+        @as(u64, 8 * 1024),
+        session.transport.range_starts[1],
+    );
 
     var tag_delete = try metadata.deleteTag(allocator, repository, tag);
     defer tag_delete.deinit();
@@ -438,13 +452,6 @@ const ObservingTransport = struct {
         self.standard.deinit();
         self.allocator.free(self.endpoint);
         self.* = undefined;
-    }
-
-    fn sawResumedRange(self: *const ObservingTransport) bool {
-        for (self.range_starts[0..self.range_request_count]) |start| {
-            if (start > 0) return true;
-        }
-        return false;
     }
 
     fn send(

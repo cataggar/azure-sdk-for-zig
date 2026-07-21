@@ -1995,6 +1995,7 @@ fn renderBuildZigZon(
         \\    .dependencies = .{{
         \\{[sdk]s}{[serde]s}    }},
         \\    .paths = .{{
+        \\        ".gitignore",
         \\        "build.zig",
         \\        "build.zig.zon",
         \\        "src",

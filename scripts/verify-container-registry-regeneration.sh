@@ -3,6 +3,24 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRATCH="$ROOT/.release/container_registry/regeneration"
+CODEGEN_ZIG_PKG="$ROOT/codegen/cli/zig-pkg"
+ZIG_PKG_EXISTED=0
+if [[ -e "$CODEGEN_ZIG_PKG" ]]; then
+  ZIG_PKG_EXISTED=1
+fi
+
+cleanup() {
+  local status=$?
+  trap - EXIT
+  rm -rf "$SCRATCH"
+  if [[ "$ZIG_PKG_EXISTED" == 0 ]]; then
+    rm -rf "$CODEGEN_ZIG_PKG"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+
+rm -rf "$SCRATCH"
 mkdir -p "$SCRATCH"
 
 snapshot_tree() {
@@ -51,7 +69,10 @@ snapshot_status "$SCRATCH/status.before"
 
 (
   cd "$ROOT/codegen/cli"
-  zig build generate-container-registry-package
+  zig build \
+    --cache-dir "$SCRATCH/codegen-cache" \
+    --global-cache-dir "$SCRATCH/global-cache" \
+    generate-container-registry-package
 )
 
 snapshot_tree "rest/container_registry" "$SCRATCH/rest.after"
@@ -88,5 +109,4 @@ if 'addModule("azure_rest_container_registry"' not in build:
     raise SystemExit("ERROR: regenerated REST module name drifted")
 PY
 
-rm -rf "$SCRATCH"
 echo "ACR regeneration is deterministic and isolated to generator-owned REST outputs."
