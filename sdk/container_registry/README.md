@@ -2,8 +2,9 @@
 
 `azure_sdk_container_registry` adds secure ACR challenge authentication,
 token caching, metadata operations, Link-header paging, structured service
-errors, exact-byte manifests, and bounded-memory resumable blob uploads to the
-generated `azure_rest_container_registry` protocol package.
+errors, exact-byte manifest operations, bounded-memory resumable blob uploads,
+and bounded blob downloads to the generated
+`azure_rest_container_registry` protocol package.
 
 ```zig
 const acr = @import("azure_sdk_container_registry");
@@ -132,6 +133,50 @@ session, final service digests are validated, and cancellation remains an outer
 Use `uploadBlobResult` when structured service errors are required. Generated
 mount, upload-status, and cancel operations remain available through
 `client.protocolClient().containerRegistryBlob()` and `acr.protocol`.
+
+Use `BlobDownloadClient` for digest-safe blob downloads:
+
+```zig
+var blobs = try acr.BlobDownloadClient.init(
+    allocator,
+    registry_endpoint,
+    "team/app",
+    .{
+        .transport = transport,
+        .authentication = .{ .credential = credential },
+    },
+);
+defer blobs.deinit();
+
+// Buffered downloads are capped at 16 MiB by default.
+var small = try blobs.downloadBlob(digest, .{ .max_size = 2 * 1024 * 1024 });
+defer small.deinit();
+
+// Streaming callers own one active HTTP operation.
+var stream = try blobs.downloadBlobStreaming(digest, .{});
+defer stream.deinit();
+const reader = try stream.reader();
+// Read from reader, then finish to drain and validate length and SHA-256.
+_ = reader;
+try stream.finish();
+
+// Large downloads use sequential 4 MiB ranges and bounded copy memory.
+var downloaded = try blobs.downloadBlobToWriter(digest, writer, .{});
+defer downloaded.deinit();
+```
+
+Streaming downloads require `finish`, `abort`, or `cancel`, followed by
+`deinit`; active operations are aborted by `deinit`. Buffered downloads enforce
+the configured decoded-byte bound. Writer downloads request sequential ranges
+and retry only classified HTTP/read/transport failures from the last
+successfully written offset, so retries never replay confirmed bytes. A server
+may return a full `200`, ranged `206`, or terminal `416`; every length, range,
+total, requested digest, and returned service digest is checked.
+
+Core redirect handling follows ACR `307` responses over HTTPS, removes
+`Authorization`, cookies, proxy authorization, and `Host` on cross-origin
+requests, and rejects insecure targets. Ranged retries always restart from the
+registry URL rather than retaining a storage redirect.
 
 Long-lived clients use bounded LRU caches: 128 routes, 128 scoped access
 tokens, and 32 refresh tokens. Tokens that reach the configured expiry skew
