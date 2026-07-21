@@ -417,6 +417,25 @@ pub const KustoConnection = struct {
     }
 
     pub fn send(self: *KustoConnection, request: *core.http.Request) !core.http.Response {
+        try self.validateRequestEndpoint(request);
+        request.redirect_policy = .not_allowed;
+        return self.pipeline.send(request);
+    }
+
+    /// Opens a single-owner streaming operation using the authenticated
+    /// pipeline. Streaming preparation runs each policy once and never retries
+    /// a consumed request body.
+    pub fn open(
+        self: *KustoConnection,
+        request: *core.http.Request,
+        options: core.http.OpenOptions,
+    ) !*core.http.HttpOperation {
+        try self.validateRequestEndpoint(request);
+        request.redirect_policy = .not_allowed;
+        return self.pipeline.open(request, options);
+    }
+
+    fn validateRequestEndpoint(self: *const KustoConnection, request: *const core.http.Request) !void {
         const targets_engine = sameHttpsOrigin(self.cluster_url, request.url);
         const targets_data_management = if (self.data_management_url) |url|
             sameHttpsOrigin(url, request.url)
@@ -425,8 +444,6 @@ pub const KustoConnection = struct {
         if (!targets_engine and !targets_data_management) {
             return error.UntrustedKustoRequestEndpoint;
         }
-        request.redirect_policy = .not_allowed;
-        return self.pipeline.send(request);
     }
 
     pub fn clusterUrl(self: *const KustoConnection) []const u8 {
@@ -739,6 +756,26 @@ pub const ClientRequestProperties = struct {
     pub fn deinit(self: *ClientRequestProperties, allocator: std.mem.Allocator) void {
         deinitPropertyList(&self.options, allocator);
         deinitPropertyList(&self.parameters, allocator);
+    }
+
+    /// Deep-copies the option and parameter bags. Borrowed header strings
+    /// remain borrowed, matching the source property bag.
+    pub fn clone(self: *const ClientRequestProperties, allocator: std.mem.Allocator) !ClientRequestProperties {
+        var result = ClientRequestProperties{
+            .client_request_id = self.client_request_id,
+            .application = self.application,
+            .server_timeout_ms = self.server_timeout_ms,
+            .user = self.user,
+            .client_version = self.client_version,
+            .client_timeout_ms = self.client_timeout_ms,
+            .no_request_timeout = self.no_request_timeout,
+        };
+        errdefer result.deinit(allocator);
+        for (self.options.items) |property|
+            try appendClonedProperty(&result.options, allocator, property);
+        for (self.parameters.items) |property|
+            try appendClonedProperty(&result.parameters, allocator, property);
+        return result;
     }
 
     /// Set an arbitrary Kusto request option. The name and value are copied.
@@ -1062,6 +1099,21 @@ fn deinitPropertyList(items: *std.ArrayListUnmanaged(RequestProperty), allocator
     for (items.items) |*property| property.deinit(allocator);
     items.deinit(allocator);
     items.* = .empty;
+}
+
+fn appendClonedProperty(
+    destination: *std.ArrayListUnmanaged(RequestProperty),
+    allocator: std.mem.Allocator,
+    source: RequestProperty,
+) !void {
+    const name = try allocator.dupe(u8, source.name);
+    errdefer allocator.free(name);
+    const value = try cloneSerdeValue(source.value, allocator);
+    errdefer {
+        var owned_value = value;
+        owned_value.deinit(allocator);
+    }
+    try destination.append(allocator, .{ .name = name, .value = value });
 }
 
 fn setProperty(items: *std.ArrayListUnmanaged(RequestProperty), allocator: std.mem.Allocator, name: []const u8, value: anytype) !void {

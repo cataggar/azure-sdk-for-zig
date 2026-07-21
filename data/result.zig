@@ -907,6 +907,426 @@ pub const KustoResponseDataSet = struct {
     }
 };
 
+/// How a progressive table batch changes its table's current rows. Consumers
+/// must treat `replace` as a reset, including when the batch has zero rows.
+pub const ProgressiveTableAction = enum {
+    append,
+    replace,
+};
+
+/// Allocator-owned V2 data-set metadata emitted by a progressive stream.
+pub const ProgressiveDataSetHeader = struct {
+    version: []u8,
+    is_progressive: bool,
+    is_fragmented: ?bool = null,
+    error_reporting_placement: ?[]u8 = null,
+
+    pub fn deinit(self: *ProgressiveDataSetHeader, allocator: std.mem.Allocator) void {
+        allocator.free(self.version);
+        if (self.error_reporting_placement) |value| allocator.free(value);
+        self.* = undefined;
+    }
+};
+
+/// An owned table-shaped progressive batch. A `data_table` event is always a
+/// replacement, while a table fragment preserves the server's explicit action.
+pub const ProgressiveTableBatch = struct {
+    action: ProgressiveTableAction,
+    table: KustoResultTable,
+    failure: ?kusto_common.KustoError = null,
+
+    pub fn deinit(self: *ProgressiveTableBatch, allocator: std.mem.Allocator) void {
+        self.table.deinit(allocator);
+        if (self.failure) |*failure| failure.deinit();
+        self.* = undefined;
+    }
+};
+
+pub const ProgressiveTableProgress = struct {
+    table_id: i64,
+    progress: f64,
+};
+
+pub const ProgressiveTableCompletion = struct {
+    table_id: i64,
+    row_count: i64,
+    has_errors: bool,
+    cancelled: bool,
+    failure: ?kusto_common.KustoError = null,
+
+    pub fn deinit(self: *ProgressiveTableCompletion) void {
+        if (self.failure) |*failure| failure.deinit();
+        self.* = undefined;
+    }
+};
+
+pub const ProgressiveDataSetCompletion = struct {
+    has_errors: bool,
+    cancelled: bool,
+    failure: ?kusto_common.KustoError = null,
+
+    pub fn deinit(self: *ProgressiveDataSetCompletion) void {
+        if (self.failure) |*failure| failure.deinit();
+        self.* = undefined;
+    }
+};
+
+pub const ProgressiveUnknownFrame = struct {
+    frame_type: []u8,
+
+    pub fn deinit(self: *ProgressiveUnknownFrame, allocator: std.mem.Allocator) void {
+        allocator.free(self.frame_type);
+        self.* = undefined;
+    }
+};
+
+/// One owned V2 response event. `raw_json` is the exact complete JSON object
+/// received from the wire and remains valid until `deinit`.
+pub const ProgressiveFrame = struct {
+    index: usize,
+    raw_json: []u8,
+    payload: Payload,
+
+    pub const Payload = union(enum) {
+        data_set_header: ProgressiveDataSetHeader,
+        data_table: ProgressiveTableBatch,
+        table_header: KustoResultTable,
+        table_fragment: ProgressiveTableBatch,
+        table_progress: ProgressiveTableProgress,
+        table_completion: ProgressiveTableCompletion,
+        data_set_completion: ProgressiveDataSetCompletion,
+        unknown: ProgressiveUnknownFrame,
+    };
+
+    pub fn deinit(self: *ProgressiveFrame, allocator: std.mem.Allocator) void {
+        switch (self.payload) {
+            .data_set_header => |*header| header.deinit(allocator),
+            .data_table, .table_fragment => |*batch| batch.deinit(allocator),
+            .table_header => |*table| table.deinit(allocator),
+            .table_completion => |*completion| completion.deinit(),
+            .data_set_completion => |*completion| completion.deinit(),
+            .unknown => |*unknown| unknown.deinit(allocator),
+            .table_progress => {},
+        }
+        allocator.free(self.raw_json);
+        self.* = undefined;
+    }
+
+    pub fn frameType(self: *const ProgressiveFrame) []const u8 {
+        return switch (self.payload) {
+            .data_set_header => "DataSetHeader",
+            .data_table => "DataTable",
+            .table_header => "TableHeader",
+            .table_fragment => "TableFragment",
+            .table_progress => "TableProgress",
+            .table_completion => "TableCompletion",
+            .data_set_completion => "DataSetCompletion",
+            .unknown => |unknown| unknown.frame_type,
+        };
+    }
+};
+
+const ProgressiveTableState = struct {
+    table: ?KustoResultTable,
+    row_count: i64,
+    completed: bool,
+
+    fn deinit(self: *ProgressiveTableState, allocator: std.mem.Allocator) void {
+        if (self.table) |*table| table.deinit(allocator);
+        self.* = undefined;
+    }
+};
+
+/// Incrementally validates V2 frames while retaining only schemas, row counts,
+/// and table state. Every input slice passed to `decodeOwnedFrame` transfers
+/// ownership, whether decoding succeeds or fails.
+pub const ProgressiveDecoder = struct {
+    allocator: std.mem.Allocator,
+    options: DecodeOptions,
+    operation: kusto_common.KustoOperation,
+    tables: std.ArrayList(ProgressiveTableState) = .empty,
+    table_indexes: std.AutoHashMap(i64, usize),
+    saw_header: bool = false,
+    saw_completion: bool = false,
+    is_progressive: bool = false,
+    is_fragmented: bool = false,
+    next_index: usize = 0,
+    max_table_count: usize = 1024,
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        options: DecodeOptions,
+        operation: kusto_common.KustoOperation,
+    ) ProgressiveDecoder {
+        return .{
+            .allocator = allocator,
+            .options = options,
+            .operation = operation,
+            .table_indexes = std.AutoHashMap(i64, usize).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *ProgressiveDecoder) void {
+        for (self.tables.items) |*table| table.deinit(self.allocator);
+        self.tables.deinit(self.allocator);
+        self.table_indexes.deinit();
+        self.* = undefined;
+    }
+
+    /// Decodes one complete JSON object and transfers ownership of `raw_json`
+    /// to the returned event. The decoder never accumulates event rows.
+    pub fn decodeOwnedFrame(self: *ProgressiveDecoder, raw_json: []u8) !ProgressiveFrame {
+        errdefer self.allocator.free(raw_json);
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const fields = try parseObjectFields(arena.allocator(), raw_json);
+        const frame_type_raw = requiredField(fields, "FrameType") orelse return error.MalformedKustoResponse;
+        const frame_type = try decodeStringTemp(arena.allocator(), frame_type_raw);
+        if (self.saw_completion) return error.MalformedKustoResponse;
+        if (!self.saw_header and !std.mem.eql(u8, frame_type, "DataSetHeader"))
+            return error.MalformedKustoResponse;
+
+        var payload: ProgressiveFrame.Payload = undefined;
+        if (std.mem.eql(u8, frame_type, "DataSetHeader")) {
+            if (self.saw_header) return error.MalformedKustoResponse;
+            payload = .{ .data_set_header = try self.decodeHeader(fields) };
+        } else if (std.mem.eql(u8, frame_type, "DataTable")) {
+            payload = .{ .data_table = try self.decodeDataTable(fields) };
+        } else if (std.mem.eql(u8, frame_type, "TableHeader")) {
+            payload = .{ .table_header = try self.decodeTableHeader(fields) };
+        } else if (std.mem.eql(u8, frame_type, "TableFragment")) {
+            payload = .{ .table_fragment = try self.decodeTableFragment(fields) };
+        } else if (std.mem.eql(u8, frame_type, "TableProgress")) {
+            payload = .{ .table_progress = try self.decodeTableProgress(fields) };
+        } else if (std.mem.eql(u8, frame_type, "TableCompletion")) {
+            payload = .{ .table_completion = try self.decodeTableCompletion(fields) };
+        } else if (std.mem.eql(u8, frame_type, "DataSetCompletion")) {
+            payload = .{ .data_set_completion = try self.decodeDataSetCompletion(fields) };
+        } else {
+            payload = .{ .unknown = .{
+                .frame_type = try self.allocator.dupe(u8, frame_type),
+            } };
+        }
+        const frame = ProgressiveFrame{
+            .index = self.next_index,
+            .raw_json = raw_json,
+            .payload = payload,
+        };
+        self.next_index += 1;
+        return frame;
+    }
+
+    /// Verifies that the top-level array ended after a header and completion.
+    pub fn finish(self: *const ProgressiveDecoder) !void {
+        if (!self.saw_header or !self.saw_completion)
+            return error.MalformedKustoResponse;
+    }
+
+    fn decodeHeader(self: *ProgressiveDecoder, fields: []const Field) !ProgressiveDataSetHeader {
+        const version_raw = requiredField(fields, "Version") orelse return error.MalformedKustoResponse;
+        const progressive_raw = requiredField(fields, "IsProgressive") orelse return error.MalformedKustoResponse;
+        const version = try decodeStringOwned(self.allocator, version_raw);
+        errdefer self.allocator.free(version);
+        var header = ProgressiveDataSetHeader{
+            .version = version,
+            .is_progressive = try decodeBool(progressive_raw),
+        };
+        errdefer header.deinit(self.allocator);
+        if (field(fields, "IsFragmented")) |raw|
+            header.is_fragmented = try decodeBool(raw);
+        if (field(fields, "ErrorReportingPlacement")) |raw|
+            header.error_reporting_placement = try decodeStringOwned(self.allocator, raw);
+        self.saw_header = true;
+        self.is_progressive = header.is_progressive;
+        self.is_fragmented = header.is_fragmented orelse false;
+        return header;
+    }
+
+    fn decodeDataTable(self: *ProgressiveDecoder, fields: []const Field) !ProgressiveTableBatch {
+        const id = try parseRequiredId(fields, "TableId");
+        if (self.table_indexes.contains(id)) return error.MalformedKustoResponse;
+        var failure: ?kusto_common.KustoError = null;
+        errdefer if (failure) |*value| value.deinit();
+        var builder = try parseDataTable(
+            self.allocator,
+            fields,
+            id,
+            self.options,
+            self.operation,
+            &failure,
+        );
+        errdefer builder.deinit(self.allocator);
+        var table = try builder.take(self.allocator);
+        errdefer table.deinit(self.allocator);
+        try self.addTableState(&table, @intCast(table.rows.len), true);
+        const owned_failure = failure;
+        failure = null;
+        return .{ .action = .replace, .table = table, .failure = owned_failure };
+    }
+
+    fn decodeTableHeader(self: *ProgressiveDecoder, fields: []const Field) !KustoResultTable {
+        if (!self.allowsTableFrames()) return error.MalformedKustoResponse;
+        const id = try parseRequiredId(fields, "TableId");
+        if (self.table_indexes.contains(id)) return error.MalformedKustoResponse;
+        var builder = try parseTableHeader(self.allocator, fields, id);
+        errdefer builder.deinit(self.allocator);
+        var table = try builder.take(self.allocator);
+        errdefer table.deinit(self.allocator);
+        try self.addTableState(&table, 0, false);
+        return table;
+    }
+
+    fn decodeTableFragment(self: *ProgressiveDecoder, fields: []const Field) !ProgressiveTableBatch {
+        if (!self.allowsTableFrames()) return error.MalformedKustoResponse;
+        const id = try parseRequiredId(fields, "TableId");
+        const table_index = self.table_indexes.get(id) orelse return error.MalformedKustoResponse;
+        const state = &self.tables.items[table_index];
+        if (state.completed) return error.MalformedKustoResponse;
+        const state_table = if (state.table) |*table| table else return error.MalformedKustoResponse;
+        if (field(fields, "FieldCount")) |raw| {
+            const field_count = try decodeNonNegativeI64(raw);
+            if (field_count != state_table.columns.len) return error.MalformedKustoResponse;
+        }
+        const type_raw = requiredField(fields, "TableFragmentType") orelse return error.MalformedKustoResponse;
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const type_name = try decodeStringTemp(arena.allocator(), type_raw);
+        const action: ProgressiveTableAction = if (std.mem.eql(u8, type_name, "DataAppend"))
+            .append
+        else if (std.mem.eql(u8, type_name, "DataReplace"))
+            .replace
+        else
+            return error.UnsupportedTableFragmentType;
+        const rows_raw = requiredField(fields, "Rows") orelse return error.MalformedKustoResponse;
+        var batch_table = try cloneTableMetadata(self.allocator, state_table, false);
+        errdefer batch_table.deinit(self.allocator);
+        var failure: ?kusto_common.KustoError = null;
+        errdefer if (failure) |*value| value.deinit();
+        const rows = try parseRows(
+            self.allocator,
+            rows_raw,
+            batch_table.columns,
+            self.options,
+            self.operation,
+            &failure,
+        );
+        batch_table.rows = rows;
+        batch_table.reported_row_count = @intCast(rows.len);
+        const batch_count: i64 = @intCast(rows.len);
+        state.row_count = switch (action) {
+            .append => std.math.add(i64, state.row_count, batch_count) catch return error.MalformedKustoResponse,
+            .replace => batch_count,
+        };
+        const owned_failure = failure;
+        failure = null;
+        return .{ .action = action, .table = batch_table, .failure = owned_failure };
+    }
+
+    fn decodeTableProgress(self: *ProgressiveDecoder, fields: []const Field) !ProgressiveTableProgress {
+        if (!self.allowsTableFrames()) return error.MalformedKustoResponse;
+        const id = try parseRequiredId(fields, "TableId");
+        const table_index = self.table_indexes.get(id) orelse return error.MalformedKustoResponse;
+        const state = &self.tables.items[table_index];
+        if (state.completed) return error.MalformedKustoResponse;
+        const progress_raw = requiredField(fields, "TableProgress") orelse return error.MalformedKustoResponse;
+        const progress = try decodeFiniteNumber(progress_raw);
+        if (progress < 0 or progress > 100) return error.MalformedKustoResponse;
+        const table = if (state.table) |*value| value else return error.MalformedKustoResponse;
+        table.progress = progress;
+        return .{ .table_id = id, .progress = progress };
+    }
+
+    fn decodeTableCompletion(self: *ProgressiveDecoder, fields: []const Field) !ProgressiveTableCompletion {
+        const id = try parseRequiredId(fields, "TableId");
+        const table_index = self.table_indexes.get(id) orelse return error.MalformedKustoResponse;
+        const state = &self.tables.items[table_index];
+        if (state.completed) return error.MalformedKustoResponse;
+        const row_count_raw = requiredField(fields, "RowCount") orelse return error.MalformedKustoResponse;
+        const row_count = try decodeNonNegativeI64(row_count_raw);
+        if (row_count != state.row_count) return error.MalformedKustoResponse;
+        const has_errors = if (field(fields, "HasErrors")) |raw| try decodeBool(raw) else false;
+        const cancelled = if (field(fields, "Cancelled")) |raw| try decodeBool(raw) else false;
+        const failure = try completionFailure(
+            self.allocator,
+            self.operation,
+            .table_completion,
+            field(fields, "OneApiErrors"),
+            has_errors,
+            cancelled,
+        );
+        state.completed = true;
+        if (state.table) |*table| {
+            table.deinit(self.allocator);
+            state.table = null;
+        }
+        return .{
+            .table_id = id,
+            .row_count = row_count,
+            .has_errors = has_errors,
+            .cancelled = cancelled,
+            .failure = failure,
+        };
+    }
+
+    fn decodeDataSetCompletion(self: *ProgressiveDecoder, fields: []const Field) !ProgressiveDataSetCompletion {
+        for (self.tables.items) |state| {
+            if (!state.completed) return error.MalformedKustoResponse;
+        }
+        const has_errors_raw = requiredField(fields, "HasErrors") orelse return error.MalformedKustoResponse;
+        const cancelled_raw = requiredField(fields, "Cancelled") orelse return error.MalformedKustoResponse;
+        const has_errors = try decodeBool(has_errors_raw);
+        const cancelled = try decodeBool(cancelled_raw);
+        const failure = try completionFailure(
+            self.allocator,
+            self.operation,
+            .dataset_completion,
+            field(fields, "OneApiErrors"),
+            has_errors,
+            cancelled,
+        );
+        self.saw_completion = true;
+        return .{
+            .has_errors = has_errors,
+            .cancelled = cancelled,
+            .failure = failure,
+        };
+    }
+
+    fn addTableState(
+        self: *ProgressiveDecoder,
+        source: *const KustoResultTable,
+        row_count: i64,
+        completed: bool,
+    ) !void {
+        const id = source.id orelse return error.MalformedKustoResponse;
+        if (self.tables.items.len >= self.max_table_count)
+            return error.KustoProgressiveTableLimitExceeded;
+        var table: ?KustoResultTable = if (completed)
+            null
+        else
+            try cloneTableMetadata(self.allocator, source, false);
+        errdefer if (table) |*value| value.deinit(self.allocator);
+        if (table) |*value| {
+            value.completed = false;
+            value.reported_row_count = row_count;
+        }
+        try self.table_indexes.put(id, self.tables.items.len);
+        errdefer {
+            _ = self.table_indexes.remove(id);
+        }
+        try self.tables.append(self.allocator, .{
+            .table = table,
+            .row_count = row_count,
+            .completed = completed,
+        });
+        table = null;
+    }
+
+    fn allowsTableFrames(self: *const ProgressiveDecoder) bool {
+        return self.is_progressive or self.is_fragmented;
+    }
+};
+
 pub const DecodeOutcome = struct {
     dataset: KustoResponseDataSet,
     failure: ?kusto_common.KustoError = null,
@@ -1898,6 +2318,67 @@ fn deinitTableMetadata(table: *KustoResultTable, allocator: std.mem.Allocator) v
     if (table.toc_name) |value| allocator.free(value);
     if (table.toc_id) |value| allocator.free(value);
     if (table.pretty_name) |value| allocator.free(value);
+}
+
+fn cloneTableMetadata(
+    allocator: std.mem.Allocator,
+    source: *const KustoResultTable,
+    completed: bool,
+) !KustoResultTable {
+    const name = try allocator.dupe(u8, source.name);
+    errdefer allocator.free(name);
+    const kind = if (source.kind) |value| try allocator.dupe(u8, value) else null;
+    errdefer if (kind) |value| allocator.free(value);
+    const toc_name = if (source.toc_name) |value| try allocator.dupe(u8, value) else null;
+    errdefer if (toc_name) |value| allocator.free(value);
+    const toc_id = if (source.toc_id) |value| try allocator.dupe(u8, value) else null;
+    errdefer if (toc_id) |value| allocator.free(value);
+    const pretty_name = if (source.pretty_name) |value| try allocator.dupe(u8, value) else null;
+    errdefer if (pretty_name) |value| allocator.free(value);
+    const columns = try cloneColumns(allocator, source.columns);
+    errdefer {
+        for (columns) |*column| column.deinit(allocator);
+        allocator.free(columns);
+    }
+    return .{
+        .id = source.id,
+        .ordinal = source.ordinal,
+        .name = name,
+        .kind = kind,
+        .known_kind = source.known_kind,
+        .toc_name = toc_name,
+        .toc_id = toc_id,
+        .pretty_name = pretty_name,
+        .columns = columns,
+        .rows = &.{},
+        .progress = source.progress,
+        .reported_row_count = source.reported_row_count,
+        .completed = completed,
+    };
+}
+
+fn cloneColumns(
+    allocator: std.mem.Allocator,
+    source: []const KustoResultColumn,
+) ![]KustoResultColumn {
+    var columns = try allocator.alloc(KustoResultColumn, source.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (columns[0..initialized]) |*column| column.deinit(allocator);
+        allocator.free(columns);
+    }
+    for (source, 0..) |column, index| {
+        columns[index] = .{
+            .name = try allocator.dupe(u8, column.name),
+            .column_type = undefined,
+            .scalar_kind = column.scalar_kind,
+            .has_declared_type = column.has_declared_type,
+        };
+        errdefer allocator.free(columns[index].name);
+        columns[index].column_type = try allocator.dupe(u8, column.column_type);
+        initialized += 1;
+    }
+    return columns;
 }
 
 fn parseObjectFields(allocator: std.mem.Allocator, raw: []const u8) ![]Field {
@@ -2954,6 +3435,24 @@ test "complex result parsing releases all allocation failures" {
     );
 }
 
+test "progressive decoder does not retain completed DataTable schemas" {
+    const allocator = std.testing.allocator;
+    var decoder = ProgressiveDecoder.init(allocator, .{}, .query);
+    defer decoder.deinit();
+
+    var header = try decoder.decodeOwnedFrame(try allocator.dupe(u8,
+        \\{"FrameType":"DataSetHeader","Version":"v2.0","IsProgressive":false}
+    ));
+    defer header.deinit(allocator);
+    var table = try decoder.decodeOwnedFrame(try allocator.dupe(u8,
+        \\{"FrameType":"DataTable","TableId":0,"TableKind":"PrimaryResult","TableName":"T","Columns":[{"ColumnName":"Value","ColumnType":"long"}],"Rows":[[1]]}
+    ));
+    defer table.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), decoder.tables.items.len);
+    try std.testing.expect(decoder.tables.items[0].table == null);
+}
+
 const TypedHook = struct {
     text: []u8,
 
@@ -3204,5 +3703,103 @@ test "typed row conversion releases every allocation failure path" {
         std.testing.allocator,
         typedRowAllocationFixture,
         .{},
+    );
+}
+
+test "ProgressiveDecoder retains only state and preserves append replace completion errors" {
+    const allocator = std.testing.allocator;
+    var decoder = ProgressiveDecoder.init(allocator, .{}, .query);
+    defer decoder.deinit();
+
+    var header = try decoder.decodeOwnedFrame(try allocator.dupe(
+        u8,
+        "{\"FrameType\":\"DataSetHeader\",\"Version\":\"v2.0\",\"IsProgressive\":true}",
+    ));
+    defer header.deinit(allocator);
+    try std.testing.expectEqualStrings("DataSetHeader", header.frameType());
+
+    var table_header = try decoder.decodeOwnedFrame(try allocator.dupe(
+        u8,
+        "{\"FrameType\":\"TableHeader\",\"TableId\":7,\"TableKind\":\"PrimaryResult\",\"TableName\":\"T\",\"Columns\":[{\"ColumnName\":\"n\",\"ColumnType\":\"long\"}]}",
+    ));
+    defer table_header.deinit(allocator);
+
+    var append = try decoder.decodeOwnedFrame(try allocator.dupe(
+        u8,
+        "{\"FrameType\":\"TableFragment\",\"TableId\":7,\"FieldCount\":1,\"TableFragmentType\":\"DataAppend\",\"Rows\":[[1]]}",
+    ));
+    defer append.deinit(allocator);
+    switch (append.payload) {
+        .table_fragment => |batch| {
+            try std.testing.expectEqual(ProgressiveTableAction.append, batch.action);
+            try std.testing.expectEqual(@as(?i64, 1), batch.table.rows[0].get(0).?.asI64());
+        },
+        else => return error.TestUnexpectedFrame,
+    }
+
+    var replace = try decoder.decodeOwnedFrame(try allocator.dupe(
+        u8,
+        "{\"FrameType\":\"TableFragment\",\"TableId\":7,\"FieldCount\":1,\"TableFragmentType\":\"DataReplace\",\"Rows\":[]}",
+    ));
+    defer replace.deinit(allocator);
+    switch (replace.payload) {
+        .table_fragment => |batch| {
+            try std.testing.expectEqual(ProgressiveTableAction.replace, batch.action);
+            try std.testing.expectEqual(@as(usize, 0), batch.table.rows.len);
+        },
+        else => return error.TestUnexpectedFrame,
+    }
+
+    var completion = try decoder.decodeOwnedFrame(try allocator.dupe(
+        u8,
+        "{\"FrameType\":\"TableCompletion\",\"TableId\":7,\"RowCount\":0,\"HasErrors\":true,\"Cancelled\":false,\"OneApiErrors\":[{\"error\":{\"code\":\"Partial\",\"message\":\"partial table\"}}]}",
+    ));
+    defer completion.deinit(allocator);
+    switch (completion.payload) {
+        .table_completion => |item| {
+            try std.testing.expect(item.failure != null);
+            try std.testing.expectEqual(KustoErrorSource.table_completion, item.failure.?.source);
+        },
+        else => return error.TestUnexpectedFrame,
+    }
+
+    var dataset_completion = try decoder.decodeOwnedFrame(try allocator.dupe(
+        u8,
+        "{\"FrameType\":\"DataSetCompletion\",\"HasErrors\":false,\"Cancelled\":false}",
+    ));
+    defer dataset_completion.deinit(allocator);
+    try decoder.finish();
+}
+
+test "ProgressiveDecoder rejects out of order and invalid row counts" {
+    const allocator = std.testing.allocator;
+    var decoder = ProgressiveDecoder.init(allocator, .{}, .query);
+    defer decoder.deinit();
+    try std.testing.expectError(
+        error.MalformedKustoResponse,
+        decoder.decodeOwnedFrame(try allocator.dupe(
+            u8,
+            "{\"FrameType\":\"TableProgress\",\"TableId\":1,\"TableProgress\":50}",
+        )),
+    );
+
+    var second = ProgressiveDecoder.init(allocator, .{}, .query);
+    defer second.deinit();
+    var header = try second.decodeOwnedFrame(try allocator.dupe(
+        u8,
+        "{\"FrameType\":\"DataSetHeader\",\"Version\":\"v2.0\",\"IsProgressive\":true}",
+    ));
+    defer header.deinit(allocator);
+    var table = try second.decodeOwnedFrame(try allocator.dupe(
+        u8,
+        "{\"FrameType\":\"TableHeader\",\"TableId\":1,\"TableKind\":\"PrimaryResult\",\"TableName\":\"T\",\"Columns\":[]}",
+    ));
+    defer table.deinit(allocator);
+    try std.testing.expectError(
+        error.MalformedKustoResponse,
+        second.decodeOwnedFrame(try allocator.dupe(
+            u8,
+            "{\"FrameType\":\"TableCompletion\",\"TableId\":1,\"RowCount\":1}",
+        )),
     );
 }
