@@ -157,6 +157,16 @@ Set `.metadata_mode = .disabled` for offline or custom bootstrap control. Trust 
 
 Metadata can expose the login authority for a sovereign or private cloud, but `TokenCredential` is an opaque credential boundary: Kusto cannot reconfigure a generic credential at runtime. Callers using those clouds must construct or configure their credential for the discovered authority themselves; do not assume that every `azure_core` credential supports runtime authority changes.
 
+### Kusto request properties, timeouts, and retries
+
+`ClientRequestProperties` emits object-valued `Options` and `Parameters` through structured serde values. Dynamic setters own their keys and values and require `deinit`; borrowed header strings must outlive the request.
+
+- Typed helper areas cover timeout, truncation, progressive results, cache, consistency, resources, and security. Unknown options preserve their JSON types; raw JSON fragments are not accepted. Query parameter values must be strings or Kusto `long` values; encode other scalar types as KQL literal strings such as `datetime(...)` or `dynamic(...)`.
+- Query requests default to a 4-minute server timeout and management requests to 10 minutes. Explicit server timeouts range from 1 second through 1 hour with millisecond precision; the client budget defaults to the server timeout plus 30 seconds. `no_request_timeout` requests the maximum server timeout.
+- In the current synchronous buffered transport, the client timeout bounds retries and backoff only; it cannot interrupt an in-flight `std.http` request. Hard cancellation is deferred to future streaming and cancellation transport work.
+- Explicit application, user, version, and request-ID headers override defaults. Results expose owned `client_request_id` and `activity_id`; dataset `deinit` frees them.
+- Queries may retry; management operations and streaming ingestion remain non-retryable.
+
 ### Infrastructure
 
 | Package | Description |
