@@ -38,6 +38,10 @@ pub const Request = struct {
     body: ?[]const u8 = null,
     allocator: std.mem.Allocator,
     retryable: bool = true,
+    /// Set immediately before a transport implementation is called. This lets
+    /// non-idempotent clients distinguish pre-transport failures from an
+    /// attempt whose server-side outcome is unknown.
+    transport_started: bool = false,
     redirect_policy: RedirectPolicy = .follow,
     /// Best-effort budget checked before attempts and retry backoff. A blocking
     /// in-flight send can exceed this budget.
@@ -139,6 +143,7 @@ pub const HttpTransport = struct {
     sendFn: *const fn (self: *HttpTransport, request: *Request) anyerror!Response,
 
     pub fn send(self: *HttpTransport, request: *Request) !Response {
+        request.transport_started = true;
         return self.sendFn(self, request);
     }
 };

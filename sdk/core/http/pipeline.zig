@@ -53,6 +53,7 @@ pub const HttpPipeline = struct {
     transport_impl: *HttpTransport,
 
     pub fn send(self: *HttpPipeline, request: *Request) !Response {
+        request.transport_started = false;
         return callNext(request, self.policies, self.transport_impl);
     }
 };

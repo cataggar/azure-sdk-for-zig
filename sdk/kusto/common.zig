@@ -6,6 +6,14 @@ const std = @import("std");
 const core = @import("azure_core");
 const serde = @import("serde");
 
+pub const errors = @import("error.zig");
+pub const KustoError = errors.KustoError;
+pub const KustoErrorDetail = errors.KustoErrorDetail;
+pub const KustoOperation = errors.KustoOperation;
+pub const KustoErrorSource = errors.KustoErrorSource;
+pub const KustoOperationOutcome = errors.KustoOperationOutcome;
+pub const KustoResult = errors.KustoResult;
+
 // ─────────────────────── Enums ───────────────────────
 
 /// Supported data formats for ingestion.

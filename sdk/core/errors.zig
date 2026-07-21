@@ -94,6 +94,11 @@ pub fn logErrorResponse(response: http.Response) void {
 /// fast on `"AuthFailed"`) — the standard pattern in Azure SDKs for other
 /// languages.
 ///
+/// Kusto does not use this generic result because its 200 responses can carry
+/// partial service failures; its `KustoResult(T)` adds `.partial` and
+/// Kusto-specific diagnostic and outcome fields. This type remains the
+/// compatibility result for services with ordinary HTTP success semantics.
+///
 /// **Layered error model**
 ///
 /// - The outer Zig error union (`!Result(T)`) carries *local* failures —
