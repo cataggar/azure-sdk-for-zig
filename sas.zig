@@ -259,6 +259,109 @@ pub const SasBlobClient = struct {
         return self.upload(.{ .reader = .{ .reader = reader, .size = size } }, options);
     }
 
+    /// Stages an unknown-length stream as ordered blocks and commits it.
+    ///
+    /// This is intended for transforms such as streaming gzip, whose output
+    /// length cannot be known before consuming the source. It uses one bounded
+    /// block buffer and reserves the worst-case block-list XML before the
+    /// first stage request, so commit-body growth cannot allocate after a
+    /// successful block. The reader is consumed once and is never retried.
+    pub fn uploadBlockStream(
+        self: *SasBlobClient,
+        reader: *std.Io.Reader,
+        options: BlobUploadOptions,
+    ) !BlobUploadOutcome {
+        try validateBlockStreamOptions(options);
+
+        const block_capacity: usize = @intCast(options.block_size);
+        const block = try self.allocator.alloc(u8, block_capacity);
+        defer self.allocator.free(block);
+
+        var commit = std.ArrayList(u8).empty;
+        defer commit.deinit(self.allocator);
+        try commit.ensureTotalCapacity(self.allocator, maxBlockListBytes());
+        try commit.appendSlice(self.allocator, "<BlockList>");
+
+        var staged_blocks: u64 = 0;
+        while (true) {
+            if (staged_blocks == max_block_count) {
+                const has_more = blockStreamHasMoreData(reader) catch |err|
+                    return localFailureAfterBlocks(err, .put_block, staged_blocks);
+                if (has_more)
+                    return localFailureAfterBlocks(
+                        error.BlobUploadTooLarge,
+                        .put_block,
+                        staged_blocks,
+                    );
+                break;
+            }
+
+            var used: usize = 0;
+            while (used < block.len) {
+                const count = reader.readSliceShort(block[used..]) catch |err|
+                    return localFailureAfterBlocks(err, .put_block, staged_blocks);
+                if (count == 0) break;
+                used += count;
+            }
+            if (used == 0) break;
+
+            const block_id = blockId(staged_blocks);
+            // The capacity was reserved before staging began.
+            commit.appendSlice(self.allocator, "<Latest>") catch unreachable;
+            commit.appendSlice(self.allocator, &block_id) catch unreachable;
+            commit.appendSlice(self.allocator, "</Latest>") catch unreachable;
+
+            const outcome = blk: {
+                const block_url = self.uri.appendProtocolQuery(self.allocator, &.{
+                    .{ .name = "comp", .value = "block" },
+                    .{ .name = "blockid", .value = &block_id },
+                }) catch |err| return localFailureAfterBlocks(err, .put_block, staged_blocks);
+                defer self.allocator.free(block_url);
+
+                var request = core.http.Request.init(self.allocator, .PUT, block_url);
+                defer request.deinit();
+                request.setHeader("Content-Type", "application/octet-stream") catch |err|
+                    return localFailureAfterBlocks(err, .put_block, staged_blocks);
+                request.setHeader("x-ms-version", storage_api_version) catch |err|
+                    return localFailureAfterBlocks(err, .put_block, staged_blocks);
+                request.body = block[0..used];
+                break :blk sas.send(self.transport, &request, null) catch |err|
+                    return localFailureAfterBlocks(err, .put_block, staged_blocks);
+            };
+            switch (outcome) {
+                .accepted => {},
+                else => return mapOutcome(outcome, .put_block),
+            }
+            staged_blocks += 1;
+            if (used < block.len) break;
+        }
+
+        if (staged_blocks == 0) {
+            // An empty transformed stream still needs a valid Block Blob.
+            return self.putBlobBytes("", options);
+        }
+
+        // The capacity was reserved before staging began.
+        commit.appendSlice(self.allocator, "</BlockList>") catch unreachable;
+        const commit_url = self.uri.appendProtocolQuery(self.allocator, &.{
+            .{ .name = "comp", .value = "blocklist" },
+        }) catch |err| return localFailureAfterBlocks(err, .put_block_list, staged_blocks);
+        defer self.allocator.free(commit_url);
+
+        var request = core.http.Request.init(self.allocator, .PUT, commit_url);
+        defer request.deinit();
+        request.setHeader("Content-Type", "application/xml") catch |err|
+            return localFailureAfterBlocks(err, .put_block_list, staged_blocks);
+        request.setHeader("x-ms-version", storage_api_version) catch |err|
+            return localFailureAfterBlocks(err, .put_block_list, staged_blocks);
+        request.setHeader("x-ms-blob-content-type", options.content_type) catch |err|
+            return localFailureAfterBlocks(err, .put_block_list, staged_blocks);
+        request.body = commit.items;
+        const outcome = sas.send(self.transport, &request, null) catch |err|
+            return localFailureAfterBlocks(err, .put_block_list, staged_blocks);
+        return mapOutcome(outcome, .put_block_list);
+    }
+
     fn putBlob(
         self: *SasBlobClient,
         reader: *std.Io.Reader,
@@ -339,6 +442,27 @@ fn validateOptions(size: u64, options: BlobUploadOptions) !void {
         if (blocks > max_block_count)
             return error.BlobUploadTooLarge;
     }
+}
+
+fn validateBlockStreamOptions(options: BlobUploadOptions) !void {
+    if (options.block_size == 0 or options.block_size > max_block_size)
+        return error.InvalidBlobBlockSize;
+    if (options.single_upload_max_bytes > max_single_upload_bytes)
+        return error.InvalidBlobSingleUploadLimit;
+}
+
+fn maxBlockListBytes() usize {
+    return "<BlockList>".len +
+        @as(usize, @intCast(max_block_count)) *
+            ("<Latest>".len + 12 + "</Latest>".len) +
+        "</BlockList>".len;
+}
+
+/// Probes a saturated unknown-length upload once. A full final block is valid
+/// when this observes EOF; only an additional byte exceeds Blob's limit.
+fn blockStreamHasMoreData(reader: *std.Io.Reader) !bool {
+    var byte: [1]u8 = undefined;
+    return try reader.readSliceShort(&byte) != 0;
 }
 
 fn blockCount(size: u64, block_size: u64) u64 {
@@ -688,6 +812,36 @@ test "SAS blob block upload orders deterministic IDs and bounds reads" {
         transport.last_body.?,
     );
     try std.testing.expect(transport.last_headers.get("Authorization") == null);
+}
+
+test "SAS blob unknown-length block stream commits buffered blocks" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 201, "");
+    defer transport.deinit();
+    var client = try SasBlobClient.init(
+        allocator,
+        "https://account.blob.core.windows.net/container/blob?sig=opaque",
+        transport.asTransport(),
+    );
+    defer client.deinit();
+
+    var reader = std.Io.Reader.fixed("abcdefgh");
+    const outcome = try client.uploadBlockStream(&reader, .{ .block_size = 3 });
+    try std.testing.expect(outcome.isAccepted());
+    try std.testing.expectEqual(@as(usize, 4), transport.call_count);
+    try std.testing.expectEqualStrings(
+        "<BlockList><Latest>MDAwMDAwMDA=</Latest><Latest>MDAwMDAwMDE=</Latest><Latest>MDAwMDAwMDI=</Latest></BlockList>",
+        transport.last_body.?,
+    );
+    try std.testing.expect(transport.last_headers.get("Authorization") == null);
+}
+
+test "SAS blob block-stream limit EOF probe accepts exactly full capacity" {
+    var eof_reader = std.Io.Reader.fixed("");
+    try std.testing.expect(!try blockStreamHasMoreData(&eof_reader));
+
+    var extra_reader = std.Io.Reader.fixed("x");
+    try std.testing.expect(try blockStreamHasMoreData(&extra_reader));
 }
 
 test "SAS blob returns known rejections and unknown transport outcomes" {
