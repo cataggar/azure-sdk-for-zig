@@ -510,6 +510,7 @@ fn openFollowingRedirects(
 
     var redirect_count: usize = 0;
     while (true) {
+        try checkCancelled(current_options.cancellation);
         var operation = try rawOpen(transport, current, current_options);
         const action = redirectAction(
             operation.status_code,
@@ -535,6 +536,10 @@ fn openFollowingRedirects(
         };
         operation.abort();
         operation.deinit();
+        checkCancelled(current_options.cancellation) catch |err| {
+            target.allocator.free(target.url);
+            return err;
+        };
         if (action.drop_body) {
             current_options.body = null;
         } else if (current_options.body) |*body| {
@@ -1532,6 +1537,7 @@ pub const SequenceMockTransport = struct {
     captured_body_present: [16]bool = .{false} ** 16,
     captured_body_lengths: [16]usize = .{0} ** 16,
     captured_bodies: [16][512]u8 = undefined,
+    cancel_after_open: ?*CancellationToken = null,
 
     pub fn init(allocator: std.mem.Allocator, responses: []const CannedResponse) SequenceMockTransport {
         return .{
@@ -1593,6 +1599,7 @@ pub const SequenceMockTransport = struct {
         }
 
         const idx = try self.capture(request, body_bytes);
+        if (self.cancel_after_open) |token| token.cancel();
         return BufferedOperation.fromResponse(try self.response(idx));
     }
 
@@ -1940,6 +1947,54 @@ test "transport preserves buffered 301 302 and 303 redirect semantics" {
     try std.testing.expectEqual(Method.GET, one_shot_sequence.captured_methods[1].?);
     try std.testing.expect(!one_shot_sequence.captured_body_present[1]);
     try operation.finish();
+}
+
+test "streaming redirect cancellation does not rewind or follow" {
+    const CountingReplay = struct {
+        reader: std.Io.Reader,
+        bytes: []const u8,
+        rewind_count: usize = 0,
+
+        fn init(bytes: []const u8) @This() {
+            return .{ .reader = std.Io.Reader.fixed(bytes), .bytes = bytes };
+        }
+
+        fn rewind(context: *anyopaque) !*std.Io.Reader {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            self.rewind_count += 1;
+            self.reader = std.Io.Reader.fixed(self.bytes);
+            return &self.reader;
+        }
+    };
+
+    const allocator = std.testing.allocator;
+    var token = CancellationToken{};
+    var sequence = SequenceMockTransport.init(allocator, &.{
+        .{
+            .status = 307,
+            .body = "",
+            .headers = &.{.{ .name = "Location", .value = "https://storage.example/blob" }},
+        },
+        .{ .status = 200, .body = "unexpected" },
+    });
+    sequence.cancel_after_open = &token;
+    var request = Request.init(allocator, .PUT, "https://registry.example/upload");
+    defer request.deinit();
+    var source = CountingReplay.init("payload");
+    const body = StreamingRequestBody.knownLength(
+        &source.reader,
+        source.bytes.len,
+    ).withRewind(&source, &CountingReplay.rewind);
+
+    try std.testing.expectError(
+        error.OperationCancelled,
+        sequence.asTransport().open(
+            &request,
+            .{ .body = body, .cancellation = &token },
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 1), sequence.call_count);
+    try std.testing.expectEqual(@as(usize, 0), source.rewind_count);
 }
 
 test "transport does not replay one-shot bodies and rejects insecure redirects" {
