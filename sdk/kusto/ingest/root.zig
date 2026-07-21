@@ -13,6 +13,9 @@ pub const DataFormat = kusto_common.DataFormat;
 pub const IngestionProperties = kusto_common.IngestionProperties;
 pub const KustoConnection = kusto_common.KustoConnection;
 pub const KustoConnectionOptions = kusto_common.KustoConnectionOptions;
+pub const KustoMetadataMode = kusto_common.KustoMetadataMode;
+pub const KustoCloudInfo = kusto_common.KustoCloudInfo;
+pub const KustoCloudInfoCache = kusto_common.KustoCloudInfoCache;
 pub const KustoRetryOptions = kusto_common.KustoRetryOptions;
 
 // ─────────────────── Types ───────────────────────────
@@ -137,7 +140,7 @@ pub const StreamingIngestClient = struct {
 
         const cluster_url = switch (self.runtime) {
             .legacy => |legacy| legacy.connection.cluster_url,
-            .shared => |connection| connection.clusterUrl(),
+            .shared => |connection| connection.engineUrl(),
         };
 
         if (options.mapping_name) |mapping| {
@@ -326,7 +329,12 @@ test "shared StreamingIngestClient authenticates through KustoConnection" {
         .cluster_url = "https://cluster.kusto.windows.net",
         .credential = credential.asCredential(),
     };
-    const connection = try KustoConnection.init(allocator, properties, service_mock.asTransport(), .{});
+    const connection = try KustoConnection.init(
+        allocator,
+        properties,
+        service_mock.asTransport(),
+        .{ .metadata_mode = .disabled },
+    );
     defer connection.deinit();
 
     var client = StreamingIngestClient.initWithConnection(connection);
@@ -335,6 +343,38 @@ test "shared StreamingIngestClient authenticates through KustoConnection" {
     try std.testing.expect(token_mock.last_url != null);
     try std.testing.expect(service_mock.last_headers.get("Authorization") != null);
     try std.testing.expectEqual(false, service_mock.last_retryable.?);
+}
+
+test "shared StreamingIngestClient uses explicit engine endpoint" {
+    const allocator = std.testing.allocator;
+    var service_mock = core.http.MockTransport.init(allocator, 200, "{}");
+    defer service_mock.deinit();
+
+    var credential = core.credentials.TokenCredential{ .getTokenFn = &successfulTokenRequest };
+    const properties = ConnectionProperties{
+        .cluster_url = "https://cluster.kusto.windows.net",
+        .credential = &credential,
+    };
+    const connection = try KustoConnection.init(
+        allocator,
+        properties,
+        service_mock.asTransport(),
+        .{
+            .metadata_mode = .disabled,
+            .engine_endpoint = "https://streaming-engine.kusto.windows.net",
+            .data_management_endpoint = "https://ingest-dm.kusto.windows.net",
+        },
+    );
+    defer connection.deinit();
+
+    var client = StreamingIngestClient.initWithConnection(connection);
+    _ = try client.ingestFromSlice(allocator, "DB", "Table", "data", .{});
+
+    try std.testing.expectEqualStrings(
+        "https://streaming-engine.kusto.windows.net/v1/rest/ingest/DB/Table?streamFormat=Csv",
+        service_mock.last_url.?,
+    );
+    try std.testing.expect(std.mem.find(u8, service_mock.last_url.?, "ingest-dm") == null);
 }
 
 test "shared StreamingIngestClient can be copied" {
@@ -347,7 +387,12 @@ test "shared StreamingIngestClient can be copied" {
         .cluster_url = "https://cluster.kusto.windows.net",
         .credential = &credential,
     };
-    const connection = try KustoConnection.init(allocator, properties, service_mock.asTransport(), .{});
+    const connection = try KustoConnection.init(
+        allocator,
+        properties,
+        service_mock.asTransport(),
+        .{ .metadata_mode = .disabled },
+    );
     defer connection.deinit();
 
     const original = StreamingIngestClient.initWithConnection(connection);
@@ -366,7 +411,12 @@ test "ManagedIngestClient shared initialization composes borrowed clients" {
         .cluster_url = "https://cluster.kusto.windows.net",
         .credential = &credential,
     };
-    const connection = try KustoConnection.init(allocator, properties, service_mock.asTransport(), .{});
+    const connection = try KustoConnection.init(
+        allocator,
+        properties,
+        service_mock.asTransport(),
+        .{ .metadata_mode = .disabled },
+    );
     defer connection.deinit();
 
     var client = ManagedIngestClient.initWithConnection(connection);
@@ -390,7 +440,12 @@ test "configured shared connection does not retry streaming writes" {
         .cluster_url = "https://cluster.kusto.windows.net",
         .credential = &credential,
     };
-    const connection = try KustoConnection.init(allocator, properties, service_mock.asTransport(), .{});
+    const connection = try KustoConnection.init(
+        allocator,
+        properties,
+        service_mock.asTransport(),
+        .{ .metadata_mode = .disabled },
+    );
     defer connection.deinit();
 
     var client = StreamingIngestClient.initWithConnection(connection);

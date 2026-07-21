@@ -24,6 +24,12 @@ pub const Method = enum {
     }
 };
 
+/// Controls whether an HTTP transport may follow redirects.
+pub const RedirectPolicy = enum {
+    follow,
+    not_allowed,
+};
+
 /// An outgoing HTTP request.
 pub const Request = struct {
     method: Method = .GET,
@@ -32,6 +38,7 @@ pub const Request = struct {
     body: ?[]const u8 = null,
     allocator: std.mem.Allocator,
     retryable: bool = true,
+    redirect_policy: RedirectPolicy = .follow,
 
     pub fn init(allocator: std.mem.Allocator, method: Method, request_url: []const u8) Request {
         return .{
@@ -97,6 +104,8 @@ pub const Response = struct {
 ///
 /// Default implementation uses `std.http.Client` (TLS via `std.crypto.tls`).
 /// Users may supply their own for testing or custom networking.
+/// Custom implementations must honor `.not_allowed`; this is a security
+/// contract for bootstrap calls.
 pub const HttpTransport = struct {
     sendFn: *const fn (self: *HttpTransport, request: *Request) anyerror!Response,
 
@@ -158,7 +167,10 @@ pub const StdHttpTransport = struct {
         // Use lower-level API to access response headers.
         var req = try self.client.request(request.method.toStd(), uri, .{
             .extra_headers = extra.items,
-            .redirect_behavior = if (authenticated) .not_allowed else @enumFromInt(3),
+            .redirect_behavior = if (authenticated or request.redirect_policy == .not_allowed)
+                .not_allowed
+            else
+                @enumFromInt(3),
         });
         defer req.deinit();
 
@@ -242,6 +254,8 @@ pub const MockTransport = struct {
     last_headers: std.StringHashMap([]const u8),
     last_body: ?[]u8 = null,
     last_retryable: ?bool = null,
+    last_redirect_policy: ?RedirectPolicy = null,
+    call_count: usize = 0,
     response_headers_list: []const HeaderPair = &.{},
 
     pub fn init(allocator: std.mem.Allocator, status: u16, body: []const u8) MockTransport {
@@ -253,6 +267,8 @@ pub const MockTransport = struct {
             .last_method = null,
             .last_url = null,
             .last_headers = std.StringHashMap([]const u8).init(allocator),
+            .last_redirect_policy = null,
+            .call_count = 0,
         };
     }
 
@@ -268,6 +284,7 @@ pub const MockTransport = struct {
 
     fn sendImpl(transport: *HttpTransport, request: *Request) !Response {
         const self: *MockTransport = @alignCast(@fieldParentPtr("transport", transport));
+        self.call_count += 1;
         self.last_method = request.method;
         if (self.last_url) |old| self.allocator.free(old);
         self.last_url = try self.allocator.dupe(u8, request.url);
@@ -286,6 +303,7 @@ pub const MockTransport = struct {
             try self.last_headers.put(name, value);
         }
         self.last_retryable = request.retryable;
+        self.last_redirect_policy = request.redirect_policy;
 
         const response_body_copy = try self.allocator.dupe(u8, self.response_body);
         errdefer self.allocator.free(response_body_copy);
@@ -376,6 +394,9 @@ test "request init and set header" {
     const allocator = std.testing.allocator;
     var req = Request.init(allocator, .GET, "https://example.com");
     defer req.deinit();
+    try std.testing.expectEqual(RedirectPolicy.follow, req.redirect_policy);
+    req.redirect_policy = .not_allowed;
+    try std.testing.expectEqual(RedirectPolicy.not_allowed, req.redirect_policy);
     try req.setHeader("Accept", "application/json");
     try std.testing.expectEqualStrings("application/json", req.headers.get("Accept").?);
     try req.setHeader("Accept", "application/xml");
@@ -403,6 +424,7 @@ test "mock transport" {
     var req = Request.init(allocator, .POST, "https://vault.azure.net/secrets/mysecret");
     defer req.deinit();
     req.body = "{\"value\":\"secret-value\"}";
+    req.redirect_policy = .not_allowed;
     var resp = try mock.asTransport().send(&req);
     defer resp.deinit();
     try std.testing.expectEqual(@as(u16, 200), resp.status_code);
@@ -410,4 +432,6 @@ test "mock transport" {
     try std.testing.expectEqual(Method.POST, mock.last_method.?);
     try std.testing.expectEqualStrings("https://vault.azure.net/secrets/mysecret", mock.last_url.?);
     try std.testing.expectEqualStrings("{\"value\":\"secret-value\"}", mock.last_body.?);
+    try std.testing.expectEqual(RedirectPolicy.not_allowed, mock.last_redirect_policy.?);
+    try std.testing.expectEqual(@as(usize, 1), mock.call_count);
 }

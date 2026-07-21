@@ -149,6 +149,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .imports = &.{
             .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "serde", .module = serde_mod },
         },
     });
 
@@ -396,6 +397,7 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 .imports = &.{
                     .{ .name = "azure_core", .module = core_mod },
+                    .{ .name = "serde", .module = serde_mod },
                 },
             }),
         });
