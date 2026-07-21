@@ -574,6 +574,9 @@ const ARM_RESOURCE_KIND_BY_NAME = {
   ExtensionResource: "extension",
 };
 
+const USAGE_INPUT = 2;
+const USAGE_OUTPUT = 4;
+
 /**
  * Walk the `baseModel` chain root-to-leaf and return the concatenated
  * list of (own + inherited) properties. Inherited properties come
@@ -641,8 +644,8 @@ export function adaptModel(model) {
     })),
     parents: model.baseModel ? [model.baseModel.name] : [],
     discriminator: model.discriminatorProperty?.name ?? null,
-    is_input: !!(model.usage & 1),
-    is_output: !!(model.usage & 2),
+    is_input: !!(model.usage & USAGE_INPUT),
+    is_output: !!(model.usage & USAGE_OUTPUT),
     arm_resource_kind: detectArmResourceKind(model),
     additional_properties: model.additionalProperties
       ? adaptType(model.additionalProperties)

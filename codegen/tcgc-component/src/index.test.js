@@ -115,8 +115,10 @@ test("model adapter preserves multipart fields and open records", () => {
         },
       },
     }],
-    usage: 1,
+    usage: 2,
   });
+  assert.equal(multipart.is_input, true);
+  assert.equal(multipart.is_output, false);
   assert.deepEqual(multipart.fields[0].multipart, {
     name: "grantType",
     is_file: false,
@@ -131,8 +133,10 @@ test("model adapter preserves multipart fields and open records", () => {
       kind: "dict",
       valueType: { kind: "unknown" },
     },
-    usage: 2,
+    usage: 4,
   });
+  assert.equal(open.is_input, false);
+  assert.equal(open.is_output, true);
   assert.deepEqual(open.additional_properties, {
     kind: "Map",
     value: { kind: "Scalar", value: "unknown" },

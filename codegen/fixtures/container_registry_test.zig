@@ -27,6 +27,31 @@ fn hasStatus(statuses: []const std.json.Value, expected: i64) bool {
     return false;
 }
 
+fn expectMethodSet(
+    methods: []const cm.Method,
+    expected: []const []const u8,
+) !void {
+    const testing = std.testing;
+    try testing.expectEqual(expected.len, methods.len);
+    for (expected) |expected_name| {
+        var matches: usize = 0;
+        for (methods) |method| {
+            if (std.mem.eql(u8, method.name, expected_name)) matches += 1;
+        }
+        try testing.expectEqual(@as(usize, 1), matches);
+    }
+    for (methods) |method| {
+        var found = false;
+        for (expected) |expected_name| {
+            if (std.mem.eql(u8, method.name, expected_name)) {
+                found = true;
+                break;
+            }
+        }
+        try testing.expect(found);
+    }
+}
+
 test "Container Registry fixture preserves the complete wire contract" {
     const testing = std.testing;
     var parsed = try std.json.parseFromSlice(
@@ -52,13 +77,45 @@ test "Container Registry fixture preserves the complete wire contract" {
         if (!client.is_root) {
             operation_group_count += 1;
             if (std.mem.eql(u8, client.name, "ContainerRegistry")) {
-                try testing.expectEqual(@as(usize, 15), client.methods.len);
+                try expectMethodSet(client.methods, &.{
+                    "check_docker_v2_support",
+                    "get_manifest",
+                    "create_manifest",
+                    "delete_manifest",
+                    "get_repositories",
+                    "get_properties",
+                    "delete_repository",
+                    "update_properties",
+                    "get_tags",
+                    "get_tag_properties",
+                    "update_tag_attributes",
+                    "delete_tag",
+                    "get_manifests",
+                    "get_manifest_properties",
+                    "update_manifest_properties",
+                });
                 registry_group_seen = true;
             } else if (std.mem.eql(u8, client.name, "ContainerRegistryBlob")) {
-                try testing.expectEqual(@as(usize, 11), client.methods.len);
+                try expectMethodSet(client.methods, &.{
+                    "get_blob",
+                    "check_blob_exists",
+                    "delete_blob",
+                    "mount_blob",
+                    "get_upload_status",
+                    "upload_chunk",
+                    "complete_upload",
+                    "cancel_upload",
+                    "start_upload",
+                    "get_chunk",
+                    "check_chunk_exists",
+                });
                 blob_group_seen = true;
             } else if (std.mem.eql(u8, client.name, "Authentication")) {
-                try testing.expectEqual(@as(usize, 3), client.methods.len);
+                try expectMethodSet(client.methods, &.{
+                    "exchange_aad_access_token_for_acr_refresh_token",
+                    "exchange_acr_refresh_token_for_acr_access_token",
+                    "get_acr_access_token_from_login",
+                });
                 authentication_group_seen = true;
             } else {
                 return error.UnexpectedOperationGroup;
@@ -90,11 +147,29 @@ test "Container Registry fixture preserves the complete wire contract" {
     );
 
     const multipart = findModel(model, "MultipartBodyParameter").?;
+    try testing.expect(multipart.is_input);
+    try testing.expect(!multipart.is_output);
     try testing.expectEqual(@as(usize, 5), multipart.fields.len);
     for (multipart.fields) |field| {
         try testing.expect(field.multipart != null);
         try testing.expectEqualStrings("text/plain", field.multipart.?.content_types[0]);
     }
+
+    const manifest = findModel(model, "Manifest").?;
+    try testing.expect(manifest.is_input);
+    try testing.expect(!manifest.is_output);
+
+    for ([_][]const u8{
+        "RepositoryChangeableAttributes",
+        "TagChangeableAttributes",
+        "ManifestChangeableAttributes",
+    }) |name| {
+        try testing.expect(findModel(model, name).?.is_input);
+    }
+
+    const access_token = findModel(model, "AcrAccessToken").?;
+    try testing.expect(!access_token.is_input);
+    try testing.expect(access_token.is_output);
 
     const get_manifest = findMethod(model, "get_manifest").?;
     try testing.expectEqualStrings("user", get_manifest.header_parameters[0].source.kind);

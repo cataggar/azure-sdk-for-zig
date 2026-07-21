@@ -3964,7 +3964,7 @@
       "parents": [],
       "discriminator": null,
       "is_input": false,
-      "is_output": false,
+      "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
     },
@@ -4016,7 +4016,7 @@
       "parents": [],
       "discriminator": null,
       "is_input": false,
-      "is_output": false,
+      "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
     },
@@ -4028,7 +4028,7 @@
       "parents": [],
       "discriminator": null,
       "is_input": false,
-      "is_output": false,
+      "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
     },
@@ -4214,7 +4214,7 @@
       ],
       "discriminator": null,
       "is_input": false,
-      "is_output": false,
+      "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
     },
@@ -4279,7 +4279,7 @@
       "parents": [],
       "discriminator": null,
       "is_input": false,
-      "is_output": false,
+      "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
     },
@@ -4376,7 +4376,7 @@
       "parents": [],
       "discriminator": null,
       "is_input": false,
-      "is_output": false,
+      "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
     },
@@ -4457,7 +4457,7 @@
       "parents": [],
       "discriminator": null,
       "is_input": false,
-      "is_output": false,
+      "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
     },
@@ -4626,7 +4626,7 @@
       "parents": [],
       "discriminator": null,
       "is_input": false,
-      "is_output": false,
+      "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": {
         "kind": "Map",
@@ -4658,7 +4658,7 @@
       "parents": [],
       "discriminator": null,
       "is_input": false,
-      "is_output": false,
+      "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
     },
@@ -4684,7 +4684,7 @@
       "parents": [],
       "discriminator": null,
       "is_input": false,
-      "is_output": false,
+      "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
     },
@@ -4736,7 +4736,7 @@
       "parents": [],
       "discriminator": null,
       "is_input": false,
-      "is_output": false,
+      "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
     },
@@ -4775,7 +4775,7 @@
       "parents": [],
       "discriminator": null,
       "is_input": false,
-      "is_output": false,
+      "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
     },
@@ -4853,7 +4853,7 @@
       "parents": [],
       "discriminator": null,
       "is_input": false,
-      "is_output": false,
+      "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
     },
@@ -4878,8 +4878,8 @@
       ],
       "parents": [],
       "discriminator": null,
-      "is_input": false,
-      "is_output": true,
+      "is_input": true,
+      "is_output": false,
       "arm_resource_kind": null,
       "additional_properties": null
     },
@@ -4921,7 +4921,7 @@
       "parents": [],
       "discriminator": null,
       "is_input": false,
-      "is_output": false,
+      "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
     },
@@ -5025,7 +5025,7 @@
       "parents": [],
       "discriminator": null,
       "is_input": false,
-      "is_output": false,
+      "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
     },
@@ -5089,7 +5089,7 @@
       ],
       "parents": [],
       "discriminator": null,
-      "is_input": false,
+      "is_input": true,
       "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
@@ -5158,7 +5158,7 @@
       "parents": [],
       "discriminator": null,
       "is_input": false,
-      "is_output": false,
+      "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
     },
@@ -5249,7 +5249,7 @@
       "parents": [],
       "discriminator": null,
       "is_input": false,
-      "is_output": false,
+      "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
     },
@@ -5313,7 +5313,7 @@
       ],
       "parents": [],
       "discriminator": null,
-      "is_input": false,
+      "is_input": true,
       "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
@@ -5366,7 +5366,7 @@
       "parents": [],
       "discriminator": null,
       "is_input": false,
-      "is_output": false,
+      "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
     },
@@ -5434,7 +5434,7 @@
       "parents": [],
       "discriminator": null,
       "is_input": false,
-      "is_output": false,
+      "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
     },
@@ -5583,7 +5583,7 @@
       "parents": [],
       "discriminator": null,
       "is_input": false,
-      "is_output": false,
+      "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
     },
@@ -5635,7 +5635,7 @@
       "parents": [],
       "discriminator": null,
       "is_input": false,
-      "is_output": false,
+      "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
     },
@@ -5699,7 +5699,7 @@
       ],
       "parents": [],
       "discriminator": null,
-      "is_input": false,
+      "is_input": true,
       "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
@@ -5752,7 +5752,7 @@
       "parents": [],
       "discriminator": null,
       "is_input": false,
-      "is_output": false,
+      "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
     },
@@ -5864,8 +5864,8 @@
       ],
       "parents": [],
       "discriminator": null,
-      "is_input": false,
-      "is_output": true,
+      "is_input": true,
+      "is_output": false,
       "arm_resource_kind": null,
       "additional_properties": null
     },
@@ -5891,7 +5891,7 @@
       "parents": [],
       "discriminator": null,
       "is_input": false,
-      "is_output": false,
+      "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
     },
@@ -5917,7 +5917,7 @@
       "parents": [],
       "discriminator": null,
       "is_input": false,
-      "is_output": false,
+      "is_output": true,
       "arm_resource_kind": null,
       "additional_properties": null
     }
