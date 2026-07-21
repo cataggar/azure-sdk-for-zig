@@ -14,6 +14,7 @@ pub const KustoErrorSource = enum {
     http,
     dataset_completion,
     table_completion,
+    data_table,
     query_status,
     v1_exception,
     transport,
