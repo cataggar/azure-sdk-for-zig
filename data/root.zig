@@ -15,11 +15,21 @@ pub const ClientRequestProperties = kusto_common.ClientRequestProperties;
 pub const KustoResultColumn = struct {
     name: []const u8,
     column_type: []const u8,
+
+    pub fn deinit(self: KustoResultColumn, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.column_type);
+    }
 };
 
 pub const KustoResultRow = struct {
     values: []const []const u8,
     columns: []const KustoResultColumn,
+
+    pub fn deinit(self: KustoResultRow, allocator: std.mem.Allocator) void {
+        for (self.values) |value| allocator.free(value);
+        allocator.free(self.values);
+    }
 
     /// Get a value by column name.
     pub fn getByName(self: KustoResultRow, name: []const u8) ?[]const u8 {
@@ -36,10 +46,25 @@ pub const KustoResultTable = struct {
     name: []const u8,
     columns: []const KustoResultColumn,
     rows: []const KustoResultRow,
+
+    pub fn deinit(self: *KustoResultTable, allocator: std.mem.Allocator) void {
+        for (self.rows) |row| row.deinit(allocator);
+        allocator.free(self.rows);
+        for (self.columns) |column| column.deinit(allocator);
+        allocator.free(self.columns);
+        allocator.free(self.name);
+        self.* = .{ .name = "", .columns = &.{}, .rows = &.{} };
+    }
 };
 
 pub const KustoResponseDataSet = struct {
     tables: []KustoResultTable,
+
+    pub fn deinit(self: *KustoResponseDataSet, allocator: std.mem.Allocator) void {
+        for (self.tables) |*table| table.deinit(allocator);
+        allocator.free(self.tables);
+        self.tables = &.{};
+    }
 
     /// Get the primary result table (first table named "PrimaryResult" or index 0).
     pub fn primaryTable(self: KustoResponseDataSet) ?KustoResultTable {
@@ -136,12 +161,7 @@ pub const KustoClient = struct {
         csl: []const u8,
         properties: ?ClientRequestProperties,
     ) !core.errors.Result(KustoResponseDataSet) {
-        const props_json = if (properties) |p| try p.toJson(allocator) else try allocator.dupe(u8, "{}");
-        defer allocator.free(props_json);
-
-        const body = try std.fmt.allocPrint(allocator,
-            \\{{"db":"{s}","csl":"{s}","properties":{s}}}
-        , .{ database, csl, props_json });
+        const body = try serializeRequest(allocator, database, csl, properties);
         defer allocator.free(body);
 
         var req = core.http.Request.init(allocator, .POST, url);
@@ -165,6 +185,50 @@ pub const KustoClient = struct {
     }
 };
 
+const EmptyRequestProperties = struct {};
+
+const RequestWithEmptyProperties = struct {
+    db: []const u8,
+    csl: []const u8,
+    properties: EmptyRequestProperties = .{},
+};
+
+const TimeoutRequestProperties = struct {
+    Options: struct {
+        servertimeout: []const u8,
+    },
+};
+
+const RequestWithTimeout = struct {
+    db: []const u8,
+    csl: []const u8,
+    properties: TimeoutRequestProperties,
+};
+
+fn serializeRequest(
+    allocator: std.mem.Allocator,
+    database: []const u8,
+    csl: []const u8,
+    properties: ?ClientRequestProperties,
+) ![]u8 {
+    if (properties) |props| {
+        if (props.server_timeout_ms) |timeout| {
+            const minutes = @divTrunc(timeout, 60000);
+            const timeout_value = try std.fmt.allocPrint(allocator, "{d}m", .{minutes});
+            defer allocator.free(timeout_value);
+            return serde.json.toSlice(allocator, RequestWithTimeout{
+                .db = database,
+                .csl = csl,
+                .properties = .{ .Options = .{ .servertimeout = timeout_value } },
+            });
+        }
+    }
+    return serde.json.toSlice(allocator, RequestWithEmptyProperties{
+        .db = database,
+        .csl = csl,
+    });
+}
+
 // ─────────────────── Response Parsing ────────────────
 
 /// Wire shape of a single column descriptor inside a Kusto v2 DataTable frame.
@@ -173,138 +237,230 @@ const KustoColumnSchema = struct {
     ColumnType: ?[]const u8 = null,
 };
 
-/// Wire shape of a single Kusto v2 frame, columns only. Rows are dynamic
-/// JSON arrays of mixed-type values (string, int, bool, null, nested
-/// objects), which serde cannot deserialize into a uniform Zig type, so
-/// we parse `Rows` separately by walking the raw body.
-const KustoFrameSchema = struct {
+const KustoFrameTypeSchema = struct {
     FrameType: ?[]const u8 = null,
+};
+
+/// Wire shape of frame metadata. Rows are scanned separately because they
+/// contain dynamically typed JSON values.
+const KustoFrameSchema = struct {
+    FrameType: []const u8,
     TableName: ?[]const u8 = null,
     Columns: ?[]const KustoColumnSchema = null,
 };
 
 fn parseResponseDataSet(allocator: std.mem.Allocator, body: []const u8) !KustoResponseDataSet {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
+    if (!try std.json.validate(allocator, body)) return error.MalformedKustoResponse;
 
-    const frames = serde.json.fromSlice([]const KustoFrameSchema, arena.allocator(), body) catch
-        return .{ .tables = try allocator.alloc(KustoResultTable, 0) };
+    var deserializer = serde.json.Deserializer.init(body);
+    const scanner = &deserializer.scanner;
+    const first = scanner.next() catch return error.MalformedKustoResponse;
+    if (first != .array_begin) return error.MalformedKustoResponse;
 
     var tables = std.ArrayList(KustoResultTable).empty;
-    errdefer tables.deinit(allocator);
-
-    // Walk the raw body alongside the typed frames to grab `Rows`. We
-    // assume frames appear in the body in the same order they do in the
-    // typed slice.
-    var body_pos: usize = 0;
-    for (frames) |frame| {
-        const table_name_src = frame.TableName orelse continue;
-        const cols_src = frame.Columns orelse &[_]KustoColumnSchema{};
-
-        const table_name = try allocator.dupe(u8, table_name_src);
-        errdefer allocator.free(table_name);
-
-        const cols_slice = try allocator.alloc(KustoResultColumn, cols_src.len);
-        errdefer allocator.free(cols_slice);
-        for (cols_src, 0..) |col, i| {
-            cols_slice[i] = .{
-                .name = try allocator.dupe(u8, col.ColumnName),
-                .column_type = if (col.ColumnType) |ct| try allocator.dupe(u8, ct) else try allocator.dupe(u8, "string"),
-            };
-        }
-
-        const rows = try extractRows(allocator, body, &body_pos, cols_slice);
-
-        try tables.append(allocator, .{
-            .name = table_name,
-            .columns = cols_slice,
-            .rows = rows,
-        });
+    errdefer {
+        for (tables.items) |*table| table.deinit(allocator);
+        tables.deinit(allocator);
     }
 
-    return .{ .tables = try tables.toOwnedSlice(allocator) };
-}
-
-/// Extract the next `"Rows":[[...],[...],...]` array starting at or after
-/// `*body_pos`. Advances `*body_pos` past the consumed array. Each row's
-/// values are returned as raw JSON strings (unquoted if originally
-/// JSON-string typed) so the existing API surface is preserved.
-fn extractRows(
-    allocator: std.mem.Allocator,
-    body: []const u8,
-    body_pos: *usize,
-    columns: []const KustoResultColumn,
-) ![]KustoResultRow {
-    var rows = std.ArrayList(KustoResultRow).empty;
-    errdefer rows.deinit(allocator);
-
-    const rows_idx = std.mem.findPos(u8, body, body_pos.*, "\"Rows\":[") orelse {
-        return rows.toOwnedSlice(allocator);
-    };
-    const array_start = rows_idx + "\"Rows\":[".len;
-    var depth: u32 = 1;
-    var i = array_start;
-    while (i < body.len and depth > 0) : (i += 1) {
-        if (body[i] == '[') depth += 1;
-        if (body[i] == ']') depth -= 1;
-    }
-    const rows_content = body[array_start .. i - 1];
-    body_pos.* = i;
-
-    var row_depth: u32 = 0;
-    var row_start: ?usize = null;
-    for (rows_content, 0..) |ch, ri| {
-        if (ch == '[') {
-            if (row_depth == 0) row_start = ri + 1;
-            row_depth += 1;
-        } else if (ch == ']') {
-            row_depth -= 1;
-            if (row_depth == 0) {
-                if (row_start) |rs| {
-                    const row_text = rows_content[rs..ri];
-                    const values = try parseRowValues(allocator, row_text);
-                    try rows.append(allocator, .{ .values = values, .columns = columns });
-                }
-                row_start = null;
+    if (scanner.isContainerEmpty(']') catch return error.MalformedKustoResponse) {
+        _ = scanner.next() catch return error.MalformedKustoResponse;
+    } else {
+        while (true) {
+            const frame_slice = captureValue(scanner, body) catch return error.MalformedKustoResponse;
+            if (try parseFrame(allocator, frame_slice)) |parsed| {
+                var table = parsed;
+                errdefer table.deinit(allocator);
+                try tables.append(allocator, table);
+            }
+            switch (scanner.finishContainer(']') catch return error.MalformedKustoResponse) {
+                .end => break,
+                .more => {},
             }
         }
     }
+
+    scanner.skipWhitespace();
+    if (scanner.pos != body.len) return error.MalformedKustoResponse;
+    return .{ .tables = try tables.toOwnedSlice(allocator) };
+}
+
+fn captureValue(scanner: anytype, input: []const u8) ![]const u8 {
+    scanner.skipWhitespace();
+    const start = scanner.pos;
+    try scanner.skipValue();
+    return input[start..scanner.pos];
+}
+
+fn parseFrame(allocator: std.mem.Allocator, frame_slice: []const u8) !?KustoResultTable {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const frame_type_schema = serde.json.fromSlice(KustoFrameTypeSchema, arena.allocator(), frame_slice) catch |err| {
+        if (err == error.OutOfMemory) return error.OutOfMemory;
+        return error.MalformedKustoResponse;
+    };
+    const frame_type = frame_type_schema.FrameType orelse return null;
+    if (!std.mem.eql(u8, frame_type, "DataTable")) return null;
+
+    const frame = serde.json.fromSlice(KustoFrameSchema, arena.allocator(), frame_slice) catch |err| {
+        if (err == error.OutOfMemory) return error.OutOfMemory;
+        return error.MalformedKustoResponse;
+    };
+    const table_name_src = frame.TableName orelse return error.MalformedKustoResponse;
+    const columns_src = frame.Columns orelse return error.MalformedKustoResponse;
+    const rows_slice = try findRowsSlice(arena.allocator(), frame_slice);
+
+    const table_name = try allocator.dupe(u8, table_name_src);
+    errdefer allocator.free(table_name);
+
+    var columns = std.ArrayList(KustoResultColumn).empty;
+    errdefer {
+        for (columns.items) |column| column.deinit(allocator);
+        columns.deinit(allocator);
+    }
+    for (columns_src) |column_src| {
+        {
+            var column = KustoResultColumn{
+                .name = try allocator.dupe(u8, column_src.ColumnName),
+                .column_type = undefined,
+            };
+            errdefer allocator.free(column.name);
+            column.column_type = try allocator.dupe(u8, column_src.ColumnType orelse "string");
+            errdefer allocator.free(column.column_type);
+            try columns.append(allocator, column);
+        }
+    }
+    const columns_slice = try columns.toOwnedSlice(allocator);
+    errdefer {
+        for (columns_slice) |column| column.deinit(allocator);
+        allocator.free(columns_slice);
+    }
+
+    const rows = try parseRows(allocator, rows_slice, columns_slice);
+    return .{
+        .name = table_name,
+        .columns = columns_slice,
+        .rows = rows,
+    };
+}
+
+fn findRowsSlice(allocator: std.mem.Allocator, frame_slice: []const u8) ![]const u8 {
+    var deserializer = serde.json.Deserializer.init(frame_slice);
+    const scanner = &deserializer.scanner;
+    const first = scanner.next() catch return error.MalformedKustoResponse;
+    if (first != .object_begin) return error.MalformedKustoResponse;
+
+    var rows_slice: ?[]const u8 = null;
+    if (scanner.isContainerEmpty('}') catch return error.MalformedKustoResponse) {
+        _ = scanner.next() catch return error.MalformedKustoResponse;
+    } else {
+        while (true) {
+            scanner.skipWhitespace();
+            const key_start = scanner.pos;
+            const key_token = scanner.next() catch return error.MalformedKustoResponse;
+            if (key_token != .string) return error.MalformedKustoResponse;
+            const key_slice = frame_slice[key_start..scanner.pos];
+            const key = serde.json.fromSlice([]const u8, allocator, key_slice) catch |err| {
+                if (err == error.OutOfMemory) return error.OutOfMemory;
+                return error.MalformedKustoResponse;
+            };
+            scanner.expectColon() catch return error.MalformedKustoResponse;
+            const value_slice = captureValue(scanner, frame_slice) catch return error.MalformedKustoResponse;
+            if (std.mem.eql(u8, key, "Rows")) {
+                if (rows_slice != null) return error.MalformedKustoResponse;
+                rows_slice = value_slice;
+            }
+            switch (scanner.finishContainer('}') catch return error.MalformedKustoResponse) {
+                .end => break,
+                .more => {},
+            }
+        }
+    }
+    scanner.skipWhitespace();
+    if (scanner.pos != frame_slice.len) return error.MalformedKustoResponse;
+    return rows_slice orelse error.MalformedKustoResponse;
+}
+
+fn parseRows(
+    allocator: std.mem.Allocator,
+    rows_slice: []const u8,
+    columns: []const KustoResultColumn,
+) ![]KustoResultRow {
+    var deserializer = serde.json.Deserializer.init(rows_slice);
+    const scanner = &deserializer.scanner;
+    const first = scanner.next() catch return error.MalformedKustoResponse;
+    if (first != .array_begin) return error.MalformedKustoResponse;
+
+    var rows = std.ArrayList(KustoResultRow).empty;
+    errdefer {
+        for (rows.items) |row| row.deinit(allocator);
+        rows.deinit(allocator);
+    }
+    if (scanner.isContainerEmpty(']') catch return error.MalformedKustoResponse) {
+        _ = scanner.next() catch return error.MalformedKustoResponse;
+    } else {
+        while (true) {
+            const row_slice = captureValue(scanner, rows_slice) catch return error.MalformedKustoResponse;
+            const values = try parseRowValues(allocator, row_slice);
+            {
+                var row = KustoResultRow{ .values = values, .columns = columns };
+                errdefer row.deinit(allocator);
+                try rows.append(allocator, row);
+            }
+            switch (scanner.finishContainer(']') catch return error.MalformedKustoResponse) {
+                .end => break,
+                .more => {},
+            }
+        }
+    }
+    scanner.skipWhitespace();
+    if (scanner.pos != rows_slice.len) return error.MalformedKustoResponse;
     return rows.toOwnedSlice(allocator);
 }
 
-fn parseRowValues(allocator: std.mem.Allocator, row_text: []const u8) ![]const []const u8 {
+fn parseRowValues(allocator: std.mem.Allocator, row_slice: []const u8) ![]const []const u8 {
+    var deserializer = serde.json.Deserializer.init(row_slice);
+    const scanner = &deserializer.scanner;
+    const first = scanner.next() catch return error.MalformedKustoResponse;
+    if (first != .array_begin) return error.MalformedKustoResponse;
+
     var values = std.ArrayList([]const u8).empty;
-    errdefer values.deinit(allocator);
-
-    var in_string = false;
-    var val_start: usize = 0;
-    var i: usize = 0;
-
-    while (i < row_text.len) : (i += 1) {
-        const ch = row_text[i];
-        if (ch == '"' and (i == 0 or row_text[i - 1] != '\\')) {
-            in_string = !in_string;
-        } else if (ch == ',' and !in_string) {
-            const raw = std.mem.trim(u8, row_text[val_start..i], " \t");
-            try values.append(allocator, try unquote(allocator, raw));
-            val_start = i + 1;
+    errdefer {
+        for (values.items) |value| allocator.free(value);
+        values.deinit(allocator);
+    }
+    if (scanner.isContainerEmpty(']') catch return error.MalformedKustoResponse) {
+        _ = scanner.next() catch return error.MalformedKustoResponse;
+    } else {
+        while (true) {
+            const cell_slice = captureValue(scanner, row_slice) catch return error.MalformedKustoResponse;
+            const value = try decodeCell(allocator, cell_slice);
+            {
+                errdefer allocator.free(value);
+                try values.append(allocator, value);
+            }
+            switch (scanner.finishContainer(']') catch return error.MalformedKustoResponse) {
+                .end => break,
+                .more => {},
+            }
         }
     }
-    if (val_start <= row_text.len) {
-        const raw = std.mem.trim(u8, row_text[val_start..], " \t");
-        if (raw.len > 0) {
-            try values.append(allocator, try unquote(allocator, raw));
-        }
-    }
-
+    scanner.skipWhitespace();
+    if (scanner.pos != row_slice.len) return error.MalformedKustoResponse;
     return values.toOwnedSlice(allocator);
 }
 
-fn unquote(allocator: std.mem.Allocator, raw: []const u8) ![]const u8 {
-    if (raw.len >= 2 and raw[0] == '"' and raw[raw.len - 1] == '"') {
-        return allocator.dupe(u8, raw[1 .. raw.len - 1]);
+fn decodeCell(allocator: std.mem.Allocator, cell_slice: []const u8) ![]const u8 {
+    var deserializer = serde.json.Deserializer.init(cell_slice);
+    const token = deserializer.scanner.peek() catch return error.MalformedKustoResponse;
+    if (token == .string) {
+        return serde.json.fromSlice([]const u8, allocator, cell_slice) catch |err| {
+            if (err == error.OutOfMemory) return error.OutOfMemory;
+            return error.MalformedKustoResponse;
+        };
     }
-    return allocator.dupe(u8, raw);
+    return allocator.dupe(u8, std.mem.trim(u8, cell_slice, " \t\n\r"));
 }
 
 // ─────────────────────── Tests ───────────────────────
@@ -320,23 +476,8 @@ test "KustoClient executeQuery" {
     const conn = kusto_common.ConnectionProperties{ .cluster_url = "https://mycluster.eastus.kusto.windows.net" };
     var client = KustoClient.init(conn, mock.asTransport(), .{});
 
-    const result = try client.executeQuery(allocator, "TestDB", "StormEvents | count", null);
-    defer {
-        for (result.tables) |t| {
-            allocator.free(t.name);
-            for (t.columns) |c| {
-                allocator.free(c.name);
-                allocator.free(c.column_type);
-            }
-            allocator.free(t.columns);
-            for (t.rows) |r| {
-                for (r.values) |v| allocator.free(v);
-                allocator.free(r.values);
-            }
-            allocator.free(t.rows);
-        }
-        allocator.free(result.tables);
-    }
+    var result = try client.executeQuery(allocator, "TestDB", "StormEvents | count", null);
+    defer result.deinit(allocator);
 
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "/v2/rest/query") != null);
     try std.testing.expectEqual(core.http.Method.POST, mock.last_method.?);
@@ -360,23 +501,8 @@ test "KustoClient executeMgmt" {
     const conn = kusto_common.ConnectionProperties{ .cluster_url = "https://mycluster.eastus.kusto.windows.net" };
     var client = KustoClient.init(conn, mock.asTransport(), .{});
 
-    const result = try client.executeMgmt(allocator, "TestDB", ".show databases", null);
-    defer {
-        for (result.tables) |t| {
-            allocator.free(t.name);
-            for (t.columns) |c| {
-                allocator.free(c.name);
-                allocator.free(c.column_type);
-            }
-            allocator.free(t.columns);
-            for (t.rows) |r| {
-                for (r.values) |v| allocator.free(v);
-                allocator.free(r.values);
-            }
-            allocator.free(t.rows);
-        }
-        allocator.free(result.tables);
-    }
+    var result = try client.executeMgmt(allocator, "TestDB", ".show databases", null);
+    defer result.deinit(allocator);
 
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "/v1/rest/mgmt") != null);
     const table = result.tables[0];
@@ -391,7 +517,8 @@ test "KustoClient execute auto-routes to mgmt" {
     const conn = kusto_common.ConnectionProperties{ .cluster_url = "https://cluster.kusto.windows.net" };
     var client = KustoClient.init(conn, mock.asTransport(), .{});
 
-    _ = try client.execute(allocator, "db", ".show databases");
+    var result = try client.execute(allocator, "db", ".show databases");
+    defer result.deinit(allocator);
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "/v1/rest/mgmt") != null);
 }
 
@@ -403,7 +530,8 @@ test "KustoClient execute auto-routes to query" {
     const conn = kusto_common.ConnectionProperties{ .cluster_url = "https://cluster.kusto.windows.net" };
     var client = KustoClient.init(conn, mock.asTransport(), .{});
 
-    _ = try client.execute(allocator, "db", "StormEvents | count");
+    var result = try client.execute(allocator, "db", "StormEvents | count");
+    defer result.deinit(allocator);
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "/v2/rest/query") != null);
 }
 
@@ -431,4 +559,174 @@ test "KustoResultRow getByName" {
     try std.testing.expectEqualStrings("Alice", row.getByName("Name").?);
     try std.testing.expectEqualStrings("30", row.getByName("Age").?);
     try std.testing.expect(row.getByName("Missing") == null);
+}
+
+test "Kusto request bodies round trip caller strings" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200, "[]");
+    defer mock.deinit();
+
+    const conn = kusto_common.ConnectionProperties{ .cluster_url = "https://cluster.kusto.windows.net" };
+    var client = KustoClient.init(conn, mock.asTransport(), .{});
+
+    const database = "db\"\\\n\t\x01";
+    const query = "print value = \"a\\\\b\"\n\t\r";
+    var query_result = try client.executeQuery(
+        allocator,
+        database,
+        query,
+        .{ .client_request_id = "ignored-for-now", .application = "ignored-for-now" },
+    );
+    defer query_result.deinit(allocator);
+
+    var query_arena = std.heap.ArenaAllocator.init(allocator);
+    defer query_arena.deinit();
+    const query_wire = try serde.json.fromSlice(
+        RequestWithEmptyProperties,
+        query_arena.allocator(),
+        mock.last_body.?,
+    );
+    try std.testing.expectEqualStrings(database, query_wire.db);
+    try std.testing.expectEqualStrings(query, query_wire.csl);
+    try std.testing.expect(std.mem.find(u8, mock.last_body.?, "\"properties\":{}") != null);
+
+    const command = ".show table [a\"b\\\\c]\n\t";
+    var mgmt_result = try client.executeMgmt(
+        allocator,
+        database,
+        command,
+        .{ .server_timeout_ms = 300000 },
+    );
+    defer mgmt_result.deinit(allocator);
+
+    var mgmt_arena = std.heap.ArenaAllocator.init(allocator);
+    defer mgmt_arena.deinit();
+    const mgmt_wire = try serde.json.fromSlice(
+        RequestWithTimeout,
+        mgmt_arena.allocator(),
+        mock.last_body.?,
+    );
+    try std.testing.expectEqualStrings(database, mgmt_wire.db);
+    try std.testing.expectEqualStrings(command, mgmt_wire.csl);
+    try std.testing.expectEqualStrings("5m", mgmt_wire.properties.Options.servertimeout);
+}
+
+test "Kusto response preserves dynamic JSON cells" {
+    const response_body =
+        \\[
+        \\  {"FrameType":"DataSetHeader","Version":"v2.0"},
+        \\  {"FrameType":"DataTable","TableName":"PrimaryResult","Columns":[
+        \\    {"ColumnName":"Text","ColumnType":"string"},
+        \\    {"ColumnName":"Object","ColumnType":"dynamic"},
+        \\    {"ColumnName":"Array","ColumnType":"dynamic"},
+        \\    {"ColumnName":"Null","ColumnType":"string"},
+        \\    {"ColumnName":"Boolean","ColumnType":"bool"},
+        \\    {"ColumnName":"Number","ColumnType":"real"},
+        \\    {"ColumnName":"EmptyArray","ColumnType":"dynamic"}
+        \\  ],"Rows":[[
+        \\    "line\n\"quote\" \\ slash \u2603",
+        \\    {"a":[1,2],"s":"x,y"},
+        \\    [1,{"nested":[true,null]}],
+        \\    null,
+        \\    false,
+        \\    -12.5e+2,
+        \\    []
+        \\  ]]},
+        \\  {"FrameType":"DataSetCompletion","HasErrors":false}
+        \\]
+    ;
+
+    var dataset = try parseResponseDataSet(std.testing.allocator, response_body);
+    defer dataset.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), dataset.tables.len);
+    const values = dataset.tables[0].rows[0].values;
+    try std.testing.expectEqual(@as(usize, 7), values.len);
+    try std.testing.expectEqualStrings("line\n\"quote\" \\ slash \xE2\x98\x83", values[0]);
+    try std.testing.expectEqualStrings("{\"a\":[1,2],\"s\":\"x,y\"}", values[1]);
+    try std.testing.expectEqualStrings("[1,{\"nested\":[true,null]}]", values[2]);
+    try std.testing.expectEqualStrings("null", values[3]);
+    try std.testing.expectEqualStrings("false", values[4]);
+    try std.testing.expectEqualStrings("-12.5e+2", values[5]);
+    try std.testing.expectEqualStrings("[]", values[6]);
+}
+
+test "Kusto response accepts empty dataset and skips non-table frames" {
+    var empty = try parseResponseDataSet(std.testing.allocator, "[]");
+    defer empty.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), empty.tables.len);
+
+    var frames = try parseResponseDataSet(std.testing.allocator,
+        \\[{"FrameType":"DataSetHeader","nested":{"values":[1,2]}},{"FrameType":"DataSetCompletion"}]
+    );
+    defer frames.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), frames.tables.len);
+}
+
+test "Kusto response rejects malformed bodies and DataTable shapes" {
+    const malformed = [_][]const u8{
+        "not json",
+        "{}",
+        "[",
+        "[] trailing",
+        \\[{"FrameType":"DataTable","TableName":"T","Columns":[]}]
+        ,
+        \\[{"FrameType":"DataTable","TableName":"T","Columns":[],"Rows":{}}]
+        ,
+        \\[{"FrameType":"DataTable","TableName":"T","Columns":[],"Rows":[42]}]
+        ,
+        \\[{"FrameType":"DataTable","TableName":"T","Columns":{},"Rows":[]}]
+        ,
+        \\[{"FrameType":"DataTable","Columns":[],"Rows":[]}]
+        ,
+        \\[{"FrameType":"DataTable","TableName":"T","Columns":[],"Rows":[["\uZZZZ"]]}]
+        ,
+    };
+    for (malformed) |body| {
+        try std.testing.expectError(
+            error.MalformedKustoResponse,
+            parseResponseDataSet(std.testing.allocator, body),
+        );
+    }
+}
+
+test "Kusto dataset and Result deinit own all parsed allocations" {
+    const response_body =
+        \\[{"FrameType":"DataTable","TableName":"T","Columns":[{"ColumnName":"C"}],"Rows":[["value"]]}]
+    ;
+
+    var dataset = try parseResponseDataSet(std.testing.allocator, response_body);
+    dataset.deinit(std.testing.allocator);
+
+    var result: core.errors.Result(KustoResponseDataSet) = .{
+        .ok = try parseResponseDataSet(std.testing.allocator, response_body),
+    };
+    result.deinit(std.testing.allocator);
+}
+
+fn parseAllocationFixture(allocator: std.mem.Allocator, body: []const u8) !void {
+    var dataset = try parseResponseDataSet(allocator, body);
+    defer dataset.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 2), dataset.tables.len);
+    try std.testing.expectEqualStrings("escaped\nvalue", dataset.tables[0].rows[0].values[0]);
+}
+
+test "Kusto response parser handles every allocation failure" {
+    const response_body =
+        \\[
+        \\  {"FrameType":"DataSetHeader"},
+        \\  {"FrameType":"DataTable","TableName":"PrimaryResult","Columns":[
+        \\    {"ColumnName":"A","ColumnType":"string"},
+        \\    {"ColumnName":"B","ColumnType":"dynamic"}
+        \\  ],"Rows":[["escaped\nvalue",{"nested":[1,2]}],["second",null]]},
+        \\  {"FrameType":"DataTable","TableName":"SecondaryResult","Columns":[
+        \\    {"ColumnName":"C","ColumnType":"long"}
+        \\  ],"Rows":[[42]]}
+        \\]
+    ;
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        parseAllocationFixture,
+        .{response_body},
+    );
 }

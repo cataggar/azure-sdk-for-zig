@@ -1,9 +1,9 @@
 ///! Azure Kusto (Data Explorer) ingestion clients.
 ///!
-///! Provides three ingestion patterns matching the Go/Python/Node SDKs:
-///! - `StreamingIngestClient` — direct streaming via `/v1/rest/ingest`
-///! - `QueuedIngestClient` — reliable batched ingestion via data management
-///! - `ManagedIngestClient` — streaming with queued fallback
+///! Provides experimental direct streaming ingestion via
+///! `StreamingIngestClient`. Queued ingestion and managed queued fallback
+///! are represented by API placeholders that return explicit
+///! not-implemented errors.
 const std = @import("std");
 const core = @import("azure_core");
 const kusto_common = @import("azure_kusto_common");
@@ -16,7 +16,13 @@ pub const IngestionProperties = kusto_common.IngestionProperties;
 
 pub const IngestionResult = struct {
     status: IngestionStatus,
+    /// Allocator-owned when non-null; call `deinit` to release it.
     ingestion_id: ?[]const u8 = null,
+
+    pub fn deinit(self: *IngestionResult, allocator: std.mem.Allocator) void {
+        if (self.ingestion_id) |id| allocator.free(id);
+        self.ingestion_id = null;
+    }
 };
 
 pub const IngestionStatus = enum {
@@ -44,8 +50,8 @@ pub const IngestOptions = struct {
 /// Direct streaming ingestion via the engine endpoint.
 ///
 /// Data is sent directly to the Kusto engine via `POST /v1/rest/ingest/{db}/{table}`.
-/// Fast but limited to small payloads (<4MB). For larger or more reliable
-/// ingestion, use `QueuedIngestClient` or `ManagedIngestClient`.
+/// Fast but limited to small payloads (<4MB). Queued ingestion for larger or
+/// more reliable payloads is planned but not implemented.
 pub const StreamingIngestClient = struct {
     connection: ConnectionProperties,
     pipeline: core.pipeline.HttpPipeline,
@@ -102,24 +108,27 @@ pub const StreamingIngestClient = struct {
     }
 
     fn buildIngestUrl(self: *StreamingIngestClient, allocator: std.mem.Allocator, database: []const u8, table: []const u8, options: IngestOptions) ![]u8 {
+        const encoded_database = try core.url.percentEncode(allocator, database);
+        defer allocator.free(encoded_database);
+        const encoded_table = try core.url.percentEncode(allocator, table);
+        defer allocator.free(encoded_table);
+
         if (options.mapping_name) |mapping| {
+            const encoded_mapping = try core.url.percentEncode(allocator, mapping);
+            defer allocator.free(encoded_mapping);
             return std.fmt.allocPrint(allocator, "{s}/v1/rest/ingest/{s}/{s}?streamFormat={s}&mappingName={s}", .{
-                self.connection.cluster_url, database, table, options.format.toString(), mapping,
+                self.connection.cluster_url, encoded_database, encoded_table, options.format.toString(), encoded_mapping,
             });
         }
         return std.fmt.allocPrint(allocator, "{s}/v1/rest/ingest/{s}/{s}?streamFormat={s}", .{
-            self.connection.cluster_url, database, table, options.format.toString(),
+            self.connection.cluster_url, encoded_database, encoded_table, options.format.toString(),
         });
     }
 };
 
 // ─────────────── QueuedIngestClient ──────────────────
 
-/// Reliable batched ingestion via the data management endpoint.
-///
-/// Uploads data to a temporary blob, then posts an ingestion message
-/// to a queue. The Kusto data management service processes the queue.
-/// Most reliable ingestion method, recommended for production.
+/// Queued ingestion is planned but not implemented.
 pub const QueuedIngestClient = struct {
     connection: ConnectionProperties,
     pipeline: core.pipeline.HttpPipeline,
@@ -132,75 +141,20 @@ pub const QueuedIngestClient = struct {
         };
     }
 
-    /// Ingest from a blob URL (blob already uploaded).
-    ///
-    /// Returns `IngestionResult{ .status = .failed }` on Azure-side
-    /// errors. Use `ingestFromBlobResult` to receive the structured
-    /// `AzureError` instead.
     pub fn ingestFromBlob(self: *QueuedIngestClient, allocator: std.mem.Allocator, properties: IngestionProperties, blob_url: []const u8) !IngestionResult {
-        var r = try self.ingestFromBlobResult(allocator, properties, blob_url);
-        return switch (r) {
-            .ok => |v| v,
-            .err => blk: {
-                std.log.warn("{f}", .{r.err});
-                r.err.deinit();
-                break :blk .{ .status = .failed };
-            },
-        };
-    }
-
-    /// Same as `ingestFromBlob` but exposes Azure-side failures via Result.
-    pub fn ingestFromBlobResult(self: *QueuedIngestClient, allocator: std.mem.Allocator, properties: IngestionProperties, blob_url: []const u8) !core.errors.Result(IngestionResult) {
-        // Build the ingestion message as JSON.
-        const msg = try self.buildIngestionMessage(allocator, properties, blob_url);
-        defer allocator.free(msg);
-
-        // In production: post to the ingestion queue obtained from DM endpoint.
-        // For now, send to the DM endpoint's mgmt API.
-        const dm_url = try self.getDmUrl(allocator);
-        const url = try std.fmt.allocPrint(allocator, "{s}/v1/rest/mgmt", .{dm_url});
-        defer allocator.free(url);
-
-        const body = try std.fmt.allocPrint(allocator,
-            \\{{"db":"{s}","csl":".ingest into table {s} ({s}) with (format='{s}')"}}
-        , .{ properties.database, properties.table, blob_url, properties.format.toString() });
-        defer allocator.free(body);
-
-        var req = core.http.Request.init(allocator, .POST, url);
-        defer req.deinit();
-        try req.setHeader("Content-Type", "application/json; charset=utf-8");
-        req.body = body;
-
-        var resp = try self.pipeline.send(&req);
-        defer resp.deinit();
-
-        if (!resp.isSuccess()) {
-            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
-                return .{ .err = az_err };
-            }
-            return error.AzureRequestFailed;
-        }
-
-        return .{ .ok = .{ .status = .queued } };
-    }
-
-    fn getDmUrl(self: *QueuedIngestClient, allocator: std.mem.Allocator) ![]const u8 {
-        if (self.dm_url) |url| return url;
-        self.dm_url = try self.connection.getIngestUrl(allocator);
-        return self.dm_url.?;
-    }
-
-    fn buildIngestionMessage(self: *QueuedIngestClient, allocator: std.mem.Allocator, properties: IngestionProperties, blob_url: []const u8) ![]u8 {
         _ = self;
-        return std.fmt.allocPrint(allocator,
-            \\{{"Id":"","BlobPath":"{s}","DatabaseName":"{s}","TableName":"{s}","Format":"{s}","FlushImmediately":{s}}}
-        , .{
-            blob_url,
-            properties.database,
-            properties.table,
-            properties.format.toString(),
-            if (properties.flush_immediately) "true" else "false",
-        });
+        _ = allocator;
+        _ = properties;
+        _ = blob_url;
+        return error.QueuedIngestionNotImplemented;
+    }
+
+    pub fn ingestFromBlobResult(self: *QueuedIngestClient, allocator: std.mem.Allocator, properties: IngestionProperties, blob_url: []const u8) !core.errors.Result(IngestionResult) {
+        _ = self;
+        _ = allocator;
+        _ = properties;
+        _ = blob_url;
+        return error.QueuedIngestionNotImplemented;
     }
 
     pub fn deinit(self: *QueuedIngestClient, allocator: std.mem.Allocator) void {
@@ -210,10 +164,7 @@ pub const QueuedIngestClient = struct {
 
 // ─────────────── ManagedIngestClient ─────────────────
 
-/// Tries streaming ingestion first, falls back to queued on failure.
-///
-/// Best of both worlds: low latency of streaming with the reliability
-/// of queued ingestion. Recommended for most use cases.
+/// Tries direct streaming ingestion; queued fallback is not implemented.
 pub const ManagedIngestClient = struct {
     streaming: StreamingIngestClient,
     queued: QueuedIngestClient,
@@ -225,19 +176,19 @@ pub const ManagedIngestClient = struct {
         };
     }
 
-    /// Ingest data — tries streaming first, falls back to queued via blob.
+    /// Ingest data through direct streaming.
+    ///
+    /// Returns `error.ManagedIngestionFallbackNotImplemented` if streaming
+    /// fails because queued fallback would be required.
     pub fn ingestFromSlice(self: *ManagedIngestClient, allocator: std.mem.Allocator, database: []const u8, table: []const u8, data: []const u8, options: IngestOptions) !IngestionResult {
-        // Try streaming first.
-        const streaming_result = self.streaming.ingestFromSlice(allocator, database, table, data, options) catch {
-            // Streaming failed — would fall back to queued in production.
-            // Queued requires blob upload which needs storage client integration.
-            return .{ .status = .failed };
+        var streaming_result = try self.streaming.ingestFromSliceResult(allocator, database, table, data, options);
+        return switch (streaming_result) {
+            .ok => |result| result,
+            .err => |*azure_error| {
+                azure_error.deinit();
+                return error.ManagedIngestionFallbackNotImplemented;
+            },
         };
-
-        if (streaming_result.status == .success) return streaming_result;
-
-        // Streaming returned failure status — fall back to queued.
-        return .{ .status = .failed };
     }
 
     pub fn deinit(self: *ManagedIngestClient, allocator: std.mem.Allocator) void {
@@ -277,6 +228,23 @@ test "StreamingIngestClient with mapping name" {
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "mappingName=MyMapping") != null);
 }
 
+test "StreamingIngestClient percent-encodes URL components independently" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200, "{}");
+    defer mock.deinit();
+
+    const conn = ConnectionProperties{ .cluster_url = "https://cluster.kusto.windows.net" };
+    var client = StreamingIngestClient.init(conn, mock.asTransport());
+
+    _ = try client.ingestFromSlice(allocator, "DB /&?=+", "Table /&?=+", "data", .{
+        .mapping_name = "Mapping /&?=+",
+    });
+    try std.testing.expectEqualStrings(
+        "https://cluster.kusto.windows.net/v1/rest/ingest/DB%20%2F%26%3F%3D%2B/Table%20%2F%26%3F%3D%2B?streamFormat=Csv&mappingName=Mapping%20%2F%26%3F%3D%2B",
+        mock.last_url.?,
+    );
+}
+
 test "StreamingIngestClient failure" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 400,
@@ -291,7 +259,18 @@ test "StreamingIngestClient failure" {
     try std.testing.expectEqual(IngestionStatus.failed, result.status);
 }
 
-test "QueuedIngestClient ingestFromBlob" {
+test "IngestionResult deinit through Result" {
+    const allocator = std.testing.allocator;
+    var result: core.errors.Result(IngestionResult) = .{ .ok = .{
+        .status = .success,
+        .ingestion_id = try allocator.dupe(u8, "ingestion-id"),
+    } };
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqualStrings("ingestion-id", result.ok.ingestion_id.?);
+}
+
+test "QueuedIngestClient does not send placeholder requests" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 200, "{}");
     defer mock.deinit();
@@ -300,14 +279,21 @@ test "QueuedIngestClient ingestFromBlob" {
     var client = QueuedIngestClient.init(conn, mock.asTransport());
     defer client.deinit(allocator);
 
-    const result = try client.ingestFromBlob(allocator, .{
+    const properties = IngestionProperties{
         .database = "TestDB",
         .table = "Logs",
         .format = .json,
-    }, "https://storage.blob.core.windows.net/container/blob.json");
-
-    try std.testing.expectEqual(IngestionStatus.queued, result.status);
-    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "ingest-mycluster") != null);
+    };
+    try std.testing.expectError(
+        error.QueuedIngestionNotImplemented,
+        client.ingestFromBlob(allocator, properties, "https://storage.blob.core.windows.net/container/blob.json"),
+    );
+    try std.testing.expect(mock.last_url == null);
+    try std.testing.expectError(
+        error.QueuedIngestionNotImplemented,
+        client.ingestFromBlobResult(allocator, properties, "https://storage.blob.core.windows.net/container/blob.json"),
+    );
+    try std.testing.expect(mock.last_url == null);
 }
 
 test "ManagedIngestClient ingestFromSlice success" {
@@ -321,6 +307,24 @@ test "ManagedIngestClient ingestFromSlice success" {
 
     const result = try client.ingestFromSlice(allocator, "DB", "Table", "data", .{});
     try std.testing.expectEqual(IngestionStatus.success, result.status);
+}
+
+test "ManagedIngestClient does not attempt unimplemented queued fallback" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 400,
+        \\{"error":{"code":"BadRequest","message":"Invalid data"}}
+    );
+    defer mock.deinit();
+
+    const conn = ConnectionProperties{ .cluster_url = "https://cluster.kusto.windows.net" };
+    var client = ManagedIngestClient.init(conn, mock.asTransport());
+    defer client.deinit(allocator);
+
+    try std.testing.expectError(
+        error.ManagedIngestionFallbackNotImplemented,
+        client.ingestFromSlice(allocator, "DB", "Table", "bad", .{}),
+    );
+    try std.testing.expect(std.mem.find(u8, mock.last_url.?, "/v1/rest/ingest/DB/Table") != null);
 }
 
 test "IngestionStatus toString" {
