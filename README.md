@@ -114,6 +114,32 @@ azure-core-amqp: azure-uamqp-zig (pure Zig AMQP 1.0)
 
 Kusto datasets and non-null ingestion IDs are allocator-owned; call their `deinit` methods when finished.
 
+### Kusto authentication and connections
+
+Create authenticated Kusto clients from a shared `KustoConnection`. This example assumes the caller already has a `*TokenCredential` named `credential` and a `*HttpTransport` named `transport`.
+
+```zig
+var builder = KustoConnectionStringBuilder.init("https://mycluster.kusto.windows.net");
+_ = builder.withTokenCredential(credential);
+const properties = builder.build();
+
+const connection = try KustoConnection.init(allocator, properties, transport, .{});
+defer connection.deinit();
+
+var client = KustoClient.initWithConnection(connection, .{});
+// Or: var ingest_client = StreamingIngestClient.initWithConnection(connection);
+```
+
+`KustoConnection` owns copies of its endpoint, scope, user-agent, policy, and token-cache state. It borrows the credential and transport; both must outlive the connection. Derived clients borrow the connection, require no `deinit`, and must not outlive the connection or any in-flight request.
+
+Connections and their derived clients are not safe for concurrent use. Externally serialize all calls, including calls made through separate clients that share a connection.
+
+The existing client constructors remain unauthenticated compatibility APIs only. Passing authentication configuration to them returns `AuthenticatedConnectionRequired`; authenticated code must use `initWithConnection`.
+
+`withAadAppKey` is deprecated and inert for connection creation. It is rejected with `AadAppKeyAuthenticationUnsupported`; supply an `azure_core.credentials.TokenCredential` instead.
+
+The public-cloud Kusto scope is the default. An explicit scope override is available; cloud metadata and sovereign-cloud scope discovery remain planned.
+
 ### Infrastructure
 
 | Package | Description |

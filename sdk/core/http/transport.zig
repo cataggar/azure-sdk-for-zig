@@ -44,19 +44,31 @@ pub const Request = struct {
     }
 
     pub fn setHeader(self: *Request, key: []const u8, value: []const u8) !void {
-        const owned_key = try self.allocator.dupe(u8, key);
-        errdefer self.allocator.free(owned_key);
         const owned_value = try self.allocator.dupe(u8, value);
         errdefer self.allocator.free(owned_value);
 
-        const entry = try self.headers.getOrPut(owned_key);
-        if (entry.found_existing) {
-            self.allocator.free(owned_key);
-            self.allocator.free(entry.value_ptr.*);
-        } else {
-            entry.key_ptr.* = owned_key;
+        var iterator = self.headers.iterator();
+        while (iterator.next()) |entry| {
+            if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, key)) {
+                self.allocator.free(entry.value_ptr.*);
+                entry.value_ptr.* = owned_value;
+                return;
+            }
         }
-        entry.value_ptr.* = owned_value;
+
+        const owned_key = try self.allocator.dupe(u8, key);
+        errdefer self.allocator.free(owned_key);
+        try self.headers.put(owned_key, owned_value);
+    }
+
+    pub fn getHeader(self: *Request, key: []const u8) ?[]const u8 {
+        var iterator = self.headers.iterator();
+        while (iterator.next()) |entry| {
+            if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, key)) {
+                return entry.value_ptr.*;
+            }
+        }
+        return null;
     }
 
     pub fn deinit(self: *Request) void {
@@ -368,6 +380,9 @@ test "request init and set header" {
     try std.testing.expectEqualStrings("application/json", req.headers.get("Accept").?);
     try req.setHeader("Accept", "application/xml");
     try std.testing.expectEqualStrings("application/xml", req.headers.get("Accept").?);
+    try req.setHeader("accept", "application/json");
+    try std.testing.expectEqual(@as(usize, 1), req.headers.count());
+    try std.testing.expectEqualStrings("application/json", req.getHeader("ACCEPT").?);
 }
 
 test "response isSuccess" {

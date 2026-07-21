@@ -9,6 +9,9 @@ const kusto_common = @import("azure_kusto_common");
 
 pub const ConnectionProperties = kusto_common.ConnectionProperties;
 pub const ClientRequestProperties = kusto_common.ClientRequestProperties;
+pub const KustoConnection = kusto_common.KustoConnection;
+pub const KustoConnectionOptions = kusto_common.KustoConnectionOptions;
+pub const KustoRetryOptions = kusto_common.KustoRetryOptions;
 
 // ─────────────────── Response Types ──────────────────
 
@@ -82,10 +85,22 @@ pub const KustoClientOptions = struct {
 };
 
 /// Client for executing KQL queries and management commands against a Kusto cluster.
+///
+/// Clients created with `initWithConnection` borrow their `KustoConnection` and
+/// may be copied or moved. The connection must outlive every client copy. Since
+/// `KustoConnection.supports_concurrent_use` is false, callers must serialize
+/// requests that share one connection.
 pub const KustoClient = struct {
-    connection: ConnectionProperties,
-    pipeline: core.pipeline.HttpPipeline,
+    runtime: Runtime,
     application_name: []const u8,
+
+    const Runtime = union(enum) {
+        legacy: struct {
+            connection: ConnectionProperties,
+            pipeline: core.pipeline.HttpPipeline,
+        },
+        shared: *KustoConnection,
+    };
 
     pub fn init(
         connection: ConnectionProperties,
@@ -93,24 +108,37 @@ pub const KustoClient = struct {
         options: KustoClientOptions,
     ) KustoClient {
         return .{
-            .connection = connection,
-            .pipeline = .{ .policies = &.{}, .transport_impl = transport },
+            .runtime = .{ .legacy = .{
+                .connection = connection,
+                .pipeline = .{ .policies = &.{}, .transport_impl = transport },
+            } },
+            .application_name = options.application_name,
+        };
+    }
+
+    /// Create a client that borrows `connection`; this client has no deinit.
+    ///
+    /// The connection must outlive this client and all copies of it. Serialize
+    /// their use because `KustoConnection.supports_concurrent_use` is false.
+    pub fn initWithConnection(connection: *KustoConnection, options: KustoClientOptions) KustoClient {
+        return .{
+            .runtime = .{ .shared = connection },
             .application_name = options.application_name,
         };
     }
 
     /// Execute a KQL query. Uses v2 REST endpoint.
     pub fn executeQuery(self: *KustoClient, allocator: std.mem.Allocator, database: []const u8, query: []const u8, properties: ?ClientRequestProperties) !KustoResponseDataSet {
-        const url = try std.fmt.allocPrint(allocator, "{s}/v2/rest/query", .{self.connection.cluster_url});
+        const url = try std.fmt.allocPrint(allocator, "{s}/v2/rest/query", .{self.clusterUrl()});
         defer allocator.free(url);
-        return self.executeInternal(allocator, url, database, query, properties);
+        return self.executeInternal(allocator, url, database, query, properties, true);
     }
 
     /// Execute a management command (starts with `.`). Uses v1 REST endpoint.
     pub fn executeMgmt(self: *KustoClient, allocator: std.mem.Allocator, database: []const u8, command: []const u8, properties: ?ClientRequestProperties) !KustoResponseDataSet {
-        const url = try std.fmt.allocPrint(allocator, "{s}/v1/rest/mgmt", .{self.connection.cluster_url});
+        const url = try std.fmt.allocPrint(allocator, "{s}/v1/rest/mgmt", .{self.clusterUrl()});
         defer allocator.free(url);
-        return self.executeInternal(allocator, url, database, command, properties);
+        return self.executeInternal(allocator, url, database, command, properties, false);
     }
 
     /// Auto-routing: commands starting with `.` go to mgmt, others to query.
@@ -124,14 +152,14 @@ pub const KustoClient = struct {
 
     /// `Result(...)` variants of the execute methods.
     pub fn executeQueryResult(self: *KustoClient, allocator: std.mem.Allocator, database: []const u8, query: []const u8, properties: ?ClientRequestProperties) !core.errors.Result(KustoResponseDataSet) {
-        const url = try std.fmt.allocPrint(allocator, "{s}/v2/rest/query", .{self.connection.cluster_url});
+        const url = try std.fmt.allocPrint(allocator, "{s}/v2/rest/query", .{self.clusterUrl()});
         defer allocator.free(url);
-        return self.executeInternalResult(allocator, url, database, query, properties);
+        return self.executeInternalResult(allocator, url, database, query, properties, true);
     }
     pub fn executeMgmtResult(self: *KustoClient, allocator: std.mem.Allocator, database: []const u8, command: []const u8, properties: ?ClientRequestProperties) !core.errors.Result(KustoResponseDataSet) {
-        const url = try std.fmt.allocPrint(allocator, "{s}/v1/rest/mgmt", .{self.connection.cluster_url});
+        const url = try std.fmt.allocPrint(allocator, "{s}/v1/rest/mgmt", .{self.clusterUrl()});
         defer allocator.free(url);
-        return self.executeInternalResult(allocator, url, database, command, properties);
+        return self.executeInternalResult(allocator, url, database, command, properties, false);
     }
     pub fn executeResult(self: *KustoClient, allocator: std.mem.Allocator, database: []const u8, query_or_command: []const u8) !core.errors.Result(KustoResponseDataSet) {
         const trimmed = std.mem.trimStart(u8, query_or_command, " \t\n\r");
@@ -148,8 +176,9 @@ pub const KustoClient = struct {
         database: []const u8,
         csl: []const u8,
         properties: ?ClientRequestProperties,
+        retryable: bool,
     ) !KustoResponseDataSet {
-        var r = try self.executeInternalResult(allocator, url, database, csl, properties);
+        var r = try self.executeInternalResult(allocator, url, database, csl, properties, retryable);
         return r.unwrap(error.KustoQueryFailed);
     }
 
@@ -160,6 +189,7 @@ pub const KustoClient = struct {
         database: []const u8,
         csl: []const u8,
         properties: ?ClientRequestProperties,
+        retryable: bool,
     ) !core.errors.Result(KustoResponseDataSet) {
         const body = try serializeRequest(allocator, database, csl, properties);
         defer allocator.free(body);
@@ -169,9 +199,15 @@ pub const KustoClient = struct {
         try req.setHeader("Content-Type", "application/json; charset=utf-8");
         try req.setHeader("Accept", "application/json");
         try req.setHeader("x-ms-app", self.application_name);
+        if (properties) |props| {
+            if (props.client_request_id) |request_id| {
+                try req.setHeader("x-ms-client-request-id", request_id);
+            }
+        }
         req.body = body;
+        req.retryable = retryable;
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.send(&req);
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
@@ -182,6 +218,30 @@ pub const KustoClient = struct {
         }
 
         return .{ .ok = try parseResponseDataSet(allocator, resp.body) };
+    }
+
+    fn clusterUrl(self: *const KustoClient) []const u8 {
+        return switch (self.runtime) {
+            .legacy => |legacy| legacy.connection.cluster_url,
+            .shared => |connection| connection.clusterUrl(),
+        };
+    }
+
+    fn send(self: *KustoClient, req: *core.http.Request) !core.http.Response {
+        return switch (self.runtime) {
+            .shared => |connection| connection.send(req),
+            .legacy => |*legacy| {
+                const connection = legacy.connection;
+                if (connection.credential != null or
+                    connection.authority_id != null or
+                    connection.application_client_id != null or
+                    connection.application_key != null)
+                {
+                    return error.AuthenticatedConnectionRequired;
+                }
+                return legacy.pipeline.send(req);
+            },
+        };
     }
 };
 
@@ -465,6 +525,30 @@ fn decodeCell(allocator: std.mem.Allocator, cell_slice: []const u8) ![]const u8 
 
 // ─────────────────────── Tests ───────────────────────
 
+const TestTokenCredential = struct {
+    credential: core.credentials.TokenCredential = .{ .getTokenFn = &getToken },
+    call_count: usize = 0,
+    last_scope: ?[]const u8 = null,
+
+    fn asCredential(self: *TestTokenCredential) *core.credentials.TokenCredential {
+        return &self.credential;
+    }
+
+    fn getToken(
+        credential: *core.credentials.TokenCredential,
+        request_context: core.credentials.TokenRequestContext,
+        _: core.context.Context,
+    ) anyerror!core.credentials.AccessToken {
+        const self: *TestTokenCredential = @alignCast(@fieldParentPtr("credential", credential));
+        self.call_count += 1;
+        self.last_scope = request_context.scopes[0];
+        return .{
+            .token = "data-client-test-token",
+            .expires_on = std.math.maxInt(i64),
+        };
+    }
+};
+
 test "KustoClient executeQuery" {
     const allocator = std.testing.allocator;
     const response_body =
@@ -488,6 +572,157 @@ test "KustoClient executeQuery" {
     try std.testing.expectEqualStrings("Count", primary.columns[0].name);
     try std.testing.expectEqual(@as(usize, 1), primary.rows.len);
     try std.testing.expectEqualStrings("42", primary.rows[0].values[0]);
+}
+
+test "shared KustoClient authenticates queries" {
+    const allocator = std.testing.allocator;
+    var credential = TestTokenCredential{};
+    var mock = core.http.MockTransport.init(allocator, 200, "[]");
+    defer mock.deinit();
+    const connection = try KustoConnection.init(
+        allocator,
+        .{
+            .cluster_url = "https://cluster.kusto.windows.net/",
+            .credential = credential.asCredential(),
+        },
+        mock.asTransport(),
+        .{},
+    );
+    defer connection.deinit();
+
+    var client = KustoClient.initWithConnection(connection, .{});
+    var result = try client.executeQuery(
+        allocator,
+        "db",
+        "print 1",
+        .{ .client_request_id = "kusto-test-request-id" },
+    );
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), credential.call_count);
+    try std.testing.expectEqualStrings(
+        "https://kusto.kusto.windows.net/.default",
+        credential.last_scope.?,
+    );
+    try std.testing.expect(mock.last_headers.get("Authorization") != null);
+    try std.testing.expectEqualStrings(
+        "kusto-test-request-id",
+        mock.last_headers.get("x-ms-client-request-id").?,
+    );
+    try std.testing.expectEqualStrings(
+        "https://cluster.kusto.windows.net/v2/rest/query",
+        mock.last_url.?,
+    );
+}
+
+test "copied shared KustoClient remains usable" {
+    const allocator = std.testing.allocator;
+    var credential = TestTokenCredential{};
+    var mock = core.http.MockTransport.init(allocator, 200, "[]");
+    defer mock.deinit();
+    const connection = try KustoConnection.init(
+        allocator,
+        .{
+            .cluster_url = "https://cluster.kusto.windows.net",
+            .credential = credential.asCredential(),
+        },
+        mock.asTransport(),
+        .{},
+    );
+    defer connection.deinit();
+
+    const copied = KustoClient.initWithConnection(connection, .{});
+    var moved = copied;
+    var result = try moved.executeQuery(allocator, "db", "print 1", null);
+    defer result.deinit(allocator);
+
+    try std.testing.expect(mock.last_url != null);
+    try std.testing.expectEqual(@as(usize, 1), credential.call_count);
+}
+
+test "legacy authenticated KustoClient fails before transport" {
+    const allocator = std.testing.allocator;
+    var credential = TestTokenCredential{};
+    var mock = core.http.MockTransport.init(allocator, 200, "[]");
+    defer mock.deinit();
+    var client = KustoClient.init(
+        .{
+            .cluster_url = "https://cluster.kusto.windows.net",
+            .credential = credential.asCredential(),
+        },
+        mock.asTransport(),
+        .{},
+    );
+
+    try std.testing.expectError(
+        error.AuthenticatedConnectionRequired,
+        client.executeQuery(allocator, "db", "print 1", null),
+    );
+    try std.testing.expect(mock.last_url == null);
+    try std.testing.expectEqual(@as(usize, 0), credential.call_count);
+}
+
+test "shared KustoClient retries queries" {
+    const allocator = std.testing.allocator;
+    var credential = TestTokenCredential{};
+    const responses = [_]core.http.SequenceMockTransport.CannedResponse{
+        .{ .status = 500, .body = "server error" },
+        .{ .status = 200, .body = "[]" },
+    };
+    var sequence = core.http.SequenceMockTransport.init(allocator, &responses);
+    const connection = try KustoConnection.init(
+        allocator,
+        .{
+            .cluster_url = "https://cluster.kusto.windows.net",
+            .credential = credential.asCredential(),
+        },
+        sequence.asTransport(),
+        .{ .retry = .{
+            .max_retries = 1,
+            .initial_delay_ms = 0,
+            .max_delay_ms = 0,
+        } },
+    );
+    defer connection.deinit();
+
+    var client = KustoClient.initWithConnection(connection, .{});
+    var result = try client.executeQuery(allocator, "db", "print 1", null);
+    defer result.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 2), sequence.call_count);
+}
+
+test "shared KustoClient does not retry management commands" {
+    const allocator = std.testing.allocator;
+    var credential = TestTokenCredential{};
+    const responses = [_]core.http.SequenceMockTransport.CannedResponse{
+        .{
+            .status = 500,
+            .body = "{\"error\":{\"code\":\"ServerError\",\"message\":\"failed\"}}",
+        },
+        .{ .status = 200, .body = "[]" },
+    };
+    var sequence = core.http.SequenceMockTransport.init(allocator, &responses);
+    const connection = try KustoConnection.init(
+        allocator,
+        .{
+            .cluster_url = "https://cluster.kusto.windows.net",
+            .credential = credential.asCredential(),
+        },
+        sequence.asTransport(),
+        .{ .retry = .{
+            .max_retries = 1,
+            .initial_delay_ms = 0,
+            .max_delay_ms = 0,
+        } },
+    );
+    defer connection.deinit();
+
+    var client = KustoClient.initWithConnection(connection, .{});
+    try std.testing.expectError(
+        error.KustoQueryFailed,
+        client.executeMgmt(allocator, "db", ".show tables", null),
+    );
+    try std.testing.expectEqual(@as(usize, 1), sequence.call_count);
 }
 
 test "KustoClient executeMgmt" {

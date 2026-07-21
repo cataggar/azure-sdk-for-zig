@@ -298,6 +298,9 @@ pub const RequestIdPolicy = struct {
         next: []*HttpPolicy,
         final_transport: *HttpTransport,
     ) !Response {
+        if (request.getHeader("x-ms-client-request-id") != null) {
+            return callNext(request, next, final_transport);
+        }
         const uuid_mod = @import("../uuid.zig");
         const seed: u64 = @truncate(@as(u128, @bitCast(nanoTimestamp())));
         var prng = std.Random.DefaultPrng.init(seed);
@@ -350,7 +353,7 @@ pub const TracingPolicy = struct {
         span.setAttribute("url.full", request.url) catch {};
         span.setAttribute("az.namespace", self.az_namespace) catch {};
 
-        if (request.headers.get("x-ms-client-request-id")) |rid| {
+        if (request.getHeader("x-ms-client-request-id")) |rid| {
             span.setAttribute("az.client_request_id", rid) catch {};
         }
 
@@ -443,6 +446,27 @@ test "RequestIdPolicy injects x-ms-client-request-id" {
     // UUID format: 8-4-4-4-12 = 36 chars.
     try std.testing.expectEqual(@as(usize, 36), request_id.len);
     try std.testing.expectEqual(@as(u8, '-'), request_id[8]);
+}
+
+test "RequestIdPolicy preserves caller-provided request ID" {
+    const allocator = std.testing.allocator;
+    var mock = transport.MockTransport.init(allocator, 200, "ok");
+    defer mock.deinit();
+    var rid = RequestIdPolicy.init();
+    var policy_ptrs = [_]*HttpPolicy{rid.asPolicy()};
+    var pipeline_inst = HttpPipeline{
+        .policies = &policy_ptrs,
+        .transport_impl = mock.asTransport(),
+    };
+    var req = Request.init(allocator, .GET, "https://example.com");
+    defer req.deinit();
+    try req.setHeader("X-MS-Client-Request-Id", "caller-request-id");
+    var resp = try pipeline_inst.send(&req);
+    defer resp.deinit();
+    try std.testing.expectEqualStrings(
+        "caller-request-id",
+        req.getHeader("x-ms-client-request-id").?,
+    );
 }
 
 test "BearerTokenAuthPolicy injects Authorization header" {
