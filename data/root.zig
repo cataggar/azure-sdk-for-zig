@@ -18,6 +18,12 @@ pub const KustoRetryOptions = kusto_common.KustoRetryOptions;
 pub const KustoRequestKind = kusto_common.KustoRequestKind;
 pub const QueryConsistency = kusto_common.QueryConsistency;
 pub const RequestProperty = kusto_common.RequestProperty;
+pub const KustoError = kusto_common.KustoError;
+pub const KustoErrorDetail = kusto_common.KustoErrorDetail;
+pub const KustoOperation = kusto_common.KustoOperation;
+pub const KustoErrorSource = kusto_common.KustoErrorSource;
+pub const KustoOperationOutcome = kusto_common.KustoOperationOutcome;
+pub const KustoResult = kusto_common.KustoResult;
 
 // ─────────────────── Response Types ──────────────────
 
@@ -53,6 +59,7 @@ pub const KustoResultRow = struct {
 
 pub const KustoResultTable = struct {
     name: []const u8,
+    kind: ?[]const u8 = null,
     columns: []const KustoResultColumn,
     rows: []const KustoResultRow,
 
@@ -62,6 +69,7 @@ pub const KustoResultTable = struct {
         for (self.columns) |column| column.deinit(allocator);
         allocator.free(self.columns);
         allocator.free(self.name);
+        if (self.kind) |kind| allocator.free(kind);
         self.* = .{ .name = "", .columns = &.{}, .rows = &.{} };
     }
 };
@@ -167,17 +175,17 @@ pub const KustoClient = struct {
     }
 
     /// `Result(...)` variants of the execute methods.
-    pub fn executeQueryResult(self: *KustoClient, allocator: std.mem.Allocator, database: []const u8, query: []const u8, properties: ?ClientRequestProperties) !core.errors.Result(KustoResponseDataSet) {
+    pub fn executeQueryResult(self: *KustoClient, allocator: std.mem.Allocator, database: []const u8, query: []const u8, properties: ?ClientRequestProperties) !KustoResult(KustoResponseDataSet) {
         const url = try std.fmt.allocPrint(allocator, "{s}/v2/rest/query", .{self.engineUrl()});
         defer allocator.free(url);
         return self.executeInternalResult(allocator, url, database, query, properties, .query);
     }
-    pub fn executeMgmtResult(self: *KustoClient, allocator: std.mem.Allocator, database: []const u8, command: []const u8, properties: ?ClientRequestProperties) !core.errors.Result(KustoResponseDataSet) {
+    pub fn executeMgmtResult(self: *KustoClient, allocator: std.mem.Allocator, database: []const u8, command: []const u8, properties: ?ClientRequestProperties) !KustoResult(KustoResponseDataSet) {
         const url = try std.fmt.allocPrint(allocator, "{s}/v1/rest/mgmt", .{self.engineUrl()});
         defer allocator.free(url);
         return self.executeInternalResult(allocator, url, database, command, properties, .management);
     }
-    pub fn executeResult(self: *KustoClient, allocator: std.mem.Allocator, database: []const u8, query_or_command: []const u8) !core.errors.Result(KustoResponseDataSet) {
+    pub fn executeResult(self: *KustoClient, allocator: std.mem.Allocator, database: []const u8, query_or_command: []const u8) !KustoResult(KustoResponseDataSet) {
         const trimmed = std.mem.trimStart(u8, query_or_command, " \t\n\r");
         if (trimmed.len > 0 and trimmed[0] == '.') {
             return self.executeMgmtResult(allocator, database, query_or_command, null);
@@ -195,7 +203,20 @@ pub const KustoClient = struct {
         kind: KustoRequestKind,
     ) !KustoResponseDataSet {
         var r = try self.executeInternalResult(allocator, url, database, csl, properties, kind);
-        return r.unwrap(error.KustoQueryFailed);
+        return switch (r) {
+            .ok => |value| value,
+            .partial => |*partial| {
+                std.log.warn("{f}", .{partial.failure});
+                partial.failure.deinit();
+                partial.value.deinit(allocator);
+                return error.KustoQueryFailed;
+            },
+            .err => |*failure| {
+                std.log.warn("{f}", .{failure.*});
+                failure.deinit();
+                return error.KustoQueryFailed;
+            },
+        };
     }
 
     fn executeInternalResult(
@@ -206,7 +227,7 @@ pub const KustoClient = struct {
         csl: []const u8,
         properties: ?ClientRequestProperties,
         kind: KustoRequestKind,
-    ) !core.errors.Result(KustoResponseDataSet) {
+    ) !KustoResult(KustoResponseDataSet) {
         const props: ClientRequestProperties = properties orelse ClientRequestProperties{};
         try props.validate(kind);
         const body = try serializeRequest(allocator, database, csl, props, kind);
@@ -232,11 +253,36 @@ pub const KustoClient = struct {
         var resp = try self.send(&req);
         defer resp.deinit();
 
+        const operation: KustoOperation = if (kind == .query) .query else .management;
         if (!resp.isSuccess()) {
-            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
-                return .{ .err = az_err };
+            var failure = try kusto_common.errors.fromHttpResponse(
+                allocator,
+                operation,
+                &resp,
+                .known_not_accepted,
+            );
+            errdefer failure.deinit();
+            try kusto_common.errors.applyResponseCorrelation(
+                &failure,
+                &resp,
+                req.getHeader("x-ms-client-request-id"),
+            );
+            return .{ .err = failure };
+        }
+
+        var in_band_failure = try inspectInBandFailure(allocator, resp.body, operation);
+        errdefer if (in_band_failure) |*failure| failure.deinit();
+        if (in_band_failure) |*failure| {
+            if (failure.source == .v1_exception) {
+                try kusto_common.errors.applyResponseCorrelation(
+                    failure,
+                    &resp,
+                    req.getHeader("x-ms-client-request-id"),
+                );
+                const owned_failure = failure.*;
+                in_band_failure = null;
+                return .{ .err = owned_failure };
             }
-            return error.AzureRequestFailed;
         }
 
         var dataset = try parseResponseDataSet(allocator, resp.body);
@@ -247,6 +293,26 @@ pub const KustoClient = struct {
         }
         if (resp.getHeader("x-ms-activity-id")) |activity_id| {
             dataset.activity_id = try allocator.dupe(u8, activity_id);
+        }
+        if (in_band_failure) |*failure| {
+            try kusto_common.errors.applyResponseCorrelation(
+                failure,
+                &resp,
+                req.getHeader("x-ms-client-request-id"),
+            );
+            const owned_failure = failure.*;
+            in_band_failure = null;
+            return .{ .partial = .{ .value = dataset, .failure = owned_failure } };
+        }
+        if (try queryStatusFailure(allocator, dataset, operation)) |classified_failure| {
+            var failure = classified_failure;
+            errdefer failure.deinit();
+            try kusto_common.errors.applyResponseCorrelation(
+                &failure,
+                &resp,
+                req.getHeader("x-ms-client-request-id"),
+            );
+            return .{ .partial = .{ .value = dataset, .failure = failure } };
         }
         return .{ .ok = dataset };
     }
@@ -303,6 +369,7 @@ const KustoFrameTypeSchema = struct {
 const KustoFrameSchema = struct {
     FrameType: []const u8,
     TableName: ?[]const u8 = null,
+    TableKind: ?[]const u8 = null,
     Columns: ?[]const KustoColumnSchema = null,
 };
 
@@ -342,6 +409,172 @@ fn parseResponseDataSet(allocator: std.mem.Allocator, body: []const u8) !KustoRe
     return .{ .tables = try tables.toOwnedSlice(allocator) };
 }
 
+const CompletionFrameSchema = struct {
+    FrameType: ?[]const u8 = null,
+    HasErrors: ?bool = null,
+    Cancelled: ?bool = null,
+    OneApiErrors: ?[]kusto_common.errors.OneApiEnvelope = null,
+};
+
+/// Classifies only the first completion failure. Progressive reconstruction and
+/// deduplication are intentionally deferred; tables were already buffered by
+/// `parseResponseDataSet` before this pass.
+fn inspectInBandFailure(
+    allocator: std.mem.Allocator,
+    body: []const u8,
+    operation: KustoOperation,
+) !?KustoError {
+    var deserializer = serde.json.Deserializer.init(body);
+    const scanner = &deserializer.scanner;
+    const first = scanner.next() catch return error.MalformedKustoResponse;
+    if (first == .object_begin) return inspectV1Exception(allocator, body, operation);
+    if (first != .array_begin) return error.MalformedKustoResponse;
+    if (scanner.isContainerEmpty(']') catch return error.MalformedKustoResponse) {
+        _ = scanner.next() catch return error.MalformedKustoResponse;
+        return null;
+    }
+    while (true) {
+        const frame_slice = captureValue(scanner, body) catch return error.MalformedKustoResponse;
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const frame = serde.json.fromSlice(CompletionFrameSchema, arena.allocator(), frame_slice) catch |err| {
+            if (err == error.OutOfMemory) return error.OutOfMemory;
+            return error.MalformedKustoResponse;
+        };
+        const source: ?KustoErrorSource = if (std.mem.eql(u8, frame.FrameType orelse "", "DataSetCompletion"))
+            .dataset_completion
+        else if (std.mem.eql(u8, frame.FrameType orelse "", "TableCompletion"))
+            .table_completion
+        else
+            null;
+        if (source) |failure_source| {
+            const cancelled = frame.Cancelled orelse false;
+            if (frame.OneApiErrors) |errors| {
+                if (errors.len > 0) {
+                    return try kusto_common.errors.fromOneApiEnvelope(
+                        allocator,
+                        operation,
+                        failure_source,
+                        errors[0],
+                        cancelled,
+                    );
+                }
+            }
+            if ((frame.HasErrors orelse false) or cancelled) {
+                return kusto_common.errors.inBandFailure(
+                    allocator,
+                    operation,
+                    failure_source,
+                    cancelled,
+                );
+            }
+        }
+        switch (scanner.finishContainer(']') catch return error.MalformedKustoResponse) {
+            .end => break,
+            .more => {},
+        }
+    }
+    return null;
+}
+
+fn inspectV1Exception(
+    allocator: std.mem.Allocator,
+    body: []const u8,
+    operation: KustoOperation,
+) !?KustoError {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var scanner = std.json.Scanner.initCompleteInput(arena.allocator(), body);
+    defer scanner.deinit();
+    const value = std.json.parseFromTokenSourceLeaky(
+        std.json.Value,
+        arena.allocator(),
+        &scanner,
+        .{},
+    ) catch |err| {
+        if (err == error.OutOfMemory) return error.OutOfMemory;
+        return error.MalformedKustoResponse;
+    };
+    const message = findV1Exception(&value) orelse return null;
+    var failure = kusto_common.errors.inBandFailure(
+        allocator,
+        operation,
+        .v1_exception,
+        false,
+    );
+    errdefer failure.deinit();
+    failure.detail.message = try allocator.dupe(u8, message);
+    return failure;
+}
+
+fn findV1Exception(value: *const std.json.Value) ?[]const u8 {
+    switch (value.*) {
+        .object => |object| {
+            if (object.get("Exceptions")) |exceptions_value| {
+                switch (exceptions_value) {
+                    .array => |exceptions| {
+                        for (exceptions.items) |exception| {
+                            switch (exception) {
+                                .string => |message| return message,
+                                else => {},
+                            }
+                        }
+                    },
+                    else => {},
+                }
+            }
+            for (object.values()) |*entry_value| {
+                if (findV1Exception(entry_value)) |message| return message;
+            }
+        },
+        .array => |items| {
+            for (items.items) |*item| {
+                if (findV1Exception(item)) |message| return message;
+            }
+        },
+        else => {},
+    }
+    return null;
+}
+
+fn queryStatusFailure(
+    allocator: std.mem.Allocator,
+    dataset: KustoResponseDataSet,
+    operation: KustoOperation,
+) !?KustoError {
+    for (dataset.tables) |table| {
+        const is_query_status = std.mem.eql(u8, table.name, "QueryStatus") or
+            (table.kind != null and std.mem.eql(u8, table.kind.?, "QueryCompletionInformation"));
+        if (!is_query_status) continue;
+        for (table.rows) |row| {
+            const severity_text = row.getByName("Severity") orelse continue;
+            const severity = std.fmt.parseInt(i32, severity_text, 10) catch continue;
+            if (severity > 2) continue;
+            var failure = kusto_common.errors.inBandFailure(
+                allocator,
+                operation,
+                .query_status,
+                false,
+            );
+            errdefer failure.deinit();
+            if (row.getByName("StatusCode")) |code| {
+                failure.detail.code = try allocator.dupe(u8, code);
+            }
+            if (row.getByName("StatusDescription")) |message| {
+                failure.detail.message = try allocator.dupe(u8, message);
+            }
+            if (row.getByName("ClientActivityId") orelse row.getByName("RequestId")) |request_id| {
+                failure.client_request_id = try allocator.dupe(u8, request_id);
+            }
+            if (row.getByName("ActivityId")) |activity_id| {
+                failure.activity_id = try allocator.dupe(u8, activity_id);
+            }
+            return failure;
+        }
+    }
+    return null;
+}
+
 fn captureValue(scanner: anytype, input: []const u8) ![]const u8 {
     scanner.skipWhitespace();
     const start = scanner.pos;
@@ -370,6 +603,11 @@ fn parseFrame(allocator: std.mem.Allocator, frame_slice: []const u8) !?KustoResu
 
     const table_name = try allocator.dupe(u8, table_name_src);
     errdefer allocator.free(table_name);
+    const table_kind = if (frame.TableKind) |kind|
+        try allocator.dupe(u8, kind)
+    else
+        null;
+    errdefer if (table_kind) |kind| allocator.free(kind);
 
     var columns = std.ArrayList(KustoResultColumn).empty;
     errdefer {
@@ -397,6 +635,7 @@ fn parseFrame(allocator: std.mem.Allocator, frame_slice: []const u8) !?KustoResu
     const rows = try parseRows(allocator, rows_slice, columns_slice);
     return .{
         .name = table_name,
+        .kind = table_kind,
         .columns = columns_slice,
         .rows = rows,
     };
@@ -1040,10 +1279,169 @@ test "Kusto dataset and Result deinit own all parsed allocations" {
     var dataset = try parseResponseDataSet(std.testing.allocator, response_body);
     dataset.deinit(std.testing.allocator);
 
-    var result: core.errors.Result(KustoResponseDataSet) = .{
+    var result: KustoResult(KustoResponseDataSet) = .{
         .ok = try parseResponseDataSet(std.testing.allocator, response_body),
     };
     result.deinit(std.testing.allocator);
+}
+
+test "Kusto non-2xx malformed body is a structured HTTP failure" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 502, "gateway said no");
+    defer mock.deinit();
+    var client = KustoClient.init(
+        .{ .cluster_url = "https://cluster.kusto.windows.net" },
+        mock.asTransport(),
+        .{},
+    );
+
+    var result = try client.executeQueryResult(allocator, "db", "print 1", null);
+    defer result.deinit(allocator);
+    switch (result) {
+        .err => |failure| {
+            try std.testing.expectEqual(@as(?u16, 502), failure.http_status);
+            try std.testing.expectEqual(KustoErrorSource.http, failure.source);
+            try std.testing.expectEqual(KustoOperationOutcome.known_not_accepted, failure.outcome);
+            try std.testing.expect(failure.retryable);
+            try std.testing.expect(failure.detail.code == null);
+            try std.testing.expectEqual(@as(usize, 36), failure.client_request_id.?.len);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "V1 exception payload is a structured in-band failure" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200,
+        \\{"Tables":[{"TableName":"Table_0","Columns":[],"Rows":[{"Exceptions":["partial V1 failure"]}]}]}
+    );
+    defer mock.deinit();
+    var client = KustoClient.init(
+        .{ .cluster_url = "https://cluster.kusto.windows.net" },
+        mock.asTransport(),
+        .{},
+    );
+
+    var result = try client.executeMgmtResult(allocator, "db", ".show tables", null);
+    defer result.deinit(allocator);
+    switch (result) {
+        .err => |failure| {
+            try std.testing.expectEqual(KustoErrorSource.v1_exception, failure.source);
+            try std.testing.expectEqual(KustoOperationOutcome.partial, failure.outcome);
+            try std.testing.expectEqualStrings("partial V1 failure", failure.detail.message.?);
+            try std.testing.expectEqual(@as(usize, 36), failure.client_request_id.?.len);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "DataSetCompletion OneApiErrors preserves buffered tables as partial" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200,
+        \\[
+        \\ {"FrameType":"DataTable","TableName":"PrimaryResult","Columns":[{"ColumnName":"Value"}],"Rows":[["before failure"]]},
+        \\ {"FrameType":"DataSetCompletion","HasErrors":true,"OneApiErrors":[{"error":{"code":"LimitsExceeded","message":"partial failure","@permanent":false,"@context":{"clientRequestId":"context-request","activityId":"context-activity"}}}]}
+        \\]
+    );
+    mock.response_headers_list = &.{
+        .{ .name = "x-ms-client-request-id", .value = "response-request" },
+        .{ .name = "x-ms-activity-id", .value = "response-activity" },
+    };
+    defer mock.deinit();
+    var client = KustoClient.init(
+        .{ .cluster_url = "https://cluster.kusto.windows.net" },
+        mock.asTransport(),
+        .{},
+    );
+
+    var result = try client.executeQueryResult(allocator, "db", "print 1", null);
+    defer result.deinit(allocator);
+    switch (result) {
+        .partial => |partial| {
+            try std.testing.expectEqual(@as(usize, 1), partial.value.tables.len);
+            try std.testing.expectEqualStrings("before failure", partial.value.tables[0].rows[0].values[0]);
+            try std.testing.expectEqual(KustoErrorSource.dataset_completion, partial.failure.source);
+            try std.testing.expectEqualStrings("LimitsExceeded", partial.failure.detail.code.?);
+            try std.testing.expectEqualStrings("response-request", partial.failure.client_request_id.?);
+            try std.testing.expectEqualStrings("response-activity", partial.failure.activity_id.?);
+            try std.testing.expect(!partial.failure.retryable);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "TableCompletion OneApiErrors is classified as partial" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200,
+        \\[{"FrameType":"TableCompletion","HasErrors":true,"OneApiErrors":[{"error":{"code":"TableFailure","message":"failed table"}}]}]
+    );
+    defer mock.deinit();
+    var client = KustoClient.init(
+        .{ .cluster_url = "https://cluster.kusto.windows.net" },
+        mock.asTransport(),
+        .{},
+    );
+
+    var result = try client.executeQueryResult(allocator, "db", "print 1", null);
+    defer result.deinit(allocator);
+    switch (result) {
+        .partial => |partial| {
+            try std.testing.expectEqual(KustoErrorSource.table_completion, partial.failure.source);
+            try std.testing.expectEqualStrings("TableFailure", partial.failure.detail.code.?);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "QueryStatus failure rows are classified as partial" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200,
+        \\[{"FrameType":"DataTable","TableName":"QueryStatus","Columns":[{"ColumnName":"Severity"},{"ColumnName":"StatusCode"},{"ColumnName":"StatusDescription"},{"ColumnName":"ClientActivityId"},{"ColumnName":"ActivityId"}],"Rows":[[1,"SyntaxError","bad query","row-request","row-activity"]]}]
+    );
+    defer mock.deinit();
+    var client = KustoClient.init(
+        .{ .cluster_url = "https://cluster.kusto.windows.net" },
+        mock.asTransport(),
+        .{},
+    );
+
+    var result = try client.executeQueryResult(allocator, "db", "print 1", null);
+    defer result.deinit(allocator);
+    switch (result) {
+        .partial => |partial| {
+            try std.testing.expectEqual(KustoErrorSource.query_status, partial.failure.source);
+            try std.testing.expectEqualStrings("SyntaxError", partial.failure.detail.code.?);
+            try std.testing.expectEqualStrings("bad query", partial.failure.detail.message.?);
+            try std.testing.expectEqualStrings("row-request", partial.failure.client_request_id.?);
+            try std.testing.expectEqualStrings("row-activity", partial.failure.activity_id.?);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "V2 QueryCompletionInformation failure rows are classified as partial" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200,
+        \\[{"FrameType":"DataTable","TableName":"Table_1","TableKind":"QueryCompletionInformation","Columns":[{"ColumnName":"Severity"},{"ColumnName":"StatusCode"},{"ColumnName":"StatusDescription"}],"Rows":[[2,"LimitsExceeded","result truncated"]]}]
+    );
+    defer mock.deinit();
+    var client = KustoClient.init(
+        .{ .cluster_url = "https://cluster.kusto.windows.net" },
+        mock.asTransport(),
+        .{},
+    );
+
+    var result = try client.executeQueryResult(allocator, "db", "print 1", null);
+    defer result.deinit(allocator);
+    switch (result) {
+        .partial => |partial| {
+            try std.testing.expectEqualStrings("QueryCompletionInformation", partial.value.tables[0].kind.?);
+            try std.testing.expectEqual(KustoErrorSource.query_status, partial.failure.source);
+            try std.testing.expectEqualStrings("LimitsExceeded", partial.failure.detail.code.?);
+            try std.testing.expectEqualStrings("result truncated", partial.failure.detail.message.?);
+        },
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 fn parseAllocationFixture(allocator: std.mem.Allocator, body: []const u8) !void {

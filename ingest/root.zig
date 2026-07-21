@@ -17,11 +17,18 @@ pub const KustoMetadataMode = kusto_common.KustoMetadataMode;
 pub const KustoCloudInfo = kusto_common.KustoCloudInfo;
 pub const KustoCloudInfoCache = kusto_common.KustoCloudInfoCache;
 pub const KustoRetryOptions = kusto_common.KustoRetryOptions;
+pub const KustoError = kusto_common.KustoError;
+pub const KustoErrorDetail = kusto_common.KustoErrorDetail;
+pub const KustoOperation = kusto_common.KustoOperation;
+pub const KustoErrorSource = kusto_common.KustoErrorSource;
+pub const KustoOperationOutcome = kusto_common.KustoOperationOutcome;
+pub const KustoResult = kusto_common.KustoResult;
 
 // ─────────────────── Types ───────────────────────────
 
 pub const IngestionResult = struct {
     status: IngestionStatus,
+    outcome: KustoOperationOutcome = .accepted,
     /// Allocator-owned when non-null; call `deinit` to release it.
     ingestion_id: ?[]const u8 = null,
 
@@ -91,23 +98,25 @@ pub const StreamingIngestClient = struct {
     ///
     /// Returns `IngestionResult{ .status = .failed }` on any Azure-side
     /// error (and logs the error). Use `ingestFromSliceResult` to receive
-    /// the structured `AzureError` instead.
+    /// the structured Kusto failure and operation outcome instead.
     pub fn ingestFromSlice(self: *StreamingIngestClient, allocator: std.mem.Allocator, database: []const u8, table: []const u8, data: []const u8, options: IngestOptions) !IngestionResult {
         var r = try self.ingestFromSliceResult(allocator, database, table, data, options);
         return switch (r) {
             .ok => |v| v,
+            .partial => unreachable,
             .err => blk: {
+                const outcome = r.err.outcome;
                 std.log.warn("{f}", .{r.err});
                 r.err.deinit();
-                break :blk .{ .status = .failed };
+                break :blk .{ .status = .failed, .outcome = outcome };
             },
         };
     }
 
-    /// Same as `ingestFromSlice` but exposes Azure-side failures as the
-    /// `.err` variant of `Result` instead of collapsing them into
-    /// `IngestionResult{ .status = .failed }`.
-    pub fn ingestFromSliceResult(self: *StreamingIngestClient, allocator: std.mem.Allocator, database: []const u8, table: []const u8, data: []const u8, options: IngestOptions) !core.errors.Result(IngestionResult) {
+    /// Same as `ingestFromSlice` but exposes Kusto-side failures as `.err`.
+    /// A send failure after transport entry has `.outcome = .unknown`; a
+    /// non-2xx response is known not to have been accepted.
+    pub fn ingestFromSliceResult(self: *StreamingIngestClient, allocator: std.mem.Allocator, database: []const u8, table: []const u8, data: []const u8, options: IngestOptions) !KustoResult(IngestionResult) {
         const url = try self.buildIngestUrl(allocator, database, table, options);
         defer allocator.free(url);
 
@@ -116,17 +125,36 @@ pub const StreamingIngestClient = struct {
         try req.setHeader("Content-Type", "application/json");
         try req.setHeader("Content-Encoding", "utf-8");
         try req.setHeader("x-ms-app", "azure-sdk-zig");
+        try core.pipeline.ensureRequestId(&req);
         req.body = data;
         req.retryable = false;
 
-        var resp = try self.send(&req);
+        var resp = self.send(&req) catch |err| {
+            if (req.transport_started) {
+                return .{ .err = try kusto_common.errors.transportUnknown(
+                    allocator,
+                    err,
+                    req.getHeader("x-ms-client-request-id"),
+                ) };
+            }
+            return err;
+        };
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
-            if (core.errors.errorFromResponse(allocator, resp)) |az_err| {
-                return .{ .err = az_err };
-            }
-            return error.AzureRequestFailed;
+            var failure = try kusto_common.errors.fromHttpResponse(
+                allocator,
+                .streaming_ingest,
+                &resp,
+                .known_not_accepted,
+            );
+            errdefer failure.deinit();
+            try kusto_common.errors.applyResponseCorrelation(
+                &failure,
+                &resp,
+                req.getHeader("x-ms-client-request-id"),
+            );
+            return .{ .err = failure };
         }
 
         return .{ .ok = .{ .status = .success } };
@@ -209,7 +237,7 @@ pub const QueuedIngestClient = struct {
         return error.QueuedIngestionNotImplemented;
     }
 
-    pub fn ingestFromBlobResult(self: *QueuedIngestClient, allocator: std.mem.Allocator, properties: IngestionProperties, blob_url: []const u8) !core.errors.Result(IngestionResult) {
+    pub fn ingestFromBlobResult(self: *QueuedIngestClient, allocator: std.mem.Allocator, properties: IngestionProperties, blob_url: []const u8) !KustoResult(IngestionResult) {
         _ = self;
         _ = allocator;
         _ = properties;
@@ -253,14 +281,23 @@ pub const ManagedIngestClient = struct {
     /// Returns `error.ManagedIngestionFallbackNotImplemented` if streaming
     /// fails because queued fallback would be required.
     pub fn ingestFromSlice(self: *ManagedIngestClient, allocator: std.mem.Allocator, database: []const u8, table: []const u8, data: []const u8, options: IngestOptions) !IngestionResult {
-        var streaming_result = try self.streaming.ingestFromSliceResult(allocator, database, table, data, options);
-        return switch (streaming_result) {
-            .ok => |result| result,
-            .err => |*azure_error| {
-                azure_error.deinit();
+        var result = try self.ingestFromSliceResult(allocator, database, table, data, options);
+        return switch (result) {
+            .ok => |ingestion| ingestion,
+            .partial => unreachable,
+            .err => |*failure| {
+                const outcome = failure.outcome;
+                failure.deinit();
+                if (outcome == .unknown) return error.KustoIngestionOutcomeUnknown;
                 return error.ManagedIngestionFallbackNotImplemented;
             },
         };
+    }
+
+    /// Structured managed-ingestion result. Until queued fallback is
+    /// implemented, this preserves the direct-streaming failure and outcome.
+    pub fn ingestFromSliceResult(self: *ManagedIngestClient, allocator: std.mem.Allocator, database: []const u8, table: []const u8, data: []const u8, options: IngestOptions) !KustoResult(IngestionResult) {
+        return self.streaming.ingestFromSliceResult(allocator, database, table, data, options);
     }
 
     pub fn deinit(self: *ManagedIngestClient, allocator: std.mem.Allocator) void {
@@ -276,6 +313,18 @@ fn connectionHasAuthentication(connection: ConnectionProperties) bool {
 }
 
 // ─────────────────────── Tests ───────────────────────
+
+const TransportFailure = struct {
+    transport: core.http.HttpTransport = .{ .sendFn = &send },
+
+    fn asTransport(self: *TransportFailure) *core.http.HttpTransport {
+        return &self.transport;
+    }
+
+    fn send(_: *core.http.HttpTransport, _: *core.http.Request) anyerror!core.http.Response {
+        return error.ConnectionResetByPeer;
+    }
+};
 
 test "StreamingIngestClient ingestFromSlice" {
     const allocator = std.testing.allocator;
@@ -486,6 +535,29 @@ test "StreamingIngestClient failure" {
 
     const result = try client.ingestFromSlice(allocator, "DB", "Table", "bad", .{});
     try std.testing.expectEqual(IngestionStatus.failed, result.status);
+    try std.testing.expectEqual(KustoOperationOutcome.known_not_accepted, result.outcome);
+}
+
+test "streaming non-2xx is known not accepted" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 400,
+        \\{"error":{"code":"BadRequest","message":"Invalid data"}}
+    );
+    defer mock.deinit();
+    var client = StreamingIngestClient.init(
+        .{ .cluster_url = "https://cluster.kusto.windows.net" },
+        mock.asTransport(),
+    );
+
+    var result = try client.ingestFromSliceResult(allocator, "DB", "Table", "bad", .{});
+    defer result.deinit(allocator);
+    switch (result) {
+        .err => |failure| {
+            try std.testing.expectEqual(KustoOperationOutcome.known_not_accepted, failure.outcome);
+            try std.testing.expect(!failure.retryable);
+        },
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 fn unexpectedTokenRequest(
@@ -526,9 +598,56 @@ test "legacy authenticated StreamingIngestClient requires shared connection" {
     try std.testing.expect(mock.last_url == null);
 }
 
+test "streaming transport failure has unknown outcome after transport entry" {
+    const allocator = std.testing.allocator;
+    var failing_transport = TransportFailure{};
+    var client = StreamingIngestClient.init(
+        .{ .cluster_url = "https://cluster.kusto.windows.net" },
+        failing_transport.asTransport(),
+    );
+
+    var result = try client.ingestFromSliceResult(allocator, "DB", "Table", "data", .{});
+    defer result.deinit(allocator);
+    switch (result) {
+        .err => |failure| {
+            try std.testing.expectEqual(KustoErrorSource.transport, failure.source);
+            try std.testing.expectEqual(KustoOperationOutcome.unknown, failure.outcome);
+            try std.testing.expectEqual(error.ConnectionResetByPeer, failure.transport_error.?);
+            try std.testing.expectEqual(@as(usize, 36), failure.client_request_id.?.len);
+            try std.testing.expect(!failure.retryable);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "managed ingestion does not fall back after an unknown outcome" {
+    const allocator = std.testing.allocator;
+    var failing_transport = TransportFailure{};
+    var client = ManagedIngestClient.init(
+        .{ .cluster_url = "https://cluster.kusto.windows.net" },
+        failing_transport.asTransport(),
+    );
+    defer client.deinit(allocator);
+
+    var result = try client.ingestFromSliceResult(allocator, "DB", "Table", "data", .{});
+    defer result.deinit(allocator);
+    switch (result) {
+        .err => |failure| {
+            try std.testing.expectEqual(KustoOperationOutcome.unknown, failure.outcome);
+            try std.testing.expectEqual(error.ConnectionResetByPeer, failure.transport_error.?);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    try std.testing.expectError(
+        error.KustoIngestionOutcomeUnknown,
+        client.ingestFromSlice(allocator, "DB", "Table", "data", .{}),
+    );
+}
+
 test "IngestionResult deinit through Result" {
     const allocator = std.testing.allocator;
-    var result: core.errors.Result(IngestionResult) = .{ .ok = .{
+    var result: KustoResult(IngestionResult) = .{ .ok = .{
         .status = .success,
         .ingestion_id = try allocator.dupe(u8, "ingestion-id"),
     } };
