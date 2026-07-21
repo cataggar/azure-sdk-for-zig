@@ -39,6 +39,9 @@ pub const Request = struct {
     allocator: std.mem.Allocator,
     retryable: bool = true,
     redirect_policy: RedirectPolicy = .follow,
+    /// Best-effort budget checked before attempts and retry backoff. A blocking
+    /// in-flight send can exceed this budget.
+    operation_timeout_ms: ?u64 = null,
 
     pub fn init(allocator: std.mem.Allocator, method: Method, request_url: []const u8) Request {
         return .{
@@ -51,6 +54,15 @@ pub const Request = struct {
     }
 
     pub fn setHeader(self: *Request, key: []const u8, value: []const u8) !void {
+        if (key.len == 0) return error.InvalidHttpHeaderName;
+        for (key) |byte| {
+            if (!isHttpTokenByte(byte)) return error.InvalidHttpHeaderName;
+        }
+        for (value) |byte| {
+            if ((byte < 0x20 and byte != '\t') or byte == 0x7f)
+                return error.InvalidHttpHeaderValue;
+        }
+
         const owned_value = try self.allocator.dupe(u8, value);
         errdefer self.allocator.free(owned_value);
 
@@ -83,6 +95,13 @@ pub const Request = struct {
     }
 };
 
+fn isHttpTokenByte(byte: u8) bool {
+    return std.ascii.isAlphanumeric(byte) or switch (byte) {
+        '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~' => true,
+        else => false,
+    };
+}
+
 /// An HTTP response.
 pub const Response = struct {
     status_code: u16,
@@ -92,6 +111,16 @@ pub const Response = struct {
 
     pub fn isSuccess(self: Response) bool {
         return self.status_code >= 200 and self.status_code < 300;
+    }
+
+    pub fn getHeader(self: *const Response, key: []const u8) ?[]const u8 {
+        var iterator = self.headers.iterator();
+        while (iterator.next()) |entry| {
+            if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, key)) {
+                return entry.value_ptr.*;
+            }
+        }
+        return null;
     }
 
     pub fn deinit(self: *Response) void {
@@ -255,6 +284,7 @@ pub const MockTransport = struct {
     last_body: ?[]u8 = null,
     last_retryable: ?bool = null,
     last_redirect_policy: ?RedirectPolicy = null,
+    last_operation_timeout_ms: ?u64 = null,
     call_count: usize = 0,
     response_headers_list: []const HeaderPair = &.{},
 
@@ -287,8 +317,10 @@ pub const MockTransport = struct {
         self.call_count += 1;
         self.last_method = request.method;
         if (self.last_url) |old| self.allocator.free(old);
+        self.last_url = null;
         self.last_url = try self.allocator.dupe(u8, request.url);
         if (self.last_body) |old| self.allocator.free(old);
+        self.last_body = null;
         self.last_body = if (request.body) |body|
             try self.allocator.dupe(u8, body)
         else
@@ -304,6 +336,7 @@ pub const MockTransport = struct {
         }
         self.last_retryable = request.retryable;
         self.last_redirect_policy = request.redirect_policy;
+        self.last_operation_timeout_ms = request.operation_timeout_ms;
 
         const response_body_copy = try self.allocator.dupe(u8, self.response_body);
         errdefer self.allocator.free(response_body_copy);
@@ -395,6 +428,7 @@ test "request init and set header" {
     var req = Request.init(allocator, .GET, "https://example.com");
     defer req.deinit();
     try std.testing.expectEqual(RedirectPolicy.follow, req.redirect_policy);
+    try std.testing.expectEqual(@as(?u64, null), req.operation_timeout_ms);
     req.redirect_policy = .not_allowed;
     try std.testing.expectEqual(RedirectPolicy.not_allowed, req.redirect_policy);
     try req.setHeader("Accept", "application/json");
@@ -404,6 +438,8 @@ test "request init and set header" {
     try req.setHeader("accept", "application/json");
     try std.testing.expectEqual(@as(usize, 1), req.headers.count());
     try std.testing.expectEqualStrings("application/json", req.getHeader("ACCEPT").?);
+    try std.testing.expectError(error.InvalidHttpHeaderName, req.setHeader("bad name", "value"));
+    try std.testing.expectError(error.InvalidHttpHeaderValue, req.setHeader("x-value", "one\r\ntwo"));
 }
 
 test "response isSuccess" {
@@ -417,6 +453,26 @@ test "response isSuccess" {
     try std.testing.expect(resp.isSuccess());
 }
 
+test "response header lookup is case-insensitive" {
+    const allocator = std.testing.allocator;
+    var headers = std.StringHashMap([]const u8).init(allocator);
+    const name = try allocator.dupe(u8, "X-MS-Activity-Id");
+    errdefer allocator.free(name);
+    const value = try allocator.dupe(u8, "activity-id");
+    errdefer allocator.free(value);
+    try headers.put(name, value);
+
+    var resp = Response{
+        .status_code = 200,
+        .headers = headers,
+        .body = try allocator.dupe(u8, "ok"),
+        .allocator = allocator,
+    };
+    defer resp.deinit();
+    try std.testing.expectEqualStrings("activity-id", resp.getHeader("x-ms-activity-id").?);
+    try std.testing.expect(resp.getHeader("missing") == null);
+}
+
 test "mock transport" {
     const allocator = std.testing.allocator;
     var mock = MockTransport.init(allocator, 200, "{\"status\":\"ok\"}");
@@ -425,6 +481,7 @@ test "mock transport" {
     defer req.deinit();
     req.body = "{\"value\":\"secret-value\"}";
     req.redirect_policy = .not_allowed;
+    req.operation_timeout_ms = 12_345;
     var resp = try mock.asTransport().send(&req);
     defer resp.deinit();
     try std.testing.expectEqual(@as(u16, 200), resp.status_code);
@@ -433,5 +490,6 @@ test "mock transport" {
     try std.testing.expectEqualStrings("https://vault.azure.net/secrets/mysecret", mock.last_url.?);
     try std.testing.expectEqualStrings("{\"value\":\"secret-value\"}", mock.last_body.?);
     try std.testing.expectEqual(RedirectPolicy.not_allowed, mock.last_redirect_policy.?);
+    try std.testing.expectEqual(@as(?u64, 12_345), mock.last_operation_timeout_ms);
     try std.testing.expectEqual(@as(usize, 1), mock.call_count);
 }

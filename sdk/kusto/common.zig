@@ -672,21 +672,624 @@ fn deriveIngestEndpoint(allocator: std.mem.Allocator, engine_url: []const u8) ![
 
 // ─────────────── Request Properties ─────────────────
 
+/// The kind of Kusto operation for which request properties are being sent.
+pub const KustoRequestKind = enum { query, management };
+
+/// Default server timeout for queries.
+pub const query_default_server_timeout_ms: u64 = 240_000;
+/// Default server timeout for management commands.
+pub const management_default_server_timeout_ms: u64 = 600_000;
+/// Maximum timeout accepted by the Kusto service.
+pub const max_server_timeout_ms: u64 = 3_600_000;
+/// Extra time allowed for the client to receive a server response.
+pub const client_timeout_grace_ms: u64 = 30_000;
+
+/// Values accepted by Kusto's `queryconsistency` request option.
+pub const QueryConsistency = enum {
+    strong,
+    weak,
+    weak_by_query,
+    weak_by_database,
+    weak_by_session_id,
+
+    fn wireValue(self: QueryConsistency) []const u8 {
+        return switch (self) {
+            .strong => "strongconsistency",
+            .weak => "weakconsistency",
+            .weak_by_query => "weakconsistency_by_query",
+            .weak_by_database => "weakconsistency_by_database",
+            .weak_by_session_id => "weakconsistency_by_session_id",
+        };
+    }
+};
+
+/// An owned entry in a request property bag.
+pub const RequestProperty = struct {
+    name: []u8,
+    value: serde.Value,
+
+    fn deinit(self: *RequestProperty, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
+        self.value.deinit(allocator);
+    }
+};
+
 /// Client request properties for query/management commands.
 pub const ClientRequestProperties = struct {
     client_request_id: ?[]const u8 = null,
     application: ?[]const u8 = null,
     server_timeout_ms: ?i64 = null,
+    user: ?[]const u8 = null,
+    client_version: ?[]const u8 = null,
+    client_timeout_ms: ?u64 = null,
+    no_request_timeout: bool = false,
+    options: std.ArrayListUnmanaged(RequestProperty) = .empty,
+    parameters: std.ArrayListUnmanaged(RequestProperty) = .empty,
+
+    /// Releases the names and values owned by the option and parameter bags.
+    /// The string fields in this type are borrowed and are not released.
+    pub fn deinit(self: *ClientRequestProperties, allocator: std.mem.Allocator) void {
+        deinitPropertyList(&self.options, allocator);
+        deinitPropertyList(&self.parameters, allocator);
+    }
+
+    /// Set an arbitrary Kusto request option. The name and value are copied.
+    pub fn setOption(self: *ClientRequestProperties, allocator: std.mem.Allocator, name: []const u8, value: anytype) !void {
+        try setProperty(&self.options, allocator, name, value);
+    }
+
+    /// Set an arbitrary Kusto query parameter. The name and value are copied.
+    pub fn setParameter(self: *ClientRequestProperties, allocator: std.mem.Allocator, name: []const u8, value: anytype) !void {
+        var owned_value = try ownedValueFromAny(value, allocator);
+        validateQueryParameterValue(owned_value) catch |err| {
+            owned_value.deinit(allocator);
+            return err;
+        };
+        try setOwnedProperty(&self.parameters, allocator, name, owned_value);
+    }
+
+    pub fn setServerTimeoutMs(self: *ClientRequestProperties, timeout_ms: i64) void {
+        self.server_timeout_ms = timeout_ms;
+    }
+
+    pub fn setNoRequestTimeout(self: *ClientRequestProperties, enabled: bool) void {
+        self.no_request_timeout = enabled;
+    }
+
+    pub fn removeOption(self: *ClientRequestProperties, allocator: std.mem.Allocator, name: []const u8) bool {
+        return removeProperty(&self.options, allocator, name);
+    }
+
+    pub fn removeParameter(self: *ClientRequestProperties, allocator: std.mem.Allocator, name: []const u8) bool {
+        return removeProperty(&self.parameters, allocator, name);
+    }
+
+    pub fn setNoTruncation(self: *ClientRequestProperties, allocator: std.mem.Allocator, enabled: bool) !void {
+        try self.setOption(allocator, "notruncation", enabled);
+    }
+
+    pub fn setTruncationMaxRecords(self: *ClientRequestProperties, allocator: std.mem.Allocator, max_records: u64) !void {
+        try self.setOption(allocator, "truncationmaxrecords", max_records);
+    }
+
+    pub fn setTruncationMaxSize(self: *ClientRequestProperties, allocator: std.mem.Allocator, max_size: u64) !void {
+        try self.setOption(allocator, "truncationmaxsize", max_size);
+    }
+
+    pub fn setProgressiveEnabled(self: *ClientRequestProperties, allocator: std.mem.Allocator, enabled: bool) !void {
+        try self.setOption(allocator, "results_progressive_enabled", enabled);
+    }
+
+    pub fn setProgressiveResultsEnabled(self: *ClientRequestProperties, allocator: std.mem.Allocator, enabled: bool) !void {
+        try self.setProgressiveEnabled(allocator, enabled);
+    }
+
+    pub fn setProgressiveRowCount(self: *ClientRequestProperties, allocator: std.mem.Allocator, row_count: u64) !void {
+        try self.setOption(allocator, "query_results_progressive_row_count", row_count);
+    }
+
+    pub fn setProgressiveUpdatePeriod(self: *ClientRequestProperties, allocator: std.mem.Allocator, period_ms: u64) !void {
+        var buffer: [32]u8 = undefined;
+        try self.setOption(allocator, "query_results_progressive_update_period", formatTimespan(&buffer, period_ms));
+    }
+
+    pub fn setCacheMaxAge(self: *ClientRequestProperties, allocator: std.mem.Allocator, max_age_ms: u64) !void {
+        var buffer: [32]u8 = undefined;
+        try self.setOption(allocator, "query_results_cache_max_age", formatTimespan(&buffer, max_age_ms));
+    }
+
+    pub fn setQueryResultsCacheMaxAge(self: *ClientRequestProperties, allocator: std.mem.Allocator, max_age_ms: u64) !void {
+        try self.setCacheMaxAge(allocator, max_age_ms);
+    }
+
+    pub fn setCacheForceRefresh(self: *ClientRequestProperties, allocator: std.mem.Allocator, enabled: bool) !void {
+        try self.setOption(allocator, "query_results_cache_force_refresh", enabled);
+    }
+
+    pub fn setQueryResultsCacheForceRefresh(self: *ClientRequestProperties, allocator: std.mem.Allocator, enabled: bool) !void {
+        try self.setCacheForceRefresh(allocator, enabled);
+    }
+
+    pub fn setCachePerShard(self: *ClientRequestProperties, allocator: std.mem.Allocator, enabled: bool) !void {
+        try self.setOption(allocator, "query_results_cache_per_shard", enabled);
+    }
+
+    pub fn setQueryResultsCachePerShard(self: *ClientRequestProperties, allocator: std.mem.Allocator, enabled: bool) !void {
+        try self.setCachePerShard(allocator, enabled);
+    }
+
+    pub fn setQueryConsistency(self: *ClientRequestProperties, allocator: std.mem.Allocator, consistency: QueryConsistency) !void {
+        try self.setOption(allocator, "queryconsistency", consistency.wireValue());
+    }
+
+    pub fn setQueryWeakConsistencySessionId(self: *ClientRequestProperties, allocator: std.mem.Allocator, session_id: []const u8) !void {
+        try self.setOption(allocator, "query_weakconsistency_session_id", session_id);
+    }
+
+    pub fn setMaxMemoryPerIterator(self: *ClientRequestProperties, allocator: std.mem.Allocator, bytes: u64) !void {
+        try self.setOption(allocator, "maxmemoryconsumptionperiterator", bytes);
+    }
+
+    pub fn setMaxMemoryConsumptionPerIterator(self: *ClientRequestProperties, allocator: std.mem.Allocator, bytes: u64) !void {
+        try self.setMaxMemoryPerIterator(allocator, bytes);
+    }
+
+    pub fn setMaxMemoryPerQueryNode(self: *ClientRequestProperties, allocator: std.mem.Allocator, bytes: u64) !void {
+        try self.setOption(allocator, "max_memory_consumption_per_query_per_node", bytes);
+    }
+
+    pub fn setMaxMemoryConsumptionPerQueryPerNode(self: *ClientRequestProperties, allocator: std.mem.Allocator, bytes: u64) !void {
+        try self.setMaxMemoryPerQueryNode(allocator, bytes);
+    }
+
+    pub fn setRequestReadOnly(self: *ClientRequestProperties, allocator: std.mem.Allocator, enabled: bool) !void {
+        try self.setOption(allocator, "request_readonly", enabled);
+    }
+
+    pub fn setBlockRowLevelSecurity(self: *ClientRequestProperties, allocator: std.mem.Allocator, enabled: bool) !void {
+        try self.setOption(allocator, "request_block_row_level_security", enabled);
+    }
+
+    pub fn setForceRowLevelSecurity(self: *ClientRequestProperties, allocator: std.mem.Allocator, enabled: bool) !void {
+        try self.setOption(allocator, "query_force_row_level_security", enabled);
+    }
+
+    /// Validates explicit timeouts and any winning custom server timeout.
+    pub fn validate(self: *const ClientRequestProperties, kind: KustoRequestKind) !void {
+        _ = kind;
+        if (self.server_timeout_ms) |timeout| {
+            if (timeout < 1_000 or timeout > max_server_timeout_ms)
+                return error.InvalidServerTimeout;
+        }
+        if (self.client_timeout_ms) |timeout| {
+            if (timeout == 0 or timeout > max_server_timeout_ms + client_timeout_grace_ms)
+                return error.InvalidClientTimeout;
+        }
+        const no_request_timeout = try self.requestsNoTimeout();
+        if (!no_request_timeout and self.server_timeout_ms == null) {
+            if (findProperty(self.options.items, "servertimeout")) |property| {
+                _ = try timeoutFromValue(property.value);
+            }
+        }
+    }
+
+    /// Returns the server timeout after applying Kusto's operation default.
+    pub fn effectiveServerTimeoutMs(self: *const ClientRequestProperties, kind: KustoRequestKind) !u64 {
+        try self.validate(kind);
+        if (try self.requestsNoTimeout()) return max_server_timeout_ms;
+        if (self.server_timeout_ms) |timeout| return @intCast(timeout);
+        if (findProperty(self.options.items, "servertimeout")) |property|
+            return timeoutFromValue(property.value);
+        return defaultServerTimeout(kind);
+    }
+
+    /// Returns the client timeout, including the client grace period by default.
+    pub fn effectiveClientTimeoutMs(self: *const ClientRequestProperties, kind: KustoRequestKind) !u64 {
+        try self.validate(kind);
+        return self.client_timeout_ms orelse (try self.effectiveServerTimeoutMs(kind)) + client_timeout_grace_ms;
+    }
+
+    /// Returns the internal request-property adapter with operation defaults.
+    fn requestView(self: *const ClientRequestProperties, kind: KustoRequestKind) RequestPropertiesView {
+        return .{ .properties = self, .kind = kind };
+    }
 
     /// Serialize to JSON for the "properties" field in the REST body.
     pub fn toJson(self: ClientRequestProperties, allocator: std.mem.Allocator) ![]u8 {
-        if (self.server_timeout_ms) |timeout| {
-            const minutes = @divTrunc(timeout, 60000);
-            return std.fmt.allocPrint(allocator, "{{\"Options\":{{\"servertimeout\":\"{d}m\"}}}}", .{minutes});
-        }
-        return allocator.dupe(u8, "{}");
+        try self.validate(.query);
+        return serde.json.toSlice(allocator, RequestPropertiesView{ .properties = &self });
+    }
+
+    fn requestsNoTimeout(self: *const ClientRequestProperties) !bool {
+        if (self.no_request_timeout) return true;
+        const property = findProperty(self.options.items, "norequesttimeout") orelse return false;
+        return switch (property.value) {
+            .bool => |enabled| enabled,
+            else => error.InvalidNoRequestTimeout,
+        };
     }
 };
+
+const RequestPropertiesView = struct {
+    properties: *const ClientRequestProperties,
+    kind: ?KustoRequestKind = null,
+
+    pub fn zerdeSerialize(self: RequestPropertiesView, serializer: anytype) @TypeOf(serializer.*).Error!void {
+        var object = try serializer.beginStruct();
+        try object.serializeEntry(@as([]const u8, "Options"), OptionsView{ .properties = self.properties, .kind = self.kind });
+        try object.serializeEntry(@as([]const u8, "Parameters"), PropertyBagView{ .items = self.properties.parameters.items });
+        try object.end();
+    }
+};
+
+const KustoRequestWire = struct {
+    db: []const u8,
+    csl: []const u8,
+    properties: RequestPropertiesView,
+};
+
+pub fn serializeRequestBody(
+    allocator: std.mem.Allocator,
+    database: []const u8,
+    csl: []const u8,
+    properties: ClientRequestProperties,
+    kind: KustoRequestKind,
+) ![]u8 {
+    try properties.validate(kind);
+    return serde.json.toSlice(allocator, KustoRequestWire{
+        .db = database,
+        .csl = csl,
+        .properties = properties.requestView(kind),
+    });
+}
+
+const DynamicValue = struct {
+    value: *const serde.Value,
+
+    pub fn zerdeSerialize(self: DynamicValue, serializer: anytype) @TypeOf(serializer.*).Error!void {
+        switch (self.value.*) {
+            .null => try serializer.serializeNull(),
+            .bool => |value| try serializer.serializeBool(value),
+            .int => |value| try serializer.serializeInt(value),
+            .uint => |value| try serializer.serializeInt(value),
+            .float => |value| try serializer.serializeFloat(value),
+            .string => |value| try serializer.serializeString(value),
+            .array => |values| {
+                var array = try serializer.beginArray();
+                for (values) |*value| try serdeSerializeValue(value, &array);
+                try array.end();
+            },
+            .object => |entries| {
+                var object = try serializer.beginStruct();
+                for (entries) |*entry| try object.serializeEntry(entry.key, DynamicValue{ .value = &entry.value });
+                try object.end();
+            },
+        }
+    }
+};
+
+fn serdeSerializeValue(value: *const serde.Value, serializer: anytype) @TypeOf(serializer.*).Error!void {
+    try (DynamicValue{ .value = value }).zerdeSerialize(serializer);
+}
+
+const PropertyBagView = struct {
+    items: []const RequestProperty,
+
+    pub fn zerdeSerialize(self: PropertyBagView, serializer: anytype) @TypeOf(serializer.*).Error!void {
+        var object = try serializer.beginStruct();
+        for (self.items) |*property| {
+            try object.serializeEntry(property.name, DynamicValue{ .value = &property.value });
+        }
+        try object.end();
+    }
+};
+
+const OptionsView = struct {
+    properties: *const ClientRequestProperties,
+    kind: ?KustoRequestKind,
+
+    pub fn zerdeSerialize(self: OptionsView, serializer: anytype) @TypeOf(serializer.*).Error!void {
+        var object = try serializer.beginStruct();
+        const properties = self.properties;
+        const no_request_timeout = properties.requestsNoTimeout() catch unreachable;
+        const skip_custom_timeout = no_request_timeout or properties.server_timeout_ms != null;
+        for (properties.options.items) |*property| {
+            if ((skip_custom_timeout and std.mem.eql(u8, property.name, "servertimeout")) or
+                std.mem.eql(u8, property.name, "norequesttimeout"))
+                continue;
+            if (std.mem.eql(u8, property.name, "servertimeout")) {
+                var buffer: [32]u8 = undefined;
+                const timeout = timeoutFromValue(property.value) catch unreachable;
+                try object.serializeEntry(@as([]const u8, "servertimeout"), formatTimespan(&buffer, timeout));
+                continue;
+            }
+            try object.serializeEntry(property.name, DynamicValue{ .value = &property.value });
+        }
+
+        if (no_request_timeout) {
+            try object.serializeEntry(@as([]const u8, "norequesttimeout"), true);
+        } else if (properties.server_timeout_ms) |timeout| {
+            var buffer: [32]u8 = undefined;
+            const timeout_ms: u64 = if (timeout >= 0) @intCast(timeout) else 0;
+            try object.serializeEntry(@as([]const u8, "servertimeout"), formatTimespan(&buffer, timeout_ms));
+        } else if (findProperty(properties.options.items, "servertimeout") == null) {
+            if (self.kind) |kind| {
+                var buffer: [32]u8 = undefined;
+                try object.serializeEntry(@as([]const u8, "servertimeout"), formatTimespan(&buffer, defaultServerTimeout(kind)));
+            }
+        }
+        try object.end();
+    }
+};
+
+fn deinitPropertyList(items: *std.ArrayListUnmanaged(RequestProperty), allocator: std.mem.Allocator) void {
+    for (items.items) |*property| property.deinit(allocator);
+    items.deinit(allocator);
+    items.* = .empty;
+}
+
+fn setProperty(items: *std.ArrayListUnmanaged(RequestProperty), allocator: std.mem.Allocator, name: []const u8, value: anytype) !void {
+    try setOwnedProperty(items, allocator, name, try ownedValueFromAny(value, allocator));
+}
+
+fn setOwnedProperty(items: *std.ArrayListUnmanaged(RequestProperty), allocator: std.mem.Allocator, name: []const u8, value: serde.Value) !void {
+    var owned_value = value;
+    errdefer owned_value.deinit(allocator);
+
+    if (findPropertyIndex(items.items, name)) |index| {
+        items.items[index].value.deinit(allocator);
+        items.items[index].value = owned_value;
+        return;
+    }
+
+    const owned_name = try allocator.dupe(u8, name);
+    errdefer allocator.free(owned_name);
+    try items.append(allocator, .{ .name = owned_name, .value = owned_value });
+}
+
+fn validateQueryParameterValue(value: serde.Value) !void {
+    switch (value) {
+        .string, .int => {},
+        .uint => |item| if (item > std.math.maxInt(i64)) return error.InvalidQueryParameterValue,
+        else => return error.InvalidQueryParameterValue,
+    }
+}
+
+/// Equivalent to `serde.Value.fromAny`, but initializes every allocation before
+/// making it visible to an error cleanup path.
+fn ownedValueFromAny(value: anytype, allocator: std.mem.Allocator) !serde.Value {
+    const T = @TypeOf(value);
+    if (comptime T == serde.Value) return cloneSerdeValue(value, allocator);
+    switch (@typeInfo(T)) {
+        .bool => return .{ .bool = value },
+        .int => |info| {
+            if (info.signedness == .unsigned)
+                return .{ .uint = std.math.cast(u64, value) orelse return error.PropertyIntegerOutOfRange };
+            if (value >= 0)
+                return .{ .uint = std.math.cast(u64, value) orelse return error.PropertyIntegerOutOfRange };
+            return .{ .int = std.math.cast(i64, value) orelse return error.PropertyIntegerOutOfRange };
+        },
+        .comptime_int => {
+            if (value >= 0) {
+                if (value > std.math.maxInt(u64)) return error.PropertyIntegerOutOfRange;
+                return .{ .uint = @intCast(value) };
+            }
+            if (value < std.math.minInt(i64)) return error.PropertyIntegerOutOfRange;
+            return .{ .int = @intCast(value) };
+        },
+        .float, .comptime_float => return .{ .float = @floatCast(value) },
+        .void => return .null,
+        .optional => {
+            if (value) |child| return ownedValueFromAny(child, allocator);
+            return .null;
+        },
+        .pointer => |pointer| {
+            if (pointer.size == .slice) {
+                if (pointer.child == u8) return ownedString(value, allocator);
+                return ownedArray(pointer.child, value, allocator);
+            }
+            if (pointer.size == .one and @typeInfo(pointer.child) == .array and @typeInfo(pointer.child).array.child == u8)
+                return ownedString(value[0..], allocator);
+            return ownedValueFromAny(value.*, allocator);
+        },
+        .array => |array| return ownedArray(array.child, value[0..], allocator),
+        .@"struct" => |info| {
+            if (info.is_tuple) {
+                var values = try allocator.alloc(serde.Value, info.fields.len);
+                var initialized: usize = 0;
+                errdefer {
+                    for (values[0..initialized]) |item| item.deinit(allocator);
+                    allocator.free(values);
+                }
+                inline for (info.fields, 0..) |field, index| {
+                    values[index] = try ownedValueFromAny(@field(value, field.name), allocator);
+                    initialized += 1;
+                }
+                return .{ .array = values };
+            }
+            var entries = try allocator.alloc(serde.Entry, info.fields.len);
+            var initialized: usize = 0;
+            errdefer {
+                for (entries[0..initialized]) |entry| {
+                    allocator.free(entry.key);
+                    entry.value.deinit(allocator);
+                }
+                allocator.free(entries);
+            }
+            inline for (info.fields, 0..) |field, index| {
+                entries[index].key = try allocator.dupe(u8, field.name);
+                entries[index].value = ownedValueFromAny(@field(value, field.name), allocator) catch |err| {
+                    allocator.free(entries[index].key);
+                    return err;
+                };
+                initialized += 1;
+            }
+            return .{ .object = entries };
+        },
+        .@"enum" => return ownedString(@tagName(value), allocator),
+        else => return error.UnsupportedPropertyValue,
+    }
+}
+
+fn cloneSerdeValue(value: serde.Value, allocator: std.mem.Allocator) !serde.Value {
+    return switch (value) {
+        .null => .null,
+        .bool => |item| .{ .bool = item },
+        .int => |item| .{ .int = item },
+        .uint => |item| .{ .uint = item },
+        .float => |item| .{ .float = item },
+        .string => |item| ownedString(item, allocator),
+        .array => |items| blk: {
+            var result = try allocator.alloc(serde.Value, items.len);
+            var initialized: usize = 0;
+            errdefer {
+                for (result[0..initialized]) |item| item.deinit(allocator);
+                allocator.free(result);
+            }
+            for (items, 0..) |item, index| {
+                result[index] = try cloneSerdeValue(item, allocator);
+                initialized += 1;
+            }
+            break :blk .{ .array = result };
+        },
+        .object => |items| blk: {
+            var result = try allocator.alloc(serde.Entry, items.len);
+            var initialized: usize = 0;
+            errdefer {
+                for (result[0..initialized]) |item| {
+                    allocator.free(item.key);
+                    item.value.deinit(allocator);
+                }
+                allocator.free(result);
+            }
+            for (items, 0..) |item, index| {
+                result[index].key = try allocator.dupe(u8, item.key);
+                result[index].value = cloneSerdeValue(item.value, allocator) catch |err| {
+                    allocator.free(result[index].key);
+                    return err;
+                };
+                initialized += 1;
+            }
+            break :blk .{ .object = result };
+        },
+    };
+}
+
+fn ownedString(value: []const u8, allocator: std.mem.Allocator) !serde.Value {
+    return .{ .string = try allocator.dupe(u8, value) };
+}
+
+fn ownedArray(comptime Child: type, values: []const Child, allocator: std.mem.Allocator) !serde.Value {
+    var result = try allocator.alloc(serde.Value, values.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (result[0..initialized]) |item| item.deinit(allocator);
+        allocator.free(result);
+    }
+    for (values, 0..) |value, index| {
+        result[index] = try ownedValueFromAny(value, allocator);
+        initialized += 1;
+    }
+    return .{ .array = result };
+}
+
+fn removeProperty(items: *std.ArrayListUnmanaged(RequestProperty), allocator: std.mem.Allocator, name: []const u8) bool {
+    const index = findPropertyIndex(items.items, name) orelse return false;
+    var removed = items.orderedRemove(index);
+    removed.deinit(allocator);
+    return true;
+}
+
+fn findProperty(items: []const RequestProperty, name: []const u8) ?*const RequestProperty {
+    for (items) |*property| {
+        if (std.mem.eql(u8, property.name, name)) return property;
+    }
+    return null;
+}
+
+fn findPropertyIndex(items: []const RequestProperty, name: []const u8) ?usize {
+    for (items, 0..) |property, index| {
+        if (std.mem.eql(u8, property.name, name)) return index;
+    }
+    return null;
+}
+
+fn defaultServerTimeout(kind: KustoRequestKind) u64 {
+    return switch (kind) {
+        .query => query_default_server_timeout_ms,
+        .management => management_default_server_timeout_ms,
+    };
+}
+
+fn formatTimespan(buffer: []u8, timeout_ms: u64) []const u8 {
+    const hours = timeout_ms / 3_600_000;
+    const minutes = (timeout_ms / 60_000) % 60;
+    const seconds = (timeout_ms / 1_000) % 60;
+    const milliseconds = timeout_ms % 1_000;
+    return std.fmt.bufPrint(buffer, "{d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}", .{ hours, minutes, seconds, milliseconds }) catch unreachable;
+}
+
+fn timeoutFromValue(value: serde.Value) !u64 {
+    return switch (value) {
+        .uint => |timeout| validateServerTimeout(timeout),
+        .int => |timeout| if (timeout >= 0) validateServerTimeout(@intCast(timeout)) else error.InvalidServerTimeout,
+        .string => |timeout| validateServerTimeout(try parseTimespan(timeout)),
+        else => error.InvalidServerTimeout,
+    };
+}
+
+fn validateServerTimeout(timeout: u64) !u64 {
+    if (timeout < 1_000 or timeout > max_server_timeout_ms) return error.InvalidServerTimeout;
+    return timeout;
+}
+
+fn parseTimespan(value: []const u8) !u64 {
+    if (std.mem.endsWith(u8, value, "ms"))
+        return parseScaledDuration(value[0 .. value.len - 2], 1);
+    if (std.mem.endsWith(u8, value, "d"))
+        return parseScaledDuration(value[0 .. value.len - 1], 86_400_000);
+    if (std.mem.endsWith(u8, value, "h"))
+        return parseScaledDuration(value[0 .. value.len - 1], 3_600_000);
+    if (std.mem.endsWith(u8, value, "m"))
+        return parseScaledDuration(value[0 .. value.len - 1], 60_000);
+    if (std.mem.endsWith(u8, value, "s"))
+        return parseScaledDuration(value[0 .. value.len - 1], 1_000);
+    if (value.len != 12 or value[2] != ':' or value[5] != ':' or value[8] != '.')
+        return error.InvalidServerTimeout;
+    const hours = std.fmt.parseInt(u64, value[0..2], 10) catch return error.InvalidServerTimeout;
+    const minutes = std.fmt.parseInt(u64, value[3..5], 10) catch return error.InvalidServerTimeout;
+    const seconds = std.fmt.parseInt(u64, value[6..8], 10) catch return error.InvalidServerTimeout;
+    const milliseconds = std.fmt.parseInt(u64, value[9..12], 10) catch return error.InvalidServerTimeout;
+    if (minutes > 59 or seconds > 59) return error.InvalidServerTimeout;
+    const hour_ms = std.math.mul(u64, hours, 3_600_000) catch return error.InvalidServerTimeout;
+    const minute_ms = std.math.mul(u64, minutes, 60_000) catch return error.InvalidServerTimeout;
+    const second_ms = std.math.mul(u64, seconds, 1_000) catch return error.InvalidServerTimeout;
+    return std.math.add(u64, std.math.add(u64, hour_ms, minute_ms) catch return error.InvalidServerTimeout, std.math.add(u64, second_ms, milliseconds) catch return error.InvalidServerTimeout) catch error.InvalidServerTimeout;
+}
+
+fn parseScaledDuration(value: []const u8, unit_ms: u64) !u64 {
+    if (value.len == 0) return error.InvalidServerTimeout;
+    const decimal_index = std.mem.indexOfScalar(u8, value, '.');
+    const whole_text = if (decimal_index) |index| value[0..index] else value;
+    if (whole_text.len == 0) return error.InvalidServerTimeout;
+    const whole = std.fmt.parseInt(u64, whole_text, 10) catch return error.InvalidServerTimeout;
+    var result = std.math.mul(u64, whole, unit_ms) catch return error.InvalidServerTimeout;
+
+    if (decimal_index) |index| {
+        const fraction_text = value[index + 1 ..];
+        if (fraction_text.len == 0 or std.mem.indexOfScalar(u8, fraction_text, '.') != null)
+            return error.InvalidServerTimeout;
+        const fraction = std.fmt.parseInt(u64, fraction_text, 10) catch return error.InvalidServerTimeout;
+        var scale: u64 = 1;
+        for (fraction_text) |_| {
+            scale = std.math.mul(u64, scale, 10) catch return error.InvalidServerTimeout;
+        }
+        const scaled_fraction = std.math.mul(u64, fraction, unit_ms) catch return error.InvalidServerTimeout;
+        if (scaled_fraction % scale != 0) return error.InvalidServerTimeout;
+        result = std.math.add(u64, result, scaled_fraction / scale) catch return error.InvalidServerTimeout;
+    }
+    return result;
+}
 
 /// Ingestion properties for data upload.
 pub const IngestionProperties = struct {
@@ -1337,7 +1940,7 @@ test "ClientRequestProperties toJson default" {
     const props = ClientRequestProperties{};
     const json = try props.toJson(allocator);
     defer allocator.free(json);
-    try std.testing.expectEqualStrings("{}", json);
+    try std.testing.expectEqualStrings("{\"Options\":{},\"Parameters\":{}}", json);
 }
 
 test "ClientRequestProperties toJson with timeout" {
@@ -1345,5 +1948,208 @@ test "ClientRequestProperties toJson with timeout" {
     const props = ClientRequestProperties{ .server_timeout_ms = 300000 };
     const json = try props.toJson(allocator);
     defer allocator.free(json);
-    try std.testing.expectEqualStrings("{\"Options\":{\"servertimeout\":\"5m\"}}", json);
+    try std.testing.expectEqualStrings("{\"Options\":{\"servertimeout\":\"00:05:00.000\"},\"Parameters\":{}}", json);
+}
+
+test "ClientRequestProperties preserves millisecond timeout precision" {
+    const allocator = std.testing.allocator;
+    const props = ClientRequestProperties{ .server_timeout_ms = 90_001 };
+    const json = try props.toJson(allocator);
+    defer allocator.free(json);
+    try std.testing.expectEqualStrings("{\"Options\":{\"servertimeout\":\"00:01:30.001\"},\"Parameters\":{}}", json);
+}
+
+test "ClientRequestProperties validates timeout bounds" {
+    try std.testing.expectError(error.InvalidServerTimeout, (ClientRequestProperties{ .server_timeout_ms = 999 }).validate(.query));
+    try std.testing.expectError(error.InvalidServerTimeout, (ClientRequestProperties{ .server_timeout_ms = 3_600_001 }).validate(.management));
+    try std.testing.expectError(error.InvalidClientTimeout, (ClientRequestProperties{ .client_timeout_ms = 0 }).validate(.query));
+    try std.testing.expectError(error.InvalidClientTimeout, (ClientRequestProperties{ .client_timeout_ms = max_server_timeout_ms + client_timeout_grace_ms + 1 }).validate(.query));
+    try std.testing.expectEqual(@as(u64, 10_000), try parseTimespan("10s"));
+    try std.testing.expectEqual(@as(u64, 3_600_000), try parseTimespan("1h"));
+    try std.testing.expectEqual(@as(u64, 5_400_000), try parseTimespan("1.5h"));
+
+    const props = ClientRequestProperties{};
+    try std.testing.expectEqual(query_default_server_timeout_ms, try props.effectiveServerTimeoutMs(.query));
+    try std.testing.expectEqual(management_default_server_timeout_ms + client_timeout_grace_ms, try props.effectiveClientTimeoutMs(.management));
+}
+
+test "ClientRequestProperties typed helpers use Kusto wire names and types" {
+    const allocator = std.testing.allocator;
+    var props = ClientRequestProperties{};
+    defer props.deinit(allocator);
+    try props.setNoTruncation(allocator, true);
+    try props.setTruncationMaxRecords(allocator, 123);
+    try props.setProgressiveRowCount(allocator, 50);
+    try props.setProgressiveUpdatePeriod(allocator, 90_001);
+    try props.setCacheForceRefresh(allocator, false);
+    try props.setQueryConsistency(allocator, .weak_by_database);
+    try props.setMaxMemoryPerQueryNode(allocator, 456);
+    try props.setBlockRowLevelSecurity(allocator, true);
+    try props.setForceRowLevelSecurity(allocator, true);
+
+    const json = try props.toJson(allocator);
+    defer allocator.free(json);
+    try std.testing.expectEqualStrings(
+        "{\"Options\":{\"notruncation\":true,\"truncationmaxrecords\":123,\"query_results_progressive_row_count\":50,\"query_results_progressive_update_period\":\"00:01:30.001\",\"query_results_cache_force_refresh\":false,\"queryconsistency\":\"weakconsistency_by_database\",\"max_memory_consumption_per_query_per_node\":456,\"request_block_row_level_security\":true,\"query_force_row_level_security\":true},\"Parameters\":{}}",
+        json,
+    );
+}
+
+test "ClientRequestProperties supports non-byte slices" {
+    const allocator = std.testing.allocator;
+    var props = ClientRequestProperties{};
+    defer props.deinit(allocator);
+    const values = [_]u16{ 1, 2, 3 };
+    try props.setOption(allocator, "values", values[0..]);
+
+    const json = try props.toJson(allocator);
+    defer allocator.free(json);
+    try std.testing.expectEqualStrings(
+        "{\"Options\":{\"values\":[1,2,3]},\"Parameters\":{}}",
+        json,
+    );
+}
+
+test "ClientRequestProperties preserves nested dynamic values and escapes strings" {
+    const allocator = std.testing.allocator;
+    const Input = struct {
+        flag: bool,
+        signed: i64,
+        unsigned: u64,
+        decimal: f64,
+        text: []const u8,
+        absent: ?u8,
+        values: [2]u8,
+        child: struct { answer: u8 },
+    };
+
+    var props = ClientRequestProperties{};
+    defer props.deinit(allocator);
+    try props.setOption(allocator, "quoted\"name", Input{
+        .flag = true,
+        .signed = -2,
+        .unsigned = 3,
+        .decimal = 1.5,
+        .text = "line\n\"quoted\"",
+        .absent = null,
+        .values = .{ 4, 5 },
+        .child = .{ .answer = 6 },
+    });
+    const json = try props.toJson(allocator);
+    defer allocator.free(json);
+    try std.testing.expectEqualStrings(
+        "{\"Options\":{\"quoted\\\"name\":{\"flag\":true,\"signed\":-2,\"unsigned\":3,\"decimal\":1.5,\"text\":\"line\\n\\\"quoted\\\"\",\"absent\":null,\"values\":[4,5],\"child\":{\"answer\":6}}},\"Parameters\":{}}",
+        json,
+    );
+}
+
+test "ClientRequestProperties copies supplied serde values" {
+    const allocator = std.testing.allocator;
+    var value = try serde.Value.fromAny([]const u8, "copied", allocator);
+    defer value.deinit(allocator);
+    var props = ClientRequestProperties{};
+    defer props.deinit(allocator);
+    try props.setOption(allocator, "unknown", value);
+
+    const json = try props.toJson(allocator);
+    defer allocator.free(json);
+    try std.testing.expectEqualStrings("{\"Options\":{\"unknown\":\"copied\"},\"Parameters\":{}}", json);
+}
+
+test "ClientRequestProperties replaces duplicate keys and keeps both bags" {
+    const allocator = std.testing.allocator;
+    var props = ClientRequestProperties{};
+    defer props.deinit(allocator);
+    try props.setOption(allocator, "value", @as(u8, 1));
+    try props.setOption(allocator, "value", "replacement");
+    try props.setParameter(allocator, "p", @as(i64, 7));
+    const json = try props.toJson(allocator);
+    defer allocator.free(json);
+    try std.testing.expectEqualStrings("{\"Options\":{\"value\":\"replacement\"},\"Parameters\":{\"p\":7}}", json);
+    try std.testing.expectEqual(@as(usize, 1), props.options.items.len);
+}
+
+test "ClientRequestProperties enforces query parameter wire values" {
+    const allocator = std.testing.allocator;
+    var props = ClientRequestProperties{};
+    defer props.deinit(allocator);
+    try props.setParameter(allocator, "long", @as(i64, 42));
+    try props.setParameter(allocator, "dynamic", "dynamic([1, 2])");
+    try std.testing.expectError(
+        error.InvalidQueryParameterValue,
+        props.setParameter(allocator, "invalid", [_]u8{ 1, 2 }),
+    );
+
+    const json = try props.toJson(allocator);
+    defer allocator.free(json);
+    try std.testing.expectEqualStrings(
+        "{\"Options\":{},\"Parameters\":{\"long\":42,\"dynamic\":\"dynamic([1, 2])\"}}",
+        json,
+    );
+}
+
+test "ClientRequestProperties request view applies operation timeout defaults" {
+    const allocator = std.testing.allocator;
+    const props = ClientRequestProperties{};
+    const query_json = try serde.json.toSlice(allocator, props.requestView(.query));
+    defer allocator.free(query_json);
+    try std.testing.expectEqualStrings("{\"Options\":{\"servertimeout\":\"00:04:00.000\"},\"Parameters\":{}}", query_json);
+    const management_json = try serde.json.toSlice(allocator, props.requestView(.management));
+    defer allocator.free(management_json);
+    try std.testing.expectEqualStrings("{\"Options\":{\"servertimeout\":\"00:10:00.000\"},\"Parameters\":{}}", management_json);
+}
+
+test "ClientRequestProperties applies reserved timeout precedence" {
+    const allocator = std.testing.allocator;
+    var props = ClientRequestProperties{ .server_timeout_ms = 90_001 };
+    defer props.deinit(allocator);
+    try props.setOption(allocator, "servertimeout", "00:02:00.000");
+    {
+        const json = try serde.json.toSlice(allocator, props.requestView(.query));
+        defer allocator.free(json);
+        try std.testing.expectEqualStrings("{\"Options\":{\"servertimeout\":\"00:01:30.001\"},\"Parameters\":{}}", json);
+    }
+
+    props.server_timeout_ms = null;
+    {
+        const json = try serde.json.toSlice(allocator, props.requestView(.query));
+        defer allocator.free(json);
+        try std.testing.expectEqualStrings("{\"Options\":{\"servertimeout\":\"00:02:00.000\"},\"Parameters\":{}}", json);
+    }
+
+    try props.setOption(allocator, "servertimeout", @as(u64, 90_001));
+    {
+        const json = try serde.json.toSlice(allocator, props.requestView(.query));
+        defer allocator.free(json);
+        try std.testing.expectEqualStrings("{\"Options\":{\"servertimeout\":\"00:01:30.001\"},\"Parameters\":{}}", json);
+    }
+
+    try props.setOption(allocator, "servertimeout", "1.5m");
+    {
+        const json = try serde.json.toSlice(allocator, props.requestView(.query));
+        defer allocator.free(json);
+        try std.testing.expectEqualStrings("{\"Options\":{\"servertimeout\":\"00:01:30.000\"},\"Parameters\":{}}", json);
+    }
+
+    try props.setOption(allocator, "norequesttimeout", true);
+    {
+        const json = try serde.json.toSlice(allocator, props.requestView(.query));
+        defer allocator.free(json);
+        try std.testing.expectEqualStrings("{\"Options\":{\"norequesttimeout\":true},\"Parameters\":{}}", json);
+    }
+
+    try props.setOption(allocator, "norequesttimeout", "invalid");
+    try std.testing.expectError(error.InvalidNoRequestTimeout, props.validate(.query));
+}
+
+fn setRequestPropertiesForAllocationTest(allocator: std.mem.Allocator) !void {
+    var props = ClientRequestProperties{};
+    defer props.deinit(allocator);
+    try props.setOption(allocator, "nested", .{ .name = "value", .items = [_]u8{ 1, 2 } });
+    try props.setOption(allocator, "nested", .{ .name = "replacement", .items = [_]u8{ 3, 4 } });
+    try props.setParameter(allocator, "parameter", "value");
+}
+
+test "ClientRequestProperties frees all owned dynamic properties" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, setRequestPropertiesForAllocationTest, .{});
 }

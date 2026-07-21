@@ -15,6 +15,9 @@ pub const KustoMetadataMode = kusto_common.KustoMetadataMode;
 pub const KustoCloudInfo = kusto_common.KustoCloudInfo;
 pub const KustoCloudInfoCache = kusto_common.KustoCloudInfoCache;
 pub const KustoRetryOptions = kusto_common.KustoRetryOptions;
+pub const KustoRequestKind = kusto_common.KustoRequestKind;
+pub const QueryConsistency = kusto_common.QueryConsistency;
+pub const RequestProperty = kusto_common.RequestProperty;
 
 // ─────────────────── Response Types ──────────────────
 
@@ -65,11 +68,17 @@ pub const KustoResultTable = struct {
 
 pub const KustoResponseDataSet = struct {
     tables: []KustoResultTable,
+    client_request_id: ?[]u8 = null,
+    activity_id: ?[]u8 = null,
 
     pub fn deinit(self: *KustoResponseDataSet, allocator: std.mem.Allocator) void {
         for (self.tables) |*table| table.deinit(allocator);
         allocator.free(self.tables);
+        if (self.client_request_id) |value| allocator.free(value);
+        if (self.activity_id) |value| allocator.free(value);
         self.tables = &.{};
+        self.client_request_id = null;
+        self.activity_id = null;
     }
 
     /// Get the primary result table (first table named "PrimaryResult" or index 0).
@@ -85,6 +94,7 @@ pub const KustoResponseDataSet = struct {
 
 pub const KustoClientOptions = struct {
     application_name: []const u8 = "azure-sdk-zig",
+    client_version: []const u8 = "azsdk-zig-kusto/0.1.0",
 };
 
 /// Client for executing KQL queries and management commands against a Kusto cluster.
@@ -96,6 +106,7 @@ pub const KustoClientOptions = struct {
 pub const KustoClient = struct {
     runtime: Runtime,
     application_name: []const u8,
+    client_version: []const u8,
 
     const Runtime = union(enum) {
         legacy: struct {
@@ -116,6 +127,7 @@ pub const KustoClient = struct {
                 .pipeline = .{ .policies = &.{}, .transport_impl = transport },
             } },
             .application_name = options.application_name,
+            .client_version = options.client_version,
         };
     }
 
@@ -127,6 +139,7 @@ pub const KustoClient = struct {
         return .{
             .runtime = .{ .shared = connection },
             .application_name = options.application_name,
+            .client_version = options.client_version,
         };
     }
 
@@ -134,14 +147,14 @@ pub const KustoClient = struct {
     pub fn executeQuery(self: *KustoClient, allocator: std.mem.Allocator, database: []const u8, query: []const u8, properties: ?ClientRequestProperties) !KustoResponseDataSet {
         const url = try std.fmt.allocPrint(allocator, "{s}/v2/rest/query", .{self.engineUrl()});
         defer allocator.free(url);
-        return self.executeInternal(allocator, url, database, query, properties, true);
+        return self.executeInternal(allocator, url, database, query, properties, .query);
     }
 
     /// Execute a management command (starts with `.`). Uses v1 REST endpoint.
     pub fn executeMgmt(self: *KustoClient, allocator: std.mem.Allocator, database: []const u8, command: []const u8, properties: ?ClientRequestProperties) !KustoResponseDataSet {
         const url = try std.fmt.allocPrint(allocator, "{s}/v1/rest/mgmt", .{self.engineUrl()});
         defer allocator.free(url);
-        return self.executeInternal(allocator, url, database, command, properties, false);
+        return self.executeInternal(allocator, url, database, command, properties, .management);
     }
 
     /// Auto-routing: commands starting with `.` go to mgmt, others to query.
@@ -157,12 +170,12 @@ pub const KustoClient = struct {
     pub fn executeQueryResult(self: *KustoClient, allocator: std.mem.Allocator, database: []const u8, query: []const u8, properties: ?ClientRequestProperties) !core.errors.Result(KustoResponseDataSet) {
         const url = try std.fmt.allocPrint(allocator, "{s}/v2/rest/query", .{self.engineUrl()});
         defer allocator.free(url);
-        return self.executeInternalResult(allocator, url, database, query, properties, true);
+        return self.executeInternalResult(allocator, url, database, query, properties, .query);
     }
     pub fn executeMgmtResult(self: *KustoClient, allocator: std.mem.Allocator, database: []const u8, command: []const u8, properties: ?ClientRequestProperties) !core.errors.Result(KustoResponseDataSet) {
         const url = try std.fmt.allocPrint(allocator, "{s}/v1/rest/mgmt", .{self.engineUrl()});
         defer allocator.free(url);
-        return self.executeInternalResult(allocator, url, database, command, properties, false);
+        return self.executeInternalResult(allocator, url, database, command, properties, .management);
     }
     pub fn executeResult(self: *KustoClient, allocator: std.mem.Allocator, database: []const u8, query_or_command: []const u8) !core.errors.Result(KustoResponseDataSet) {
         const trimmed = std.mem.trimStart(u8, query_or_command, " \t\n\r");
@@ -179,9 +192,9 @@ pub const KustoClient = struct {
         database: []const u8,
         csl: []const u8,
         properties: ?ClientRequestProperties,
-        retryable: bool,
+        kind: KustoRequestKind,
     ) !KustoResponseDataSet {
-        var r = try self.executeInternalResult(allocator, url, database, csl, properties, retryable);
+        var r = try self.executeInternalResult(allocator, url, database, csl, properties, kind);
         return r.unwrap(error.KustoQueryFailed);
     }
 
@@ -192,23 +205,29 @@ pub const KustoClient = struct {
         database: []const u8,
         csl: []const u8,
         properties: ?ClientRequestProperties,
-        retryable: bool,
+        kind: KustoRequestKind,
     ) !core.errors.Result(KustoResponseDataSet) {
-        const body = try serializeRequest(allocator, database, csl, properties);
+        const props: ClientRequestProperties = properties orelse ClientRequestProperties{};
+        try props.validate(kind);
+        const body = try serializeRequest(allocator, database, csl, props, kind);
         defer allocator.free(body);
 
         var req = core.http.Request.init(allocator, .POST, url);
         defer req.deinit();
         try req.setHeader("Content-Type", "application/json; charset=utf-8");
         try req.setHeader("Accept", "application/json");
-        try req.setHeader("x-ms-app", self.application_name);
-        if (properties) |props| {
-            if (props.client_request_id) |request_id| {
-                try req.setHeader("x-ms-client-request-id", request_id);
-            }
+        try req.setHeader("Accept-Encoding", "gzip, deflate");
+        try req.setHeader("x-ms-app", props.application orelse self.application_name);
+        if (props.user) |user| try req.setHeader("x-ms-user", user);
+        try req.setHeader("x-ms-client-version", props.client_version orelse self.client_version);
+        try req.setHeader("x-ms-version", "2024-12-12");
+        if (props.client_request_id) |request_id| {
+            try req.setHeader("x-ms-client-request-id", request_id);
         }
+        try core.pipeline.ensureRequestId(&req);
+        req.operation_timeout_ms = try props.effectiveClientTimeoutMs(kind);
         req.body = body;
-        req.retryable = retryable;
+        req.retryable = kind == .query;
 
         var resp = try self.send(&req);
         defer resp.deinit();
@@ -220,7 +239,16 @@ pub const KustoClient = struct {
             return error.AzureRequestFailed;
         }
 
-        return .{ .ok = try parseResponseDataSet(allocator, resp.body) };
+        var dataset = try parseResponseDataSet(allocator, resp.body);
+        errdefer dataset.deinit(allocator);
+        const response_request_id = resp.getHeader("x-ms-client-request-id") orelse req.getHeader("x-ms-client-request-id");
+        if (response_request_id) |request_id| {
+            dataset.client_request_id = try allocator.dupe(u8, request_id);
+        }
+        if (resp.getHeader("x-ms-activity-id")) |activity_id| {
+            dataset.activity_id = try allocator.dupe(u8, activity_id);
+        }
+        return .{ .ok = dataset };
     }
 
     fn engineUrl(self: *const KustoClient) []const u8 {
@@ -248,48 +276,14 @@ pub const KustoClient = struct {
     }
 };
 
-const EmptyRequestProperties = struct {};
-
-const RequestWithEmptyProperties = struct {
-    db: []const u8,
-    csl: []const u8,
-    properties: EmptyRequestProperties = .{},
-};
-
-const TimeoutRequestProperties = struct {
-    Options: struct {
-        servertimeout: []const u8,
-    },
-};
-
-const RequestWithTimeout = struct {
-    db: []const u8,
-    csl: []const u8,
-    properties: TimeoutRequestProperties,
-};
-
 fn serializeRequest(
     allocator: std.mem.Allocator,
     database: []const u8,
     csl: []const u8,
-    properties: ?ClientRequestProperties,
+    properties: ClientRequestProperties,
+    kind: KustoRequestKind,
 ) ![]u8 {
-    if (properties) |props| {
-        if (props.server_timeout_ms) |timeout| {
-            const minutes = @divTrunc(timeout, 60000);
-            const timeout_value = try std.fmt.allocPrint(allocator, "{d}m", .{minutes});
-            defer allocator.free(timeout_value);
-            return serde.json.toSlice(allocator, RequestWithTimeout{
-                .db = database,
-                .csl = csl,
-                .properties = .{ .Options = .{ .servertimeout = timeout_value } },
-            });
-        }
-    }
-    return serde.json.toSlice(allocator, RequestWithEmptyProperties{
-        .db = database,
-        .csl = csl,
-    });
+    return kusto_common.serializeRequestBody(allocator, database, csl, properties, kind);
 }
 
 // ─────────────────── Response Parsing ────────────────
@@ -568,6 +562,9 @@ test "KustoClient executeQuery" {
 
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "/v2/rest/query") != null);
     try std.testing.expectEqual(core.http.Method.POST, mock.last_method.?);
+    const request_id = mock.last_headers.get("x-ms-client-request-id").?;
+    try std.testing.expectEqual(@as(usize, 36), request_id.len);
+    try std.testing.expectEqualStrings(request_id, result.client_request_id.?);
 
     const primary = result.primaryTable().?;
     try std.testing.expectEqualStrings("PrimaryResult", primary.name);
@@ -779,6 +776,8 @@ test "KustoClient executeMgmt" {
     defer result.deinit(allocator);
 
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "/v1/rest/mgmt") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_body.?, "\"servertimeout\":\"00:10:00.000\"") != null);
+    try std.testing.expectEqual(@as(?u64, 630_000), mock.last_operation_timeout_ms);
     const table = result.tables[0];
     try std.testing.expectEqualStrings("TestDB", table.rows[0].values[0]);
 }
@@ -856,13 +855,14 @@ test "Kusto request bodies round trip caller strings" {
     var query_arena = std.heap.ArenaAllocator.init(allocator);
     defer query_arena.deinit();
     const query_wire = try serde.json.fromSlice(
-        RequestWithEmptyProperties,
+        struct { db: []const u8, csl: []const u8 },
         query_arena.allocator(),
         mock.last_body.?,
     );
     try std.testing.expectEqualStrings(database, query_wire.db);
     try std.testing.expectEqualStrings(query, query_wire.csl);
-    try std.testing.expect(std.mem.find(u8, mock.last_body.?, "\"properties\":{}") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_body.?, "\"properties\":{\"Options\":{\"servertimeout\":\"00:04:00.000\"},\"Parameters\":{}}") != null);
+    try std.testing.expectEqual(@as(?u64, 270_000), mock.last_operation_timeout_ms);
 
     const command = ".show table [a\"b\\\\c]\n\t";
     var mgmt_result = try client.executeMgmt(
@@ -876,13 +876,81 @@ test "Kusto request bodies round trip caller strings" {
     var mgmt_arena = std.heap.ArenaAllocator.init(allocator);
     defer mgmt_arena.deinit();
     const mgmt_wire = try serde.json.fromSlice(
-        RequestWithTimeout,
+        struct { db: []const u8, csl: []const u8 },
         mgmt_arena.allocator(),
         mock.last_body.?,
     );
     try std.testing.expectEqualStrings(database, mgmt_wire.db);
     try std.testing.expectEqualStrings(command, mgmt_wire.csl);
-    try std.testing.expectEqualStrings("5m", mgmt_wire.properties.Options.servertimeout);
+    try std.testing.expect(std.mem.find(u8, mock.last_body.?, "\"properties\":{\"Options\":{\"servertimeout\":\"00:05:00.000\"},\"Parameters\":{}}") != null);
+    try std.testing.expectEqual(@as(?u64, 330_000), mock.last_operation_timeout_ms);
+}
+
+test "KustoClient applies diagnostic headers and owns response correlation" {
+    const allocator = std.testing.allocator;
+    var credential = TestTokenCredential{};
+    var mock = core.http.MockTransport.init(allocator, 200, "[]");
+    mock.response_headers_list = &.{
+        .{ .name = "X-MS-Client-Request-Id", .value = "echoed-request-id" },
+        .{ .name = "x-ms-activity-id", .value = "activity-id" },
+    };
+    defer mock.deinit();
+    const connection = try KustoConnection.init(
+        allocator,
+        .{
+            .cluster_url = "https://cluster.kusto.windows.net",
+            .credential = credential.asCredential(),
+        },
+        mock.asTransport(),
+        .{ .metadata_mode = .disabled },
+    );
+    defer connection.deinit();
+
+    var properties = ClientRequestProperties{
+        .client_request_id = "caller-request-id",
+        .application = "caller-app",
+        .user = "caller-user",
+        .client_version = "caller-version",
+        .server_timeout_ms = 90_001,
+        .client_timeout_ms = 120_000,
+    };
+    defer properties.deinit(allocator);
+    try properties.setOption(allocator, "best_effort", true);
+    try properties.setParameter(allocator, "limit", @as(i64, 5));
+
+    var client = KustoClient.initWithConnection(connection, .{
+        .application_name = "default-app",
+        .client_version = "default-version",
+    });
+    var result = try client.executeQuery(allocator, "db", "print 1", properties);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqualStrings("caller-request-id", mock.last_headers.get("x-ms-client-request-id").?);
+    try std.testing.expectEqualStrings("caller-app", mock.last_headers.get("x-ms-app").?);
+    try std.testing.expectEqualStrings("caller-user", mock.last_headers.get("x-ms-user").?);
+    try std.testing.expectEqualStrings("caller-version", mock.last_headers.get("x-ms-client-version").?);
+    try std.testing.expectEqualStrings("2024-12-12", mock.last_headers.get("x-ms-version").?);
+    try std.testing.expectEqualStrings("gzip, deflate", mock.last_headers.get("Accept-Encoding").?);
+    try std.testing.expectEqual(@as(?u64, 120_000), mock.last_operation_timeout_ms);
+    try std.testing.expect(std.mem.find(u8, mock.last_body.?, "\"servertimeout\":\"00:01:30.001\"") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_body.?, "\"best_effort\":true") != null);
+    try std.testing.expect(std.mem.find(u8, mock.last_body.?, "\"limit\":5") != null);
+    try std.testing.expectEqualStrings("echoed-request-id", result.client_request_id.?);
+    try std.testing.expectEqualStrings("activity-id", result.activity_id.?);
+}
+
+test "KustoClient rejects invalid request properties before transport" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200, "[]");
+    defer mock.deinit();
+    const conn = ConnectionProperties{ .cluster_url = "https://cluster.kusto.windows.net" };
+    var client = KustoClient.init(conn, mock.asTransport(), .{});
+
+    try std.testing.expectError(
+        error.InvalidServerTimeout,
+        client.executeQuery(allocator, "db", "print 1", .{ .server_timeout_ms = 999 }),
+    );
+    try std.testing.expectEqual(@as(usize, 0), mock.call_count);
 }
 
 test "Kusto response preserves dynamic JSON cells" {

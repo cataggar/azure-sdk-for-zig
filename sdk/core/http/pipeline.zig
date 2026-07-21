@@ -10,13 +10,19 @@ fn nanoTimestamp() i128 {
     return std.Io.Timestamp.now(threaded.io(), .real).toNanoseconds();
 }
 
+fn monotonicNanoTimestamp() i128 {
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    return std.Io.Timestamp.now(threaded.io(), .awake).toNanoseconds();
+}
+
 fn unixTimestampSeconds() i64 {
     return @intCast(@divTrunc(nanoTimestamp(), std.time.ns_per_s));
 }
 
 fn sleepMs(ms: u64) void {
     var threaded: std.Io.Threaded = .init_single_threaded;
-    threaded.io().sleep(.fromMilliseconds(@intCast(ms)), .real) catch {};
+    const nanoseconds = @as(i96, ms) * std.time.ns_per_ms;
+    threaded.io().sleep(.fromNanoseconds(nanoseconds), .awake) catch {};
 }
 
 /// A single stage in the HTTP pipeline.
@@ -117,7 +123,10 @@ pub const LoggingPolicy = struct {
 /// Retries failed requests with exponential back-off and jitter.
 ///
 /// Retries on server errors (5xx) and throttling (429). Honors the
-/// `Retry-After` response header when present.
+/// `Retry-After` response header when present. For retryable requests,
+/// `Request.operation_timeout_ms` limits attempts and backoff, but blocking
+/// transports cannot interrupt an in-flight send. Non-retryable requests
+/// always make one send, which is likewise not interruptible.
 pub const RetryPolicy = struct {
     max_retries: u32 = 3,
     initial_delay_ms: u64 = 800,
@@ -147,9 +156,19 @@ pub const RetryPolicy = struct {
     ) !Response {
         if (!request.retryable) return callNext(request, next, final_transport);
         const self: *RetryPolicy = @alignCast(@fieldParentPtr("policy", policy));
+        const deadline_ns: ?i128 = if (request.operation_timeout_ms) |timeout_ms|
+            std.math.add(
+                i128,
+                monotonicNanoTimestamp(),
+                @as(i128, timeout_ms) * std.time.ns_per_ms,
+            ) catch std.math.maxInt(i128)
+        else
+            null;
         var attempt: u32 = 0;
         var prng = std.Random.DefaultPrng.init(@truncate(@as(u128, @bitCast(nanoTimestamp()))));
         while (true) {
+            if (deadlineExpired(deadline_ns)) return error.OperationTimedOut;
+
             const result = callNext(request, next, final_transport);
             if (result) |resp| {
                 if (!isRetryable(resp.status_code) or attempt >= self.max_retries) return resp;
@@ -164,34 +183,71 @@ pub const RetryPolicy = struct {
                 if (retry_after_ms > 0) {
                     // Honor server's Retry-After, capped at max_delay.
                     const delay = @min(retry_after_ms, self.max_delay_ms);
-                    sleepMs(delay);
+                    if (!sleepWithinBudget(delay, deadline_ns)) return error.OperationTimedOut;
                 } else {
-                    const base_delay = @min(
-                        self.initial_delay_ms * (@as(u64, 1) << @intCast(attempt - 1)),
+                    const base_delay = exponentialDelayMs(
+                        self.initial_delay_ms,
                         self.max_delay_ms,
+                        attempt,
                     );
                     const jitter = prng.random().uintLessThan(u64, @max(base_delay, 1));
                     const delay = base_delay / 2 + jitter / 2;
-                    sleepMs(delay);
+                    if (!sleepWithinBudget(delay, deadline_ns)) return error.OperationTimedOut;
                 }
             } else |err| {
                 if (attempt >= self.max_retries) return err;
                 attempt += 1;
-                const base_delay = @min(
-                    self.initial_delay_ms * (@as(u64, 1) << @intCast(attempt - 1)),
+                const base_delay = exponentialDelayMs(
+                    self.initial_delay_ms,
                     self.max_delay_ms,
+                    attempt,
                 );
                 const jitter = prng.random().uintLessThan(u64, @max(base_delay, 1));
                 const delay = base_delay / 2 + jitter / 2;
-                sleepMs(delay);
+                if (!sleepWithinBudget(delay, deadline_ns)) return error.OperationTimedOut;
             }
         }
     }
 
+    fn deadlineExpired(deadline_ns: ?i128) bool {
+        const deadline = deadline_ns orelse return false;
+        return monotonicNanoTimestamp() >= deadline;
+    }
+
+    fn sleepWithinBudget(delay_ms: u64, deadline_ns: ?i128) bool {
+        const deadline = deadline_ns orelse {
+            sleepMs(delay_ms);
+            return true;
+        };
+        const now = monotonicNanoTimestamp();
+        if (now >= deadline) return false;
+
+        const remaining_ns = deadline - now;
+        const delay_ns = @as(i128, delay_ms) * std.time.ns_per_ms;
+        if (delay_ns >= remaining_ns) {
+            var threaded: std.Io.Threaded = .init_single_threaded;
+            threaded.io().sleep(
+                .fromNanoseconds(@intCast(remaining_ns)),
+                .awake,
+            ) catch {};
+            return false;
+        }
+        sleepMs(delay_ms);
+        return true;
+    }
+
+    fn exponentialDelayMs(initial_delay_ms: u64, max_delay_ms: u64, attempt: u32) u64 {
+        if (initial_delay_ms == 0 or max_delay_ms == 0) return 0;
+        const shift = attempt -| 1;
+        if (shift >= 64) return max_delay_ms;
+        const multiplier = @as(u64, 1) << @intCast(shift);
+        const scaled = std.math.mul(u64, initial_delay_ms, multiplier) catch
+            std.math.maxInt(u64);
+        return @min(scaled, max_delay_ms);
+    }
+
     fn parseRetryAfter(resp: Response) ?u64 {
-        const value = resp.headers.get("Retry-After") orelse
-            resp.headers.get("retry-after") orelse
-            return null;
+        const value = resp.getHeader("Retry-After") orelse return null;
         return std.fmt.parseInt(u64, value, 10) catch null;
     }
 
@@ -280,6 +336,17 @@ pub const BearerTokenAuthPolicy = struct {
     }
 };
 
+/// Ensures a request has a caller-preserving unique client request ID.
+pub fn ensureRequestId(request: *Request) !void {
+    if (request.getHeader("x-ms-client-request-id") != null) return;
+    const uuid_mod = @import("../uuid.zig");
+    const seed: u64 = @truncate(@as(u128, @bitCast(nanoTimestamp())));
+    var prng = std.Random.DefaultPrng.init(seed);
+    const id = uuid_mod.Uuid.init(prng.random());
+    const id_str = id.toString();
+    try request.setHeader("x-ms-client-request-id", &id_str);
+}
+
 /// Injects `x-ms-client-request-id` with a unique UUID per request.
 pub const RequestIdPolicy = struct {
     policy: HttpPolicy,
@@ -298,15 +365,7 @@ pub const RequestIdPolicy = struct {
         next: []*HttpPolicy,
         final_transport: *HttpTransport,
     ) !Response {
-        if (request.getHeader("x-ms-client-request-id") != null) {
-            return callNext(request, next, final_transport);
-        }
-        const uuid_mod = @import("../uuid.zig");
-        const seed: u64 = @truncate(@as(u128, @bitCast(nanoTimestamp())));
-        var prng = std.Random.DefaultPrng.init(seed);
-        const id = uuid_mod.Uuid.init(prng.random());
-        const id_str = id.toString();
-        try request.setHeader("x-ms-client-request-id", &id_str);
+        try ensureRequestId(request);
         return callNext(request, next, final_transport);
     }
 };
@@ -536,6 +595,17 @@ test "RetryPolicy converts Retry-After seconds to milliseconds" {
     try std.testing.expectEqual(@as(u64, 10_000), RetryPolicy.retryAfterDelayMs(response));
 }
 
+test "RetryPolicy exponential delay saturates without overflow" {
+    try std.testing.expectEqual(
+        std.math.maxInt(u64),
+        RetryPolicy.exponentialDelayMs(std.math.maxInt(u64), std.math.maxInt(u64), 2),
+    );
+    try std.testing.expectEqual(
+        @as(u64, 60_000),
+        RetryPolicy.exponentialDelayMs(800, 60_000, std.math.maxInt(u32)),
+    );
+}
+
 test "RetryPolicy passes through 404 without retry" {
     const allocator = std.testing.allocator;
     var mock = transport.MockTransport.init(allocator, 404, "not found");
@@ -600,9 +670,44 @@ test "RetryPolicy bypasses retries for non-retryable requests" {
     var req = Request.init(allocator, .POST, "https://example.com/create");
     defer req.deinit();
     req.retryable = false;
+    req.operation_timeout_ms = 0;
     var resp = try pip.send(&req);
     defer resp.deinit();
     try std.testing.expectEqual(@as(u16, 500), resp.status_code);
+    try std.testing.expectEqual(@as(usize, 1), seq.call_count);
+}
+
+test "RetryPolicy zero timeout prevents a retryable send" {
+    const allocator = std.testing.allocator;
+    var seq = transport.SequenceMockTransport.init(allocator, &.{
+        .{ .status = 200, .body = "ok" },
+    });
+    var retry = RetryPolicy.init();
+    var policy_ptrs = [_]*HttpPolicy{retry.asPolicy()};
+    var pip = HttpPipeline{ .policies = &policy_ptrs, .transport_impl = seq.asTransport() };
+    var req = Request.init(allocator, .GET, "https://example.com");
+    defer req.deinit();
+    req.operation_timeout_ms = 0;
+
+    try std.testing.expectError(error.OperationTimedOut, pip.send(&req));
+    try std.testing.expectEqual(@as(usize, 0), seq.call_count);
+}
+
+test "RetryPolicy timeout prevents a second attempt" {
+    const allocator = std.testing.allocator;
+    var seq = transport.SequenceMockTransport.init(allocator, &.{
+        .{ .status = 500, .body = "error" },
+        .{ .status = 200, .body = "ok" },
+    });
+    var retry = RetryPolicy.init();
+    retry.initial_delay_ms = 100;
+    var policy_ptrs = [_]*HttpPolicy{retry.asPolicy()};
+    var pip = HttpPipeline{ .policies = &policy_ptrs, .transport_impl = seq.asTransport() };
+    var req = Request.init(allocator, .GET, "https://example.com");
+    defer req.deinit();
+    req.operation_timeout_ms = 1;
+
+    try std.testing.expectError(error.OperationTimedOut, pip.send(&req));
     try std.testing.expectEqual(@as(usize, 1), seq.call_count);
 }
 
