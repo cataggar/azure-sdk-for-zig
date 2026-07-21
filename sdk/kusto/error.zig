@@ -118,6 +118,10 @@ fn deinitValue(comptime T: type, value: *T, allocator: std.mem.Allocator) void {
             if (comptime @hasDecl(T, "deinit"))
                 value.deinit(allocator);
         },
+        .@"union" => {
+            if (comptime @hasDecl(T, "deinit"))
+                value.deinit(allocator);
+        },
         .pointer => |pointer| {
             if (comptime pointer.size == .one and @hasDecl(pointer.child, "deinit")) {
                 const deinit_info = @typeInfo(@TypeOf(pointer.child.deinit)).@"fn";

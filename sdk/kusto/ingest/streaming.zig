@@ -173,6 +173,10 @@ pub const IngestOptions = struct {
     report_level: IngestionReportLevel = .failures_only,
     report_method: IngestionReportMethod = .queue,
     queued_compression: QueuedCompression = .automatic,
+    /// Managed ingestion sends at most this many uncompressed raw bytes to
+    /// the direct endpoint. It must be nonzero and no greater than
+    /// `max_streaming_payload_bytes`; larger sources deliberately use Queue.
+    managed_streaming_threshold_bytes: u64 = max_streaming_payload_bytes,
     /// Maximum temporary-blob resource attempts. Queue attempts use this same
     /// bound and are retried only after a received rejection.
     queued_max_resource_attempts: u32 = 3,
