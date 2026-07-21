@@ -73,6 +73,42 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(fixture_test).step);
 
+    const fixture_generator_mod = b.createModule(.{
+        .root_source_file = b.path("../fixtures/generate_container_registry_package.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    fixture_generator_mod.addImport("emit", emit_mod);
+    const fixture_generator = b.addExecutable(.{
+        .name = "generate-container-registry-package",
+        .root_module = fixture_generator_mod,
+    });
+    const generate_fixture = b.addRunArtifact(fixture_generator);
+    const generated_fixture_dir =
+        generate_fixture.addOutputDirectoryArg("container-registry-package");
+
+    const azure_sdk_dep = b.dependency("azure_sdk", .{
+        .target = host_target,
+        .optimize = optimize,
+    });
+    const serde_dep = b.dependency("serde", .{
+        .target = host_target,
+        .optimize = optimize,
+    });
+    const generated_fixture_mod = b.createModule(.{
+        .root_source_file = generated_fixture_dir.path(b, "src/root.zig"),
+        .target = host_target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "azure_core", .module = azure_sdk_dep.module("azure_core") },
+            .{ .name = "serde", .module = serde_dep.module("serde") },
+        },
+    });
+    const generated_fixture_test = b.addTest(.{
+        .root_module = generated_fixture_mod,
+    });
+    test_step.dependOn(&b.addRunArtifact(generated_fixture_test).step);
+
     // ── Componentization step ────────────────────────────────────
     //
     // Drives wabt + wac to produce the composed component:

@@ -240,7 +240,9 @@ test "Container Registry golden preserves protocol fidelity" {
     try testing.expect(std.mem.indexOf(u8, clients, "pub fn initWithPipeline(") != null);
     try testing.expect(std.mem.indexOf(u8, clients, "core.url.encodeRepositoryName(alloc, name)") != null);
     try testing.expect(std.mem.indexOf(u8, clients, "core.url.expandGreedyPathValue(alloc, next_blob_uuid_link)") != null);
-    try testing.expect(std.mem.indexOf(u8, clients, "core.url.resolveUrl(alloc, self.endpoint, encoded_path_0)") != null);
+    try testing.expect(std.mem.indexOf(u8, clients, "core.url.resolveAndValidateUrl(") != null);
+    try testing.expect(std.mem.indexOf(u8, clients, "&.{endpoint_host.bytes}") != null);
+    try testing.expect(std.mem.indexOf(u8, clients, "core.url.resolveUrl(") == null);
     try testing.expect(std.mem.indexOf(u8, clients, "try req.setHeader(\"range\", range);") != null);
     try testing.expect(std.mem.indexOf(u8, clients, "if (accept) |value| try req.setHeader(\"accept\", value);") != null);
     try testing.expect(std.mem.indexOf(u8, clients, "req.body = value;") != null);
@@ -249,6 +251,8 @@ test "Container Registry golden preserves protocol fidelity" {
     try testing.expect(std.mem.indexOf(u8, clients, "status_307: struct") != null);
     try testing.expect(std.mem.indexOf(u8, clients, "status_404: struct") != null);
     try testing.expect(std.mem.indexOf(u8, clients, "status_206: struct") != null);
+    try testing.expect(std.mem.indexOf(u8, clients, "pub const CancelUploadResult") == null);
+    try testing.expect(std.mem.indexOf(u8, clients, "pub fn cancelUpload(") != null);
     try testing.expect(std.mem.indexOf(u8, clients, "const response_body = try bufferRawResponseBody(alloc, resp.body);") != null);
 
     const models = try emitter.renderModels(allocator, parsed.value);

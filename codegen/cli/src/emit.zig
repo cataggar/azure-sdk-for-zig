@@ -500,17 +500,61 @@ fn renderSubClientAccessor(w: *std.Io.Writer, parent: cm.Client, sc: cm.SubClien
 
 fn usesProtocolResult(m: cm.Method) bool {
     if (m.long_running != null or m.responses.len == 0) return false;
-    if (m.responses.len > 1 or std.ascii.eqlIgnoreCase(m.http_method, "head")) return true;
     for (m.responses) |response| {
         if (response.headers.len > 0 or std.mem.eql(u8, response.body_kind, "raw")) return true;
         for (response.status_codes) |status| {
             switch (status) {
-                .integer => |value| if (value == 204 or value == 206 or value == 307 or value == 404) return true,
+                .integer => |value| if (value < 200 or value >= 300) return true,
                 else => {},
             }
         }
     }
+    const first = m.responses[0];
+    for (m.responses[1..]) |response| {
+        if (!responseShapesEquivalent(first, response)) return true;
+    }
     return false;
+}
+
+fn responseShapesEquivalent(a: cm.ResponseVariant, b: cm.ResponseVariant) bool {
+    if (!std.mem.eql(u8, a.body_kind, b.body_kind)) return false;
+    return typeRefsEquivalent(a.response_type, b.response_type);
+}
+
+fn typeRefsEquivalent(a: ?cm.TypeRef, b: ?cm.TypeRef) bool {
+    if (a == null or b == null) return a == null and b == null;
+    const left = a.?;
+    const right = b.?;
+    if (!std.mem.eql(u8, left.kind, right.kind)) return false;
+    return jsonValuesEquivalent(left.value, right.value);
+}
+
+fn jsonValuesEquivalent(a: std.json.Value, b: std.json.Value) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return switch (a) {
+        .null => true,
+        .bool => |value| value == b.bool,
+        .integer => |value| value == b.integer,
+        .float => |value| value == b.float,
+        .number_string => |value| std.mem.eql(u8, value, b.number_string),
+        .string => |value| std.mem.eql(u8, value, b.string),
+        .array => |values| blk: {
+            if (values.items.len != b.array.items.len) break :blk false;
+            for (values.items, b.array.items) |left, right| {
+                if (!jsonValuesEquivalent(left, right)) break :blk false;
+            }
+            break :blk true;
+        },
+        .object => |values| blk: {
+            if (values.count() != b.object.count()) break :blk false;
+            var iterator = values.iterator();
+            while (iterator.next()) |entry| {
+                const right = b.object.get(entry.key_ptr.*) orelse break :blk false;
+                if (!jsonValuesEquivalent(entry.value_ptr.*, right)) break :blk false;
+            }
+            break :blk true;
+        },
+    };
 }
 
 fn protocolResultName(allocator: std.mem.Allocator, m: cm.Method) ![]u8 {
@@ -723,7 +767,15 @@ fn renderUrlBuild(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method)
         std.mem.endsWith(u8, m.path, "}");
     if (is_single_greedy) {
         try w.print(
-            \\        const base_url = try core.url.resolveUrl(alloc, self.endpoint, encoded_path_{d});
+            \\        const endpoint_uri = std.Uri.parse(self.endpoint) catch return error.InvalidUrl;
+            \\        var endpoint_host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
+            \\        const endpoint_host = endpoint_uri.getHost(&endpoint_host_buffer) catch return error.InvalidUrl;
+            \\        const base_url = try core.url.resolveAndValidateUrl(
+            \\            alloc,
+            \\            self.endpoint,
+            \\            encoded_path_{d},
+            \\            &.{{endpoint_host.bytes}},
+            \\        );
             \\        defer alloc.free(base_url);
             \\
         , .{greedy_index.?});
@@ -1046,12 +1098,25 @@ fn renderRequestSetup(
         } else if (std.mem.eql(u8, bp.serialization_kind, "multipart")) {
             try renderMultipartBody(allocator, w, model, bp, id);
         } else {
-            try w.print(
-                \\        const body_json = try serde.json.toSlice(alloc, {s});
-                \\        defer alloc.free(body_json);
-                \\        req.body = body_json;
-                \\
-            , .{id});
+            if (bodyParameterIsOptional(m)) {
+                try w.print(
+                    \\        var body_json: ?[]u8 = null;
+                    \\        defer if (body_json) |bytes| alloc.free(bytes);
+                    \\        if ({s}) |body| {{
+                    \\            const bytes = try serde.json.toSlice(alloc, body);
+                    \\            body_json = bytes;
+                    \\            req.body = bytes;
+                    \\        }}
+                    \\
+                , .{id});
+            } else {
+                try w.print(
+                    \\        const body_json = try serde.json.toSlice(alloc, {s});
+                    \\        defer alloc.free(body_json);
+                    \\        req.body = body_json;
+                    \\
+                , .{id});
+            }
         }
     }
 }
@@ -1420,7 +1485,7 @@ pub fn renderModels(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
         );
     }
     try w.writeAll("\n");
-    if (hasOpenRecords(model)) {
+    if (needsJsonValue(model)) {
         try renderJsonValue(w);
     }
 
@@ -1467,11 +1532,45 @@ pub fn renderModels(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
     return try aw.toOwnedSlice();
 }
 
-fn hasOpenRecords(model: cm.CodeModel) bool {
+fn needsJsonValue(model: cm.CodeModel) bool {
     for (model.models) |item| {
-        if (item.additional_properties != null) return true;
+        if (item.additional_properties) |additional| {
+            if (typeRefContainsUnknown(additional)) return true;
+        }
+        for (item.fields) |field| {
+            if (typeRefContainsUnknown(field.field_type)) return true;
+        }
     }
     return false;
+}
+
+fn typeRefContainsUnknown(type_ref: cm.TypeRef) bool {
+    if (type_ref.isScalar() and
+        std.mem.eql(u8, type_ref.scalarName() orelse "", "unknown"))
+    {
+        return true;
+    }
+    return jsonValueContainsUnknown(type_ref.value);
+}
+
+fn jsonValueContainsUnknown(value: std.json.Value) bool {
+    return switch (value) {
+        .string => |text| std.mem.eql(u8, text, "unknown"),
+        .array => |items| blk: {
+            for (items.items) |item| {
+                if (jsonValueContainsUnknown(item)) break :blk true;
+            }
+            break :blk false;
+        },
+        .object => |object| blk: {
+            var iterator = object.iterator();
+            while (iterator.next()) |entry| {
+                if (jsonValueContainsUnknown(entry.value_ptr.*)) break :blk true;
+            }
+            break :blk false;
+        },
+        else => false,
+    };
 }
 
 fn renderJsonValue(w: *std.Io.Writer) !void {
@@ -1979,4 +2078,75 @@ test "display_name surfaces in root.zig + README, not build.zig" {
     defer alloc.free(zon);
     try testing.expect(std.mem.indexOf(u8, zon, ".name = .arm_avs") != null);
     try testing.expect(std.mem.indexOf(u8, zon, "arm-avs") == null);
+}
+
+test "bodyless success status alternatives preserve the void API" {
+    var statuses = [_]std.json.Value{ .{ .integer = 200 }, .{ .integer = 204 } };
+    var statuses_200 = [_]std.json.Value{.{ .integer = 200 }};
+    var statuses_204 = [_]std.json.Value{.{ .integer = 204 }};
+    var responses = [_]cm.ResponseVariant{
+        .{ .status_codes = &statuses_200, .body_kind = "none" },
+        .{ .status_codes = &statuses_204, .body_kind = "none" },
+    };
+    const method: cm.Method = .{
+        .name = "delete_item",
+        .name_camel = "deleteItem",
+        .http_method = "delete",
+        .path = "/items/{name}",
+        .response = .{ .status_codes = &statuses },
+        .responses = &responses,
+    };
+    try std.testing.expect(!usesProtocolResult(method));
+}
+
+test "optional JSON request bodies are omitted when null" {
+    const allocator = std.testing.allocator;
+    const optional_payload = cm.TypeRef{
+        .kind = "Model",
+        .value = .{ .string = "Payload" },
+    };
+    var user_parameters = [_]cm.UserParameter{
+        .{
+            .name = "payload",
+            .method_name = "payload",
+            .param_type = optional_payload,
+            .optional = true,
+        },
+    };
+    var methods = [_]cm.Method{
+        .{
+            .name = "update",
+            .name_camel = "update",
+            .http_method = "patch",
+            .path = "/item",
+            .user_parameters = &user_parameters,
+            .body_parameter = .{
+                .user_param_name = "payload",
+                .content_type = "application/json",
+                .body_type = optional_payload,
+                .serialization_kind = "json",
+            },
+            .response = .{},
+        },
+    };
+    var clients_model = [_]cm.Client{
+        .{
+            .name = "OptionalBodyClient",
+            .endpoint = .{ .name = "endpoint" },
+            .methods = &methods,
+        },
+    };
+    const model: cm.CodeModel = .{
+        .package_name = "optional_body",
+        .package_version = "0.1.0",
+        .target_kind = "client",
+        .service_kind = "azure-dataplane",
+        .clients = &clients_model,
+    };
+
+    const clients = try renderClients(allocator, model);
+    defer allocator.free(clients);
+    try std.testing.expect(std.mem.indexOf(u8, clients, "if (payload) |body| {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, clients, "req.body = bytes;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, clients, "toSlice(alloc, payload)") == null);
 }

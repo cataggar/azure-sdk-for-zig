@@ -57,7 +57,7 @@ pub fn renderType(
         return allocator.dupe(u8, "std.json.Value");
     }
     if (t.isScalar()) {
-        return try renderScalar(allocator, t.scalarName() orelse "unknown");
+        return try renderScalar(allocator, t.scalarName() orelse "unknown", scope);
     }
     return allocator.dupe(u8, "std.json.Value");
 }
@@ -85,9 +85,16 @@ fn renderTypeFromValue(
     }
 }
 
-fn renderScalar(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+fn renderScalar(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    scope: Scope,
+) ![]u8 {
     if (std.mem.eql(u8, name, "unknown")) {
-        return try allocator.dupe(u8, "JsonValue");
+        return try allocator.dupe(u8, switch (scope) {
+            .clients => "models.JsonValue",
+            .models, .enums => "JsonValue",
+        });
     }
     const mapping = [_]struct { []const u8, []const u8 }{
         .{ "string", "[]const u8" },
