@@ -111,6 +111,8 @@ pub const WireParameter = struct {
     style: ?[]const u8 = null,
     explode: ?bool = null,
     allow_reserved: ?bool = null,
+    /// "segment" | "repository" | "greedy" for path parameters.
+    path_encoding: ?[]const u8 = null,
 };
 
 pub const WireSource = struct {

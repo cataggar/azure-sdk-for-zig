@@ -100,6 +100,7 @@ export async function $onEmit(context) {
     for (const top of sdkContext.sdkPackage.clients) {
       flattenClients(top, /*parent=*/null, flatClients);
     }
+    disambiguateRootClientNames(flatClients);
     const codeModel = {
       package_name: opts["package-name"] || "azure_generated",
       package_version: opts["package-version"] || "0.1.0",
@@ -113,6 +114,15 @@ export async function $onEmit(context) {
     __slot.json = JSON.stringify(codeModel, null, 2);
   } catch (err) {
     __slot.error = err instanceof Error ? err : new Error(String(err));
+  }
+}
+
+export function disambiguateRootClientNames(clients) {
+  for (const client of clients) {
+    if (!client.is_root) continue;
+    if (clients.some((other) => other !== client && other.name === client.name)) {
+      client.name = `${client.name}Client`;
+    }
   }
 }
 
@@ -388,6 +398,8 @@ function adaptWireParameters(op, clientParamNames, userByMethodName) {
       explode:
         p.kind === "path" || p.kind === "query" ? !!p.explode : null,
       allow_reserved: p.kind === "path" ? !!p.allowReserved : null,
+      path_encoding:
+        p.kind === "path" ? pathEncoding(op.path ?? "", p) : null,
     };
     switch (p.kind) {
       case "path":
@@ -457,7 +469,20 @@ function adaptResponseVariant(resp) {
 }
 
 function normalizeStatusCodes(statusCodes) {
-  return typeof statusCodes === "undefined" ? [] : [statusCodes];
+  if (typeof statusCodes === "undefined") return [];
+  return Array.isArray(statusCodes) ? statusCodes : [statusCodes];
+}
+
+function pathEncoding(path, parameter) {
+  if (parameter.allowReserved) return "greedy";
+  const wireName = parameter.serializedName ?? parameter.name;
+  if (
+    wireName === "name" &&
+    (path.startsWith("/v2/") || path.startsWith("/acr/v1/"))
+  ) {
+    return "repository";
+  }
+  return "segment";
 }
 
 function serializationKind(options, contentTypes) {

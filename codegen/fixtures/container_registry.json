@@ -5,7 +5,7 @@
   "service_kind": "azure-dataplane",
   "clients": [
     {
-      "name": "ContainerRegistry",
+      "name": "ContainerRegistryClient",
       "namespace": "ContainerRegistry",
       "doc": "Metadata API definition for the Azure Container Registry runtime",
       "is_root": true,
@@ -70,7 +70,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [],
@@ -161,7 +162,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "repository"
             },
             {
               "wire_name": "reference",
@@ -172,7 +174,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "segment"
             }
           ],
           "query_parameters": [
@@ -185,7 +188,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [
@@ -198,7 +202,8 @@
               "optional": true,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "body_parameter": null,
@@ -296,7 +301,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "repository"
             },
             {
               "wire_name": "reference",
@@ -307,7 +313,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "segment"
             }
           ],
           "query_parameters": [
@@ -320,7 +327,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [
@@ -333,7 +341,8 @@
               "optional": false,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "body_parameter": {
@@ -452,7 +461,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "repository"
             },
             {
               "wire_name": "reference",
@@ -463,7 +473,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "segment"
             }
           ],
           "query_parameters": [
@@ -476,7 +487,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [],
@@ -568,7 +580,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             },
             {
               "wire_name": "last",
@@ -579,7 +592,8 @@
               "optional": true,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             },
             {
               "wire_name": "n",
@@ -590,7 +604,8 @@
               "optional": true,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [
@@ -603,7 +618,8 @@
               "optional": false,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "body_parameter": null,
@@ -708,7 +724,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "repository"
             }
           ],
           "query_parameters": [
@@ -721,7 +738,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [
@@ -734,7 +752,8 @@
               "optional": false,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "body_parameter": null,
@@ -812,7 +831,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "repository"
             }
           ],
           "query_parameters": [
@@ -825,7 +845,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [],
@@ -916,7 +937,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "repository"
             }
           ],
           "query_parameters": [
@@ -929,7 +951,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [
@@ -942,7 +965,8 @@
               "optional": true,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             },
             {
               "wire_name": "Accept",
@@ -953,7 +977,8 @@
               "optional": false,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "body_parameter": {
@@ -1082,7 +1107,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "repository"
             }
           ],
           "query_parameters": [
@@ -1095,7 +1121,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             },
             {
               "wire_name": "last",
@@ -1106,7 +1133,8 @@
               "optional": true,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             },
             {
               "wire_name": "n",
@@ -1117,7 +1145,8 @@
               "optional": true,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             },
             {
               "wire_name": "orderby",
@@ -1128,7 +1157,8 @@
               "optional": true,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             },
             {
               "wire_name": "digest",
@@ -1139,7 +1169,8 @@
               "optional": true,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [
@@ -1152,7 +1183,8 @@
               "optional": false,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "body_parameter": null,
@@ -1250,7 +1282,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "repository"
             },
             {
               "wire_name": "reference",
@@ -1261,7 +1294,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "segment"
             }
           ],
           "query_parameters": [
@@ -1274,7 +1308,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [
@@ -1287,7 +1322,8 @@
               "optional": false,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "body_parameter": null,
@@ -1385,7 +1421,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "repository"
             },
             {
               "wire_name": "reference",
@@ -1396,7 +1433,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "segment"
             }
           ],
           "query_parameters": [
@@ -1409,7 +1447,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [
@@ -1422,7 +1461,8 @@
               "optional": true,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             },
             {
               "wire_name": "Accept",
@@ -1433,7 +1473,8 @@
               "optional": false,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "body_parameter": {
@@ -1532,7 +1573,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "repository"
             },
             {
               "wire_name": "reference",
@@ -1543,7 +1585,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "segment"
             }
           ],
           "query_parameters": [
@@ -1556,7 +1599,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [],
@@ -1667,7 +1711,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "repository"
             }
           ],
           "query_parameters": [
@@ -1680,7 +1725,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             },
             {
               "wire_name": "last",
@@ -1691,7 +1737,8 @@
               "optional": true,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             },
             {
               "wire_name": "n",
@@ -1702,7 +1749,8 @@
               "optional": true,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             },
             {
               "wire_name": "orderby",
@@ -1713,7 +1761,8 @@
               "optional": true,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [
@@ -1726,7 +1775,8 @@
               "optional": false,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "body_parameter": null,
@@ -1824,7 +1874,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "repository"
             },
             {
               "wire_name": "digest",
@@ -1835,7 +1886,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "segment"
             }
           ],
           "query_parameters": [
@@ -1848,7 +1900,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [
@@ -1861,7 +1914,8 @@
               "optional": false,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "body_parameter": null,
@@ -1959,7 +2013,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "repository"
             },
             {
               "wire_name": "digest",
@@ -1970,7 +2025,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "segment"
             }
           ],
           "query_parameters": [
@@ -1983,7 +2039,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [
@@ -1996,7 +2053,8 @@
               "optional": true,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             },
             {
               "wire_name": "Accept",
@@ -2007,7 +2065,8 @@
               "optional": false,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "body_parameter": {
@@ -2125,7 +2184,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "repository"
             },
             {
               "wire_name": "digest",
@@ -2136,7 +2196,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "segment"
             }
           ],
           "query_parameters": [
@@ -2149,7 +2210,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [
@@ -2162,7 +2224,8 @@
               "optional": false,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "body_parameter": null,
@@ -2289,7 +2352,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "repository"
             },
             {
               "wire_name": "digest",
@@ -2300,7 +2364,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "segment"
             }
           ],
           "query_parameters": [
@@ -2313,7 +2378,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [],
@@ -2433,7 +2499,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "repository"
             },
             {
               "wire_name": "digest",
@@ -2444,7 +2511,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "segment"
             }
           ],
           "query_parameters": [
@@ -2457,7 +2525,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [],
@@ -2558,7 +2627,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "repository"
             }
           ],
           "query_parameters": [
@@ -2571,7 +2641,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             },
             {
               "wire_name": "from",
@@ -2582,7 +2653,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             },
             {
               "wire_name": "mount",
@@ -2593,7 +2665,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [],
@@ -2692,7 +2765,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": true
+              "allow_reserved": true,
+              "path_encoding": "greedy"
             }
           ],
           "query_parameters": [
@@ -2705,7 +2779,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [],
@@ -2805,7 +2880,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": true
+              "allow_reserved": true,
+              "path_encoding": "greedy"
             }
           ],
           "query_parameters": [
@@ -2818,7 +2894,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [
@@ -2831,7 +2908,8 @@
               "optional": false,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "body_parameter": {
@@ -2960,7 +3038,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": true
+              "allow_reserved": true,
+              "path_encoding": "greedy"
             }
           ],
           "query_parameters": [
@@ -2973,7 +3052,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             },
             {
               "wire_name": "digest",
@@ -2984,7 +3064,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [
@@ -2997,7 +3078,8 @@
               "optional": true,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "body_parameter": {
@@ -3106,7 +3188,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": true
+              "allow_reserved": true,
+              "path_encoding": "greedy"
             }
           ],
           "query_parameters": [
@@ -3119,7 +3202,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [],
@@ -3190,7 +3274,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "repository"
             }
           ],
           "query_parameters": [
@@ -3203,7 +3288,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [],
@@ -3322,7 +3408,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "repository"
             },
             {
               "wire_name": "digest",
@@ -3333,7 +3420,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "segment"
             }
           ],
           "query_parameters": [
@@ -3346,7 +3434,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [
@@ -3359,7 +3448,8 @@
               "optional": false,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             },
             {
               "wire_name": "Accept",
@@ -3370,7 +3460,8 @@
               "optional": false,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "body_parameter": null,
@@ -3487,7 +3578,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "repository"
             },
             {
               "wire_name": "digest",
@@ -3498,7 +3590,8 @@
               "optional": false,
               "style": "simple",
               "explode": false,
-              "allow_reserved": false
+              "allow_reserved": false,
+              "path_encoding": "segment"
             }
           ],
           "query_parameters": [
@@ -3511,7 +3604,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [
@@ -3524,7 +3618,8 @@
               "optional": false,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "body_parameter": null,
@@ -3634,7 +3729,8 @@
               "optional": false,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             },
             {
               "wire_name": "Accept",
@@ -3645,7 +3741,8 @@
               "optional": false,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "body_parameter": {
@@ -3736,7 +3833,8 @@
               "optional": false,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             },
             {
               "wire_name": "Accept",
@@ -3747,7 +3845,8 @@
               "optional": false,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "body_parameter": {
@@ -3847,7 +3946,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             },
             {
               "wire_name": "service",
@@ -3858,7 +3958,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             },
             {
               "wire_name": "scope",
@@ -3869,7 +3970,8 @@
               "optional": false,
               "style": null,
               "explode": false,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "header_parameters": [
@@ -3882,7 +3984,8 @@
               "optional": false,
               "style": null,
               "explode": null,
-              "allow_reserved": null
+              "allow_reserved": null,
+              "path_encoding": null
             }
           ],
           "body_parameter": null,

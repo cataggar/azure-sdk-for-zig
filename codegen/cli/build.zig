@@ -17,12 +17,16 @@ pub fn build(b: *std.Build) void {
         .os_tag = .wasi,
     });
     const optimize = b.standardOptimizeOption(.{});
+    const codemodel_mod = b.createModule(.{
+        .root_source_file = b.path("src/codemodel.zig"),
+    });
 
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
+    exe_mod.addImport("codemodel", codemodel_mod);
 
     const exe = b.addExecutable(.{
         .name = "codegen-cli",
@@ -40,12 +44,14 @@ pub fn build(b: *std.Build) void {
     // tcgc_import.zig's stub is target-agnostic too).
     const host_target = b.standardTargetOptions(.{});
     const test_step = b.step("test", "Run unit tests");
+    const test_root = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    test_root.addImport("codemodel", codemodel_mod);
     const t = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = host_target,
-            .optimize = optimize,
-        }),
+        .root_module = test_root,
     });
     test_step.dependOn(&b.addRunArtifact(t).step);
 
@@ -54,15 +60,54 @@ pub fn build(b: *std.Build) void {
         .target = host_target,
         .optimize = optimize,
     });
-    fixture_test_mod.addImport("codemodel", b.createModule(.{
-        .root_source_file = b.path("src/codemodel.zig"),
+    fixture_test_mod.addImport("codemodel", codemodel_mod);
+    const emit_mod = b.createModule(.{
+        .root_source_file = b.path("src/emit.zig"),
         .target = host_target,
         .optimize = optimize,
-    }));
+    });
+    emit_mod.addImport("codemodel", codemodel_mod);
+    fixture_test_mod.addImport("emit", emit_mod);
     const fixture_test = b.addTest(.{
         .root_module = fixture_test_mod,
     });
     test_step.dependOn(&b.addRunArtifact(fixture_test).step);
+
+    const fixture_generator_mod = b.createModule(.{
+        .root_source_file = b.path("../fixtures/generate_container_registry_package.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    fixture_generator_mod.addImport("emit", emit_mod);
+    const fixture_generator = b.addExecutable(.{
+        .name = "generate-container-registry-package",
+        .root_module = fixture_generator_mod,
+    });
+    const generate_fixture = b.addRunArtifact(fixture_generator);
+    const generated_fixture_dir =
+        generate_fixture.addOutputDirectoryArg("container-registry-package");
+
+    const azure_sdk_dep = b.dependency("azure_sdk", .{
+        .target = host_target,
+        .optimize = optimize,
+    });
+    const serde_dep = b.dependency("serde", .{
+        .target = host_target,
+        .optimize = optimize,
+    });
+    const generated_fixture_mod = b.createModule(.{
+        .root_source_file = generated_fixture_dir.path(b, "src/root.zig"),
+        .target = host_target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "azure_core", .module = azure_sdk_dep.module("azure_core") },
+            .{ .name = "serde", .module = serde_dep.module("serde") },
+        },
+    });
+    const generated_fixture_test = b.addTest(.{
+        .root_module = generated_fixture_mod,
+    });
+    test_step.dependOn(&b.addRunArtifact(generated_fixture_test).step);
 
     // ── Componentization step ────────────────────────────────────
     //

@@ -16,10 +16,12 @@
 //!       enums.zig
 
 const std = @import("std");
-const cm = @import("codemodel.zig");
+const cm = @import("codemodel");
 const naming = @import("naming.zig");
 const types = @import("types.zig");
 const ids = @import("identifiers.zig");
+
+pub const CodeModel = cm.CodeModel;
 
 pub const EmitOptions = struct {
     /// Optional override of the package name. Defaults to
@@ -210,7 +212,7 @@ fn renderRoot(allocator: std.mem.Allocator, model: cm.CodeModel, display_name: [
 
 // ─── clients.zig ──────────────────────────────────────────────────────
 
-fn renderClients(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
+pub fn renderClients(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
     var aw: std.Io.Writer.Allocating = .init(allocator);
     errdefer aw.deinit();
     const w = &aw.writer;
@@ -224,6 +226,19 @@ fn renderClients(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
         \\const models = @import("models.zig");
         \\const enums = @import("enums.zig");
         \\
+        \\// Keep raw-body ownership behind one helper so the generated shape can
+        \\// adopt the core streaming response API without changing status/header logic.
+        \\fn bufferRawResponseBody(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
+        \\    return allocator.dupe(u8, body);
+        \\}
+        \\
+        \\fn responseStatusExpected(status: u16, expected: []const u16) bool {
+        \\    if (expected.len == 0) return status >= 200 and status < 300;
+        \\    for (expected) |value| {
+        \\        if (status == value) return true;
+        \\    }
+        \\    return false;
+        \\}
         \\
     );
 
@@ -236,7 +251,7 @@ fn renderClients(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
     }
 
     for (model.clients) |c| {
-        try renderClient(allocator, w, c);
+        try renderClient(allocator, w, model, c);
         try w.writeAll("\n");
     }
     return try aw.toOwnedSlice();
@@ -257,7 +272,12 @@ fn renderRootConstants(w: *std.Io.Writer, c: cm.Client) !void {
     try w.writeAll("};\n\n");
 }
 
-fn renderClient(allocator: std.mem.Allocator, w: *std.Io.Writer, c: cm.Client) !void {
+fn renderClient(
+    allocator: std.mem.Allocator,
+    w: *std.Io.Writer,
+    model: cm.CodeModel,
+    c: cm.Client,
+) !void {
     if (c.doc) |d| try renderDocComment(w, d);
     try w.print("pub const {s} = struct {{\n", .{c.name});
 
@@ -282,11 +302,12 @@ fn renderClient(allocator: std.mem.Allocator, w: *std.Io.Writer, c: cm.Client) !
         // and expose `init()`/`deinit()`.
         try w.writeAll(
             \\    allocator: std.mem.Allocator,
-            \\    auth_policy: *core.pipeline.BearerTokenAuthPolicy,
+            \\    auth_policy: ?*core.pipeline.BearerTokenAuthPolicy,
             \\    policy_ptrs: []*core.pipeline.HttpPolicy,
             \\
         );
         try renderRootInit(allocator, w, c);
+        try renderPipelineInit(allocator, w, c);
         try renderRootDeinit(w);
     }
 
@@ -295,7 +316,13 @@ fn renderClient(allocator: std.mem.Allocator, w: *std.Io.Writer, c: cm.Client) !
     }
 
     for (c.methods) |m| {
-        try renderMethod(allocator, w, c, m);
+        if (usesProtocolResult(m)) {
+            try renderProtocolResultType(allocator, w, m);
+        }
+    }
+
+    for (c.methods) |m| {
+        try renderMethod(allocator, w, model, c, m);
     }
 
     try w.writeAll("};\n");
@@ -334,6 +361,7 @@ fn renderRootInit(allocator: std.mem.Allocator, w: *std.Io.Writer, c: cm.Client)
         \\
         \\
     );
+    try renderPipelineOptions(allocator, w, c);
 
     try w.print(
         \\    pub fn init(allocator: std.mem.Allocator, options: InitOptions) !{s} {{
@@ -373,13 +401,76 @@ fn renderRootInit(allocator: std.mem.Allocator, w: *std.Io.Writer, c: cm.Client)
     );
 }
 
+fn renderPipelineOptions(
+    allocator: std.mem.Allocator,
+    w: *std.Io.Writer,
+    c: cm.Client,
+) !void {
+    try w.writeAll(
+        \\    pub const PipelineOptions = struct {
+        \\
+    );
+    for (c.init_parameters) |p| {
+        const id = try ids.quoteIfNeeded(allocator, p.name);
+        defer allocator.free(id);
+        const ty = try renderFieldType(allocator, p.param_type, p.optional, .clients);
+        defer allocator.free(ty);
+        try w.print("        {s}: {s},\n", .{ id, ty });
+    }
+    if (c.endpoint.default_value != null) {
+        try w.writeAll("        endpoint: []const u8 = default_endpoint,\n");
+    } else {
+        try w.writeAll("        endpoint: []const u8,\n");
+    }
+    if (c.api_version_default != null) {
+        try w.writeAll("        api_version: []const u8 = default_api_version,\n");
+    } else {
+        try w.writeAll("        api_version: []const u8,\n");
+    }
+    try w.writeAll(
+        \\    };
+        \\
+        \\
+    );
+}
+
+fn renderPipelineInit(allocator: std.mem.Allocator, w: *std.Io.Writer, c: cm.Client) !void {
+    try w.print(
+        \\    pub fn initWithPipeline(
+        \\        allocator: std.mem.Allocator,
+        \\        pipeline: core.pipeline.HttpPipeline,
+        \\        options: PipelineOptions,
+        \\    ) {s} {{
+        \\        return .{{
+        \\            .allocator = allocator,
+        \\            .endpoint = options.endpoint,
+        \\            .api_version = options.api_version,
+        \\            .auth_policy = null,
+        \\            .policy_ptrs = &.{{}},
+        \\            .pipeline = pipeline,
+        \\
+    , .{c.name});
+    for (c.init_parameters) |p| {
+        const id = try ids.quoteIfNeeded(allocator, p.name);
+        defer allocator.free(id);
+        try w.print("            .{s} = options.{s},\n", .{ id, id });
+    }
+    try w.writeAll(
+        \\        };
+        \\    }
+        \\
+    );
+}
+
 fn renderRootDeinit(w: *std.Io.Writer) !void {
     try w.writeAll(
         \\
         \\    pub fn deinit(self: *@This()) void {
-        \\        self.auth_policy.deinit();
-        \\        self.allocator.destroy(self.auth_policy);
-        \\        self.allocator.free(self.policy_ptrs);
+        \\        if (self.auth_policy) |auth_policy| {
+        \\            auth_policy.deinit();
+        \\            self.allocator.destroy(auth_policy);
+        \\            self.allocator.free(self.policy_ptrs);
+        \\        }
         \\    }
         \\
     );
@@ -407,13 +498,144 @@ fn renderSubClientAccessor(w: *std.Io.Writer, parent: cm.Client, sc: cm.SubClien
 
 // ─── method bodies ────────────────────────────────────────────────────
 
-fn renderMethod(allocator: std.mem.Allocator, w: *std.Io.Writer, c: cm.Client, m: cm.Method) !void {
+fn usesProtocolResult(m: cm.Method) bool {
+    if (m.long_running != null or m.responses.len == 0) return false;
+    for (m.responses) |response| {
+        if (response.headers.len > 0 or std.mem.eql(u8, response.body_kind, "raw")) return true;
+        for (response.status_codes) |status| {
+            switch (status) {
+                .integer => |value| if (value < 200 or value >= 300) return true,
+                else => {},
+            }
+        }
+    }
+    const first = m.responses[0];
+    for (m.responses[1..]) |response| {
+        if (!responseShapesEquivalent(first, response)) return true;
+    }
+    return false;
+}
+
+fn responseShapesEquivalent(a: cm.ResponseVariant, b: cm.ResponseVariant) bool {
+    if (!std.mem.eql(u8, a.body_kind, b.body_kind)) return false;
+    return typeRefsEquivalent(a.response_type, b.response_type);
+}
+
+fn typeRefsEquivalent(a: ?cm.TypeRef, b: ?cm.TypeRef) bool {
+    if (a == null or b == null) return a == null and b == null;
+    const left = a.?;
+    const right = b.?;
+    if (!std.mem.eql(u8, left.kind, right.kind)) return false;
+    return jsonValuesEquivalent(left.value, right.value);
+}
+
+fn jsonValuesEquivalent(a: std.json.Value, b: std.json.Value) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return switch (a) {
+        .null => true,
+        .bool => |value| value == b.bool,
+        .integer => |value| value == b.integer,
+        .float => |value| value == b.float,
+        .number_string => |value| std.mem.eql(u8, value, b.number_string),
+        .string => |value| std.mem.eql(u8, value, b.string),
+        .array => |values| blk: {
+            if (values.items.len != b.array.items.len) break :blk false;
+            for (values.items, b.array.items) |left, right| {
+                if (!jsonValuesEquivalent(left, right)) break :blk false;
+            }
+            break :blk true;
+        },
+        .object => |values| blk: {
+            if (values.count() != b.object.count()) break :blk false;
+            var iterator = values.iterator();
+            while (iterator.next()) |entry| {
+                const right = b.object.get(entry.key_ptr.*) orelse break :blk false;
+                if (!jsonValuesEquivalent(entry.value_ptr.*, right)) break :blk false;
+            }
+            break :blk true;
+        },
+    };
+}
+
+fn protocolResultName(allocator: std.mem.Allocator, m: cm.Method) ![]u8 {
+    const pascal = try naming.toPascalCase(allocator, m.name);
+    defer allocator.free(pascal);
+    return try std.fmt.allocPrint(allocator, "{s}Result", .{pascal});
+}
+
+fn renderProtocolResultType(
+    allocator: std.mem.Allocator,
+    w: *std.Io.Writer,
+    m: cm.Method,
+) !void {
+    const result_name = try protocolResultName(allocator, m);
+    defer allocator.free(result_name);
+    try w.print("\n    pub const {s} = union(enum) {{\n", .{result_name});
+    for (m.responses) |response| {
+        for (response.status_codes) |status| {
+            const code = statusInteger(status) orelse continue;
+            try w.print("        status_{d}: struct {{\n", .{code});
+            try w.print("            status: u16 = {d},\n", .{code});
+            try w.writeAll("            headers: struct {\n");
+            for (response.headers) |header| {
+                const id = try ids.quoteIfNeeded(allocator, header.name);
+                defer allocator.free(id);
+                const ty = try renderFieldType(allocator, header.header_type, header.optional, .clients);
+                defer allocator.free(ty);
+                if (header.optional) {
+                    try w.print("                {s}: {s} = null,\n", .{ id, ty });
+                } else {
+                    try w.print("                {s}: {s},\n", .{ id, ty });
+                }
+            }
+            try w.writeAll("            },\n");
+            const body_ty = try responseBodyType(allocator, response);
+            defer allocator.free(body_ty);
+            try w.print("            body: {s},\n", .{body_ty});
+            try w.writeAll("        },\n");
+        }
+    }
+    try w.writeAll("    };\n");
+}
+
+fn statusInteger(status: std.json.Value) ?u16 {
+    return switch (status) {
+        .integer => |value| if (value >= 0 and value <= std.math.maxInt(u16))
+            @intCast(value)
+        else
+            null,
+        else => null,
+    };
+}
+
+fn responseBodyType(
+    allocator: std.mem.Allocator,
+    response: cm.ResponseVariant,
+) ![]u8 {
+    if (std.mem.eql(u8, response.body_kind, "none") or response.response_type == null) {
+        return try allocator.dupe(u8, "void");
+    }
+    if (std.mem.eql(u8, response.body_kind, "raw")) {
+        return try allocator.dupe(u8, "[]const u8");
+    }
+    return try types.renderType(allocator, response.response_type.?, .clients);
+}
+
+fn renderMethod(
+    allocator: std.mem.Allocator,
+    w: *std.Io.Writer,
+    model: cm.CodeModel,
+    c: cm.Client,
+    m: cm.Method,
+) !void {
     if (m.doc) |d| try renderDocComment(w, d);
 
     // Return type depends on method kind.
-    const ReturnKind = enum { void_op, value_op, list_op, lro_op };
+    const ReturnKind = enum { void_op, value_op, list_op, lro_op, protocol_op };
     const ret_kind: ReturnKind = if (m.long_running != null)
         .lro_op
+    else if (usesProtocolResult(m))
+        .protocol_op
     else if (std.mem.eql(u8, m.kind, "paging") or std.mem.eql(u8, m.kind, "lropaging"))
         .list_op
     else if (m.response.response_type == null)
@@ -440,9 +662,10 @@ fn renderMethod(allocator: std.mem.Allocator, w: *std.Io.Writer, c: cm.Client, m
 
     switch (ret_kind) {
         .list_op => try renderListBody(allocator, w, m),
-        .void_op => try renderVoidBody(allocator, w, c, m),
-        .value_op => try renderValueBody(allocator, w, c, m),
-        .lro_op => try renderLroBody(allocator, w, c, m),
+        .void_op => try renderVoidBody(allocator, w, model, c, m),
+        .value_op => try renderValueBody(allocator, w, model, c, m),
+        .lro_op => try renderLroBody(allocator, w, model, c, m),
+        .protocol_op => try renderProtocolBody(allocator, w, model, c, m),
     }
 
     try w.writeAll("    }\n");
@@ -489,6 +712,10 @@ fn renderReturnType(allocator: std.mem.Allocator, m: cm.Method, kind: anytype) !
             }
             break :blk try allocator.dupe(u8, "core.lro.TypedPoller(void)");
         },
+        .protocol_op => blk: {
+            const result_name = try protocolResultName(allocator, m);
+            break :blk result_name;
+        },
     };
 }
 
@@ -506,92 +733,100 @@ fn renderUrlBuild(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method)
     var args_buf: std.ArrayList(u8) = .empty;
     defer args_buf.deinit(allocator);
 
-    // Endpoint first.
-    try fmt_buf.appendSlice(allocator, "{s}");
-    try args_buf.appendSlice(allocator, "self.endpoint");
-
-    // Walk the path, substituting placeholders.
-    var i: usize = 0;
-    const path = m.path;
-    while (i < path.len) {
-        if (path[i] == '{') {
-            const close = std.mem.indexOfScalarPos(u8, path, i + 1, '}') orelse break;
-            const wire_name = path[i + 1 .. close];
-            try fmt_buf.appendSlice(allocator, "{s}");
-            const expr = try valueExpression(allocator, m.path_parameters, wire_name);
-            defer allocator.free(expr);
-            try args_buf.appendSlice(allocator, ", ");
-            try args_buf.appendSlice(allocator, expr);
-            i = close + 1;
+    var greedy_index: ?usize = null;
+    for (m.path_parameters, 0..) |parameter, index| {
+        const source = try sourceExpression(allocator, parameter.source);
+        defer allocator.free(source);
+        const encoding = parameter.path_encoding orelse
+            if (parameter.allow_reserved orelse false) "greedy" else "segment";
+        if (std.mem.eql(u8, encoding, "greedy")) {
+            greedy_index = index;
+            try w.print(
+                \\        const encoded_path_{d} = try core.url.expandGreedyPathValue(alloc, {s});
+                \\        defer alloc.free(encoded_path_{d});
+                \\
+            , .{ index, source, index });
+        } else if (std.mem.eql(u8, encoding, "repository")) {
+            try w.print(
+                \\        const encoded_path_{d} = try core.url.encodeRepositoryName(alloc, {s});
+                \\        defer alloc.free(encoded_path_{d});
+                \\
+            , .{ index, source, index });
         } else {
-            try fmt_buf.append(allocator, path[i]);
-            i += 1;
+            try w.print(
+                \\        const encoded_path_{d} = try core.url.encodePathSegment(alloc, {s});
+                \\        defer alloc.free(encoded_path_{d});
+                \\
+            , .{ index, source, index });
         }
     }
 
-    // Partition query parameters: required (incl. constants/client) go
-    // inline into the head allocPrint; optional ones are appended via
-    // an ArrayList with conditional `if (...) |v|` blocks.
-    var has_required_query = false;
-    for (m.query_parameters) |qp| {
-        if (qp.optional) continue;
-        if (!has_required_query) {
-            try fmt_buf.append(allocator, '?');
-            has_required_query = true;
-        } else {
-            try fmt_buf.append(allocator, '&');
-        }
-        try fmt_buf.print(allocator, "{s}={{s}}", .{qp.wire_name});
-        const expr = try sourceExpression(allocator, qp.source);
-        defer allocator.free(expr);
-        try args_buf.appendSlice(allocator, ", ");
-        try args_buf.appendSlice(allocator, expr);
-    }
-
-    // Count optional query parameters to choose between the
-    // single-allocPrint form (no optionals) and the ArrayList form.
-    var optional_count: usize = 0;
-    for (m.query_parameters) |qp| {
-        if (qp.optional) optional_count += 1;
-    }
-
-    if (optional_count == 0) {
+    const is_single_greedy = greedy_index != null and
+        m.path_parameters.len == 1 and
+        std.mem.startsWith(u8, m.path, "/{") and
+        std.mem.endsWith(u8, m.path, "}");
+    if (is_single_greedy) {
         try w.print(
-            \\        const url = try std.fmt.allocPrint(alloc, "{s}", .{{ {s} }});
-            \\        defer alloc.free(url);
+            \\        const endpoint_uri = std.Uri.parse(self.endpoint) catch return error.InvalidUrl;
+            \\        var endpoint_host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
+            \\        const endpoint_host = endpoint_uri.getHost(&endpoint_host_buffer) catch return error.InvalidUrl;
+            \\        const base_url = try core.url.resolveAndValidateUrl(
+            \\            alloc,
+            \\            self.endpoint,
+            \\            encoded_path_{d},
+            \\            &.{{endpoint_host.bytes}},
+            \\        );
+            \\        defer alloc.free(base_url);
+            \\
+        , .{greedy_index.?});
+    } else {
+        try fmt_buf.appendSlice(allocator, "{s}");
+        try args_buf.appendSlice(allocator, "self.endpoint");
+        var i: usize = 0;
+        while (i < m.path.len) {
+            if (m.path[i] == '{') {
+                const close = std.mem.indexOfScalarPos(u8, m.path, i + 1, '}') orelse break;
+                const wire_name = m.path[i + 1 .. close];
+                const parameter_index = pathParameterIndex(m.path_parameters, wire_name) orelse {
+                    try fmt_buf.appendSlice(allocator, "<missing-path>");
+                    i = close + 1;
+                    continue;
+                };
+                try fmt_buf.appendSlice(allocator, "{s}");
+                try args_buf.print(allocator, ", encoded_path_{d}", .{parameter_index});
+                i = close + 1;
+            } else {
+                try fmt_buf.append(allocator, m.path[i]);
+                i += 1;
+            }
+        }
+        try w.print(
+            \\        const base_url = try std.fmt.allocPrint(alloc, "{s}", .{{ {s} }});
+            \\        defer alloc.free(base_url);
             \\
         , .{ fmt_buf.items, args_buf.items });
+    }
+
+    if (m.query_parameters.len == 0) {
+        try w.writeAll("        const url = base_url;\n");
         return;
     }
 
-    // ArrayList form. Build the head, then append optional params.
-    try w.print(
+    try w.writeAll(
         \\        var url_buf: std.ArrayList(u8) = .empty;
         \\        defer url_buf.deinit(alloc);
-        \\        try url_buf.print(alloc, "{s}", .{{ {s} }});
+        \\        try url_buf.appendSlice(alloc, base_url);
+        \\        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
         \\
-    , .{ fmt_buf.items, args_buf.items });
+    );
 
-    // First-optional separator: `?` if no required query params, `&`
-    // otherwise. We track this at runtime via a boolean so that any
-    // mixture of populated optionals produces the right separators
-    // even when several are null. The flag is only needed when there
-    // are zero required query params; otherwise we always emit `&`.
-    if (!has_required_query) {
-        try w.writeAll("        var has_query: bool = false;\n");
-    }
-
-    for (m.query_parameters) |qp| {
-        if (!qp.optional) continue;
-        if (qp.source.name == null) continue;
-        const user_id = try ids.quoteIfNeeded(allocator, qp.source.name.?);
-        defer allocator.free(user_id);
-        const inner_kind = innerOptionKind(m, qp);
-
-        if (!has_required_query) {
-            try renderOptionalAppendNoRequired(w, user_id, qp.wire_name, inner_kind);
+    for (m.query_parameters, 0..) |qp, index| {
+        if (qp.optional and qp.source.name != null) {
+            const user_id = try ids.quoteIfNeeded(allocator, qp.source.name.?);
+            defer allocator.free(user_id);
+            try renderOptionalAppendNoRequired(w, user_id, qp.wire_name, innerOptionKind(m, qp));
         } else {
-            try renderOptionalAppendWithRequired(w, user_id, qp.wire_name, inner_kind);
+            try renderRequiredQueryAppend(allocator, w, m, qp, index);
         }
     }
 
@@ -600,6 +835,60 @@ fn renderUrlBuild(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method)
         \\        defer alloc.free(url);
         \\
     );
+}
+
+fn pathParameterIndex(params: []const cm.WireParameter, wire_name: []const u8) ?usize {
+    for (params, 0..) |parameter, index| {
+        if (std.mem.eql(u8, parameter.wire_name, wire_name)) return index;
+    }
+    return null;
+}
+
+fn renderRequiredQueryAppend(
+    allocator: std.mem.Allocator,
+    w: *std.Io.Writer,
+    m: cm.Method,
+    qp: cm.WireParameter,
+    index: usize,
+) !void {
+    const expr = try sourceExpression(allocator, qp.source);
+    defer allocator.free(expr);
+    const kind = sourceKind(m, qp.source);
+    switch (kind) {
+        .string_like => try w.print(
+            \\        const encoded_query_{d} = try core.url.percentEncode(alloc, {s});
+            \\        defer alloc.free(encoded_query_{d});
+            \\        try url_buf.print(alloc, "{{s}}{s}={{s}}", .{{ if (has_query) "&" else "?", encoded_query_{d} }});
+            \\        has_query = true;
+            \\
+        , .{ index, expr, index, qp.wire_name, index }),
+        .enum_or_union => try w.print(
+            \\        const encoded_query_{d} = try core.url.percentEncode(alloc, {s}.toWire());
+            \\        defer alloc.free(encoded_query_{d});
+            \\        try url_buf.print(alloc, "{{s}}{s}={{s}}", .{{ if (has_query) "&" else "?", encoded_query_{d} }});
+            \\        has_query = true;
+            \\
+        , .{ index, expr, index, qp.wire_name, index }),
+        .numeric => try w.print(
+            \\        try url_buf.print(alloc, "{{s}}{s}={{d}}", .{{ if (has_query) "&" else "?", {s} }});
+            \\        has_query = true;
+            \\
+        , .{ qp.wire_name, expr }),
+        .boolean => try w.print(
+            \\        try url_buf.print(alloc, "{{s}}{s}={{}}", .{{ if (has_query) "&" else "?", {s} }});
+            \\        has_query = true;
+            \\
+        , .{ qp.wire_name, expr }),
+    }
+}
+
+fn sourceKind(m: cm.Method, source: cm.WireSource) InnerKind {
+    if (!std.mem.eql(u8, source.kind, "user")) return .string_like;
+    const name = source.name orelse return .string_like;
+    for (m.user_parameters) |parameter| {
+        if (std.mem.eql(u8, parameter.name, name)) return classifyTypeRef(parameter.param_type);
+    }
+    return .string_like;
 }
 
 const InnerKind = enum { string_like, enum_or_union, numeric, boolean };
@@ -650,44 +939,6 @@ fn classifyTypeRef(t: cm.TypeRef) InnerKind {
     return .string_like;
 }
 
-fn renderOptionalAppendWithRequired(
-    w: *std.Io.Writer,
-    user_id: []const u8,
-    wire_name: []const u8,
-    kind: InnerKind,
-) !void {
-    switch (kind) {
-        .string_like => try w.print(
-            \\        if ({s}) |v| {{
-            \\            const enc = try core.url.percentEncode(alloc, v);
-            \\            defer alloc.free(enc);
-            \\            try url_buf.print(alloc, "&{s}={{s}}", .{{enc}});
-            \\        }}
-            \\
-        , .{ user_id, wire_name }),
-        .enum_or_union => try w.print(
-            \\        if ({s}) |v| {{
-            \\            const enc = try core.url.percentEncode(alloc, v.toWire());
-            \\            defer alloc.free(enc);
-            \\            try url_buf.print(alloc, "&{s}={{s}}", .{{enc}});
-            \\        }}
-            \\
-        , .{ user_id, wire_name }),
-        .numeric => try w.print(
-            \\        if ({s}) |v| {{
-            \\            try url_buf.print(alloc, "&{s}={{d}}", .{{v}});
-            \\        }}
-            \\
-        , .{ user_id, wire_name }),
-        .boolean => try w.print(
-            \\        if ({s}) |v| {{
-            \\            try url_buf.print(alloc, "&{s}={{}}", .{{v}});
-            \\        }}
-            \\
-        , .{ user_id, wire_name }),
-    }
-}
-
 fn renderOptionalAppendNoRequired(
     w: *std.Io.Writer,
     user_id: []const u8,
@@ -734,17 +985,6 @@ fn renderOptionalAppendNoRequired(
     }
 }
 
-fn valueExpression(allocator: std.mem.Allocator, params: []cm.WireParameter, wire_name: []const u8) ![]u8 {
-    for (params) |p| {
-        if (std.mem.eql(u8, p.wire_name, wire_name)) {
-            return sourceExpression(allocator, p.source);
-        }
-    }
-    // Fallback to the placeholder name as-is (snake-cased) — keeps the
-    // file compiling so the reviewer can spot the missing wire mapping.
-    return try std.fmt.allocPrint(allocator, "\"<missing:{s}>\"", .{wire_name});
-}
-
 fn sourceExpression(allocator: std.mem.Allocator, src: cm.WireSource) ![]u8 {
     if (std.mem.eql(u8, src.kind, "constant")) {
         return try std.fmt.allocPrint(allocator, "\"{s}\"", .{src.value orelse ""});
@@ -788,7 +1028,12 @@ fn renderListBody(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method)
     , .{ item_ty, item_ty });
 }
 
-fn renderRequestSetup(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method) !void {
+fn renderRequestSetup(
+    allocator: std.mem.Allocator,
+    w: *std.Io.Writer,
+    model: cm.CodeModel,
+    m: cm.Method,
+) !void {
     const verb = try httpVerbZig(allocator, m.http_method);
     defer allocator.free(verb);
     try w.print(
@@ -796,26 +1041,196 @@ fn renderRequestSetup(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Met
         \\        defer req.deinit();
         \\
     , .{verb});
+    if (hasModeledRedirect(m)) {
+        try w.writeAll("        req.redirect_policy = .not_allowed;\n");
+    }
 
-    // Render headers — every entry tagged `kind: "constant"` becomes a
-    // `req.setHeader("Name", "value")` line. User-sourced headers are
-    // out of scope for the initial emitter cut (AVS has none).
     for (m.header_parameters) |hp| {
+        if (m.body_parameter) |bp| {
+            if (std.mem.eql(u8, bp.serialization_kind, "multipart") and
+                std.ascii.eqlIgnoreCase(hp.wire_name, "content-type"))
+            {
+                continue;
+            }
+        }
         if (std.mem.eql(u8, hp.source.kind, "constant")) {
-            try w.print("        try req.setHeader(\"{s}\", \"{s}\");\n", .{ hp.wire_name, hp.source.value orelse "" });
+            if (hp.optional and m.body_parameter != null and bodyParameterIsOptional(m)) {
+                const body_id = try ids.quoteIfNeeded(allocator, m.body_parameter.?.user_param_name);
+                defer allocator.free(body_id);
+                try w.print(
+                    \\        if ({s} != null) try req.setHeader("{s}", "{s}");
+                    \\
+                , .{ body_id, hp.wire_name, hp.source.value orelse "" });
+            } else {
+                try w.print("        try req.setHeader(\"{s}\", \"{s}\");\n", .{ hp.wire_name, hp.source.value orelse "" });
+            }
+        } else {
+            const source_name = hp.source.name orelse continue;
+            const source_id = try ids.quoteIfNeeded(allocator, source_name);
+            defer allocator.free(source_id);
+            const kind = sourceKind(m, hp.source);
+            if (hp.optional) {
+                if (kind == .enum_or_union) {
+                    try w.print(
+                        \\        if ({s}) |value| try req.setHeader("{s}", value.toWire());
+                        \\
+                    , .{ source_id, hp.wire_name });
+                } else {
+                    try w.print(
+                        \\        if ({s}) |value| try req.setHeader("{s}", value);
+                        \\
+                    , .{ source_id, hp.wire_name });
+                }
+            } else if (kind == .enum_or_union) {
+                try w.print("        try req.setHeader(\"{s}\", {s}.toWire());\n", .{ hp.wire_name, source_id });
+            } else {
+                try w.print("        try req.setHeader(\"{s}\", {s});\n", .{ hp.wire_name, source_id });
+            }
         }
     }
 
     if (m.body_parameter) |bp| {
         const id = try ids.quoteIfNeeded(allocator, bp.user_param_name);
         defer allocator.free(id);
-        try w.print(
-            \\        const body_json = try serde.json.toSlice(alloc, {s});
-            \\        defer alloc.free(body_json);
-            \\        req.body = body_json;
-            \\
-        , .{id});
+        if (std.mem.eql(u8, bp.serialization_kind, "raw")) {
+            if (bodyParameterIsOptional(m)) {
+                try w.print("        if ({s}) |body| req.body = body;\n", .{id});
+            } else {
+                try w.print("        req.body = {s};\n", .{id});
+            }
+        } else if (std.mem.eql(u8, bp.serialization_kind, "multipart")) {
+            try renderMultipartBody(allocator, w, model, bp, id);
+        } else {
+            if (bodyParameterIsOptional(m)) {
+                try w.print(
+                    \\        var body_json: ?[]u8 = null;
+                    \\        defer if (body_json) |bytes| alloc.free(bytes);
+                    \\        if ({s}) |body| {{
+                    \\            const bytes = try serde.json.toSlice(alloc, body);
+                    \\            body_json = bytes;
+                    \\            req.body = bytes;
+                    \\        }}
+                    \\
+                , .{id});
+            } else {
+                try w.print(
+                    \\        const body_json = try serde.json.toSlice(alloc, {s});
+                    \\        defer alloc.free(body_json);
+                    \\        req.body = body_json;
+                    \\
+                , .{id});
+            }
+        }
     }
+}
+
+fn hasModeledRedirect(m: cm.Method) bool {
+    if (statusesContainRedirect(m.response.status_codes)) return true;
+    for (m.responses) |response| {
+        if (statusesContainRedirect(response.status_codes)) return true;
+    }
+    return false;
+}
+
+fn statusesContainRedirect(statuses: []const std.json.Value) bool {
+    for (statuses) |status| {
+        switch (status) {
+            .integer => |value| if (value >= 300 and value < 400) return true,
+            else => {},
+        }
+    }
+    return false;
+}
+
+fn bodyParameterIsOptional(m: cm.Method) bool {
+    const body = m.body_parameter orelse return false;
+    for (m.user_parameters) |parameter| {
+        if (std.mem.eql(u8, parameter.name, body.user_param_name)) return parameter.optional;
+    }
+    return false;
+}
+
+fn renderMultipartBody(
+    allocator: std.mem.Allocator,
+    w: *std.Io.Writer,
+    model: cm.CodeModel,
+    body_parameter: cm.BodyParameter,
+    body_id: []const u8,
+) !void {
+    const type_name = if (body_parameter.body_type) |body_type|
+        body_type.namedTypeName()
+    else
+        null;
+    const multipart_model = if (type_name) |name| findModel(model, name) else null;
+    const body_model = multipart_model orelse return error.MultipartBodyModelMissing;
+
+    try w.writeAll(
+        \\        const multipart_boundary = "azure-sdk-for-zig-acr-boundary";
+        \\        var multipart_body: std.ArrayList(u8) = .empty;
+        \\        defer multipart_body.deinit(alloc);
+        \\
+    );
+    for (body_model.fields) |field| {
+        const multipart = field.multipart orelse continue;
+        const field_id = try ids.quoteIfNeeded(allocator, field.name);
+        defer allocator.free(field_id);
+        const value_expr = try multipartValueExpression(allocator, field, body_id, field_id);
+        defer allocator.free(value_expr);
+        const content_type = if (multipart.content_types.len > 0)
+            multipart.content_types[0]
+        else
+            "text/plain";
+        if (field.optional) {
+            try w.print(
+                \\        if ({s}.{s}) |value| {{
+                \\            try multipart_body.print(
+                \\                alloc,
+                \\                "--{{s}}\r\nContent-Disposition: form-data; name=\"{s}\"\r\nContent-Type: {s}\r\n\r\n{{s}}\r\n",
+                \\                .{{ multipart_boundary, {s} }},
+                \\            );
+                \\        }}
+                \\
+            , .{ body_id, field_id, multipart.name, content_type, value_expr });
+        } else {
+            try w.print(
+                \\        try multipart_body.print(
+                \\            alloc,
+                \\            "--{{s}}\r\nContent-Disposition: form-data; name=\"{s}\"\r\nContent-Type: {s}\r\n\r\n{{s}}\r\n",
+                \\            .{{ multipart_boundary, {s} }},
+                \\        );
+                \\
+            , .{ multipart.name, content_type, value_expr });
+        }
+    }
+    try w.writeAll(
+        \\        try multipart_body.print(alloc, "--{s}--\r\n", .{multipart_boundary});
+        \\        const multipart_bytes = try multipart_body.toOwnedSlice(alloc);
+        \\        defer alloc.free(multipart_bytes);
+        \\        req.body = multipart_bytes;
+        \\        try req.setHeader("Content-Type", "multipart/form-data; boundary=azure-sdk-for-zig-acr-boundary");
+        \\
+    );
+}
+
+fn multipartValueExpression(
+    allocator: std.mem.Allocator,
+    field: cm.Field,
+    body_id: []const u8,
+    field_id: []const u8,
+) ![]u8 {
+    if (field.field_type.isEnum() or std.mem.eql(u8, field.field_type.kind, "Union")) {
+        if (field.optional) return try allocator.dupe(u8, "value.toWire()");
+        return try std.fmt.allocPrint(allocator, "{s}.{s}.toWire()", .{ body_id, field_id });
+    }
+    if (field.optional) return try allocator.dupe(u8, "value");
+    return try std.fmt.allocPrint(allocator, "{s}.{s}", .{ body_id, field_id });
+}
+
+fn findModel(model: cm.CodeModel, name: []const u8) ?cm.Model {
+    for (model.models) |item| {
+        if (std.mem.eql(u8, item.name, name)) return item;
+    }
+    return null;
 }
 
 fn httpVerbZig(allocator: std.mem.Allocator, http_method: []const u8) ![]u8 {
@@ -824,42 +1239,73 @@ fn httpVerbZig(allocator: std.mem.Allocator, http_method: []const u8) ![]u8 {
     return upper;
 }
 
-fn renderVoidBody(allocator: std.mem.Allocator, w: *std.Io.Writer, c: cm.Client, m: cm.Method) !void {
-    try renderRequestSetup(allocator, w, m);
+fn renderVoidBody(
+    allocator: std.mem.Allocator,
+    w: *std.Io.Writer,
+    model: cm.CodeModel,
+    c: cm.Client,
+    m: cm.Method,
+) !void {
+    try renderRequestSetup(allocator, w, model, m);
+    const statuses = try renderExpectedStatuses(allocator, m.response.status_codes);
+    defer allocator.free(statuses);
     try w.print(
         \\
         \\        var resp = try self.pipeline.send(&req);
         \\        defer resp.deinit();
         \\
-        \\        if (!resp.isSuccess()) {{
+        \\        if (!responseStatusExpected(resp.status_code, &.{{{[statuses]s}}})) {{
         \\            core.pager.logHttpError("{[client]s}.{[method]s}", resp.status_code, resp.body);
         \\            return error.AzureRequestFailed;
         \\        }}
         \\        return;
         \\
-    , .{ .client = c.name, .method = m.name_camel });
+    , .{
+        .client = c.name,
+        .method = m.name_camel,
+        .statuses = statuses,
+    });
 }
 
-fn renderValueBody(allocator: std.mem.Allocator, w: *std.Io.Writer, c: cm.Client, m: cm.Method) !void {
-    try renderRequestSetup(allocator, w, m);
+fn renderValueBody(
+    allocator: std.mem.Allocator,
+    w: *std.Io.Writer,
+    model: cm.CodeModel,
+    c: cm.Client,
+    m: cm.Method,
+) !void {
+    try renderRequestSetup(allocator, w, model, m);
     const ty = try types.renderType(allocator, m.response.response_type.?, .clients);
     defer allocator.free(ty);
+    const statuses = try renderExpectedStatuses(allocator, m.response.status_codes);
+    defer allocator.free(statuses);
     try w.print(
         \\
         \\        var resp = try self.pipeline.send(&req);
         \\        defer resp.deinit();
         \\
-        \\        if (!resp.isSuccess()) {{
+        \\        if (!responseStatusExpected(resp.status_code, &.{{{[statuses]s}}})) {{
         \\            core.pager.logHttpError("{[client]s}.{[method]s}", resp.status_code, resp.body);
         \\            return error.AzureRequestFailed;
         \\        }}
         \\        return try serde.json.fromSlice({[ty]s}, alloc, resp.body);
         \\
-    , .{ .client = c.name, .method = m.name_camel, .ty = ty });
+    , .{
+        .client = c.name,
+        .method = m.name_camel,
+        .ty = ty,
+        .statuses = statuses,
+    });
 }
 
-fn renderLroBody(allocator: std.mem.Allocator, w: *std.Io.Writer, c: cm.Client, m: cm.Method) !void {
-    try renderRequestSetup(allocator, w, m);
+fn renderLroBody(
+    allocator: std.mem.Allocator,
+    w: *std.Io.Writer,
+    model: cm.CodeModel,
+    c: cm.Client,
+    m: cm.Method,
+) !void {
+    try renderRequestSetup(allocator, w, model, m);
     const final_ty = if (m.long_running) |l| l.final_response_type else null;
     var ty_owned: []u8 = undefined;
     if (final_ty) |t| {
@@ -868,23 +1314,170 @@ fn renderLroBody(allocator: std.mem.Allocator, w: *std.Io.Writer, c: cm.Client, 
         ty_owned = try allocator.dupe(u8, "void");
     }
     defer allocator.free(ty_owned);
+    const statuses = try renderExpectedStatuses(allocator, m.response.status_codes);
+    defer allocator.free(statuses);
     try w.print(
         \\
         \\        var resp = try self.pipeline.send(&req);
         \\        defer resp.deinit();
         \\
-        \\        if (!resp.isSuccess()) {{
+        \\        if (!responseStatusExpected(resp.status_code, &.{{{[statuses]s}}})) {{
         \\            core.pager.logHttpError("{[client]s}.{[method]s}", resp.status_code, resp.body);
         \\            return error.AzureRequestFailed;
         \\        }}
         \\        return try core.lro.TypedPoller({[ty]s}).init(alloc, self.pipeline, resp, url, .{{}});
         \\
-    , .{ .client = c.name, .method = m.name_camel, .ty = ty_owned });
+    , .{
+        .client = c.name,
+        .method = m.name_camel,
+        .ty = ty_owned,
+        .statuses = statuses,
+    });
+}
+
+fn renderProtocolBody(
+    allocator: std.mem.Allocator,
+    w: *std.Io.Writer,
+    model: cm.CodeModel,
+    c: cm.Client,
+    m: cm.Method,
+) !void {
+    try renderRequestSetup(allocator, w, model, m);
+    try w.writeAll(
+        \\
+        \\        var resp = try self.pipeline.send(&req);
+        \\        defer resp.deinit();
+        \\
+        \\        switch (resp.status_code) {
+        \\
+    );
+    for (m.responses) |response| {
+        for (response.status_codes) |status| {
+            const code = statusInteger(status) orelse continue;
+            try w.print("            {d} => {{\n", .{code});
+            try renderProtocolVariantReturn(allocator, w, response, code);
+            try w.writeAll("            },\n");
+        }
+    }
+    try w.print(
+        \\            else => {{
+        \\                core.pager.logHttpError("{s}.{s}", resp.status_code, resp.body);
+        \\                return error.AzureRequestFailed;
+        \\            }},
+        \\        }}
+        \\
+    , .{ c.name, m.name_camel });
+}
+
+fn renderProtocolVariantReturn(
+    allocator: std.mem.Allocator,
+    w: *std.Io.Writer,
+    response: cm.ResponseVariant,
+    status: u16,
+) !void {
+    for (response.headers, 0..) |header, index| {
+        if (header.header_type.isScalar() and
+            std.mem.eql(u8, header.header_type.scalarName() orelse "", "int64"))
+        {
+            if (header.optional) {
+                try w.print(
+                    \\                const response_header_{d}: ?i64 = if (resp.getHeader("{s}")) |value|
+                    \\                    try std.fmt.parseInt(i64, value, 10)
+                    \\                else
+                    \\                    null;
+                    \\
+                , .{ index, header.wire_name });
+            } else {
+                try w.print(
+                    \\                const response_header_{d} = try std.fmt.parseInt(
+                    \\                    i64,
+                    \\                    resp.getHeader("{s}") orelse return error.MissingResponseHeader,
+                    \\                    10,
+                    \\                );
+                    \\
+                , .{ index, header.wire_name });
+            }
+        } else if (header.optional) {
+            try w.print(
+                \\                const response_header_{d} = if (resp.getHeader("{s}")) |value|
+                \\                    try alloc.dupe(u8, value)
+                \\                else
+                \\                    null;
+                \\                errdefer if (response_header_{d}) |value| alloc.free(value);
+                \\
+            , .{ index, header.wire_name, index });
+        } else {
+            try w.print(
+                \\                const response_header_{d} = try alloc.dupe(
+                \\                    u8,
+                \\                    resp.getHeader("{s}") orelse return error.MissingResponseHeader,
+                \\                );
+                \\                errdefer alloc.free(response_header_{d});
+                \\
+            , .{ index, header.wire_name, index });
+        }
+    }
+
+    if (std.mem.eql(u8, response.body_kind, "raw")) {
+        try w.writeAll(
+            \\                const response_body = try bufferRawResponseBody(alloc, resp.body);
+            \\                errdefer alloc.free(response_body);
+            \\
+        );
+    } else if (std.mem.eql(u8, response.body_kind, "json") and response.response_type != null) {
+        const ty = try types.renderType(allocator, response.response_type.?, .clients);
+        defer allocator.free(ty);
+        try w.print(
+            \\                const response_body = try serde.json.fromSlice({s}, alloc, resp.body);
+            \\
+        , .{ty});
+    }
+
+    try w.print(
+        \\                return .{{ .status_{d} = .{{
+        \\                    .status = resp.status_code,
+        \\                    .headers = .{{
+        \\
+    , .{status});
+    for (response.headers, 0..) |header, index| {
+        const id = try ids.quoteIfNeeded(allocator, header.name);
+        defer allocator.free(id);
+        try w.print("                        .{s} = response_header_{d},\n", .{ id, index });
+    }
+    try w.writeAll(
+        \\                    },
+        \\
+    );
+    if (std.mem.eql(u8, response.body_kind, "none") or response.response_type == null) {
+        try w.writeAll("                    .body = {},\n");
+    } else {
+        try w.writeAll("                    .body = response_body,\n");
+    }
+    try w.writeAll(
+        \\                } };
+        \\
+    );
+}
+
+fn renderExpectedStatuses(
+    allocator: std.mem.Allocator,
+    statuses: []const std.json.Value,
+) ![]u8 {
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    errdefer output.deinit();
+    var first = true;
+    for (statuses) |status| {
+        const code = statusInteger(status) orelse continue;
+        if (!first) try output.writer.writeAll(", ");
+        try output.writer.print("{d}", .{code});
+        first = false;
+    }
+    return try output.toOwnedSlice();
 }
 
 // ─── models.zig ───────────────────────────────────────────────────────
 
-fn renderModels(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
+pub fn renderModels(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
     var aw: std.Io.Writer.Allocating = .init(allocator);
     errdefer aw.deinit();
     const w = &aw.writer;
@@ -913,6 +1506,9 @@ fn renderModels(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
         );
     }
     try w.writeAll("\n");
+    if (needsJsonValue(model)) {
+        try renderJsonValue(w);
+    }
 
     for (model.models) |m| {
         if (m.doc) |d| try renderDocComment(w, d);
@@ -932,10 +1528,14 @@ fn renderModels(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
                 try w.print("    {s}: {s},\n", .{ id, ty });
             }
         }
-        // serde.zig honors this on (de)serialization: ARM and most data-plane
-        // services emit camelCase JSON keys while Zig fields are snake_case.
-        // Per-field `wireName` overrides from TCGC still win when present.
-        try w.writeAll("\n    pub const serde = .{ .rename_all = .camel_case };\n");
+        if (m.additional_properties != null) {
+            try w.writeAll("    additional_properties: std.StringArrayHashMapUnmanaged(JsonValue) = .empty,\n");
+        }
+
+        try renderModelSerdeOptions(allocator, w, m);
+        if (m.additional_properties != null) {
+            try renderOpenModelMethods(allocator, w, m);
+        }
 
         // ARM resource marker. Lets `core.arm` helpers like
         // `core.arm.id(&res)` / `core.arm.setTags(&res, ...)` dispatch
@@ -951,6 +1551,241 @@ fn renderModels(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
         try w.writeAll("};\n\n");
     }
     return try aw.toOwnedSlice();
+}
+
+fn needsJsonValue(model: cm.CodeModel) bool {
+    for (model.models) |item| {
+        if (item.additional_properties) |additional| {
+            if (typeRefContainsUnknown(additional)) return true;
+        }
+        for (item.fields) |field| {
+            if (typeRefContainsUnknown(field.field_type)) return true;
+        }
+    }
+    return false;
+}
+
+fn typeRefContainsUnknown(type_ref: cm.TypeRef) bool {
+    if (type_ref.isScalar() and
+        std.mem.eql(u8, type_ref.scalarName() orelse "", "unknown"))
+    {
+        return true;
+    }
+    return jsonValueContainsUnknown(type_ref.value);
+}
+
+fn jsonValueContainsUnknown(value: std.json.Value) bool {
+    return switch (value) {
+        .string => |text| std.mem.eql(u8, text, "unknown"),
+        .array => |items| blk: {
+            for (items.items) |item| {
+                if (jsonValueContainsUnknown(item)) break :blk true;
+            }
+            break :blk false;
+        },
+        .object => |object| blk: {
+            var iterator = object.iterator();
+            while (iterator.next()) |entry| {
+                if (jsonValueContainsUnknown(entry.value_ptr.*)) break :blk true;
+            }
+            break :blk false;
+        },
+        else => false,
+    };
+}
+
+fn renderJsonValue(w: *std.Io.Writer) !void {
+    try w.writeAll(
+        \\pub const JsonValue = union(enum) {
+        \\    null_value: void,
+        \\    boolean: bool,
+        \\    integer: i64,
+        \\    float: f64,
+        \\    string: []const u8,
+        \\    array: []JsonValue,
+        \\    object: std.StringArrayHashMapUnmanaged(JsonValue),
+        \\
+        \\    pub fn zerdeDeserialize(
+        \\        comptime T: type,
+        \\        allocator: std.mem.Allocator,
+        \\        deserializer: anytype,
+        \\    ) @TypeOf(deserializer.*).Error!T {
+        \\        const saved = deserializer.*;
+        \\        if (deserializer.deserializeVoid()) |_| {
+        \\            return .{ .null_value = {} };
+        \\        } else |_| deserializer.* = saved;
+        \\        if (deserializer.deserializeBool()) |value| {
+        \\            return .{ .boolean = value };
+        \\        } else |_| deserializer.* = saved;
+        \\        if (deserializer.deserializeInt(i64)) |value| {
+        \\            return .{ .integer = value };
+        \\        } else |_| deserializer.* = saved;
+        \\        if (deserializer.deserializeFloat(f64)) |value| {
+        \\            return .{ .float = value };
+        \\        } else |_| deserializer.* = saved;
+        \\        if (deserializer.deserializeString(allocator)) |value| {
+        \\            return .{ .string = value };
+        \\        } else |_| deserializer.* = saved;
+        \\
+        \\        if (deserializer.deserializeSeqAccess()) |sequence_value| {
+        \\            var sequence = sequence_value;
+        \\            var values: std.ArrayList(JsonValue) = .empty;
+        \\            errdefer values.deinit(allocator);
+        \\            while (try sequence.nextElement(JsonValue, allocator)) |value| {
+        \\                values.append(allocator, value) catch
+        \\                    return deserializer.raiseError(error.OutOfMemory);
+        \\            }
+        \\            return .{ .array = values.toOwnedSlice(allocator) catch
+        \\                return deserializer.raiseError(error.OutOfMemory) };
+        \\        } else |_| deserializer.* = saved;
+        \\
+        \\        var map = deserializer.deserializeStruct(T) catch
+        \\            return deserializer.raiseError(error.UnexpectedToken);
+        \\        var values: std.StringArrayHashMapUnmanaged(JsonValue) = .empty;
+        \\        errdefer values.deinit(allocator);
+        \\        while (try map.nextKey(allocator)) |key| {
+        \\            const owned_key = allocator.dupe(u8, key) catch
+        \\                return deserializer.raiseError(error.OutOfMemory);
+        \\            const value = map.nextValue(JsonValue, allocator) catch |err| {
+        \\                allocator.free(owned_key);
+        \\                return err;
+        \\            };
+        \\            values.put(allocator, owned_key, value) catch {
+        \\                allocator.free(owned_key);
+        \\                return deserializer.raiseError(error.OutOfMemory);
+        \\            };
+        \\        }
+        \\        return .{ .object = values };
+        \\    }
+        \\
+        \\    pub fn zerdeSerialize(self: JsonValue, serializer: anytype) @TypeOf(serializer.*).Error!void {
+        \\        switch (self) {
+        \\            .null_value => return serializer.serializeNull(),
+        \\            .boolean => |value| return serializer.serializeBool(value),
+        \\            .integer => |value| return serializer.serializeInt(value),
+        \\            .float => |value| return serializer.serializeFloat(value),
+        \\            .string => |value| return serializer.serializeString(value),
+        \\            .array => |values| {
+        \\                var array = try serializer.beginArray();
+        \\                for (values) |value| try value.zerdeSerialize(&array);
+        \\                return array.end();
+        \\            },
+        \\            .object => |values| {
+        \\                var object = try serializer.beginStruct();
+        \\                var iterator = values.iterator();
+        \\                while (iterator.next()) |entry| {
+        \\                    try object.serializeEntry(entry.key_ptr.*, entry.value_ptr.*);
+        \\                }
+        \\                return object.end();
+        \\            },
+        \\        }
+        \\    }
+        \\};
+        \\
+        \\
+    );
+}
+
+fn renderModelSerdeOptions(
+    allocator: std.mem.Allocator,
+    w: *std.Io.Writer,
+    model: cm.Model,
+) !void {
+    try w.writeAll("\n    pub const serde = .{\n        .rename_all = .camel_case,\n");
+    var has_renames = false;
+    for (model.fields) |field| {
+        const camel = try naming.toCamelCase(allocator, field.name);
+        defer allocator.free(camel);
+        if (!std.mem.eql(u8, camel, field.serialized_name)) {
+            if (!has_renames) {
+                try w.writeAll("        .rename = .{\n");
+                has_renames = true;
+            }
+            const id = try ids.quoteIfNeeded(allocator, field.name);
+            defer allocator.free(id);
+            try w.print("            .{s} = \"{s}\",\n", .{ id, field.serialized_name });
+        }
+    }
+    if (has_renames) try w.writeAll("        },\n");
+    if (model.additional_properties != null) {
+        try w.writeAll("        .skip = .{ .additional_properties = .always },\n");
+    }
+    try w.writeAll("    };\n");
+}
+
+fn renderOpenModelMethods(
+    allocator: std.mem.Allocator,
+    w: *std.Io.Writer,
+    model: cm.Model,
+) !void {
+    try w.writeAll(
+        \\
+        \\    pub fn zerdeDeserialize(
+        \\        comptime T: type,
+        \\        allocator: std.mem.Allocator,
+        \\        deserializer: anytype,
+        \\    ) @TypeOf(deserializer.*).Error!T {
+        \\        var result: T = .{};
+        \\        var map = try deserializer.deserializeStruct(T);
+        \\        while (try map.nextKey(allocator)) |key| {
+        \\
+    );
+    for (model.fields) |field| {
+        const id = try ids.quoteIfNeeded(allocator, field.name);
+        defer allocator.free(id);
+        const ty = try renderFieldType(allocator, field.field_type, field.optional, .models);
+        defer allocator.free(ty);
+        try w.print(
+            \\            if (std.mem.eql(u8, key, "{s}")) {{
+            \\                result.{s} = try map.nextValue({s}, allocator);
+            \\                continue;
+            \\            }}
+            \\
+        , .{ field.serialized_name, id, ty });
+    }
+    try w.writeAll(
+        \\            const owned_key = allocator.dupe(u8, key) catch
+        \\                return deserializer.raiseError(error.OutOfMemory);
+        \\            const value = map.nextValue(JsonValue, allocator) catch |err| {
+        \\                allocator.free(owned_key);
+        \\                return err;
+        \\            };
+        \\            result.additional_properties.put(allocator, owned_key, value) catch {
+        \\                allocator.free(owned_key);
+        \\                return deserializer.raiseError(error.OutOfMemory);
+        \\            };
+        \\        }
+        \\        return result;
+        \\    }
+        \\
+        \\    pub fn zerdeSerialize(self: @This(), serializer: anytype) @TypeOf(serializer.*).Error!void {
+        \\        var object = try serializer.beginStruct();
+        \\
+    );
+    for (model.fields) |field| {
+        const id = try ids.quoteIfNeeded(allocator, field.name);
+        defer allocator.free(id);
+        if (field.optional) {
+            try w.print(
+                \\        if (self.{s}) |value| try object.serializeField("{s}", value);
+                \\
+            , .{ id, field.serialized_name });
+        } else {
+            try w.print(
+                \\        try object.serializeField("{s}", self.{s});
+                \\
+            , .{ field.serialized_name, id });
+        }
+    }
+    try w.writeAll(
+        \\        var iterator = self.additional_properties.iterator();
+        \\        while (iterator.next()) |entry| {
+        \\            try object.serializeEntry(entry.key_ptr.*, entry.value_ptr.*);
+        \\        }
+        \\        return object.end();
+        \\    }
+        \\
+    );
 }
 
 // ─── enums.zig ────────────────────────────────────────────────────────
@@ -1264,4 +2099,75 @@ test "display_name surfaces in root.zig + README, not build.zig" {
     defer alloc.free(zon);
     try testing.expect(std.mem.indexOf(u8, zon, ".name = .arm_avs") != null);
     try testing.expect(std.mem.indexOf(u8, zon, "arm-avs") == null);
+}
+
+test "bodyless success status alternatives preserve the void API" {
+    var statuses = [_]std.json.Value{ .{ .integer = 200 }, .{ .integer = 204 } };
+    var statuses_200 = [_]std.json.Value{.{ .integer = 200 }};
+    var statuses_204 = [_]std.json.Value{.{ .integer = 204 }};
+    var responses = [_]cm.ResponseVariant{
+        .{ .status_codes = &statuses_200, .body_kind = "none" },
+        .{ .status_codes = &statuses_204, .body_kind = "none" },
+    };
+    const method: cm.Method = .{
+        .name = "delete_item",
+        .name_camel = "deleteItem",
+        .http_method = "delete",
+        .path = "/items/{name}",
+        .response = .{ .status_codes = &statuses },
+        .responses = &responses,
+    };
+    try std.testing.expect(!usesProtocolResult(method));
+}
+
+test "optional JSON request bodies are omitted when null" {
+    const allocator = std.testing.allocator;
+    const optional_payload = cm.TypeRef{
+        .kind = "Model",
+        .value = .{ .string = "Payload" },
+    };
+    var user_parameters = [_]cm.UserParameter{
+        .{
+            .name = "payload",
+            .method_name = "payload",
+            .param_type = optional_payload,
+            .optional = true,
+        },
+    };
+    var methods = [_]cm.Method{
+        .{
+            .name = "update",
+            .name_camel = "update",
+            .http_method = "patch",
+            .path = "/item",
+            .user_parameters = &user_parameters,
+            .body_parameter = .{
+                .user_param_name = "payload",
+                .content_type = "application/json",
+                .body_type = optional_payload,
+                .serialization_kind = "json",
+            },
+            .response = .{},
+        },
+    };
+    var clients_model = [_]cm.Client{
+        .{
+            .name = "OptionalBodyClient",
+            .endpoint = .{ .name = "endpoint" },
+            .methods = &methods,
+        },
+    };
+    const model: cm.CodeModel = .{
+        .package_name = "optional_body",
+        .package_version = "0.1.0",
+        .target_kind = "client",
+        .service_kind = "azure-dataplane",
+        .clients = &clients_model,
+    };
+
+    const clients = try renderClients(allocator, model);
+    defer allocator.free(clients);
+    try std.testing.expect(std.mem.indexOf(u8, clients, "if (payload) |body| {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, clients, "req.body = bytes;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, clients, "toSlice(alloc, payload)") == null);
 }
