@@ -388,6 +388,22 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
 
+    // Kusto error tests — needs core + serde
+    {
+        const t = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("sdk/kusto/error.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "azure_core", .module = core_mod },
+                    .{ .name = "serde", .module = serde_mod },
+                },
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(t).step);
+    }
+
     // Kusto common tests — needs core + identity
     {
         const t = b.addTest(.{

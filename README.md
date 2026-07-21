@@ -166,6 +166,7 @@ Metadata can expose the login authority for a sovereign or private cloud, but `T
 - In the current synchronous buffered transport, the client timeout bounds retries and backoff only; it cannot interrupt an in-flight `std.http` request. Hard cancellation is deferred to future streaming and cancellation transport work.
 - Explicit application, user, version, and request-ID headers override defaults. Results expose owned `client_request_id` and `activity_id`; dataset `deinit` frees them.
 - Queries may retry; management operations and streaming ingestion remain non-retryable.
+- Kusto `*Result` APIs return `KustoResult(T)`: `.ok`, `.partial` (possibly unreliable decoded buffered tables plus an owned `KustoError`), or `.err`; call `deinit`. A streaming `.err` records `.known_not_accepted` for a received non-2xx response and `.unknown` with the transport cause after transport entry fails, while pre-transport credential/policy errors stay in the outer Zig error union. Permanent and partial failures are never retryable.
 
 ### Infrastructure
 
