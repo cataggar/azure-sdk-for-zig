@@ -112,7 +112,7 @@ azure-core-amqp: azure-uamqp-zig (pure Zig AMQP 1.0)
 | `azure_messaging_eventhubs_checkpointstore_blob` | Blob-backed checkpoint store |
 | `azure_messaging_servicebus` | `ServiceBusSenderClient`, `ServiceBusReceiverClient`, `ServiceBusAdministrationClient` |
 | `azure_kusto_data` | `KustoClient` (experimental buffered and progressive query plus management support) |
-| `azure_kusto_ingest` | `StreamingIngestClient` (experimental direct streaming ingestion); queued ingestion and managed queued fallback are planned, not implemented |
+| `azure_kusto_ingest` | `StreamingIngestClient` for direct, bounded-memory streaming ingestion; queued ingestion and managed queued fallback are not implemented |
 
 Kusto datasets and non-null ingestion IDs are allocator-owned; call their `deinit` methods when finished. Buffered Kusto datasets retain the raw response and tagged `KustoFrame` slices (including unknown V2 frames), decode V1 plus normal, progressive, and fragmented V2 tables into owned `KustoValue` values (null, strings, booleans, integers, reals, and Kusto lexical types), and preserve dynamic or unknown cells as raw JSON. Progressive query events instead own one exact raw V2 frame at a time and retain only table schemas and row counts in stream state.
 
@@ -159,6 +159,26 @@ Set `.metadata_mode = .disabled` for offline or custom bootstrap control. Trust 
 
 Metadata can expose the login authority for a sovereign or private cloud, but `TokenCredential` is an opaque credential boundary: Kusto cannot reconfigure a generic credential at runtime. Callers using those clouds must construct or configure their credential for the discovered authority themselves; do not assume that every `azure_core` credential supports runtime authority changes.
 
+### Kusto direct streaming ingestion
+
+`StreamingIngestClient.ingestResult` accepts a `StreamingIngestTarget` and a runtime `StreamingIngestSource`: borrowed bytes, a local file, a borrowed one-shot `std.Io.Reader`, a replay-reader factory, or an existing blob URI. Files and readers stream through `HttpPipeline.open`; they are not loaded wholly into memory. Direct streaming is limited to a 4 MiB uncompressed source.
+
+```zig
+const ingest = @import("azure_kusto_ingest");
+var client = ingest.StreamingIngestClient.initWithConnection(connection);
+var result = try client.ingestFromFileResult(
+    allocator,
+    .{ .database = "db", .table = "events" },
+    "events.ndjson",
+    .{ .format = .json, .mapping_name = "EventsMapping" },
+);
+defer result.deinit(allocator);
+```
+
+Raw sources use incremental request gzip by default; set `.compression = .none` to send an uncompressed request body. Direct URI sources use the protocol's `sourceKind=uri` JSON body and require `.compression = .none`. Direct streaming accepts CSV, TSV, SCsv, SOHsv, PSV, JSON, MultiJSON, and Avro; JSON, MultiJSON, and Avro require a named mapping. Named mappings are URL-encoded and supported; inline mappings, extent tags/`ingest_if_not_exists`, creation time, validation policy, and first-record skipping are queued-ingestion properties and fail locally before a transport call.
+
+One-shot readers are never retried. Bytes, files, URI sources, and explicit `ReplayReaderFactory` sources may retry only after a received retryable non-2xx response, reopening the source for each attempt while retaining one logical source ID. Source-aware retries honor bounded `Retry-After` delays and otherwise use bounded exponential backoff. A received failure is `.known_not_accepted`; an upload or transport failure after transport entry is `.unknown` and is never replayed. `JsonRows(Row).ndjson` and `.mapping` provide typed serde JSON/NDJSON bytes and a named-mapping definition helper.
+
 ### Kusto request properties, timeouts, and retries
 
 `ClientRequestProperties` emits object-valued `Options` and `Parameters` through structured serde values. Dynamic setters own their keys and values and require `deinit`; borrowed header strings must outlive the request.
@@ -171,7 +191,7 @@ Metadata can expose the login authority for a sovereign or private cloud, but `T
 - V2 buffered decoding requires a `DataSetHeader` first and `DataSetCompletion` last. It reconstructs progressive or fragmented `DataAppend`/`DataReplace` frames by table ID, treats row-embedded OneAPI errors as partial results, retains unknown frames, and exposes table/row iterators plus ID, kind, primary, properties, and status selectors.
 - `executeProgressiveQuery` forces the V2 progressive result options, consumes one complete object from the top-level JSON array at a time, and enforces `max_frame_bytes` plus `max_table_count`. Its `ProgressiveFrame` values own exact raw JSON until `deinit`; `DataAppend` and `DataReplace` remain explicit rather than being flattened. Frame, table, and row pull adapters are exclusive. The row adapter emits one null-row `replace` reset before every replacement batch, followed by append row events, and retains table/dataset completion events so partial failures and cancellation remain visible. All row-adapter payloads are borrowed until its next call.
 - Call `ProgressiveQueryStream.finish` to drain and validate the full response. Calling `deinit` without `finish` intentionally aborts without draining. `cancel` first cancels the local operation, then sends a non-retryable management `.cancel query` command targeting the original query `x-ms-client-request-id`; its management result is structured as `KustoResult(KustoResponseDataSet)`.
-- Queries may retry; management operations and streaming ingestion remain non-retryable.
+- Queries may retry; management operations remain non-retryable. Direct streaming disables generic pipeline retry and performs only bounded, source-aware Kusto-layer retries for explicitly replayable sources after known-not-accepted retryable HTTP responses.
 - Kusto `*Result` APIs return `KustoResult(T)`: `.ok`, `.partial` (possibly unreliable decoded buffered tables plus an owned `KustoError`), or `.err`; call `deinit`. A streaming `.err` records `.known_not_accepted` for a received non-2xx response and `.unknown` with the transport cause after transport entry fails, while pre-transport credential/policy errors stay in the outer Zig error union. Permanent and partial failures are never retryable.
 
 ### Progressive Kusto queries
