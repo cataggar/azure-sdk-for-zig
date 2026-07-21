@@ -82,24 +82,53 @@ pub const ManagedIdentityCredential = struct {
             return error.AuthenticationFailed;
         }
 
-        const parse = @import("client_secret.zig");
-        return parse.parseTokenResponse(allocator, resp.body);
+        return parseImdsTokenResponse(allocator, resp.body);
     }
 };
+
+/// Parse the IMDS token response, whose expiry values are JSON strings.
+fn parseImdsTokenResponse(allocator: std.mem.Allocator, body: []const u8) !AccessToken {
+    const parsed = std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        body,
+        .{},
+    ) catch return error.InvalidTokenResponse;
+    defer parsed.deinit();
+
+    if (parsed.value != .object) return error.InvalidTokenResponse;
+    const token_value = parsed.value.object.get("access_token") orelse
+        return error.InvalidTokenResponse;
+    const expires_value = parsed.value.object.get("expires_on") orelse
+        return error.InvalidTokenResponse;
+    if (token_value != .string) return error.InvalidTokenResponse;
+    if (token_value.string.len == 0) return error.InvalidTokenResponse;
+
+    const expires_on = switch (expires_value) {
+        .string => |value| std.fmt.parseInt(i64, value, 10) catch
+            return error.InvalidTokenResponse,
+        .integer => |value| value,
+        else => return error.InvalidTokenResponse,
+    };
+    if (expires_on <= 0) return error.InvalidTokenResponse;
+    const token = try allocator.dupe(u8, token_value.string);
+    return .{ .token = token, .expires_on = expires_on, .allocator = allocator };
+}
 
 test "ManagedIdentityCredential" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"msi-token","expires_in":86400}
+        \\{"access_token":"msi-token","expires_in":"86400","expires_on":"1743523200"}
     );
     defer mock.deinit();
     var cred = ManagedIdentityCredential.init(allocator, mock.asTransport());
-    const token = try cred.asCredential().getToken(
+    var token = try cred.asCredential().getToken(
         .{ .scopes = &.{"https://vault.azure.net/.default"} },
         Context.none,
     );
-    defer allocator.free(token.token);
+    defer token.deinit();
     try std.testing.expectEqualStrings("msi-token", token.token);
+    try std.testing.expectEqual(@as(i64, 1743523200), token.expires_on);
     try std.testing.expectEqual(core.http.Method.GET, mock.last_method.?);
     // Verify URL contains resource without /.default.
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "resource=https://vault.azure.net") != null);
@@ -108,16 +137,25 @@ test "ManagedIdentityCredential" {
 test "ManagedIdentityCredential with client_id" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"msi-ua","expires_in":3600}
+        \\{"access_token":"msi-ua","expires_on":1743523200}
     );
     defer mock.deinit();
     var cred = ManagedIdentityCredential.init(allocator, mock.asTransport());
     cred.withClientId("user-assigned-id");
-    const token = try cred.asCredential().getToken(
+    var token = try cred.asCredential().getToken(
         .{ .scopes = &.{"https://storage.azure.com/.default"} },
         Context.none,
     );
-    defer allocator.free(token.token);
+    defer token.deinit();
     try std.testing.expectEqualStrings("msi-ua", token.token);
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "client_id=user-assigned-id") != null);
+}
+
+test "parseImdsTokenResponse rejects invalid expiry" {
+    try std.testing.expectError(
+        error.InvalidTokenResponse,
+        parseImdsTokenResponse(std.testing.allocator,
+            \\{"access_token":"msi-token","expires_on":"not-a-timestamp"}
+        ),
+    );
 }
