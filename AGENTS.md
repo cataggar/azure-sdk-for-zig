@@ -7,8 +7,8 @@ This document provides guidance for AI agents (Copilot, etc.) working on this re
 ```bash
 zig build                     # compile SDK + example
 zig build test --summary all  # run all tests (must pass before committing)
-zig fmt sdk/ build.zig        # format code (CI enforces this)
-zig fmt --check sdk/ build.zig # check formatting without modifying
+zig fmt sdk/ examples/ build.zig        # format code (CI enforces this)
+zig fmt --check sdk/ examples/ build.zig # check formatting without modifying
 ```
 
 ## Repository Structure

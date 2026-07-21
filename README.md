@@ -15,20 +15,43 @@ Pure Zig implementation of Azure service clients with **zero C dependencies**.
 ```zig
 const std = @import("std");
 const core = @import("azure_core");
-const identity = @import("azure_identity");
+const identity = core.identity;
+const kusto_common = @import("azure_kusto_common");
+const kusto_data = @import("azure_kusto_data");
 
-// Authenticate with DefaultAzureCredential (env vars, managed identity, or CLI).
-var transport = core.http.StdHttpTransport.init(allocator, io);
-var cred = identity.DefaultAzureCredential.init(allocator, transport.asTransport(), std.posix.environ);
+pub fn main(init: std.process.Init) !void {
+    // Authenticate with environment, workload identity, managed identity, or Azure CLI.
+    var transport = core.http.StdHttpTransport.init(init.gpa, init.io);
+    defer transport.deinit();
+    var credential = try identity.DefaultAzureCredential.init(
+        init.gpa,
+        init.io,
+        transport.asTransport(),
+        init.environ_map,
+    );
+    defer credential.deinit();
 
-// Use any service client.
-var client = @import("azure_keyvault_secrets").SecretClient.init(
-    "https://myvault.vault.azure.net",
-    cred.asCredential(),
-    transport.asTransport(),
-    .{},
-);
-const secret = try client.getSecret(allocator, "my-secret");
+    var builder = kusto_common.KustoConnectionStringBuilder.init(
+        "https://mycluster.kusto.windows.net",
+    );
+    _ = builder.withTokenCredential(credential.asCredential());
+    const connection = try kusto_common.KustoConnection.init(
+        init.gpa,
+        builder.build(),
+        transport.asTransport(),
+        .{},
+    );
+    defer connection.deinit();
+
+    var client = kusto_data.KustoClient.initWithConnection(connection, .{});
+    var result = try client.executeQueryResult(
+        init.gpa,
+        "MyDatabase",
+        "print SDK='azure-sdk-for-zig'",
+        null,
+    );
+    defer result.deinit(init.gpa);
+}
 ```
 
 ## Build & Test
@@ -39,6 +62,8 @@ Requires [Zig 0.16.0](https://ziglang.org/download/) or later.
 zig build           # compile SDK + example
 zig build test      # run all tests
 zig build run       # run the example app
+zig build run-kusto-examples -- default-query
+zig build kusto-live-test     # skips unless Kusto is configured
 ```
 
 ## Architecture
@@ -144,6 +169,50 @@ resource discovery, queued-ingestion schema, retry, or status handling is
 included.
 
 Kusto datasets and non-null ingestion IDs are allocator-owned; call their `deinit` methods when finished. Buffered Kusto datasets retain the raw response and tagged `KustoFrame` slices (including unknown V2 frames), decode V1 plus normal, progressive, and fragmented V2 tables into owned `KustoValue` values (null, strings, booleans, integers, reals, and Kusto lexical types), and preserve dynamic or unknown cells as raw JSON. Progressive query events instead own one exact raw V2 frame at a time and retain only table schemas and row counts in stream state.
+
+### Kusto feature matrix
+
+| Capability | Primary API | Result and ownership | Important constraints |
+|------------|-------------|----------------------|-----------------------|
+| Buffered query | `KustoClient.executeQueryResult` | `KustoResult(KustoResponseDataSet)`; call `deinit` | Retries received retryable query failures within the request budget |
+| Typed parameters and rows | `kql.QueryParameters`, `kql.Builder`, `KustoRowDecoder` | Bound properties and builders own allocations; typed rows require `deinitRow` | Runtime values are parameters, never interpolated KQL |
+| Progressive query | `KustoClient.executeProgressiveQuery` | Heap-owned `ProgressiveQueryStream`; finish or abort, then `deinit` | One exclusive frame/table/row consumer; bounded frames and table state |
+| Management | `KustoClient.executeMgmtResult` | `KustoResult(KustoResponseDataSet)`; call `deinit` | Management commands are deliberately non-retryable |
+| Direct streaming ingestion | `StreamingIngestClient.ingestResult` | `KustoResult(IngestionResult)`; call `deinit` | At most 4 MiB raw; JSON/MultiJSON/Avro require a named mapping |
+| Queued ingestion | `QueuedIngestClient.ingest` | `QueuedIngestionResult`; call `deinit` | Queue acceptance is submission only; resource discovery and complete-SAS storage are required |
+| Managed routing and fallback | `ManagedIngestClient.ingestResult` | `KustoResult(ManagedIngestionResult)`; call `deinit` | Fallback occurs only after a replayable retryable known-not-accepted direct failure |
+| Queued status | `StatusTrackingHandle.poll` | Owned `StatusPollOutcome`; call `deinit` | Requires table reporting; only `succeeded` is terminal success |
+
+### Executable Kusto examples and live tests
+
+`examples/kusto/main.zig` is one executable runner whose subcommands cover default-credential query, typed parameter query, management, progressive iteration, direct streaming ingestion, queued submission, managed routing/fallback policy, and status polling:
+
+```bash
+export KUSTO_CLUSTER_URL='https://<cluster>.<region>.kusto.windows.net'
+export KUSTO_DATABASE='<database>'
+
+zig build run-kusto-examples -- default-query
+zig build run-kusto-examples -- typed-query
+zig build run-kusto-examples -- management
+zig build run-kusto-examples -- progressive
+```
+
+Ingestion scenarios additionally require `KUSTO_TARGET_TABLE` and `KUSTO_TARGET_MAPPING`. The default NDJSON payload contains one `Message` string field; override it with `KUSTO_INGEST_DATA` when the mapping expects another shape. `KUSTO_STATUS_TIMEOUT_MS` optionally changes the two-minute polling budget.
+
+```bash
+export KUSTO_TARGET_TABLE='<table>'
+export KUSTO_TARGET_MAPPING='<json-ingestion-mapping>'
+
+zig build run-kusto-examples -- streaming
+zig build run-kusto-examples -- queued
+zig build run-kusto-examples -- managed
+zig build run-kusto-examples -- status
+zig build run-kusto-examples -- all
+```
+
+`zig build kusto-live-test` runs the same functions serially and returns successful Zig skips when the query or ingestion environment is absent. It is an explicit step and is not part of deterministic `zig build test`. `DefaultAzureCredential` still requires one usable environment, workload-identity, managed-identity, or Azure CLI source. The managed example deterministically selects Queue with a queued-only extent tag; safely forcing a real service to return the retryable direct rejection needed for live fallback is not possible, so that exact branch remains covered by mock protocol tests.
+
+The examples print only counts and enum outcomes. They do not print credentials, authorization headers, ingestion payloads, service-issued SAS URIs, or raw error bodies.
 
 ### Kusto authentication and connections
 
@@ -436,6 +505,28 @@ const decoder = try table.rowDecoder(Row);
 var row = try decoder.rowAs(&table.rows[0], allocator);
 defer Decoder.deinitRow(&row, allocator);
 ```
+
+### Kusto compatibility and migration
+
+Valid legacy entry points remain for the current compatibility release, but authenticated applications should migrate now:
+
+| Previous entry point or assumption | Current migration |
+|------------------------------------|-------------------|
+| `KustoClient.init`, `StreamingIngestClient.init`, `QueuedIngestClient.init`, or `ManagedIngestClient.init` with authentication fields | Create one owned `KustoConnection`, then use each client's `initWithConnection` constructor |
+| `withAadAppKey` | Supply a `TokenCredential` through `withTokenCredential`; app-key connection creation returns `AadAppKeyAuthenticationUnsupported` |
+| `executeQuery`, `executeMgmt`, or `execute` generic failures | Prefer the corresponding `*Result` API to retain structured `.ok`, `.partial`, and `.err` outcomes |
+| `ingestFromSlice*` and `ingestFromBlob*` compatibility wrappers | Prefer runtime-source `ingestResult`/`ingest`; flattening wrappers intentionally discard queued attempts and status tracking |
+| Any string as a queued or managed source ID | Supply a nonzero canonical UUID or omit it for secure generation; uppercase UUIDs normalize to lowercase |
+| Queue acceptance as completed ingestion | Treat it only as submission; request table reporting and poll a transferred `StatusTrackingHandle` for terminal status |
+| Borrowed response strings or implicit cleanup | Treat datasets, errors, ingestion IDs, frames, status values, and typed rows as owned according to their documented `deinit` method |
+
+`KustoConnection` and clients derived from it are serialized-use only; externally synchronize shared calls. Cancellation and deadlines are best-effort boundaries between reads, retries, and storage phases and cannot interrupt an already-blocking system call. Unknown streaming or Queue outcomes are deliberately not replayed. Endpoint discovery accepts only trusted Kusto origins unless an exact additional host is configured. Complete-SAS Blob, Queue, and Table clients never receive the Kusto bearer credential, reject redirects, and redact SAS query values from formatting.
+
+These compatibility wrappers are retained for one release so valid older call sites can migrate without an immediate source break. Unavoidable behavior changes remain: legacy app-key authentication is rejected, real queued submission distinguishes rejected/unknown/pre-Queue outcomes, and allocator-owned result graphs require explicit cleanup.
+
+### Kusto parity references
+
+Kusto behavior and protocol choices were compared against the [Rust SDK](https://github.com/Azure/azure-kusto-rust), [Go SDK](https://github.com/Azure/azure-kusto-go), [Java SDK](https://github.com/Azure/azure-kusto-java), the [Kusto REST API](https://learn.microsoft.com/azure/data-explorer/kusto/api/rest/), and the [Kusto ingestion client reference](https://learn.microsoft.com/azure/data-explorer/kusto/api/netfx/kusto-ingest-client-reference). Zig intentionally stays stricter where replay or acceptance is ambiguous.
 
 ### Infrastructure
 
