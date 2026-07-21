@@ -439,7 +439,6 @@ pub const HttpTransport = struct {
     ) anyerror!*HttpOperation = null,
 
     pub fn send(self: *HttpTransport, request: *Request) !Response {
-        request.transport_started = true;
         return sendFollowingRedirects(self, request);
     }
 
@@ -448,7 +447,6 @@ pub const HttpTransport = struct {
         request: *Request,
         options: OpenOptions,
     ) !*HttpOperation {
-        request.transport_started = true;
         return openFollowingRedirects(self, request, options);
     }
 };
@@ -462,6 +460,7 @@ fn sendFollowingRedirects(transport: *HttpTransport, request: *Request) !Respons
 
     var redirect_count: usize = 0;
     while (true) {
+        current.transport_started = true;
         var response = try transport.sendFn(transport, current);
         const action = redirectAction(
             response.status_code,
@@ -571,9 +570,13 @@ fn rawOpen(
     request: *Request,
     options: OpenOptions,
 ) !*HttpOperation {
-    if (transport.openFn) |openFn| return openFn(transport, request, options);
-    if (options.body != null) return error.StreamingRequestUnsupported;
     try checkCancelled(options.cancellation);
+    if (transport.openFn) |openFn| {
+        request.transport_started = true;
+        return openFn(transport, request, options);
+    }
+    if (options.body != null) return error.StreamingRequestUnsupported;
+    request.transport_started = true;
     return BufferedOperation.openRaw(transport, request);
 }
 
@@ -608,8 +611,14 @@ const ResolvedRedirect = struct {
 };
 
 fn resolveRedirect(request: *const Request, location: []const u8) !ResolvedRedirect {
-    const resolved = try url_mod.resolveAndValidateUrl(request.allocator, request.url, location, &.{});
+    var resolved = try url_mod.resolveUrl(request.allocator, request.url, location);
     errdefer request.allocator.free(resolved);
+    if (std.mem.indexOfScalar(u8, resolved, '#')) |fragment_start| {
+        const without_fragment = try request.allocator.dupe(u8, resolved[0..fragment_start]);
+        request.allocator.free(resolved);
+        resolved = without_fragment;
+    }
+    try url_mod.validateHttpsUrl(resolved, &.{});
     return .{
         .allocator = request.allocator,
         .url = resolved,
@@ -641,14 +650,12 @@ const OwnedRedirectRequest = struct {
         errdefer self.request.deinit();
         var headers = source.headers.iterator();
         while (headers.next()) |header| {
-            if (cross_origin and std.ascii.eqlIgnoreCase(header.key_ptr.*, "Authorization"))
-                continue;
+            if (isRedirectOmittedHeader(header.key_ptr.*, cross_origin)) continue;
             if (drop_body and isBodyHeader(header.key_ptr.*)) continue;
             try self.request.setHeader(header.key_ptr.*, header.value_ptr.*);
         }
         self.request.body = if (drop_body) null else source.body;
         self.request.retryable = source.retryable;
-        self.request.transport_started = true;
         self.request.redirect_policy = source.redirect_policy;
         self.request.operation_timeout_ms = source.operation_timeout_ms;
         return self;
@@ -660,6 +667,15 @@ const OwnedRedirectRequest = struct {
         self.allocator.destroy(self);
     }
 };
+
+fn isRedirectOmittedHeader(name: []const u8, cross_origin: bool) bool {
+    if (std.ascii.eqlIgnoreCase(name, "Host")) return true;
+    if (!cross_origin) return false;
+    return std.ascii.eqlIgnoreCase(name, "Authorization") or
+        std.ascii.eqlIgnoreCase(name, "Cookie") or
+        std.ascii.eqlIgnoreCase(name, "Cookie2") or
+        std.ascii.eqlIgnoreCase(name, "Proxy-Authorization");
+}
 
 fn isBodyHeader(name: []const u8) bool {
     return std.ascii.eqlIgnoreCase(name, "Content-Length") or
@@ -1529,6 +1545,9 @@ pub const SequenceMockTransport = struct {
     transport: HttpTransport,
     captured_methods: [16]?Method = .{null} ** 16,
     captured_authorization: [16]bool = .{false} ** 16,
+    captured_cookie: [16]bool = .{false} ** 16,
+    captured_proxy_authorization: [16]bool = .{false} ** 16,
+    captured_host: [16]bool = .{false} ** 16,
     captured_content_type: [16]bool = .{false} ** 16,
     captured_content_length: [16]bool = .{false} ** 16,
     captured_transfer_encoding: [16]bool = .{false} ** 16,
@@ -1649,6 +1668,10 @@ pub const SequenceMockTransport = struct {
         const call = self.call_count;
         self.captured_methods[call] = request.method;
         self.captured_authorization[call] = request.getHeader("Authorization") != null;
+        self.captured_cookie[call] = request.getHeader("Cookie") != null;
+        self.captured_proxy_authorization[call] =
+            request.getHeader("Proxy-Authorization") != null;
+        self.captured_host[call] = request.getHeader("Host") != null;
         self.captured_content_type[call] = request.getHeader("Content-Type") != null;
         self.captured_content_length[call] = request.getHeader("Content-Length") != null;
         self.captured_transfer_encoding[call] = request.getHeader("Transfer-Encoding") != null;
@@ -1687,6 +1710,35 @@ test "request init and set header" {
     try std.testing.expectEqualStrings("application/json", req.getHeader("ACCEPT").?);
     try std.testing.expectError(error.InvalidHttpHeaderName, req.setHeader("bad name", "value"));
     try std.testing.expectError(error.InvalidHttpHeaderValue, req.setHeader("x-value", "one\r\ntwo"));
+}
+
+test "streaming preflight failures do not mark transport as started" {
+    const allocator = std.testing.allocator;
+    var mock = MockTransport.init(allocator, 200, "ok");
+    defer mock.deinit();
+    mock.transport.openFn = null;
+
+    var unsupported_request = Request.init(allocator, .POST, "https://example.com/upload");
+    defer unsupported_request.deinit();
+    var source = std.Io.Reader.fixed("body");
+    try std.testing.expectError(
+        error.StreamingRequestUnsupported,
+        mock.asTransport().open(&unsupported_request, .{
+            .body = StreamingRequestBody.knownLength(&source, 4),
+        }),
+    );
+    try std.testing.expect(!unsupported_request.transport_started);
+
+    var cancelled_request = Request.init(allocator, .GET, "https://example.com/cancelled");
+    defer cancelled_request.deinit();
+    var cancellation = CancellationToken{};
+    cancellation.cancel();
+    try std.testing.expectError(
+        error.OperationCancelled,
+        mock.asTransport().open(&cancelled_request, .{ .cancellation = &cancellation }),
+    );
+    try std.testing.expect(!cancelled_request.transport_started);
+    try std.testing.expectEqual(@as(usize, 0), mock.call_count);
 }
 
 test "response isSuccess" {
@@ -1807,18 +1859,21 @@ test "ReplayableBytes rewinds without copying" {
     try std.testing.expectEqualStrings("replay-body", buffer[0..second]);
 }
 
-test "transport follows safe redirects and strips cross-origin authorization" {
+test "transport follows safe redirects without forwarding origin credentials" {
     const allocator = std.testing.allocator;
     var sequence = SequenceMockTransport.init(allocator, &.{
         .{
             .status = 307,
             .body = "",
-            .headers = &.{.{ .name = "Location", .value = "https://storage.example/blob" }},
+            .headers = &.{.{ .name = "Location", .value = "https://storage.example/blob#section" }},
         },
         .{ .status = 200, .body = "ok" },
     });
     var request = Request.init(allocator, .POST, "https://registry.example/v2/upload");
     defer request.deinit();
+    try request.setHeader("Cookie", "session=test");
+    try request.setHeader("Proxy-Authorization", "Basic test");
+    try request.setHeader("Host", "registry.example");
     try request.setHeader("Authorization", "Bearer registry-token");
     var replay = ReplayableBytes.init("payload");
     var operation = try sequence.asTransport().open(&request, .{ .body = replay.body() });
@@ -1827,6 +1882,12 @@ test "transport follows safe redirects and strips cross-origin authorization" {
     try std.testing.expectEqual(@as(usize, 2), sequence.call_count);
     try std.testing.expect(sequence.captured_authorization[0]);
     try std.testing.expect(!sequence.captured_authorization[1]);
+    try std.testing.expect(sequence.captured_cookie[0]);
+    try std.testing.expect(!sequence.captured_cookie[1]);
+    try std.testing.expect(sequence.captured_proxy_authorization[0]);
+    try std.testing.expect(!sequence.captured_proxy_authorization[1]);
+    try std.testing.expect(sequence.captured_host[0]);
+    try std.testing.expect(!sequence.captured_host[1]);
     try std.testing.expectEqual(Method.POST, sequence.captured_methods[1].?);
     try std.testing.expectEqualStrings("payload", sequence.capturedBody(0));
     try std.testing.expectEqualStrings("payload", sequence.capturedBody(1));
@@ -1844,6 +1905,8 @@ test "transport follows safe redirects and strips cross-origin authorization" {
     var buffered_request = Request.init(allocator, .PUT, "https://registry.example/v2/upload");
     defer buffered_request.deinit();
     buffered_request.body = "buffered-payload";
+    try buffered_request.setHeader("Cookie", "session=test");
+    try buffered_request.setHeader("Host", "registry.example");
     try buffered_request.setHeader("Authorization", "Bearer registry-token");
     var response = try buffered_sequence.asTransport().send(&buffered_request);
     defer response.deinit();
@@ -1851,6 +1914,8 @@ test "transport follows safe redirects and strips cross-origin authorization" {
     try std.testing.expectEqualStrings("buffered-ok", response.body);
     try std.testing.expectEqual(@as(usize, 2), buffered_sequence.call_count);
     try std.testing.expect(buffered_sequence.captured_authorization[1]);
+    try std.testing.expect(buffered_sequence.captured_cookie[1]);
+    try std.testing.expect(!buffered_sequence.captured_host[1]);
     try std.testing.expectEqual(Method.PUT, buffered_sequence.captured_methods[1].?);
     try std.testing.expectEqualStrings("buffered-payload", buffered_sequence.capturedBody(1));
     try std.testing.expectEqualStrings(
