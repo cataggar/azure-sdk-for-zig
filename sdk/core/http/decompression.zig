@@ -25,7 +25,7 @@ pub const DecompressionPolicy = struct {
     policy: HttpPolicy,
 
     pub fn init() DecompressionPolicy {
-        return .{ .policy = .{ .processFn = &processImpl } };
+        return .{ .policy = .{ .processFn = &processImpl, .prepareFn = &prepareImpl } };
     }
 
     pub fn asPolicy(self: *DecompressionPolicy) *HttpPolicy {
@@ -33,13 +33,17 @@ pub const DecompressionPolicy = struct {
     }
 
     fn processImpl(
-        _: *HttpPolicy,
+        policy: *HttpPolicy,
         request: *Request,
         next: []*HttpPolicy,
         final_transport: *HttpTransport,
     ) !Response {
-        try request.setHeader("Accept-Encoding", "gzip, deflate");
+        try prepareImpl(policy, request);
         return callNext(request, next, final_transport);
+    }
+
+    fn prepareImpl(_: *HttpPolicy, request: *Request) !void {
+        try request.setHeader("Accept-Encoding", "gzip, deflate");
     }
 };
 
@@ -65,4 +69,25 @@ test "DecompressionPolicy sets Accept-Encoding" {
     var resp = try pip.send(&req);
     defer resp.deinit();
     try std.testing.expectEqualStrings("gzip, deflate", req.headers.get("Accept-Encoding").?);
+}
+
+test "DecompressionPolicy prepares streaming request" {
+    const allocator = std.testing.allocator;
+    var mock = transport.MockTransport.init(allocator, 200, "body");
+    defer mock.deinit();
+    var decomp = DecompressionPolicy.init();
+    var policy_ptrs = [_]*HttpPolicy{decomp.asPolicy()};
+    var pip = pipeline_mod.HttpPipeline{
+        .policies = &policy_ptrs,
+        .transport_impl = mock.asTransport(),
+    };
+    var req = Request.init(allocator, .GET, "https://example.com");
+    defer req.deinit();
+    var operation = try pip.open(&req, .{});
+    defer operation.deinit();
+    try std.testing.expectEqualStrings(
+        "gzip, deflate",
+        mock.last_headers.get("Accept-Encoding").?,
+    );
+    try operation.finish();
 }
