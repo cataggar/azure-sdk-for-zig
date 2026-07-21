@@ -7,6 +7,7 @@
 const std = @import("std");
 const core = @import("azure_core");
 const kusto_common = @import("azure_kusto_common");
+const streaming = @import("streaming.zig");
 
 pub const ConnectionProperties = kusto_common.ConnectionProperties;
 pub const DataFormat = kusto_common.DataFormat;
@@ -24,177 +25,22 @@ pub const KustoErrorSource = kusto_common.KustoErrorSource;
 pub const KustoOperationOutcome = kusto_common.KustoOperationOutcome;
 pub const KustoResult = kusto_common.KustoResult;
 
-// ─────────────────── Types ───────────────────────────
-
-pub const IngestionResult = struct {
-    status: IngestionStatus,
-    outcome: KustoOperationOutcome = .accepted,
-    /// Allocator-owned when non-null; call `deinit` to release it.
-    ingestion_id: ?[]const u8 = null,
-
-    pub fn deinit(self: *IngestionResult, allocator: std.mem.Allocator) void {
-        if (self.ingestion_id) |id| allocator.free(id);
-        self.ingestion_id = null;
-    }
-};
-
-pub const IngestionStatus = enum {
-    success,
-    queued,
-    failed,
-
-    pub fn toString(self: IngestionStatus) []const u8 {
-        return switch (self) {
-            .success => "Success",
-            .queued => "Queued",
-            .failed => "Failed",
-        };
-    }
-};
-
-pub const IngestOptions = struct {
-    format: DataFormat = .csv,
-    mapping_name: ?[]const u8 = null,
-    flush_immediately: bool = false,
-};
-
-// ─────────────── StreamingIngestClient ────────────────
-
-/// Direct streaming ingestion via the engine endpoint.
-///
-/// Data is sent directly to the Kusto engine via `POST /v1/rest/ingest/{db}/{table}`.
-/// Fast but limited to small payloads (<4MB). Queued ingestion for larger or
-/// more reliable payloads is planned but not implemented.
-pub const StreamingIngestClient = struct {
-    runtime: Runtime,
-
-    const Runtime = union(enum) {
-        legacy: struct {
-            connection: ConnectionProperties,
-            pipeline: core.pipeline.HttpPipeline,
-        },
-        shared: *KustoConnection,
-    };
-
-    pub fn init(connection: ConnectionProperties, transport: *core.http.HttpTransport) StreamingIngestClient {
-        return .{
-            .runtime = .{ .legacy = .{
-                .connection = connection,
-                .pipeline = .{ .policies = &.{}, .transport_impl = transport },
-            } },
-        };
-    }
-
-    /// Creates a client borrowing `connection`.
-    ///
-    /// The connection must outlive this client and all copies of it. Shared
-    /// clients are not thread-safe; serialize use of the client and connection.
-    /// This client does not deinitialize the borrowed connection.
-    pub fn initWithConnection(connection: *KustoConnection) StreamingIngestClient {
-        return .{ .runtime = .{ .shared = connection } };
-    }
-
-    /// Ingest data from a byte slice.
-    ///
-    /// Returns `IngestionResult{ .status = .failed }` on any Azure-side
-    /// error (and logs the error). Use `ingestFromSliceResult` to receive
-    /// the structured Kusto failure and operation outcome instead.
-    pub fn ingestFromSlice(self: *StreamingIngestClient, allocator: std.mem.Allocator, database: []const u8, table: []const u8, data: []const u8, options: IngestOptions) !IngestionResult {
-        var r = try self.ingestFromSliceResult(allocator, database, table, data, options);
-        return switch (r) {
-            .ok => |v| v,
-            .partial => unreachable,
-            .err => blk: {
-                const outcome = r.err.outcome;
-                std.log.warn("{f}", .{r.err});
-                r.err.deinit();
-                break :blk .{ .status = .failed, .outcome = outcome };
-            },
-        };
-    }
-
-    /// Same as `ingestFromSlice` but exposes Kusto-side failures as `.err`.
-    /// A send failure after transport entry has `.outcome = .unknown`; a
-    /// non-2xx response is known not to have been accepted.
-    pub fn ingestFromSliceResult(self: *StreamingIngestClient, allocator: std.mem.Allocator, database: []const u8, table: []const u8, data: []const u8, options: IngestOptions) !KustoResult(IngestionResult) {
-        const url = try self.buildIngestUrl(allocator, database, table, options);
-        defer allocator.free(url);
-
-        var req = core.http.Request.init(allocator, .POST, url);
-        defer req.deinit();
-        try req.setHeader("Content-Type", "application/json");
-        try req.setHeader("Content-Encoding", "utf-8");
-        try req.setHeader("x-ms-app", "azure-sdk-zig");
-        try core.pipeline.ensureRequestId(&req);
-        req.body = data;
-        req.retryable = false;
-
-        var resp = self.send(&req) catch |err| {
-            if (req.transport_started) {
-                return .{ .err = try kusto_common.errors.transportUnknown(
-                    allocator,
-                    err,
-                    req.getHeader("x-ms-client-request-id"),
-                ) };
-            }
-            return err;
-        };
-        defer resp.deinit();
-
-        if (!resp.isSuccess()) {
-            var failure = try kusto_common.errors.fromHttpResponse(
-                allocator,
-                .streaming_ingest,
-                &resp,
-                .known_not_accepted,
-            );
-            errdefer failure.deinit();
-            try kusto_common.errors.applyResponseCorrelation(
-                &failure,
-                &resp,
-                req.getHeader("x-ms-client-request-id"),
-            );
-            return .{ .err = failure };
-        }
-
-        return .{ .ok = .{ .status = .success } };
-    }
-
-    fn buildIngestUrl(self: *StreamingIngestClient, allocator: std.mem.Allocator, database: []const u8, table: []const u8, options: IngestOptions) ![]u8 {
-        const encoded_database = try core.url.percentEncode(allocator, database);
-        defer allocator.free(encoded_database);
-        const encoded_table = try core.url.percentEncode(allocator, table);
-        defer allocator.free(encoded_table);
-
-        const cluster_url = switch (self.runtime) {
-            .legacy => |legacy| legacy.connection.cluster_url,
-            .shared => |connection| connection.engineUrl(),
-        };
-
-        if (options.mapping_name) |mapping| {
-            const encoded_mapping = try core.url.percentEncode(allocator, mapping);
-            defer allocator.free(encoded_mapping);
-            return std.fmt.allocPrint(allocator, "{s}/v1/rest/ingest/{s}/{s}?streamFormat={s}&mappingName={s}", .{
-                cluster_url, encoded_database, encoded_table, options.format.toString(), encoded_mapping,
-            });
-        }
-        return std.fmt.allocPrint(allocator, "{s}/v1/rest/ingest/{s}/{s}?streamFormat={s}", .{
-            cluster_url, encoded_database, encoded_table, options.format.toString(),
-        });
-    }
-
-    fn send(self: *StreamingIngestClient, request: *core.http.Request) !core.http.Response {
-        return switch (self.runtime) {
-            .shared => |connection| connection.send(request),
-            .legacy => |*legacy| {
-                if (connectionHasAuthentication(legacy.connection)) {
-                    return error.AuthenticatedConnectionRequired;
-                }
-                return legacy.pipeline.send(request);
-            },
-        };
-    }
-};
+pub const max_streaming_payload_bytes = streaming.max_streaming_payload_bytes;
+pub const StreamingIngestTarget = streaming.StreamingIngestTarget;
+pub const RequestCompression = streaming.RequestCompression;
+pub const ReplayReader = streaming.ReplayReader;
+pub const ReplayReaderFactory = streaming.ReplayReaderFactory;
+pub const BorrowedReaderSource = streaming.BorrowedReaderSource;
+pub const BlobUriSource = streaming.BlobUriSource;
+pub const SourceKind = streaming.SourceKind;
+pub const StreamingIngestSource = streaming.StreamingIngestSource;
+pub const ValidationPolicy = streaming.ValidationPolicy;
+pub const StreamingRetryOptions = streaming.StreamingRetryOptions;
+pub const IngestionResult = streaming.IngestionResult;
+pub const IngestionStatus = streaming.IngestionStatus;
+pub const IngestOptions = streaming.IngestOptions;
+pub const StreamingIngestClient = streaming.StreamingIngestClient;
+pub const JsonRows = streaming.JsonRows;
 
 // ─────────────── QueuedIngestClient ──────────────────
 
@@ -305,23 +151,24 @@ pub const ManagedIngestClient = struct {
     }
 };
 
-fn connectionHasAuthentication(connection: ConnectionProperties) bool {
-    return connection.credential != null or
-        connection.application_client_id != null or
-        connection.application_key != null or
-        connection.authority_id != null;
-}
-
 // ─────────────────────── Tests ───────────────────────
 
 const TransportFailure = struct {
-    transport: core.http.HttpTransport = .{ .sendFn = &send },
+    transport: core.http.HttpTransport = .{ .sendFn = &send, .openFn = &open },
 
     fn asTransport(self: *TransportFailure) *core.http.HttpTransport {
         return &self.transport;
     }
 
     fn send(_: *core.http.HttpTransport, _: *core.http.Request) anyerror!core.http.Response {
+        return error.ConnectionResetByPeer;
+    }
+
+    fn open(
+        _: *core.http.HttpTransport,
+        _: *core.http.Request,
+        _: core.http.OpenOptions,
+    ) anyerror!*core.http.HttpOperation {
         return error.ConnectionResetByPeer;
     }
 };
@@ -334,7 +181,11 @@ test "StreamingIngestClient ingestFromSlice" {
     const conn = ConnectionProperties{ .cluster_url = "https://mycluster.eastus.kusto.windows.net" };
     var client = StreamingIngestClient.init(conn, mock.asTransport());
 
-    const result = try client.ingestFromSlice(allocator, "TestDB", "Logs", "{\"ts\":\"2024-01-01\"}\n", .{ .format = .json });
+    var result = try client.ingestFromSlice(allocator, "TestDB", "Logs", "{\"ts\":\"2024-01-01\"}\n", .{
+        .format = .json,
+        .mapping_name = "LogsMapping",
+    });
+    defer result.deinit(allocator);
     try std.testing.expectEqual(IngestionStatus.success, result.status);
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "/v1/rest/ingest/TestDB/Logs") != null);
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "streamFormat=Json") != null);
@@ -349,10 +200,11 @@ test "StreamingIngestClient with mapping name" {
     const conn = ConnectionProperties{ .cluster_url = "https://cluster.kusto.windows.net" };
     var client = StreamingIngestClient.init(conn, mock.asTransport());
 
-    const result = try client.ingestFromSlice(allocator, "DB", "Table", "data", .{
+    var result = try client.ingestFromSlice(allocator, "DB", "Table", "data", .{
         .format = .csv,
         .mapping_name = "MyMapping",
     });
+    defer result.deinit(allocator);
     try std.testing.expectEqual(IngestionStatus.success, result.status);
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "mappingName=MyMapping") != null);
 }
@@ -387,7 +239,8 @@ test "shared StreamingIngestClient authenticates through KustoConnection" {
     defer connection.deinit();
 
     var client = StreamingIngestClient.initWithConnection(connection);
-    const result = try client.ingestFromSlice(allocator, "DB", "Table", "data", .{});
+    var result = try client.ingestFromSlice(allocator, "DB", "Table", "data", .{});
+    defer result.deinit(allocator);
     try std.testing.expectEqual(IngestionStatus.success, result.status);
     try std.testing.expect(token_mock.last_url != null);
     try std.testing.expect(service_mock.last_headers.get("Authorization") != null);
@@ -417,7 +270,8 @@ test "shared StreamingIngestClient uses explicit engine endpoint" {
     defer connection.deinit();
 
     var client = StreamingIngestClient.initWithConnection(connection);
-    _ = try client.ingestFromSlice(allocator, "DB", "Table", "data", .{});
+    var result = try client.ingestFromSlice(allocator, "DB", "Table", "data", .{});
+    defer result.deinit(allocator);
 
     try std.testing.expectEqualStrings(
         "https://streaming-engine.kusto.windows.net/v1/rest/ingest/DB/Table?streamFormat=Csv",
@@ -446,7 +300,8 @@ test "shared StreamingIngestClient can be copied" {
 
     const original = StreamingIngestClient.initWithConnection(connection);
     var copied = original;
-    _ = try copied.ingestFromSlice(allocator, "DB", "Table", "data", .{});
+    var result = try copied.ingestFromSlice(allocator, "DB", "Table", "data", .{});
+    defer result.deinit(allocator);
     try std.testing.expect(service_mock.last_url != null);
 }
 
@@ -470,19 +325,18 @@ test "ManagedIngestClient shared initialization composes borrowed clients" {
 
     var client = ManagedIngestClient.initWithConnection(connection);
     defer client.deinit(allocator);
-    const result = try client.ingestFromSlice(allocator, "DB", "Table", "data", .{});
+    var result = try client.ingestFromSlice(allocator, "DB", "Table", "data", .{});
+    defer result.deinit(allocator);
     try std.testing.expectEqual(IngestionStatus.success, result.status);
     try std.testing.expect(service_mock.last_headers.get("Authorization") != null);
 }
 
-test "configured shared connection does not retry streaming writes" {
+test "shared connection retries replayable streaming bytes outside generic pipeline" {
     const allocator = std.testing.allocator;
-    var service_mock = core.http.SequenceMockTransport.init(allocator, &.{
-        .{ .status = 500, .body =
+    var service_mock = core.http.MockTransport.init(allocator, 500,
         \\{"error":{"code":"ServerError","message":"retry me"}}
-        },
-        .{ .status = 200, .body = "{}" },
-    });
+    );
+    defer service_mock.deinit();
 
     var credential = core.credentials.TokenCredential{ .getTokenFn = &successfulTokenRequest };
     const properties = ConnectionProperties{
@@ -498,12 +352,14 @@ test "configured shared connection does not retry streaming writes" {
     defer connection.deinit();
 
     var client = StreamingIngestClient.initWithConnection(connection);
-    const result = try client.ingestFromSlice(allocator, "DB", "Table", "data", .{});
+    const result = try client.ingestFromSlice(allocator, "DB", "Table", "data", .{
+        .retry = .{ .initial_delay_ms = 0 },
+    });
     try std.testing.expectEqual(
         IngestionStatus.failed,
         result.status,
     );
-    try std.testing.expectEqual(@as(usize, 1), service_mock.call_count);
+    try std.testing.expectEqual(@as(usize, 2), service_mock.call_count);
 }
 
 test "StreamingIngestClient percent-encodes URL components independently" {
@@ -514,9 +370,10 @@ test "StreamingIngestClient percent-encodes URL components independently" {
     const conn = ConnectionProperties{ .cluster_url = "https://cluster.kusto.windows.net" };
     var client = StreamingIngestClient.init(conn, mock.asTransport());
 
-    _ = try client.ingestFromSlice(allocator, "DB /&?=+", "Table /&?=+", "data", .{
+    var result = try client.ingestFromSlice(allocator, "DB /&?=+", "Table /&?=+", "data", .{
         .mapping_name = "Mapping /&?=+",
     });
+    defer result.deinit(allocator);
     try std.testing.expectEqualStrings(
         "https://cluster.kusto.windows.net/v1/rest/ingest/DB%20%2F%26%3F%3D%2B/Table%20%2F%26%3F%3D%2B?streamFormat=Csv&mappingName=Mapping%20%2F%26%3F%3D%2B",
         mock.last_url.?,
@@ -691,7 +548,8 @@ test "ManagedIngestClient ingestFromSlice success" {
     var client = ManagedIngestClient.init(conn, mock.asTransport());
     defer client.deinit(allocator);
 
-    const result = try client.ingestFromSlice(allocator, "DB", "Table", "data", .{});
+    var result = try client.ingestFromSlice(allocator, "DB", "Table", "data", .{});
+    defer result.deinit(allocator);
     try std.testing.expectEqual(IngestionStatus.success, result.status);
 }
 
