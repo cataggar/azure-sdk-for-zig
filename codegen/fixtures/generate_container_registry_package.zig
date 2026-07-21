@@ -8,6 +8,26 @@ pub fn main(init: std.process.Init) !void {
     var args = init.minimal.args.iterate();
     _ = args.skip();
     const output_path = args.next() orelse return error.MissingOutputPath;
+    var azure_core_commit: ?[]const u8 = null;
+    var azure_core_hash: ?[]const u8 = null;
+    var azure_sdk_path: ?[]const u8 = null;
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--azure-core-commit")) {
+            azure_core_commit = args.next() orelse return error.MissingAzureCoreCommit;
+        } else if (std.mem.eql(u8, arg, "--azure-core-hash")) {
+            azure_core_hash = args.next() orelse return error.MissingAzureCoreHash;
+        } else if (std.mem.eql(u8, arg, "--azure-sdk-path")) {
+            azure_sdk_path = args.next() orelse return error.MissingAzureSdkPath;
+        } else {
+            return error.UnexpectedArgument;
+        }
+    }
+    if ((azure_core_commit == null) != (azure_core_hash == null)) {
+        return error.IncompleteAzureCorePin;
+    }
+    if (azure_core_commit != null and azure_sdk_path != null) {
+        return error.ConflictingAzureSdkDependency;
+    }
 
     var parsed = try std.json.parseFromSlice(
         emitter.CodeModel,
@@ -24,10 +44,22 @@ pub fn main(init: std.process.Init) !void {
     else
         try std.Io.Dir.cwd().openDir(io, parent_path, .{});
     defer parent.close(io);
+    if (std.mem.eql(u8, directory_name, ".") or
+        std.mem.eql(u8, directory_name, ".."))
+    {
+        return error.InvalidOutputPath;
+    }
+    try parent.deleteTree(io, directory_name);
     var output = try parent.createDirPathOpen(io, directory_name, .{});
     defer output.close(io);
 
-    try emitter.emit(allocator, io, output, parsed.value, .{});
+    try emitter.emit(allocator, io, output, parsed.value, .{
+        .package_name = "azure_rest_container_registry",
+        .display_name = "container-registry",
+        .azure_core_commit = azure_core_commit,
+        .azure_core_hash = azure_core_hash,
+        .azure_sdk_path = azure_sdk_path orelse "../..",
+    });
     try output.writeFile(io, .{
         .sub_path = "src/clients_test.zig",
         .data = generated_tests,
@@ -40,6 +72,55 @@ const generated_tests =
     \\const serde = @import("serde");
     \\const clients = @import("clients.zig");
     \\const models = @import("models.zig");
+    \\
+    \\test "all 29 stable operations are directly accessible" {
+    \\    try expectPublicMethods(clients.ContainerRegistryClient, &.{
+    \\        "containerRegistry",
+    \\        "containerRegistryBlob",
+    \\        "authentication",
+    \\    });
+    \\    try expectPublicMethods(clients.ContainerRegistry, &.{
+    \\        "checkDockerV2Support",
+    \\        "getManifest",
+    \\        "createManifest",
+    \\        "deleteManifest",
+    \\        "getRepositories",
+    \\        "getProperties",
+    \\        "deleteRepository",
+    \\        "updateProperties",
+    \\        "getTags",
+    \\        "getTagProperties",
+    \\        "updateTagAttributes",
+    \\        "deleteTag",
+    \\        "getManifests",
+    \\        "getManifestProperties",
+    \\        "updateManifestProperties",
+    \\    });
+    \\    try expectPublicMethods(clients.ContainerRegistryBlob, &.{
+    \\        "getBlob",
+    \\        "checkBlobExists",
+    \\        "deleteBlob",
+    \\        "mountBlob",
+    \\        "getUploadStatus",
+    \\        "uploadChunk",
+    \\        "completeUpload",
+    \\        "cancelUpload",
+    \\        "startUpload",
+    \\        "getChunk",
+    \\        "checkChunkExists",
+    \\    });
+    \\    try expectPublicMethods(clients.Authentication, &.{
+    \\        "exchangeAadAccessTokenForAcrRefreshToken",
+    \\        "exchangeAcrRefreshTokenForAcrAccessToken",
+    \\        "getAcrAccessTokenFromLogin",
+    \\    });
+    \\}
+    \\
+    \\fn expectPublicMethods(comptime Client: type, comptime methods: []const []const u8) !void {
+    \\    inline for (methods) |method| {
+    \\        try std.testing.expect(@hasDecl(Client, method));
+    \\    }
+    \\}
     \\
     \\const Mock = struct {
     \\    allocator: std.mem.Allocator,

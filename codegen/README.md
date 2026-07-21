@@ -39,7 +39,7 @@ component into a single wasm executable.
  └──────────────────────────────────────────┘
       │
       ▼
- git push origin rest/<package_name>        ← orphan branch
+ git push origin rest/<service>             ← orphan branch
 ```
 
 ## Layout
@@ -52,7 +52,7 @@ component into a single wasm executable.
 | `cli/`                            | Zig WASI emitter — `codegen-cli.wasm`, composed with `tcgc.wasm` and driven by `cli/scripts/run.sh`. |
 | `tspconfigs/`                     | Zig tool that manages `tspconfigs.yaml` (`zig build tspconfigs-update` / `-resolve`). |
 | `scripts/sync.sh`                 | Resyncs `rest/<pkg>/` from the canonical spec; overwrites only `src/models.zig` by default. |
-| `fixtures/`                       | Small JSON code-model fixtures used by emitter tests.  |
+| `fixtures/`                       | Checked-in code models and deterministic package generators used by emitter tests. |
 
 `fixtures/container_registry.json` is the checked-in wire contract for
 Container Registry API `2021-07-01`. Regenerate it from the canonical
@@ -64,18 +64,31 @@ AZURE_REST_API_SPECS=/path/to/azure-rest-api-specs \
   npm run fixture:container-registry
 ```
 
+Regenerate the tracked, entirely generator-owned ACR protocol package
+from that fixture with:
+
+```bash
+cd codegen/cli
+zig build generate-container-registry-package
+```
+
+The step replaces `rest/container_registry` and emits the package/module
+name `azure_rest_container_registry`, including its generated contract
+tests. Run it a second time and require an empty `git diff` when checking
+generator determinism.
+
 ## Branch model
 
-Each generated package lives on its own **orphan branch** named
-`rest/<package_name>`:
+Each generated package can be published from its own **orphan branch** named
+`rest/<service>`:
 
 ```
-rest/<package_name>
+rest/<service>
 ```
 
-- `<package_name>` is the snake_case Zig module name, e.g.
-  `rest/keyvault_secrets`, `rest/arm_avs` (see the `zig:` field in
-  `tspconfigs.yaml`).
+- New generated packages use the module name `azure_rest_<service>`.
+  Existing packages such as `keyvault_secrets` and `arm_avs` retain
+  their pre-convention names until migrated separately.
 - The orphan branch references `azure_core` (and friends) from `main`
   through a pinned git URL+hash in `build.zig.zon`.
 
@@ -123,7 +136,8 @@ cd ../../..
 codegen/cli/scripts/run.sh \
     ../azure-rest-api-specs/specification/keyvault/data-plane/Secrets \
     .tsp-generated/client/keyvault_secrets \
-    --package-name keyvault_secrets --display-name keyvault-secrets
+    --package-name keyvault_secrets --display-name keyvault-secrets \
+    --azure-sdk-path ../../..
 ```
 
 ## How to resync a tracked package
@@ -150,6 +164,12 @@ when onboarding a brand-new package.
 > `keyvault-secrets`) still work, but larger ARM specs OOM during
 > TypeSpec compilation. Override the engine location with
 > `STARLINGMONKEY_ENGINE=/path/to/wasm npm run build`.
+
+`rest/container_registry` is intentionally different: every package and
+source file is owned by
+`fixtures/generate_container_registry_package.zig`. Use the dedicated
+`generate-container-registry-package` step above rather than `sync.sh`;
+do not patch its generated files manually.
 
 ## References
 

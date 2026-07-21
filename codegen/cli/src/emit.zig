@@ -43,6 +43,13 @@ pub const EmitOptions = struct {
     /// build.zig.zon references `azure_core` by a local `path =` entry
     /// pointing relative to the worktree root.
     azure_core_commit: ?[]const u8 = null,
+    /// Zig package hash for `azure_core_commit`. Required whenever a
+    /// commit is supplied so release output is complete and reproducible.
+    azure_core_hash: ?[]const u8 = null,
+    /// Local path used for the `azure_sdk` dependency when
+    /// `azure_core_commit` is null. Defaults to the sibling-worktree
+    /// layout used by orphan package development.
+    azure_sdk_path: []const u8 = "../azure-sdk-for-zig",
     /// Run the in-process formatter (`std.zig.Ast.parse` +
     /// `renderAlloc`) on every `.zig` and `.zon` file before writing
     /// it out. Set to `false` to skip — useful when debugging emitter
@@ -90,7 +97,14 @@ pub fn emit(
         try writeFile(allocator, io, out_dir, "build.zig", s, opts.run_zig_fmt);
     }
     {
-        const s = try renderBuildZigZon(allocator, pkg_name, model.package_version, opts.azure_core_commit);
+        const s = try renderBuildZigZon(
+            allocator,
+            pkg_name,
+            model.package_version,
+            opts.azure_core_commit,
+            opts.azure_core_hash,
+            opts.azure_sdk_path,
+        );
         defer allocator.free(s);
         try writeFile(allocator, io, out_dir, "build.zig.zon", s, opts.run_zig_fmt);
     }
@@ -1944,25 +1958,24 @@ fn renderBuildZigZon(
     pkg_name: []const u8,
     pkg_version: []const u8,
     azure_core_commit: ?[]const u8,
+    azure_core_hash: ?[]const u8,
+    azure_sdk_path: []const u8,
 ) ![]u8 {
-    const azure_sdk_entry = if (azure_core_commit) |sha|
-        try std.fmt.allocPrint(allocator,
+    const azure_sdk_entry = if (azure_core_commit) |sha| blk: {
+        const hash = azure_core_hash orelse return error.MissingAzureCoreHash;
+        break :blk try std.fmt.allocPrint(allocator,
             \\        .azure_sdk = .{{
             \\            .url = "git+https://github.com/cataggar/azure-sdk-for-zig#{s}",
-            \\            // Hash is filled in by `zig fetch`; for now the orphan
-            \\            // branch publishes without a pinned hash and the caller
-            \\            // resolves it before commit.
+            \\            .hash = "{s}",
             \\        }},
             \\
-        , .{sha})
-    else
-        try allocator.dupe(u8,
-            \\        .azure_sdk = .{
-            \\            // During local development, point at the main worktree.
-            \\            .path = "../azure-sdk-for-zig",
-            \\        },
-            \\
-        );
+        , .{ sha, hash });
+    } else try std.fmt.allocPrint(allocator,
+        \\        .azure_sdk = .{{
+        \\            .path = "{s}",
+        \\        }},
+        \\
+    , .{azure_sdk_path});
     defer allocator.free(azure_sdk_entry);
 
     const serde_entry =
@@ -2022,7 +2035,7 @@ fn renderReadme(allocator: std.mem.Allocator, display_name: []const u8, model: c
         \\
         \\This package is produced by `codegen` from the TypeSpec
         \\specification in [`Azure/azure-rest-api-specs`](https://github.com/Azure/azure-rest-api-specs).
-        \\Do not edit the contents of `src/` by hand — they will be
+        \\Do not edit generated package files by hand — they will be
         \\overwritten on the next regeneration.
         \\
         \\## Clients
@@ -2031,7 +2044,6 @@ fn renderReadme(allocator: std.mem.Allocator, display_name: []const u8, model: c
     for (model.clients) |c| {
         try w.print("- `{s}`\n", .{c.name});
     }
-    try w.writeAll("\n");
     return try aw.toOwnedSlice();
 }
 
@@ -2095,10 +2107,78 @@ test "display_name surfaces in root.zig + README, not build.zig" {
     try testing.expect(std.mem.indexOf(u8, build_zig, "\"arm_avs\"") != null);
     try testing.expect(std.mem.indexOf(u8, build_zig, "arm-avs") == null);
 
-    const zon = try renderBuildZigZon(alloc, "arm_avs", "0.1.0", null);
+    const zon = try renderBuildZigZon(
+        alloc,
+        "arm_avs",
+        "0.1.0",
+        null,
+        null,
+        "../azure-sdk-for-zig",
+    );
     defer alloc.free(zon);
     try testing.expect(std.mem.indexOf(u8, zon, ".name = .arm_avs") != null);
     try testing.expect(std.mem.indexOf(u8, zon, "arm-avs") == null);
+}
+
+test "REST package metadata supports local and pinned azure_sdk dependencies" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    const build_zig = try renderBuildZig(alloc, "azure_rest_container_registry");
+    defer alloc.free(build_zig);
+    try testing.expect(std.mem.indexOf(
+        u8,
+        build_zig,
+        "b.addModule(\"azure_rest_container_registry\"",
+    ) != null);
+
+    const local_zon = try renderBuildZigZon(
+        alloc,
+        "azure_rest_container_registry",
+        "0.1.0",
+        null,
+        null,
+        "../..",
+    );
+    defer alloc.free(local_zon);
+    try testing.expect(std.mem.indexOf(
+        u8,
+        local_zon,
+        ".name = .azure_rest_container_registry",
+    ) != null);
+    try testing.expect(std.mem.indexOf(u8, local_zon, ".path = \"../..\"") != null);
+
+    const pinned_zon = try renderBuildZigZon(
+        alloc,
+        "azure_rest_container_registry",
+        "0.1.0",
+        "0123456789abcdef",
+        "azure_sdk-0.1.0-example",
+        "../..",
+    );
+    defer alloc.free(pinned_zon);
+    try testing.expect(std.mem.indexOf(
+        u8,
+        pinned_zon,
+        "#0123456789abcdef",
+    ) != null);
+    try testing.expect(std.mem.indexOf(
+        u8,
+        pinned_zon,
+        ".hash = \"azure_sdk-0.1.0-example\"",
+    ) != null);
+
+    try testing.expectError(
+        error.MissingAzureCoreHash,
+        renderBuildZigZon(
+            alloc,
+            "azure_rest_container_registry",
+            "0.1.0",
+            "0123456789abcdef",
+            null,
+            "../..",
+        ),
+    );
 }
 
 test "bodyless success status alternatives preserve the void API" {

@@ -28,6 +28,15 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    _ = b.addModule("azure_rest_container_registry", .{
+        .root_source_file = b.path("rest/container_registry/src/root.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "serde", .module = serde_mod },
+        },
+    });
+
     const storage_common_mod = b.addModule("azure_storage_common", .{
         .root_source_file = b.path("sdk/storage/common/root.zig"),
         .target = target,
@@ -300,6 +309,19 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_storage_common_tests.step);
     test_step.dependOn(&run_kv_secrets_tests.step);
     test_step.dependOn(&run_tables_tests.step);
+
+    const container_registry_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("rest/container_registry/src/root.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "azure_core", .module = core_mod },
+                .{ .name = "serde", .module = serde_mod },
+            },
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(container_registry_tests).step);
 
     // Service SDK tests — core + identity deps
     const service_test_sources_ci = [_][]const u8{
