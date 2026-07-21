@@ -120,7 +120,7 @@ azure-core-amqp: azure-uamqp-zig (pure Zig AMQP 1.0)
 
 | Package | Clients |
 |---------|---------|
-| `azure_sdk_container_registry` | `ContainerRegistryClient` and `ContainerRegistryContentClient` with ACR auth, manifests, and resumable blob upload; generated APIs under `protocol` |
+| `azure_sdk_container_registry` | Challenge-authenticated metadata, manifest content, resumable blob uploads, and bounded/resumable blob downloads; generated APIs under `protocol` |
 | `azure_storage_blobs` | `BlobClient`, `BlobContainerClient`, `SasBlobClient` |
 | `azure_storage_queues` | `QueueClient`, `QueueServiceClient`, `SasQueueClient` |
 | `azure_storage_files_shares` | `ShareClient`, `ShareDirectoryClient`, `ShareFileClient` |
