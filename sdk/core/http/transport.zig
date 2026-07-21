@@ -666,15 +666,26 @@ const BufferedOperation = struct {
 /// synchronization.
 pub const StdHttpTransport = struct {
     allocator: std.mem.Allocator,
-    io: std.Io,
+    /// Configure this client before the first request. On first use its exact
+    /// state is transferred to heap-owned shared storage so operations may
+    /// safely outlive the transport.
     client: std.http.Client,
+    shared_client: ?*SharedHttpClient = null,
     transport: HttpTransport,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) StdHttpTransport {
+        return initWithClient(allocator, .{ .allocator = allocator, .io = io });
+    }
+
+    /// Takes ownership of a configured client. The caller must not use or
+    /// deinitialize the supplied client after this call.
+    pub fn initWithClient(
+        allocator: std.mem.Allocator,
+        client: std.http.Client,
+    ) StdHttpTransport {
         return .{
             .allocator = allocator,
-            .io = io,
-            .client = .{ .allocator = allocator, .io = io },
+            .client = client,
             .transport = .{ .sendFn = &sendImpl, .openFn = &openImpl },
         };
     }
@@ -684,14 +695,34 @@ pub const StdHttpTransport = struct {
     }
 
     pub fn deinit(self: *StdHttpTransport) void {
-        self.client.deinit();
+        if (self.shared_client) |shared| {
+            shared.release();
+            self.shared_client = null;
+        } else {
+            self.client.deinit();
+        }
+    }
+
+    fn sharedClient(self: *StdHttpTransport) !*SharedHttpClient {
+        if (self.shared_client) |shared| return shared;
+        const shared = try self.allocator.create(SharedHttpClient);
+        shared.* = .{
+            .allocator = self.allocator,
+            .client = self.client,
+        };
+        self.shared_client = shared;
+        return shared;
     }
 
     fn sendImpl(transport: *HttpTransport, request: *Request) !Response {
         const self: *StdHttpTransport = @alignCast(@fieldParentPtr("transport", transport));
         const allocator = self.allocator;
 
-        var operation = try StdStreamingOperation.open(self, request, .{}, false);
+        var operation = try StdStreamingOperation.open(
+            try self.sharedClient(),
+            request,
+            .{},
+        );
         defer operation.deinit();
 
         const body = operation.body_reader.allocRemaining(
@@ -726,16 +757,30 @@ pub const StdHttpTransport = struct {
         options: OpenOptions,
     ) !*HttpOperation {
         const self: *StdHttpTransport = @alignCast(@fieldParentPtr("transport", transport));
-        return StdStreamingOperation.open(self, request, options, true);
+        return StdStreamingOperation.open(try self.sharedClient(), request, options);
+    }
+};
+
+const SharedHttpClient = struct {
+    allocator: std.mem.Allocator,
+    client: std.http.Client,
+    references: std.atomic.Value(usize) = std.atomic.Value(usize).init(1),
+
+    fn acquire(self: *SharedHttpClient) void {
+        _ = self.references.fetchAdd(1, .monotonic);
+    }
+
+    fn release(self: *SharedHttpClient) void {
+        if (self.references.fetchSub(1, .acq_rel) != 1) return;
+        self.client.deinit();
+        self.allocator.destroy(self);
     }
 };
 
 const StdStreamingOperation = struct {
     operation: HttpOperation,
     allocator: std.mem.Allocator,
-    client: std.http.Client,
-    client_ptr: *std.http.Client,
-    owns_client: bool,
+    shared_client: *SharedHttpClient,
     request_headers: std.StringHashMap([]const u8),
     extra_headers: []std.http.Header,
     redirect_buffer: []u8,
@@ -750,10 +795,9 @@ const StdStreamingOperation = struct {
     decompress: std.http.Decompress,
 
     fn open(
-        transport: *StdHttpTransport,
+        shared_client: *SharedHttpClient,
         request: *Request,
         options: OpenOptions,
-        owns_client: bool,
     ) !*HttpOperation {
         if (options.body != null and request.body != null) {
             return error.MultipleRequestBodies;
@@ -762,17 +806,13 @@ const StdStreamingOperation = struct {
             if (token.isCancelled()) return error.OperationCancelled;
         }
 
-        const allocator = transport.allocator;
+        const allocator = shared_client.allocator;
         const self = try allocator.create(StdStreamingOperation);
+        shared_client.acquire();
         self.* = .{
             .operation = undefined,
             .allocator = allocator,
-            .client = if (owns_client)
-                .{ .allocator = allocator, .io = transport.io }
-            else
-                undefined,
-            .client_ptr = undefined,
-            .owns_client = owns_client,
+            .shared_client = shared_client,
             .request_headers = std.StringHashMap([]const u8).init(allocator),
             .extra_headers = &.{},
             .redirect_buffer = &.{},
@@ -786,7 +826,6 @@ const StdStreamingOperation = struct {
             .upload_write_buffer = undefined,
             .decompress = undefined,
         };
-        self.client_ptr = if (owns_client) &self.client else &transport.client;
         errdefer {
             self.releaseRequest(true);
             self.cleanupStorage();
@@ -798,7 +837,7 @@ const StdStreamingOperation = struct {
         self.redirect_buffer = try allocator.alloc(u8, 8 * 1024);
 
         const uri = try std.Uri.parse(request.url);
-        self.request = try self.client_ptr.request(request.method.toStd(), uri, .{
+        self.request = try self.shared_client.client.request(request.method.toStd(), uri, .{
             .extra_headers = self.extra_headers,
             .redirect_behavior = .unhandled,
         });
@@ -974,7 +1013,7 @@ const StdStreamingOperation = struct {
         if (self.redirect_buffer.len > 0) self.allocator.free(self.redirect_buffer);
         if (self.extra_headers.len > 0) self.allocator.free(self.extra_headers);
         deinitOwnedHeaders(self.allocator, &self.request_headers);
-        if (self.owns_client) self.client.deinit();
+        self.shared_client.release();
     }
 };
 
@@ -1904,7 +1943,7 @@ test "buffered transport adapts to response streaming" {
     try operation.finish();
 }
 
-test "standard transport streams known and chunked uploads with decompression" {
+test "standard transport preserves configured client for streaming uploads and decompression" {
     const cases = [_]struct {
         content_length: ?u64,
         encoding: []const u8,
@@ -1968,7 +2007,10 @@ fn runStdStreamingCase(
     );
     defer allocator.free(url);
 
-    var transport = StdHttpTransport.init(allocator, io);
+    const configured_read_buffer_size = 12 * 1024;
+    var configured_client = std.http.Client{ .allocator = allocator, .io = io };
+    configured_client.read_buffer_size = configured_read_buffer_size;
+    var transport = StdHttpTransport.initWithClient(allocator, configured_client);
     var request = Request.init(allocator, .POST, url);
     defer request.deinit();
     var source = std.Io.Reader.fixed("streaming upload body");
@@ -1980,6 +2022,13 @@ fn runStdStreamingCase(
         if (context.failure) |failure| return failure;
         return err;
     };
+    const operation_state: *StdStreamingOperation =
+        @alignCast(@fieldParentPtr("operation", operation));
+    try std.testing.expect(operation_state.shared_client == transport.shared_client.?);
+    try std.testing.expectEqual(
+        @as(usize, configured_read_buffer_size),
+        operation_state.shared_client.client.read_buffer_size,
+    );
     transport.deinit();
     defer operation.deinit();
     try std.testing.expectEqualStrings("first", operation.getHeader("x-test").?);
