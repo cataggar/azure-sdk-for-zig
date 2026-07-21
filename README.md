@@ -120,6 +120,7 @@ azure-core-amqp: azure-uamqp-zig (pure Zig AMQP 1.0)
 
 | Package | Clients |
 |---------|---------|
+| `azure_sdk_container_registry` | `ContainerRegistryClient` with ACR challenge authentication; generated APIs under `protocol` |
 | `azure_storage_blobs` | `BlobClient`, `BlobContainerClient`, `SasBlobClient` |
 | `azure_storage_queues` | `QueueClient`, `QueueServiceClient`, `SasQueueClient` |
 | `azure_storage_files_shares` | `ShareClient`, `ShareDirectoryClient`, `ShareFileClient` |
