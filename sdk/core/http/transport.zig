@@ -1,4 +1,5 @@
 const std = @import("std");
+const url_mod = @import("../url.zig");
 
 /// HTTP method verbs.
 pub const Method = enum {
@@ -84,7 +85,7 @@ pub const Request = struct {
         try self.headers.put(owned_key, owned_value);
     }
 
-    pub fn getHeader(self: *Request, key: []const u8) ?[]const u8 {
+    pub fn getHeader(self: *const Request, key: []const u8) ?[]const u8 {
         var iterator = self.headers.iterator();
         while (iterator.next()) |entry| {
             if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, key)) {
@@ -245,19 +246,84 @@ pub const CancellationToken = struct {
     }
 };
 
-/// A borrowed request-body reader. A known length uses `Content-Length`;
-/// otherwise the transport uses chunked transfer encoding.
+/// A borrowed request-body reader. `knownLength` uses `Content-Length`;
+/// `chunked` uses chunked transfer encoding.
 ///
 /// The reader must remain valid until `HttpTransport.open` returns.
+/// Redirects and retries are allowed only when both rewind fields are set.
 pub const StreamingRequestBody = struct {
     reader: *std.Io.Reader,
     content_length: ?u64 = null,
+    rewind_context: ?*anyopaque = null,
+    rewindFn: ?*const fn (context: *anyopaque) anyerror!*std.Io.Reader = null,
+
+    pub fn knownLength(reader: *std.Io.Reader, content_length: u64) StreamingRequestBody {
+        return .{ .reader = reader, .content_length = content_length };
+    }
+
+    pub fn chunked(reader: *std.Io.Reader) StreamingRequestBody {
+        return .{ .reader = reader };
+    }
+
+    pub fn withRewind(
+        self: StreamingRequestBody,
+        context: *anyopaque,
+        rewindFn: *const fn (context: *anyopaque) anyerror!*std.Io.Reader,
+    ) StreamingRequestBody {
+        var replayable = self;
+        replayable.rewind_context = context;
+        replayable.rewindFn = rewindFn;
+        return replayable;
+    }
+
+    pub fn isReplayable(self: StreamingRequestBody) bool {
+        return self.rewind_context != null and self.rewindFn != null;
+    }
+
+    pub fn rewind(self: *StreamingRequestBody) !void {
+        const context = self.rewind_context orelse return error.RequestBodyNotReplayable;
+        const rewindFn = self.rewindFn orelse return error.RequestBodyNotReplayable;
+        self.reader = try rewindFn(context);
+    }
+};
+
+/// A borrowed, bounded-memory byte body that can be replayed without copying.
+///
+/// Keep this value and its bytes alive until `HttpPipeline.open` returns.
+pub const ReplayableBytes = struct {
+    bytes: []const u8,
+    reader_impl: std.Io.Reader,
+
+    pub fn init(bytes: []const u8) ReplayableBytes {
+        return .{
+            .bytes = bytes,
+            .reader_impl = std.Io.Reader.fixed(bytes),
+        };
+    }
+
+    pub fn body(self: *ReplayableBytes) StreamingRequestBody {
+        return StreamingRequestBody.knownLength(
+            &self.reader_impl,
+            self.bytes.len,
+        ).withRewind(self, &rewindImpl);
+    }
+
+    fn rewindImpl(context: *anyopaque) !*std.Io.Reader {
+        const self: *ReplayableBytes = @ptrCast(@alignCast(context));
+        self.reader_impl = std.Io.Reader.fixed(self.bytes);
+        return &self.reader_impl;
+    }
 };
 
 pub const OpenOptions = struct {
     /// When null, `Request.body` is used as a known-length body.
     body: ?StreamingRequestBody = null,
     cancellation: ?*const CancellationToken = null,
+
+    pub fn isReplayable(self: OpenOptions) bool {
+        // Buffered Request.body bytes and body-less requests are replayable.
+        return if (self.body) |body| body.isReplayable() else true;
+    }
 };
 
 const BodyFraming = union(enum) {
@@ -373,8 +439,7 @@ pub const HttpTransport = struct {
     ) anyerror!*HttpOperation = null,
 
     pub fn send(self: *HttpTransport, request: *Request) !Response {
-        request.transport_started = true;
-        return self.sendFn(self, request);
+        return sendFollowingRedirects(self, request);
     }
 
     pub fn open(
@@ -382,17 +447,241 @@ pub const HttpTransport = struct {
         request: *Request,
         options: OpenOptions,
     ) !*HttpOperation {
-        if (self.openFn) |openFn| {
-            request.transport_started = true;
-            return openFn(self, request, options);
-        }
-        if (options.body != null) return error.StreamingRequestUnsupported;
-        if (options.cancellation) |token| {
-            if (token.isCancelled()) return error.OperationCancelled;
-        }
-        return BufferedOperation.open(self, request);
+        return openFollowingRedirects(self, request, options);
     }
 };
+
+const max_redirects = 10;
+
+fn sendFollowingRedirects(transport: *HttpTransport, request: *Request) !Response {
+    var current = request;
+    var owned: ?*OwnedRedirectRequest = null;
+    defer if (owned) |value| value.destroy();
+
+    var redirect_count: usize = 0;
+    while (true) {
+        current.transport_started = true;
+        var response = try transport.sendFn(transport, current);
+        const action = redirectAction(
+            response.status_code,
+            current.method,
+            response.getHeader("Location"),
+        ) orelse
+            return response;
+        if (current.redirect_policy == .not_allowed) return response;
+        if (redirect_count >= max_redirects) {
+            response.deinit();
+            return error.TooManyRedirects;
+        }
+
+        const target = resolveRedirect(current, action.location) catch |err| {
+            response.deinit();
+            return err;
+        };
+        response.deinit();
+        const next = OwnedRedirectRequest.create(
+            current,
+            target.url,
+            target.cross_origin,
+            action.method,
+            action.drop_body,
+        ) catch |err| {
+            target.allocator.free(target.url);
+            return err;
+        };
+        target.allocator.free(target.url);
+        if (owned) |previous| previous.destroy();
+        owned = next;
+        current = &next.request;
+        redirect_count += 1;
+    }
+}
+
+fn openFollowingRedirects(
+    transport: *HttpTransport,
+    request: *Request,
+    options: OpenOptions,
+) !*HttpOperation {
+    var current = request;
+    var current_options = options;
+    var owned: ?*OwnedRedirectRequest = null;
+    defer if (owned) |value| value.destroy();
+
+    var redirect_count: usize = 0;
+    while (true) {
+        try checkCancelled(current_options.cancellation);
+        var operation = try rawOpen(transport, current, current_options);
+        const action = redirectAction(
+            operation.status_code,
+            current.method,
+            operation.getHeader("Location"),
+        ) orelse
+            return operation;
+        if (current.redirect_policy == .not_allowed or
+            (!action.drop_body and !current_options.isReplayable()))
+        {
+            return operation;
+        }
+        if (redirect_count >= max_redirects) {
+            operation.abort();
+            operation.deinit();
+            return error.TooManyRedirects;
+        }
+
+        const target = resolveRedirect(current, action.location) catch |err| {
+            operation.abort();
+            operation.deinit();
+            return err;
+        };
+        operation.abort();
+        operation.deinit();
+        checkCancelled(current_options.cancellation) catch |err| {
+            target.allocator.free(target.url);
+            return err;
+        };
+        if (action.drop_body) {
+            current_options.body = null;
+        } else if (current_options.body) |*body| {
+            body.rewind() catch |err| {
+                target.allocator.free(target.url);
+                return err;
+            };
+        }
+        const next = OwnedRedirectRequest.create(
+            current,
+            target.url,
+            target.cross_origin,
+            action.method,
+            action.drop_body,
+        ) catch |err| {
+            target.allocator.free(target.url);
+            return err;
+        };
+        target.allocator.free(target.url);
+        if (owned) |previous| previous.destroy();
+        owned = next;
+        current = &next.request;
+        redirect_count += 1;
+    }
+}
+
+fn rawOpen(
+    transport: *HttpTransport,
+    request: *Request,
+    options: OpenOptions,
+) !*HttpOperation {
+    try checkCancelled(options.cancellation);
+    if (transport.openFn) |openFn| {
+        request.transport_started = true;
+        return openFn(transport, request, options);
+    }
+    if (options.body != null) return error.StreamingRequestUnsupported;
+    request.transport_started = true;
+    return BufferedOperation.openRaw(transport, request);
+}
+
+const RedirectAction = struct {
+    location: []const u8,
+    method: Method,
+    drop_body: bool,
+};
+
+fn redirectAction(
+    status_code: u16,
+    method: Method,
+    location: ?[]const u8,
+) ?RedirectAction {
+    const target = location orelse return null;
+    // Match std.http.Client: 303 always becomes GET; 301/302 rewrite POST.
+    return switch (status_code) {
+        301, 302 => if (method == .POST)
+            .{ .location = target, .method = .GET, .drop_body = true }
+        else
+            .{ .location = target, .method = method, .drop_body = false },
+        303 => .{ .location = target, .method = .GET, .drop_body = true },
+        307, 308 => .{ .location = target, .method = method, .drop_body = false },
+        else => null,
+    };
+}
+
+const ResolvedRedirect = struct {
+    allocator: std.mem.Allocator,
+    url: []u8,
+    cross_origin: bool,
+};
+
+fn resolveRedirect(request: *const Request, location: []const u8) !ResolvedRedirect {
+    var resolved = try url_mod.resolveUrl(request.allocator, request.url, location);
+    errdefer request.allocator.free(resolved);
+    if (std.mem.indexOfScalar(u8, resolved, '#')) |fragment_start| {
+        const without_fragment = try request.allocator.dupe(u8, resolved[0..fragment_start]);
+        request.allocator.free(resolved);
+        resolved = without_fragment;
+    }
+    try url_mod.validateHttpsUrl(resolved, &.{});
+    return .{
+        .allocator = request.allocator,
+        .url = resolved,
+        .cross_origin = !(try url_mod.sameOrigin(request.url, resolved)),
+    };
+}
+
+const OwnedRedirectRequest = struct {
+    allocator: std.mem.Allocator,
+    request: Request,
+    url: []u8,
+
+    fn create(
+        source: *const Request,
+        target_url: []const u8,
+        cross_origin: bool,
+        method: Method,
+        drop_body: bool,
+    ) !*OwnedRedirectRequest {
+        const self = try source.allocator.create(OwnedRedirectRequest);
+        errdefer source.allocator.destroy(self);
+        const owned_url = try source.allocator.dupe(u8, target_url);
+        errdefer source.allocator.free(owned_url);
+        self.* = .{
+            .allocator = source.allocator,
+            .request = Request.init(source.allocator, method, owned_url),
+            .url = owned_url,
+        };
+        errdefer self.request.deinit();
+        var headers = source.headers.iterator();
+        while (headers.next()) |header| {
+            if (isRedirectOmittedHeader(header.key_ptr.*, cross_origin)) continue;
+            if (drop_body and isBodyHeader(header.key_ptr.*)) continue;
+            try self.request.setHeader(header.key_ptr.*, header.value_ptr.*);
+        }
+        self.request.body = if (drop_body) null else source.body;
+        self.request.retryable = source.retryable;
+        self.request.redirect_policy = source.redirect_policy;
+        self.request.operation_timeout_ms = source.operation_timeout_ms;
+        return self;
+    }
+
+    fn destroy(self: *OwnedRedirectRequest) void {
+        self.request.deinit();
+        self.allocator.free(self.url);
+        self.allocator.destroy(self);
+    }
+};
+
+fn isRedirectOmittedHeader(name: []const u8, cross_origin: bool) bool {
+    if (std.ascii.eqlIgnoreCase(name, "Host")) return true;
+    if (!cross_origin) return false;
+    return std.ascii.eqlIgnoreCase(name, "Authorization") or
+        std.ascii.eqlIgnoreCase(name, "Cookie") or
+        std.ascii.eqlIgnoreCase(name, "Cookie2") or
+        std.ascii.eqlIgnoreCase(name, "Proxy-Authorization");
+}
+
+fn isBodyHeader(name: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(name, "Content-Length") or
+        std.ascii.eqlIgnoreCase(name, "Transfer-Encoding") or
+        std.ascii.eqlIgnoreCase(name, "Content-Type");
+}
 
 const BufferedOperation = struct {
     operation: HttpOperation,
@@ -400,10 +689,13 @@ const BufferedOperation = struct {
     response: Response,
     reader_impl: std.Io.Reader,
 
-    fn open(transport: *HttpTransport, request: *Request) !*HttpOperation {
-        var response = try transport.send(request);
-        errdefer response.deinit();
+    fn openRaw(transport: *HttpTransport, request: *Request) !*HttpOperation {
+        return fromResponse(try transport.sendFn(transport, request));
+    }
 
+    fn fromResponse(response_value: Response) !*HttpOperation {
+        var response = response_value;
+        errdefer response.deinit();
         const self = try response.allocator.create(BufferedOperation);
         self.* = .{
             .operation = undefined,
@@ -450,13 +742,26 @@ const BufferedOperation = struct {
 /// synchronization.
 pub const StdHttpTransport = struct {
     allocator: std.mem.Allocator,
+    /// Configure this client before the first request. On first use its exact
+    /// state is transferred to heap-owned shared storage so operations may
+    /// safely outlive the transport.
     client: std.http.Client,
+    shared_client: ?*SharedHttpClient = null,
     transport: HttpTransport,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) StdHttpTransport {
+        return initWithClient(allocator, .{ .allocator = allocator, .io = io });
+    }
+
+    /// Takes ownership of a configured client. The caller must not use or
+    /// deinitialize the supplied client after this call.
+    pub fn initWithClient(
+        allocator: std.mem.Allocator,
+        client: std.http.Client,
+    ) StdHttpTransport {
         return .{
             .allocator = allocator,
-            .client = .{ .allocator = allocator, .io = io },
+            .client = client,
             .transport = .{ .sendFn = &sendImpl, .openFn = &openImpl },
         };
     }
@@ -466,14 +771,34 @@ pub const StdHttpTransport = struct {
     }
 
     pub fn deinit(self: *StdHttpTransport) void {
-        self.client.deinit();
+        if (self.shared_client) |shared| {
+            shared.release();
+            self.shared_client = null;
+        } else {
+            self.client.deinit();
+        }
+    }
+
+    fn sharedClient(self: *StdHttpTransport) !*SharedHttpClient {
+        if (self.shared_client) |shared| return shared;
+        const shared = try self.allocator.create(SharedHttpClient);
+        shared.* = .{
+            .allocator = self.allocator,
+            .client = self.client,
+        };
+        self.shared_client = shared;
+        return shared;
     }
 
     fn sendImpl(transport: *HttpTransport, request: *Request) !Response {
         const self: *StdHttpTransport = @alignCast(@fieldParentPtr("transport", transport));
         const allocator = self.allocator;
 
-        var operation = try openImpl(transport, request, .{});
+        var operation = try StdStreamingOperation.open(
+            try self.sharedClient(),
+            request,
+            .{},
+        );
         defer operation.deinit();
 
         const body = operation.body_reader.allocRemaining(
@@ -508,13 +833,30 @@ pub const StdHttpTransport = struct {
         options: OpenOptions,
     ) !*HttpOperation {
         const self: *StdHttpTransport = @alignCast(@fieldParentPtr("transport", transport));
-        return StdStreamingOperation.open(self, request, options);
+        return StdStreamingOperation.open(try self.sharedClient(), request, options);
+    }
+};
+
+const SharedHttpClient = struct {
+    allocator: std.mem.Allocator,
+    client: std.http.Client,
+    references: std.atomic.Value(usize) = std.atomic.Value(usize).init(1),
+
+    fn acquire(self: *SharedHttpClient) void {
+        _ = self.references.fetchAdd(1, .monotonic);
+    }
+
+    fn release(self: *SharedHttpClient) void {
+        if (self.references.fetchSub(1, .acq_rel) != 1) return;
+        self.client.deinit();
+        self.allocator.destroy(self);
     }
 };
 
 const StdStreamingOperation = struct {
     operation: HttpOperation,
     allocator: std.mem.Allocator,
+    shared_client: *SharedHttpClient,
     request_headers: std.StringHashMap([]const u8),
     extra_headers: []std.http.Header,
     redirect_buffer: []u8,
@@ -529,7 +871,7 @@ const StdStreamingOperation = struct {
     decompress: std.http.Decompress,
 
     fn open(
-        transport: *StdHttpTransport,
+        shared_client: *SharedHttpClient,
         request: *Request,
         options: OpenOptions,
     ) !*HttpOperation {
@@ -540,11 +882,13 @@ const StdStreamingOperation = struct {
             if (token.isCancelled()) return error.OperationCancelled;
         }
 
-        const allocator = transport.allocator;
+        const allocator = shared_client.allocator;
         const self = try allocator.create(StdStreamingOperation);
+        shared_client.acquire();
         self.* = .{
             .operation = undefined,
             .allocator = allocator,
+            .shared_client = shared_client,
             .request_headers = std.StringHashMap([]const u8).init(allocator),
             .extra_headers = &.{},
             .redirect_buffer = &.{},
@@ -569,13 +913,9 @@ const StdStreamingOperation = struct {
         self.redirect_buffer = try allocator.alloc(u8, 8 * 1024);
 
         const uri = try std.Uri.parse(request.url);
-        const authenticated = request.getHeader("Authorization") != null;
-        self.request = try transport.client.request(request.method.toStd(), uri, .{
+        self.request = try self.shared_client.client.request(request.method.toStd(), uri, .{
             .extra_headers = self.extra_headers,
-            .redirect_behavior = if (authenticated or request.redirect_policy == .not_allowed)
-                .unhandled
-            else
-                @enumFromInt(3),
+            .redirect_behavior = .unhandled,
         });
         self.request_active = true;
         self.request.accept_encoding[@intFromEnum(std.http.ContentEncoding.zstd)] = true;
@@ -749,6 +1089,7 @@ const StdStreamingOperation = struct {
         if (self.redirect_buffer.len > 0) self.allocator.free(self.redirect_buffer);
         if (self.extra_headers.len > 0) self.allocator.free(self.extra_headers);
         deinitOwnedHeaders(self.allocator, &self.request_headers);
+        self.shared_client.release();
     }
 };
 
@@ -1192,18 +1533,36 @@ fn deinitOwnedHeaders(
 
 /// A transport that returns a sequence of canned responses — for retry testing.
 pub const SequenceMockTransport = struct {
-    pub const CannedResponse = struct { status: u16, body: []const u8 };
+    pub const CannedResponse = struct {
+        status: u16,
+        body: []const u8,
+        headers: []const MockTransport.HeaderPair = &.{},
+    };
 
     responses: []const CannedResponse,
     call_count: usize = 0,
     allocator: std.mem.Allocator,
     transport: HttpTransport,
+    captured_methods: [16]?Method = .{null} ** 16,
+    captured_authorization: [16]bool = .{false} ** 16,
+    captured_cookie: [16]bool = .{false} ** 16,
+    captured_proxy_authorization: [16]bool = .{false} ** 16,
+    captured_host: [16]bool = .{false} ** 16,
+    captured_content_type: [16]bool = .{false} ** 16,
+    captured_content_length: [16]bool = .{false} ** 16,
+    captured_transfer_encoding: [16]bool = .{false} ** 16,
+    captured_url_lengths: [16]usize = .{0} ** 16,
+    captured_urls: [16][512]u8 = undefined,
+    captured_body_present: [16]bool = .{false} ** 16,
+    captured_body_lengths: [16]usize = .{0} ** 16,
+    captured_bodies: [16][512]u8 = undefined,
+    cancel_after_open: ?*CancellationToken = null,
 
     pub fn init(allocator: std.mem.Allocator, responses: []const CannedResponse) SequenceMockTransport {
         return .{
             .responses = responses,
             .allocator = allocator,
-            .transport = .{ .sendFn = &sendImpl },
+            .transport = .{ .sendFn = &sendImpl, .openFn = &openImpl },
         };
     }
 
@@ -1213,18 +1572,124 @@ pub const SequenceMockTransport = struct {
 
     fn sendImpl(transport: *HttpTransport, request: *Request) !Response {
         const self: *SequenceMockTransport = @alignCast(@fieldParentPtr("transport", transport));
-        _ = request;
-        const idx = @min(self.call_count, self.responses.len - 1);
-        self.call_count += 1;
+        const idx = try self.capture(request, request.body);
+        return self.response(idx);
+    }
+
+    fn openImpl(
+        transport: *HttpTransport,
+        request: *Request,
+        options: OpenOptions,
+    ) !*HttpOperation {
+        const self: *SequenceMockTransport = @alignCast(@fieldParentPtr("transport", transport));
+        if (options.body != null and request.body != null) return error.MultipleRequestBodies;
+        try checkCancelled(options.cancellation);
+        const framing = requestBodyFraming(request, options);
+        var framing_headers = request.headers.iterator();
+        while (framing_headers.next()) |header| {
+            _ = try validateFramingHeader(header.key_ptr.*, header.value_ptr.*, framing);
+        }
+        var body_bytes: ?[]const u8 = request.body;
+        var captured: std.Io.Writer.Allocating = .init(self.allocator);
+        defer captured.deinit();
+        if (options.body) |body| {
+            var buffer: [7]u8 = undefined;
+            if (body.content_length) |length| {
+                var remaining = length;
+                while (remaining > 0) {
+                    try checkCancelled(options.cancellation);
+                    const limit: usize = @intCast(@min(remaining, buffer.len));
+                    const count = try body.reader.readSliceShort(buffer[0..limit]);
+                    if (count == 0) return error.RequestBodyTooShort;
+                    try captured.writer.writeAll(buffer[0..count]);
+                    remaining -= count;
+                }
+                var extra: [1]u8 = undefined;
+                if (try body.reader.readSliceShort(&extra) != 0) return error.RequestBodyTooLong;
+            } else {
+                while (true) {
+                    try checkCancelled(options.cancellation);
+                    const count = try body.reader.readSliceShort(&buffer);
+                    if (count == 0) break;
+                    try captured.writer.writeAll(buffer[0..count]);
+                }
+            }
+            body_bytes = captured.writer.buffered();
+        }
+
+        const idx = try self.capture(request, body_bytes);
+        if (self.cancel_after_open) |token| token.cancel();
+        return BufferedOperation.fromResponse(try self.response(idx));
+    }
+
+    fn response(self: *SequenceMockTransport, idx: usize) !Response {
         const r = self.responses[idx];
         const body_copy = try self.allocator.dupe(u8, r.body);
-        const headers = std.StringHashMap([]const u8).init(self.allocator);
+        errdefer self.allocator.free(body_copy);
+        var headers = std.StringHashMap([]const u8).init(self.allocator);
+        errdefer deinitOwnedHeaders(self.allocator, &headers);
+        var response_headers = ResponseHeaders.init(self.allocator);
+        errdefer response_headers.deinit();
+        for (r.headers) |header| {
+            try response_headers.append(header.name, header.value);
+            const name = try self.allocator.dupe(u8, header.name);
+            errdefer self.allocator.free(name);
+            const value = try self.allocator.dupe(u8, header.value);
+            errdefer self.allocator.free(value);
+            const entry = try headers.getOrPut(name);
+            if (entry.found_existing) {
+                self.allocator.free(name);
+                self.allocator.free(entry.value_ptr.*);
+            } else {
+                entry.key_ptr.* = name;
+            }
+            entry.value_ptr.* = value;
+        }
         return .{
             .status_code = r.status,
             .headers = headers,
             .body = body_copy,
             .allocator = self.allocator,
+            .response_headers = response_headers,
         };
+    }
+
+    fn capture(
+        self: *SequenceMockTransport,
+        request: *const Request,
+        body: ?[]const u8,
+    ) !usize {
+        if (self.responses.len == 0) return error.NoCannedResponses;
+        if (self.call_count >= self.captured_methods.len) return error.TooManyMockRequests;
+        if (request.url.len > self.captured_urls[0].len) return error.MockRequestUrlTooLong;
+        const body_value = body orelse "";
+        if (body_value.len > self.captured_bodies[0].len) return error.MockRequestBodyTooLong;
+
+        const call = self.call_count;
+        self.captured_methods[call] = request.method;
+        self.captured_authorization[call] = request.getHeader("Authorization") != null;
+        self.captured_cookie[call] = request.getHeader("Cookie") != null;
+        self.captured_proxy_authorization[call] =
+            request.getHeader("Proxy-Authorization") != null;
+        self.captured_host[call] = request.getHeader("Host") != null;
+        self.captured_content_type[call] = request.getHeader("Content-Type") != null;
+        self.captured_content_length[call] = request.getHeader("Content-Length") != null;
+        self.captured_transfer_encoding[call] = request.getHeader("Transfer-Encoding") != null;
+        @memcpy(self.captured_urls[call][0..request.url.len], request.url);
+        self.captured_url_lengths[call] = request.url.len;
+        self.captured_body_present[call] = body != null;
+        @memcpy(self.captured_bodies[call][0..body_value.len], body_value);
+        self.captured_body_lengths[call] = body_value.len;
+        self.call_count += 1;
+        return @min(call, self.responses.len - 1);
+    }
+
+    pub fn capturedUrl(self: *const SequenceMockTransport, index: usize) []const u8 {
+        return self.captured_urls[index][0..self.captured_url_lengths[index]];
+    }
+
+    pub fn capturedBody(self: *const SequenceMockTransport, index: usize) []const u8 {
+        return self.captured_bodies[index][0..self.captured_body_lengths[index]];
     }
 };
 
@@ -1245,6 +1710,35 @@ test "request init and set header" {
     try std.testing.expectEqualStrings("application/json", req.getHeader("ACCEPT").?);
     try std.testing.expectError(error.InvalidHttpHeaderName, req.setHeader("bad name", "value"));
     try std.testing.expectError(error.InvalidHttpHeaderValue, req.setHeader("x-value", "one\r\ntwo"));
+}
+
+test "streaming preflight failures do not mark transport as started" {
+    const allocator = std.testing.allocator;
+    var mock = MockTransport.init(allocator, 200, "ok");
+    defer mock.deinit();
+    mock.transport.openFn = null;
+
+    var unsupported_request = Request.init(allocator, .POST, "https://example.com/upload");
+    defer unsupported_request.deinit();
+    var source = std.Io.Reader.fixed("body");
+    try std.testing.expectError(
+        error.StreamingRequestUnsupported,
+        mock.asTransport().open(&unsupported_request, .{
+            .body = StreamingRequestBody.knownLength(&source, 4),
+        }),
+    );
+    try std.testing.expect(!unsupported_request.transport_started);
+
+    var cancelled_request = Request.init(allocator, .GET, "https://example.com/cancelled");
+    defer cancelled_request.deinit();
+    var cancellation = CancellationToken{};
+    cancellation.cancel();
+    try std.testing.expectError(
+        error.OperationCancelled,
+        mock.asTransport().open(&cancelled_request, .{ .cancellation = &cancellation }),
+    );
+    try std.testing.expect(!cancelled_request.transport_started);
+    try std.testing.expectEqual(@as(usize, 0), mock.call_count);
 }
 
 test "response isSuccess" {
@@ -1354,6 +1848,269 @@ test "mock streaming transport accepts known and chunked uploads" {
     try std.testing.expectEqual(@as(usize, 2), mock.stream_deinit_count);
 }
 
+test "ReplayableBytes rewinds without copying" {
+    var replay = ReplayableBytes.init("replay-body");
+    var body = replay.body();
+    var buffer: [32]u8 = undefined;
+    const first = try body.reader.readSliceShort(&buffer);
+    try std.testing.expectEqualStrings("replay-body", buffer[0..first]);
+    try body.rewind();
+    const second = try body.reader.readSliceShort(&buffer);
+    try std.testing.expectEqualStrings("replay-body", buffer[0..second]);
+}
+
+test "transport follows safe redirects without forwarding origin credentials" {
+    const allocator = std.testing.allocator;
+    var sequence = SequenceMockTransport.init(allocator, &.{
+        .{
+            .status = 307,
+            .body = "",
+            .headers = &.{.{ .name = "Location", .value = "https://storage.example/blob#section" }},
+        },
+        .{ .status = 200, .body = "ok" },
+    });
+    var request = Request.init(allocator, .POST, "https://registry.example/v2/upload");
+    defer request.deinit();
+    try request.setHeader("Cookie", "session=test");
+    try request.setHeader("Proxy-Authorization", "Basic test");
+    try request.setHeader("Host", "registry.example");
+    try request.setHeader("Authorization", "Bearer registry-token");
+    var replay = ReplayableBytes.init("payload");
+    var operation = try sequence.asTransport().open(&request, .{ .body = replay.body() });
+    defer operation.deinit();
+    try std.testing.expectEqual(@as(u16, 200), operation.status_code);
+    try std.testing.expectEqual(@as(usize, 2), sequence.call_count);
+    try std.testing.expect(sequence.captured_authorization[0]);
+    try std.testing.expect(!sequence.captured_authorization[1]);
+    try std.testing.expect(sequence.captured_cookie[0]);
+    try std.testing.expect(!sequence.captured_cookie[1]);
+    try std.testing.expect(sequence.captured_proxy_authorization[0]);
+    try std.testing.expect(!sequence.captured_proxy_authorization[1]);
+    try std.testing.expect(sequence.captured_host[0]);
+    try std.testing.expect(!sequence.captured_host[1]);
+    try std.testing.expectEqual(Method.POST, sequence.captured_methods[1].?);
+    try std.testing.expectEqualStrings("payload", sequence.capturedBody(0));
+    try std.testing.expectEqualStrings("payload", sequence.capturedBody(1));
+    try std.testing.expectEqualStrings("https://storage.example/blob", sequence.capturedUrl(1));
+    try operation.finish();
+
+    var buffered_sequence = SequenceMockTransport.init(allocator, &.{
+        .{
+            .status = 308,
+            .body = "",
+            .headers = &.{.{ .name = "Location", .value = "/v2/continued" }},
+        },
+        .{ .status = 200, .body = "buffered-ok" },
+    });
+    var buffered_request = Request.init(allocator, .PUT, "https://registry.example/v2/upload");
+    defer buffered_request.deinit();
+    buffered_request.body = "buffered-payload";
+    try buffered_request.setHeader("Cookie", "session=test");
+    try buffered_request.setHeader("Host", "registry.example");
+    try buffered_request.setHeader("Authorization", "Bearer registry-token");
+    var response = try buffered_sequence.asTransport().send(&buffered_request);
+    defer response.deinit();
+    try std.testing.expectEqual(@as(u16, 200), response.status_code);
+    try std.testing.expectEqualStrings("buffered-ok", response.body);
+    try std.testing.expectEqual(@as(usize, 2), buffered_sequence.call_count);
+    try std.testing.expect(buffered_sequence.captured_authorization[1]);
+    try std.testing.expect(buffered_sequence.captured_cookie[1]);
+    try std.testing.expect(!buffered_sequence.captured_host[1]);
+    try std.testing.expectEqual(Method.PUT, buffered_sequence.captured_methods[1].?);
+    try std.testing.expectEqualStrings("buffered-payload", buffered_sequence.capturedBody(1));
+    try std.testing.expectEqualStrings(
+        "https://registry.example/v2/continued",
+        buffered_sequence.capturedUrl(1),
+    );
+}
+
+test "transport preserves buffered 301 302 and 303 redirect semantics" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct {
+        status: u16,
+        method: Method,
+        location: []const u8,
+        expected_method: Method,
+        expected_body: ?[]const u8,
+        expected_authorization: bool,
+    }{
+        .{
+            .status = 301,
+            .method = .POST,
+            .location = "/moved",
+            .expected_method = .GET,
+            .expected_body = null,
+            .expected_authorization = true,
+        },
+        .{
+            .status = 302,
+            .method = .PUT,
+            .location = "/found",
+            .expected_method = .PUT,
+            .expected_body = "payload",
+            .expected_authorization = true,
+        },
+        .{
+            .status = 303,
+            .method = .PUT,
+            .location = "https://storage.example/result",
+            .expected_method = .GET,
+            .expected_body = null,
+            .expected_authorization = false,
+        },
+    };
+
+    for (cases) |case| {
+        const headers = [_]MockTransport.HeaderPair{
+            .{ .name = "Location", .value = case.location },
+        };
+        var sequence = SequenceMockTransport.init(allocator, &.{
+            .{ .status = case.status, .body = "", .headers = &headers },
+            .{ .status = 200, .body = "ok" },
+        });
+        var request = Request.init(allocator, case.method, "https://registry.example/start");
+        defer request.deinit();
+        request.body = "payload";
+        try request.setHeader("Authorization", "Bearer token");
+        try request.setHeader("Content-Type", "application/octet-stream");
+        try request.setHeader("Content-Length", "7");
+
+        var response = try sequence.asTransport().send(&request);
+        defer response.deinit();
+        try std.testing.expectEqual(@as(u16, 200), response.status_code);
+        try std.testing.expectEqual(@as(usize, 2), sequence.call_count);
+        try std.testing.expectEqual(case.expected_method, sequence.captured_methods[1].?);
+        try std.testing.expectEqual(case.expected_body != null, sequence.captured_body_present[1]);
+        try std.testing.expectEqual(case.expected_authorization, sequence.captured_authorization[1]);
+        if (case.expected_body) |body| {
+            try std.testing.expectEqualStrings(body, sequence.capturedBody(1));
+            try std.testing.expect(sequence.captured_content_type[1]);
+            try std.testing.expect(sequence.captured_content_length[1]);
+        } else {
+            try std.testing.expect(!sequence.captured_content_type[1]);
+            try std.testing.expect(!sequence.captured_content_length[1]);
+            try std.testing.expect(!sequence.captured_transfer_encoding[1]);
+        }
+    }
+
+    var one_shot_sequence = SequenceMockTransport.init(allocator, &.{
+        .{
+            .status = 302,
+            .body = "",
+            .headers = &.{.{ .name = "Location", .value = "/after-post" }},
+        },
+        .{ .status = 200, .body = "ok" },
+    });
+    var one_shot_request = Request.init(allocator, .POST, "https://registry.example/start");
+    defer one_shot_request.deinit();
+    var source = std.Io.Reader.fixed("one-shot");
+    var operation = try one_shot_sequence.asTransport().open(&one_shot_request, .{
+        .body = StreamingRequestBody.knownLength(&source, 8),
+    });
+    defer operation.deinit();
+    try std.testing.expectEqual(@as(u16, 200), operation.status_code);
+    try std.testing.expectEqual(Method.GET, one_shot_sequence.captured_methods[1].?);
+    try std.testing.expect(!one_shot_sequence.captured_body_present[1]);
+    try operation.finish();
+}
+
+test "streaming redirect cancellation does not rewind or follow" {
+    const CountingReplay = struct {
+        reader: std.Io.Reader,
+        bytes: []const u8,
+        rewind_count: usize = 0,
+
+        fn init(bytes: []const u8) @This() {
+            return .{ .reader = std.Io.Reader.fixed(bytes), .bytes = bytes };
+        }
+
+        fn rewind(context: *anyopaque) !*std.Io.Reader {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            self.rewind_count += 1;
+            self.reader = std.Io.Reader.fixed(self.bytes);
+            return &self.reader;
+        }
+    };
+
+    const allocator = std.testing.allocator;
+    var token = CancellationToken{};
+    var sequence = SequenceMockTransport.init(allocator, &.{
+        .{
+            .status = 307,
+            .body = "",
+            .headers = &.{.{ .name = "Location", .value = "https://storage.example/blob" }},
+        },
+        .{ .status = 200, .body = "unexpected" },
+    });
+    sequence.cancel_after_open = &token;
+    var request = Request.init(allocator, .PUT, "https://registry.example/upload");
+    defer request.deinit();
+    var source = CountingReplay.init("payload");
+    const body = StreamingRequestBody.knownLength(
+        &source.reader,
+        source.bytes.len,
+    ).withRewind(&source, &CountingReplay.rewind);
+
+    try std.testing.expectError(
+        error.OperationCancelled,
+        sequence.asTransport().open(
+            &request,
+            .{ .body = body, .cancellation = &token },
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 1), sequence.call_count);
+    try std.testing.expectEqual(@as(usize, 0), source.rewind_count);
+}
+
+test "transport does not replay one-shot bodies and rejects insecure redirects" {
+    const allocator = std.testing.allocator;
+    const redirect_headers = &.{MockTransport.HeaderPair{
+        .name = "Location",
+        .value = "https://storage.example/blob",
+    }};
+    var one_shot_sequence = SequenceMockTransport.init(allocator, &.{
+        .{ .status = 308, .body = "", .headers = redirect_headers },
+        .{ .status = 200, .body = "unexpected" },
+    });
+    var request = Request.init(allocator, .PUT, "https://registry.example/v2/upload");
+    defer request.deinit();
+    var source = std.Io.Reader.fixed("one-shot");
+    var operation = try one_shot_sequence.asTransport().open(&request, .{
+        .body = StreamingRequestBody.knownLength(&source, 8),
+    });
+    defer operation.deinit();
+    try std.testing.expectEqual(@as(u16, 308), operation.status_code);
+    try std.testing.expectEqual(@as(usize, 1), one_shot_sequence.call_count);
+    operation.abort();
+
+    var insecure_sequence = SequenceMockTransport.init(allocator, &.{
+        .{
+            .status = 307,
+            .body = "",
+            .headers = &.{.{ .name = "Location", .value = "http://storage.example/blob" }},
+        },
+    });
+    var insecure_request = Request.init(allocator, .GET, "https://registry.example/v2/blob");
+    defer insecure_request.deinit();
+    try std.testing.expectError(
+        error.HttpsRequired,
+        insecure_sequence.asTransport().send(&insecure_request),
+    );
+    try std.testing.expectEqual(@as(usize, 1), insecure_sequence.call_count);
+
+    var disabled_sequence = SequenceMockTransport.init(allocator, &.{
+        .{ .status = 307, .body = "", .headers = redirect_headers },
+        .{ .status = 200, .body = "unexpected" },
+    });
+    var disabled_request = Request.init(allocator, .GET, "https://registry.example/v2/blob");
+    defer disabled_request.deinit();
+    disabled_request.redirect_policy = .not_allowed;
+    var disabled_response = try disabled_sequence.asTransport().send(&disabled_request);
+    defer disabled_response.deinit();
+    try std.testing.expectEqual(@as(u16, 307), disabled_response.status_code);
+    try std.testing.expectEqual(@as(usize, 1), disabled_sequence.call_count);
+}
+
 test "mock streaming transport validates upload lengths and failures" {
     const allocator = std.testing.allocator;
     var mock = MockTransport.init(allocator, 200, "ok");
@@ -1459,7 +2216,7 @@ test "buffered transport adapts to response streaming" {
     try operation.finish();
 }
 
-test "standard transport streams known and chunked uploads with decompression" {
+test "standard transport preserves configured client for streaming uploads and decompression" {
     const cases = [_]struct {
         content_length: ?u64,
         encoding: []const u8,
@@ -1523,18 +2280,29 @@ fn runStdStreamingCase(
     );
     defer allocator.free(url);
 
-    var transport = StdHttpTransport.init(allocator, io);
-    defer transport.deinit();
+    const configured_read_buffer_size = 12 * 1024;
+    var configured_client = std.http.Client{ .allocator = allocator, .io = io };
+    configured_client.read_buffer_size = configured_read_buffer_size;
+    var transport = StdHttpTransport.initWithClient(allocator, configured_client);
     var request = Request.init(allocator, .POST, url);
     defer request.deinit();
     var source = std.Io.Reader.fixed("streaming upload body");
     var operation = transport.asTransport().open(&request, .{
         .body = .{ .reader = &source, .content_length = content_length },
     }) catch |err| {
+        transport.deinit();
         thread.join();
         if (context.failure) |failure| return failure;
         return err;
     };
+    const operation_state: *StdStreamingOperation =
+        @alignCast(@fieldParentPtr("operation", operation));
+    try std.testing.expect(operation_state.shared_client == transport.shared_client.?);
+    try std.testing.expectEqual(
+        @as(usize, configured_read_buffer_size),
+        operation_state.shared_client.client.read_buffer_size,
+    );
+    transport.deinit();
     defer operation.deinit();
     try std.testing.expectEqualStrings("first", operation.getHeader("x-test").?);
     const test_headers = try operation.getHeaderValues(allocator, "X-Test");
@@ -1706,6 +2474,34 @@ test "mock streaming operation releases every allocation failure path" {
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
         mockStreamingAllocationFixture,
+        .{},
+    );
+}
+
+fn redirectAllocationFixture(allocator: std.mem.Allocator) !void {
+    var sequence = SequenceMockTransport.init(allocator, &.{
+        .{
+            .status = 307,
+            .body = "",
+            .headers = &.{.{ .name = "Location", .value = "https://storage.example/blob" }},
+        },
+        .{ .status = 200, .body = "ok" },
+    });
+    var request = Request.init(allocator, .PUT, "https://registry.example/v2/upload");
+    defer request.deinit();
+    request.body = "body";
+    try request.setHeader("Authorization", "Bearer token");
+    var response = sequence.asTransport().send(&request) catch |err| switch (err) {
+        error.WriteFailed => return error.OutOfMemory,
+        else => |other| return other,
+    };
+    defer response.deinit();
+}
+
+test "redirect handling releases every allocation failure path" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        redirectAllocationFixture,
         .{},
     );
 }
