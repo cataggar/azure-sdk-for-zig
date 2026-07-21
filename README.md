@@ -61,8 +61,8 @@ azure-core-amqp: azure-uamqp-zig (pure Zig AMQP 1.0)
 
 | Module | Description |
 |--------|-------------|
-| `http.StdHttpTransport` | HTTP client via `std.http.Client` with response header capture |
-| `http.MockTransport` | Canned responses for unit tests |
+| `http.StdHttpTransport` | Buffered and bounded-memory streaming HTTP via `std.http.Client`, with incremental gzip/deflate/zstd response decoding |
+| `http.MockTransport` | Canned buffered and streaming responses for unit tests |
 | `http.SequenceMockTransport` | Multi-response sequences for retry testing |
 | `pipeline.HttpPipeline` | Ordered chain of policies → transport |
 | `pipeline.TelemetryPolicy` | Injects `User-Agent` header |
@@ -76,6 +76,8 @@ azure-core-amqp: azure-uamqp-zig (pure Zig AMQP 1.0)
 | `errors` | Azure error envelope parsing + `logErrorResponse` |
 | `lro` | Long-running operation poller (poll until Succeeded/Failed) |
 | `pager` | Generic paged-result iterator (`PipelinePager`) |
+
+`HttpTransport.open` and `HttpPipeline.open` return a heap-backed, single-owner `HttpOperation`. Pass a borrowed `StreamingRequestBody` with `content_length` for `Content-Length`, or omit the length for chunked upload; the source reader only needs to remain alive until `open` returns. Consume the response through `operation.reader()`, then call `finish` to drain and permit connection reuse, or `abort`/`cancel` to close without draining. Always call `deinit`; it aborts any still-active operation. Streaming policy preparation runs once and never retries a consumed reader. `CancellationToken` is checked between upload reads and cannot interrupt an already-blocking reader or socket call.
 
 ### Identity (`azure_identity`)
 
@@ -163,10 +165,10 @@ Metadata can expose the login authority for a sovereign or private cloud, but `T
 
 - Typed helper areas cover timeout, truncation, progressive results, cache, consistency, resources, and security. Unknown options preserve their JSON types; raw JSON fragments are not accepted. Query parameter values must be strings or Kusto `long` values; encode other scalar types as KQL literal strings such as `datetime(...)` or `dynamic(...)`.
 - Query requests default to a 4-minute server timeout and management requests to 10 minutes. Explicit server timeouts range from 1 second through 1 hour with millisecond precision; the client budget defaults to the server timeout plus 30 seconds. `no_request_timeout` requests the maximum server timeout.
-- In the current synchronous buffered transport, the client timeout bounds retries and backoff only; it cannot interrupt an in-flight `std.http` request. Hard cancellation is deferred to future streaming and cancellation transport work.
+- The client timeout still bounds retries and backoff only; it cannot interrupt an in-flight blocking `std.http` call. Azure Core now exposes explicit streaming-operation cancellation, but Kusto deadline and request-ID cancellation integration remains future work.
 - Explicit application, user, version, and request-ID headers override defaults. Results expose owned `client_request_id` and `activity_id`; dataset `deinit` frees them.
 - Buffered result rows are strict about matching the declared column width by default. Set `ClientRequestProperties.setClientResultsReaderAllowVaryingRowWidths` only for services that intentionally emit uneven rows; missing cells remain absent and extra cells are preserved as unknown raw JSON.
-- V2 buffered decoding requires a `DataSetHeader` first and `DataSetCompletion` last. It reconstructs progressive or fragmented `DataAppend`/`DataReplace` frames by table ID, treats row-embedded OneAPI errors as partial results, retains unknown frames, and exposes table/row iterators plus ID, kind, primary, properties, and status selectors. Network streaming and cancellation remain future work.
+- V2 buffered decoding requires a `DataSetHeader` first and `DataSetCompletion` last. It reconstructs progressive or fragmented `DataAppend`/`DataReplace` frames by table ID, treats row-embedded OneAPI errors as partial results, retains unknown frames, and exposes table/row iterators plus ID, kind, primary, properties, and status selectors. Kusto frame streaming and query cancellation remain future work.
 - Queries may retry; management operations and streaming ingestion remain non-retryable.
 - Kusto `*Result` APIs return `KustoResult(T)`: `.ok`, `.partial` (possibly unreliable decoded buffered tables plus an owned `KustoError`), or `.err`; call `deinit`. A streaming `.err` records `.known_not_accepted` for a received non-2xx response and `.unknown` with the transport cause after transport entry fails, while pre-transport credential/policy errors stay in the outer Zig error union. Permanent and partial failures are never retryable.
 
