@@ -62,6 +62,7 @@ pub const KustoError = struct {
     client_request_id: ?[]u8 = null,
     activity_id: ?[]u8 = null,
     transport_error: ?anyerror = null,
+    retry_after_ms: ?u64 = null,
     permanent: ?bool = null,
     cancelled: bool = false,
     retryable: bool = false,
@@ -163,6 +164,7 @@ pub fn fromHttpResponse(
 ) !KustoError {
     var result = init(allocator, operation, .http, outcome, response.status_code);
     errdefer result.deinit();
+    result.retry_after_ms = retryAfterMs(response);
     try setIds(
         &result,
         response.getHeader("x-ms-client-request-id"),
@@ -190,6 +192,12 @@ pub fn fromHttpResponse(
     }
     result.retryable = isRetryable(result);
     return result;
+}
+
+fn retryAfterMs(response: *const http.Response) ?u64 {
+    const value = response.getHeader("Retry-After") orelse return null;
+    const seconds = std.fmt.parseInt(u64, value, 10) catch return null;
+    return std.math.mul(u64, seconds, 1000) catch std.math.maxInt(u64);
 }
 
 /// Converts the first OneAPI envelope from an in-band completion frame.
