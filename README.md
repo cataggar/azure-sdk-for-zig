@@ -8,7 +8,7 @@
 
 Pure Zig implementation of Azure service clients with **zero C dependencies**.
 
-**60 source files · 358 tests · Zig 0.16+**
+**69 source files · 481 tests · Zig 0.16+**
 
 ## Quick Start
 
@@ -37,7 +37,7 @@ Requires [Zig 0.16.0](https://ziglang.org/download/) or later.
 
 ```bash
 zig build           # compile SDK + example
-zig build test      # run all 219 tests
+zig build test      # run all tests
 zig build run       # run the example app
 ```
 
@@ -112,7 +112,7 @@ azure-core-amqp: azure-uamqp-zig (pure Zig AMQP 1.0)
 | `azure_messaging_eventhubs_checkpointstore_blob` | Blob-backed checkpoint store |
 | `azure_messaging_servicebus` | `ServiceBusSenderClient`, `ServiceBusReceiverClient`, `ServiceBusAdministrationClient` |
 | `azure_kusto_data` | `KustoClient` (experimental buffered and progressive query plus management support) |
-| `azure_kusto_ingest` | `StreamingIngestClient`, `QueuedIngestClient`, and queued-ingestion resource discovery |
+| `azure_kusto_ingest` | `StreamingIngestClient`, `QueuedIngestClient`, `ManagedIngestClient`, and queued-ingestion resource discovery |
 
 ### Complete SAS Blob and Queue operations
 
@@ -207,6 +207,14 @@ defer result.deinit(allocator);
 Raw sources use incremental request gzip by default; set `.compression = .none` to send an uncompressed request body. Direct URI sources use the protocol's `sourceKind=uri` JSON body and require `.compression = .none`. Direct streaming accepts CSV, TSV, SCsv, SOHsv, PSV, JSON, MultiJSON, and Avro; JSON, MultiJSON, and Avro require a named mapping. Named mappings are URL-encoded and supported; inline mappings, extent tags/`ingest_if_not_exists`, creation time, validation policy, and first-record skipping are queued-ingestion properties and fail locally before a transport call.
 
 One-shot readers are never retried. Bytes, files, URI sources, and explicit `ReplayReaderFactory` sources may retry only after a received retryable non-2xx response, reopening the source for each attempt while retaining one logical source ID. Source-aware retries honor bounded `Retry-After` delays and otherwise use bounded exponential backoff. A received failure is `.known_not_accepted`; an upload or transport failure after transport entry is `.unknown` and is never replayed. `JsonRows(Row).ndjson` and `.mapping` provide typed serde JSON/NDJSON bytes and a named-mapping definition helper.
+
+### Kusto managed ingestion
+
+`ManagedIngestClient.ingestResult` accepts the same runtime source and returns `KustoResult(ManagedIngestionResult)`. Its owned result records whether `.streaming` or `.queued` was selected; the queued variant retains the full `QueuedIngestionResult`, including resource attempts and an optional `StatusTrackingHandle`. Use `takeTracking` to transfer that handle. The older slice wrappers intentionally flatten queued diagnostics and tracking for compatibility.
+
+Managed ingestion uses one secure, canonical nonzero UUID for both routes. It streams only supported direct formats at or below `IngestOptions.managed_streaming_threshold_bytes` (4 MiB uncompressed by default). Unsupported direct formats, direct-mapping-required formats without a named mapping, precompressed local files, queued-only properties, known-large sources, and Blob URIs without a known raw size go directly to Queue. A known small Blob URI uses the direct URI protocol with request compression normalized to `.none`; queued upload compression, reporting configuration, and flush do not themselves force Queue.
+
+For an unknown-size one-shot reader, managed ingestion reads at most `threshold + 1` bytes. A reader ending within the threshold is retained as replayable bytes. A larger reader is queued once through a bounded prefix-plus-original-tail reader, preserving the original reader's buffered state; it is not reopened after a rejected, incomplete, or ambiguous Blob upload. Direct streaming retries use `options.retry`; fallback happens only after its final retryable, received known-not-accepted failure and only for a replayable effective source. Permanent, cancelled, and ambiguous direct failures never queue. Cancellation is checked during reader classification and between setup, upload, status-table, and Queue phases, but cannot interrupt an already-blocking reader, socket, or transport call.
 
 ### Kusto queued-ingestion resource discovery
 
@@ -337,6 +345,8 @@ blob name, and omit `RawDataSize` unless `raw_size` supplies the original
 uncompressed length. `.gzip` deliberately recompresses an input file.
 Existing Blob URIs are queued as-is, so explicit `.gzip` or `.none`
 compression modes are rejected rather than silently ignored.
+
+Queued one-shot readers may omit a raw size. Their temporary Blob upload uses bounded block streaming (including incremental gzip where selected), and the Queue message omits `RawDataSize`. Such readers remain single-consumption sources: a Blob rejection, incomplete upload, or ambiguous upload is not retried with a reopened reader.
 
 ### Kusto request properties, timeouts, and retries
 
