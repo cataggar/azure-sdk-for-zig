@@ -9,6 +9,7 @@ const models = @import("models.zig");
 const service_error = @import("service_error.zig");
 const content = @import("content_client.zig");
 const digest = @import("digest.zig");
+const blob_upload = @import("blob_upload.zig");
 
 pub const BearerChallenge = challenge.BearerChallenge;
 pub const parseBearerChallenge = challenge.parseBearerChallenge;
@@ -61,8 +62,14 @@ pub const validateSha256Digest = digest.validateSha256Digest;
 pub const sha256DigestsEqual = digest.sha256DigestsEqual;
 pub const sha256_digest_length = digest.sha256_digest_length;
 pub const sha256_formatted_length = digest.sha256_formatted_length;
+pub const BlobUploadOptions = blob_upload.BlobUploadOptions;
+pub const BlobUploadResult = blob_upload.BlobUploadResult;
+pub const BlobUploadResponse = blob_upload.BlobUploadResponse;
+pub const default_blob_upload_chunk_size = blob_upload.default_chunk_size;
+pub const max_blob_upload_chunk_size = blob_upload.max_chunk_size;
 
 test {
     @import("std").testing.refAllDecls(@This());
     _ = @import("metadata_test.zig");
+    _ = @import("blob_upload_test.zig");
 }

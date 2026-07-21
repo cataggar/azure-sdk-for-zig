@@ -154,7 +154,7 @@ const generated_tests =
     \\            },
     \\            .cancel => .{
     \\                204,
-    \\                try self.allocator.alloc(u8, 0),
+    \\                try self.cancelResponse(request),
     \\            },
     \\        };
     \\        return .{
@@ -209,6 +209,14 @@ const generated_tests =
     \\            std.mem.indexOf(u8, request.body.?, "access_token") != null,
     \\        );
     \\        return self.allocator.dupe(u8, "{\"refresh_token\":\"token\"}");
+    \\    }
+    \\
+    \\    fn cancelResponse(self: *@This(), request: *core.http.Request) ![]u8 {
+    \\        try std.testing.expectEqual(core.http.Method.DELETE, request.method);
+    \\        try std.testing.expect(request.body == null);
+    \\        try std.testing.expect(request.getHeader("Content-Length") == null);
+    \\        try std.testing.expect(request.getHeader("Transfer-Encoding") == null);
+    \\        return self.allocator.alloc(u8, 0);
     \\    }
     \\};
     \\

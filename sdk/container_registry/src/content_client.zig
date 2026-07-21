@@ -1,6 +1,7 @@
 const std = @import("std");
 const core = @import("azure_core");
 const client_mod = @import("client.zig");
+const blob_upload = @import("blob_upload.zig");
 const digest_mod = @import("digest.zig");
 const service_error = @import("service_error.zig");
 
@@ -306,6 +307,49 @@ pub const ContainerRegistryContentClient = struct {
             self.allocator,
             &response,
         ) };
+    }
+
+    /// Uploads a blob from a seekable or non-seekable reader using bounded,
+    /// sequential chunks.
+    pub fn uploadBlob(
+        self: *ContainerRegistryContentClient,
+        reader: *std.Io.Reader,
+        options: blob_upload.BlobUploadOptions,
+    ) !blob_upload.BlobUploadResult {
+        var result = try self.uploadBlobResult(reader, options);
+        switch (result) {
+            .ok => |value| return value,
+            .err => |*failure| {
+                std.log.warn("{f}", .{failure.*});
+                failure.deinit();
+                return error.BlobUploadFailed;
+            },
+        }
+    }
+
+    /// Structured-result variant of `uploadBlob`.
+    pub fn uploadBlobResult(
+        self: *ContainerRegistryContentClient,
+        reader: *std.Io.Reader,
+        options: blob_upload.BlobUploadOptions,
+    ) !blob_upload.BlobUploadResponse {
+        return blob_upload.upload(.{
+            .allocator = self.allocator,
+            .pipeline = self.pipeline(),
+            .endpoint = self.registry_client.endpoint,
+            .api_version = self.registry_client.api_version,
+            .repository_name = self.repository_name,
+        }, reader, options);
+    }
+
+    /// Convenience wrapper for in-memory blob bytes.
+    pub fn uploadBlobBytes(
+        self: *ContainerRegistryContentClient,
+        bytes: []const u8,
+        options: blob_upload.BlobUploadOptions,
+    ) !blob_upload.BlobUploadResult {
+        var reader = std.Io.Reader.fixed(bytes);
+        return self.uploadBlob(&reader, options);
     }
 
     fn pipeline(self: *ContainerRegistryContentClient) *core.pipeline.HttpPipeline {

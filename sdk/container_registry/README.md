@@ -2,8 +2,8 @@
 
 `azure_sdk_container_registry` adds secure ACR challenge authentication,
 token caching, metadata operations, Link-header paging, structured service
-errors, and exact-byte manifest content operations to the generated
-`azure_rest_container_registry` protocol package.
+errors, exact-byte manifests, and bounded-memory resumable blob uploads to the
+generated `azure_rest_container_registry` protocol package.
 
 ```zig
 const acr = @import("azure_sdk_container_registry");
@@ -100,6 +100,15 @@ defer downloaded.deinit(allocator);
 const delete_outcome = try content.deleteManifest(uploaded.digest);
 // Both .accepted and .not_found are successful, idempotent outcomes.
 _ = delete_outcome;
+
+var blob_reader = std.Io.Reader.fixed(blob_bytes);
+var blob = try content.uploadBlob(&blob_reader, .{
+    // Defaults to 4 MiB and is the maximum upload buffer allocation.
+    .chunk_size = 8 * 1024 * 1024,
+    .cancellation = cancellation,
+});
+defer blob.deinit();
+// blob.digest, blob.location, and blob.size are owned result values.
 ```
 
 Manifest bytes are never parsed or reserialized. Upload and download validate
@@ -108,6 +117,21 @@ both directions enforce the 4 MiB manifest limit. Omitting the upload
 reference uses the computed digest; deletes require a digest. Download limits
 apply to decoded bytes; `Content-Length` is exact only for identity responses.
 The `*Result` variants preserve structured ACR service errors.
+
+Blob uploads start a resumable session, send sequential inclusive
+`Content-Range` chunks with exact `Content-Length`, then complete using the
+incrementally computed SHA-256 digest. Seekable and non-seekable readers are
+supported without buffering more than one configured chunk. Retryable
+pre-transport failures replay the buffered chunk; uncertain transport outcomes
+first query upload status and resume only from the strictly validated confirmed
+offset. Every continuation `Location` must remain HTTPS on the original
+registry origin, including its effective port. Upload failures cancel the
+session, final service digests are validated, and cancellation remains an outer
+`error.OperationCancelled`.
+
+Use `uploadBlobResult` when structured service errors are required. Generated
+mount, upload-status, and cancel operations remain available through
+`client.protocolClient().containerRegistryBlob()` and `acr.protocol`.
 
 Long-lived clients use bounded LRU caches: 128 routes, 128 scoped access
 tokens, and 32 refresh tokens. Tokens that reach the configured expiry skew

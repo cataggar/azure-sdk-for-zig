@@ -422,7 +422,11 @@ test "Container Registry golden preserves protocol fidelity" {
     try testing.expect(std.mem.indexOf(u8, clients, "status_404: struct") != null);
     try testing.expect(std.mem.indexOf(u8, clients, "status_206: struct") != null);
     try testing.expect(std.mem.indexOf(u8, clients, "pub const CancelUploadResult") == null);
-    try testing.expect(std.mem.indexOf(u8, clients, "pub fn cancelUpload(") != null);
+    const cancel_start = std.mem.indexOf(u8, clients, "pub fn cancelUpload(").?;
+    const cancel_end = std.mem.indexOfPos(u8, clients, cancel_start, "pub fn startUpload(").?;
+    const cancel_operation = clients[cancel_start..cancel_end];
+    try testing.expect(std.mem.indexOf(u8, cancel_operation, "req.body") == null);
+    try testing.expect(std.mem.indexOf(u8, cancel_operation, "req.setHeader") == null);
     try testing.expect(std.mem.indexOf(u8, clients, "const response_body = try bufferRawResponseBody(alloc, resp.body);") != null);
 
     const models = try emitter.renderModels(allocator, parsed.value);
