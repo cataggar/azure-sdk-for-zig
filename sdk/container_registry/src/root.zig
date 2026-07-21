@@ -1,4 +1,4 @@
-//! Azure Container Registry client with secure challenge authentication.
+//! Azure Container Registry clients with challenge auth and content operations.
 
 pub const protocol = @import("azure_rest_container_registry");
 
@@ -7,6 +7,8 @@ const auth = @import("auth_policy.zig");
 const client = @import("client.zig");
 const models = @import("models.zig");
 const service_error = @import("service_error.zig");
+const content = @import("content_client.zig");
+const digest = @import("digest.zig");
 
 pub const BearerChallenge = challenge.BearerChallenge;
 pub const parseBearerChallenge = challenge.parseBearerChallenge;
@@ -41,6 +43,24 @@ pub const ContainerRegistryServiceError = service_error.ServiceError;
 pub const Result = service_error.Result;
 pub const ArtifactManifestOrder = protocol.enums.ArtifactManifestOrder;
 pub const ArtifactTagOrder = protocol.enums.ArtifactTagOrder;
+pub const ContainerRegistryContentClient = content.ContainerRegistryContentClient;
+pub const ContainerRegistryContentClientOptions = content.ContainerRegistryContentClientOptions;
+pub const ManifestMediaType = content.ManifestMediaType;
+pub const UploadManifestOptions = content.UploadManifestOptions;
+pub const UploadManifestResult = content.UploadManifestResult;
+pub const DownloadManifestResult = content.DownloadManifestResult;
+pub const UploadManifestResponse = content.UploadManifestResponse;
+pub const DownloadManifestResponse = content.DownloadManifestResponse;
+pub const DeleteManifestResponse = content.DeleteManifestResponse;
+pub const max_manifest_size = content.max_manifest_size;
+pub const manifest_accept = content.manifest_accept;
+pub const Sha256Digest = digest.Sha256Digest;
+pub const computeSha256Digest = digest.computeSha256Digest;
+pub const formatSha256Digest = digest.formatSha256Digest;
+pub const validateSha256Digest = digest.validateSha256Digest;
+pub const sha256DigestsEqual = digest.sha256DigestsEqual;
+pub const sha256_digest_length = digest.sha256_digest_length;
+pub const sha256_formatted_length = digest.sha256_formatted_length;
 
 test {
     @import("std").testing.refAllDecls(@This());
