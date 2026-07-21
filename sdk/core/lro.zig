@@ -118,9 +118,9 @@ pub const Poller = struct {
     ) !Poller {
         const strategy = options.strategy orelse try detectStrategy(initial_response);
         const poll_url_str = switch (strategy) {
-            .operation_location => getHeaderIgnoreCase(initial_response.headers, "operation-location"),
-            .azure_async_operation => getHeaderIgnoreCase(initial_response.headers, "azure-asyncoperation"),
-            .location => getHeaderIgnoreCase(initial_response.headers, "location"),
+            .operation_location => initial_response.getHeader("operation-location"),
+            .azure_async_operation => initial_response.getHeader("azure-asyncoperation"),
+            .location => initial_response.getHeader("location"),
             .provisioning_state => original_url,
         } orelse return error.NoPollUrl;
 
@@ -177,7 +177,7 @@ pub const Poller = struct {
         self.last_body = try self.allocator.dupe(u8, resp.body);
 
         // Check for Retry-After header and update interval.
-        if (getHeaderIgnoreCase(resp.headers, "retry-after")) |ra| {
+        if (resp.getHeader("retry-after")) |ra| {
             if (std.fmt.parseInt(u64, ra, 10)) |secs| {
                 // Clamp to max 120 seconds.
                 self.poll_interval_ms = @min(secs * 1000, 120_000);
@@ -312,11 +312,11 @@ pub fn TypedPoller(comptime T: type) type {
 // ─────────────────── Strategy Detection ────────────────────
 
 fn detectStrategy(response: http.Response) !PollingStrategy {
-    if (getHeaderIgnoreCase(response.headers, "operation-location") != null)
+    if (response.getHeader("operation-location") != null)
         return .operation_location;
-    if (getHeaderIgnoreCase(response.headers, "azure-asyncoperation") != null)
+    if (response.getHeader("azure-asyncoperation") != null)
         return .azure_async_operation;
-    if (getHeaderIgnoreCase(response.headers, "location") != null and response.status_code == 202)
+    if (response.getHeader("location") != null and response.status_code == 202)
         return .location;
     return error.UnsupportedLroPattern;
 }
@@ -362,19 +362,6 @@ fn statusFromHttpCode(code: u16) OperationStatus {
     if (code == 202) return .in_progress;
     if (code >= 400) return .failed;
     return .in_progress;
-}
-
-// ─────────────────── Header Helpers ────────────────────────
-
-fn getHeaderIgnoreCase(headers: std.StringHashMap([]const u8), key: []const u8) ?[]const u8 {
-    // Direct lookup first.
-    if (headers.get(key)) |v| return v;
-    // Case-insensitive scan.
-    var it = headers.iterator();
-    while (it.next()) |entry| {
-        if (eqlIgnoreCase(entry.key_ptr.*, key)) return entry.value_ptr.*;
-    }
-    return null;
 }
 
 fn eqlIgnoreCase(a: []const u8, b: []const u8) bool {

@@ -106,18 +106,94 @@ fn isHttpTokenByte(byte: u8) bool {
     };
 }
 
+pub const ResponseHeader = struct {
+    name: []const u8,
+    value: []const u8,
+};
+
+/// Allocator-owned response headers in wire order.
+///
+/// Unlike `Response.headers`, this collection preserves duplicate field
+/// values. Use `getFirst` for the first value or `getAll` for every value.
+pub const ResponseHeaders = struct {
+    entries: std.ArrayList(ResponseHeader) = .empty,
+    allocator: ?std.mem.Allocator = null,
+
+    pub fn init(allocator: std.mem.Allocator) ResponseHeaders {
+        return .{ .allocator = allocator };
+    }
+
+    pub fn append(self: *ResponseHeaders, name: []const u8, value: []const u8) !void {
+        const allocator = self.allocator orelse return error.ResponseHeadersNotInitialized;
+        const owned_name = try allocator.dupe(u8, name);
+        errdefer allocator.free(owned_name);
+        const owned_value = try allocator.dupe(u8, value);
+        errdefer allocator.free(owned_value);
+        try self.entries.append(allocator, .{ .name = owned_name, .value = owned_value });
+    }
+
+    pub fn getFirst(self: *const ResponseHeaders, name: []const u8) ?[]const u8 {
+        for (self.entries.items) |header| {
+            if (std.ascii.eqlIgnoreCase(header.name, name)) return header.value;
+        }
+        return null;
+    }
+
+    /// Return an allocator-owned slice containing borrowed header values.
+    pub fn getAll(
+        self: *const ResponseHeaders,
+        allocator: std.mem.Allocator,
+        name: []const u8,
+    ) ![][]const u8 {
+        var count: usize = 0;
+        for (self.entries.items) |header| {
+            if (std.ascii.eqlIgnoreCase(header.name, name)) count += 1;
+        }
+        const values = try allocator.alloc([]const u8, count);
+        var index: usize = 0;
+        for (self.entries.items) |header| {
+            if (std.ascii.eqlIgnoreCase(header.name, name)) {
+                values[index] = header.value;
+                index += 1;
+            }
+        }
+        return values;
+    }
+
+    pub fn clone(self: *const ResponseHeaders, allocator: std.mem.Allocator) !ResponseHeaders {
+        var result = ResponseHeaders.init(allocator);
+        errdefer result.deinit();
+        for (self.entries.items) |header| {
+            try result.append(header.name, header.value);
+        }
+        return result;
+    }
+
+    pub fn deinit(self: *ResponseHeaders) void {
+        const allocator = self.allocator orelse return;
+        for (self.entries.items) |header| {
+            allocator.free(header.name);
+            allocator.free(header.value);
+        }
+        self.entries.deinit(allocator);
+        self.* = .{};
+    }
+};
+
 /// An HTTP response.
 pub const Response = struct {
     status_code: u16,
     headers: std.StringHashMap([]const u8),
     body: []const u8,
     allocator: std.mem.Allocator,
+    response_headers: ResponseHeaders = .{},
 
     pub fn isSuccess(self: Response) bool {
         return self.status_code >= 200 and self.status_code < 300;
     }
 
     pub fn getHeader(self: *const Response, key: []const u8) ?[]const u8 {
+        if (self.response_headers.getFirst(key)) |value| return value;
         var iterator = self.headers.iterator();
         while (iterator.next()) |entry| {
             if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, key)) {
@@ -127,8 +203,29 @@ pub const Response = struct {
         return null;
     }
 
+    /// Return all values for a response header, preserving wire order.
+    ///
+    /// The returned outer slice is allocator-owned; its values borrow from
+    /// this response and remain valid until `deinit`.
+    pub fn getHeaderValues(
+        self: *const Response,
+        allocator: std.mem.Allocator,
+        key: []const u8,
+    ) ![][]const u8 {
+        const values = try self.response_headers.getAll(allocator, key);
+        if (values.len > 0) return values;
+        allocator.free(values);
+
+        const value = getHeaderFromMap(&self.headers, key) orelse
+            return allocator.alloc([]const u8, 0);
+        const fallback = try allocator.alloc([]const u8, 1);
+        fallback[0] = value;
+        return fallback;
+    }
+
     pub fn deinit(self: *Response) void {
         self.allocator.free(self.body);
+        self.response_headers.deinit();
         deinitOwnedHeaders(self.allocator, &self.headers);
     }
 };
@@ -180,6 +277,7 @@ pub const OperationState = enum {
 pub const HttpOperation = struct {
     status_code: u16,
     headers: std.StringHashMap([]const u8),
+    response_headers: ResponseHeaders = .{},
     body_reader: *std.Io.Reader,
     state: OperationState = .active,
     finishFn: *const fn (self: *HttpOperation) anyerror!void,
@@ -193,11 +291,29 @@ pub const HttpOperation = struct {
     }
 
     pub fn getHeader(self: *const HttpOperation, name: []const u8) ?[]const u8 {
+        if (self.response_headers.getFirst(name)) |value| return value;
         var iter = self.headers.iterator();
         while (iter.next()) |entry| {
             if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return entry.value_ptr.*;
         }
         return null;
+    }
+
+    /// Return all values for a response header, preserving wire order.
+    pub fn getHeaderValues(
+        self: *const HttpOperation,
+        allocator: std.mem.Allocator,
+        name: []const u8,
+    ) ![][]const u8 {
+        const values = try self.response_headers.getAll(allocator, name);
+        if (values.len > 0) return values;
+        allocator.free(values);
+
+        const value = getHeaderFromMap(&self.headers, name) orelse
+            return allocator.alloc([]const u8, 0);
+        const fallback = try allocator.alloc([]const u8, 1);
+        fallback[0] = value;
+        return fallback;
     }
 
     pub fn reader(self: *HttpOperation) !*std.Io.Reader {
@@ -298,6 +414,7 @@ const BufferedOperation = struct {
         self.operation = .{
             .status_code = response.status_code,
             .headers = response.headers,
+            .response_headers = response.response_headers,
             .body_reader = &self.reader_impl,
             .finishFn = &finishImpl,
             .abortFn = &abortImpl,
@@ -305,6 +422,7 @@ const BufferedOperation = struct {
             .deinitFn = &deinitImpl,
         };
         self.response.headers = std.StringHashMap([]const u8).init(response.allocator);
+        self.response.response_headers = .{};
         return &self.operation;
     }
 
@@ -317,6 +435,7 @@ const BufferedOperation = struct {
 
     fn deinitImpl(operation: *HttpOperation) void {
         const self: *BufferedOperation = @alignCast(@fieldParentPtr("operation", operation));
+        self.operation.response_headers.deinit();
         deinitOwnedHeaders(self.allocator, &self.operation.headers);
         self.response.deinit();
         self.allocator.destroy(self);
@@ -367,14 +486,19 @@ pub const StdHttpTransport = struct {
         errdefer allocator.free(body);
         try operation.finish();
 
-        var headers = try cloneOwnedHeaders(allocator, &operation.headers);
-        errdefer deinitOwnedHeaders(allocator, &headers);
+        var header_set = try cloneOwnedResponseHeaderSet(
+            allocator,
+            &operation.headers,
+            &operation.response_headers,
+        );
+        errdefer header_set.deinit(allocator);
 
         return .{
             .status_code = operation.status_code,
-            .headers = headers,
+            .headers = header_set.map,
             .body = body,
             .allocator = allocator,
+            .response_headers = header_set.values,
         };
     }
 
@@ -468,8 +592,8 @@ const StdStreamingOperation = struct {
 
         self.response = try self.request.receiveHead(self.redirect_buffer);
         const status_code: u16 = @intFromEnum(self.response.head.status);
-        var headers = try copyResponseHeaders(allocator, &self.response.head);
-        errdefer deinitOwnedHeaders(allocator, &headers);
+        var header_set = try copyResponseHeaders(allocator, &self.response.head);
+        errdefer header_set.deinit(allocator);
 
         self.decompress_buffer = switch (self.response.head.content_encoding) {
             .identity => &.{},
@@ -493,7 +617,8 @@ const StdStreamingOperation = struct {
         );
         self.operation = .{
             .status_code = status_code,
-            .headers = headers,
+            .headers = header_set.map,
+            .response_headers = header_set.values,
             .body_reader = body_reader,
             .finishFn = &finishImpl,
             .abortFn = &abortImpl,
@@ -603,6 +728,7 @@ const StdStreamingOperation = struct {
 
     fn deinitImpl(operation: *HttpOperation) void {
         const self: *StdStreamingOperation = @alignCast(@fieldParentPtr("operation", operation));
+        self.operation.response_headers.deinit();
         deinitOwnedHeaders(self.allocator, &self.operation.headers);
         self.cleanupStorage();
         self.allocator.destroy(self);
@@ -672,10 +798,21 @@ fn validateFramingHeader(
     return false;
 }
 
-fn cloneOwnedHeaders(
+const OwnedResponseHeaderSet = struct {
+    map: std.StringHashMap([]const u8),
+    values: ResponseHeaders,
+
+    fn deinit(self: *OwnedResponseHeaderSet, allocator: std.mem.Allocator) void {
+        self.values.deinit();
+        deinitOwnedHeaders(allocator, &self.map);
+    }
+};
+
+fn cloneOwnedResponseHeaderSet(
     allocator: std.mem.Allocator,
     source: *const std.StringHashMap([]const u8),
-) !std.StringHashMap([]const u8) {
+    response_headers: *const ResponseHeaders,
+) !OwnedResponseHeaderSet {
     var result = std.StringHashMap([]const u8).init(allocator);
     errdefer deinitOwnedHeaders(allocator, &result);
     var iterator = source.iterator();
@@ -686,17 +823,23 @@ fn cloneOwnedHeaders(
         errdefer allocator.free(value);
         try result.put(name, value);
     }
-    return result;
+    return .{
+        .map = result,
+        .values = try response_headers.clone(allocator),
+    };
 }
 
 fn copyResponseHeaders(
     allocator: std.mem.Allocator,
     head: *const std.http.Client.Response.Head,
-) !std.StringHashMap([]const u8) {
+) !OwnedResponseHeaderSet {
     var headers = std.StringHashMap([]const u8).init(allocator);
     errdefer deinitOwnedHeaders(allocator, &headers);
+    var values = ResponseHeaders.init(allocator);
+    errdefer values.deinit();
     var iterator = head.iterateHeaders();
     while (iterator.next()) |header| {
+        try values.append(header.name, header.value);
         const name = try allocator.dupe(u8, header.name);
         errdefer allocator.free(name);
         const value = try allocator.dupe(u8, header.value);
@@ -711,7 +854,7 @@ fn copyResponseHeaders(
             gop.value_ptr.* = value;
         }
     }
-    return headers;
+    return .{ .map = headers, .values = values };
 }
 
 /// A transport that returns canned responses — for unit tests.
@@ -770,12 +913,14 @@ pub const MockTransport = struct {
 
         const response_body_copy = try self.allocator.dupe(u8, self.response_body);
         errdefer self.allocator.free(response_body_copy);
-        const headers = try self.copyResponseHeaders();
+        var header_set = try self.copyResponseHeaders();
+        errdefer header_set.deinit(self.allocator);
         return .{
             .status_code = self.response_status,
-            .headers = headers,
+            .headers = header_set.map,
             .body = response_body_copy,
             .allocator = self.allocator,
+            .response_headers = header_set.values,
         };
     }
 
@@ -877,10 +1022,13 @@ pub const MockTransport = struct {
         self.last_operation_timeout_ms = request.operation_timeout_ms;
     }
 
-    fn copyResponseHeaders(self: *MockTransport) !std.StringHashMap([]const u8) {
+    fn copyResponseHeaders(self: *MockTransport) !OwnedResponseHeaderSet {
         var headers = std.StringHashMap([]const u8).init(self.allocator);
         errdefer deinitOwnedHeaders(self.allocator, &headers);
+        var values = ResponseHeaders.init(self.allocator);
+        errdefer values.deinit();
         for (self.response_headers_list) |hdr| {
+            try values.append(hdr.name, hdr.value);
             const k = try self.allocator.dupe(u8, hdr.name);
             errdefer self.allocator.free(k);
             const v = try self.allocator.dupe(u8, hdr.value);
@@ -894,7 +1042,7 @@ pub const MockTransport = struct {
             }
             entry.value_ptr.* = v;
         }
-        return headers;
+        return .{ .map = headers, .values = values };
     }
 };
 
@@ -910,8 +1058,8 @@ const MockStreamingOperation = struct {
         errdefer owner.allocator.destroy(self);
         const response_body = try owner.allocator.dupe(u8, owner.response_body);
         errdefer owner.allocator.free(response_body);
-        var headers = try owner.copyResponseHeaders();
-        errdefer deinitOwnedHeaders(owner.allocator, &headers);
+        var header_set = try owner.copyResponseHeaders();
+        errdefer header_set.deinit(owner.allocator);
 
         self.* = .{
             .operation = undefined,
@@ -927,7 +1075,8 @@ const MockStreamingOperation = struct {
         );
         self.operation = .{
             .status_code = owner.response_status,
-            .headers = headers,
+            .headers = header_set.map,
+            .response_headers = header_set.values,
             .body_reader = &self.response_reader.interface,
             .finishFn = &finishImpl,
             .abortFn = &abortImpl,
@@ -956,6 +1105,7 @@ const MockStreamingOperation = struct {
     fn deinitImpl(operation: *HttpOperation) void {
         const self: *MockStreamingOperation = @alignCast(@fieldParentPtr("operation", operation));
         self.owner.stream_deinit_count += 1;
+        self.operation.response_headers.deinit();
         deinitOwnedHeaders(self.allocator, &self.operation.headers);
         self.allocator.free(self.response_body);
         self.allocator.destroy(self);
@@ -1019,6 +1169,17 @@ fn clearOwnedHeaders(
         allocator.free(entry.value_ptr.*);
     }
     headers.clearRetainingCapacity();
+}
+
+fn getHeaderFromMap(
+    headers: *const std.StringHashMap([]const u8),
+    name: []const u8,
+) ?[]const u8 {
+    var iterator = headers.iterator();
+    while (iterator.next()) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return entry.value_ptr.*;
+    }
+    return null;
 }
 
 fn deinitOwnedHeaders(
@@ -1097,23 +1258,27 @@ test "response isSuccess" {
     try std.testing.expect(resp.isSuccess());
 }
 
-test "response header lookup is case-insensitive" {
+test "response header lookup preserves mixed-case duplicates" {
     const allocator = std.testing.allocator;
-    var headers = std.StringHashMap([]const u8).init(allocator);
-    const name = try allocator.dupe(u8, "X-MS-Activity-Id");
-    errdefer allocator.free(name);
-    const value = try allocator.dupe(u8, "activity-id");
-    errdefer allocator.free(value);
-    try headers.put(name, value);
+    var response_headers = ResponseHeaders.init(allocator);
+    errdefer response_headers.deinit();
+    try response_headers.append("Link", "</page/2>; rel=next");
+    try response_headers.append("lInK", "</page/3>; rel=last");
 
     var resp = Response{
         .status_code = 200,
-        .headers = headers,
+        .headers = std.StringHashMap([]const u8).init(allocator),
         .body = try allocator.dupe(u8, "ok"),
         .allocator = allocator,
+        .response_headers = response_headers,
     };
     defer resp.deinit();
-    try std.testing.expectEqualStrings("activity-id", resp.getHeader("x-ms-activity-id").?);
+    try std.testing.expectEqualStrings("</page/2>; rel=next", resp.getHeader("LINK").?);
+    const links = try resp.getHeaderValues(allocator, "link");
+    defer allocator.free(links);
+    try std.testing.expectEqual(@as(usize, 2), links.len);
+    try std.testing.expectEqualStrings("</page/2>; rel=next", links[0]);
+    try std.testing.expectEqualStrings("</page/3>; rel=last", links[1]);
     try std.testing.expect(resp.getHeader("missing") == null);
 }
 
@@ -1121,6 +1286,10 @@ test "mock transport" {
     const allocator = std.testing.allocator;
     var mock = MockTransport.init(allocator, 200, "{\"status\":\"ok\"}");
     defer mock.deinit();
+    mock.response_headers_list = &.{
+        .{ .name = "Docker-Content-Digest", .value = "sha256:first" },
+        .{ .name = "docker-content-digest", .value = "sha256:second" },
+    };
     var req = Request.init(allocator, .POST, "https://vault.azure.net/secrets/mysecret");
     defer req.deinit();
     req.body = "{\"value\":\"secret-value\"}";
@@ -1136,6 +1305,12 @@ test "mock transport" {
     try std.testing.expectEqual(RedirectPolicy.not_allowed, mock.last_redirect_policy.?);
     try std.testing.expectEqual(@as(?u64, 12_345), mock.last_operation_timeout_ms);
     try std.testing.expectEqual(@as(usize, 1), mock.call_count);
+    try std.testing.expectEqualStrings("sha256:first", resp.getHeader("DOCKER-CONTENT-DIGEST").?);
+    const digests = try resp.getHeaderValues(allocator, "docker-content-digest");
+    defer allocator.free(digests);
+    try std.testing.expectEqual(@as(usize, 2), digests.len);
+    try std.testing.expectEqualStrings("sha256:first", digests[0]);
+    try std.testing.expectEqualStrings("sha256:second", digests[1]);
 }
 
 test "mock streaming transport accepts known and chunked uploads" {
@@ -1361,6 +1536,12 @@ fn runStdStreamingCase(
         return err;
     };
     defer operation.deinit();
+    try std.testing.expectEqualStrings("first", operation.getHeader("x-test").?);
+    const test_headers = try operation.getHeaderValues(allocator, "X-Test");
+    defer allocator.free(test_headers);
+    try std.testing.expectEqual(@as(usize, 2), test_headers.len);
+    try std.testing.expectEqualStrings("first", test_headers[0]);
+    try std.testing.expectEqualStrings("second", test_headers[1]);
 
     var response: std.Io.Writer.Allocating = .init(allocator);
     defer response.deinit();
@@ -1451,7 +1632,7 @@ const LocalHttpServer = struct {
         const midpoint = self.encoded_response.len / 2;
         if (self.chunked_response) {
             try writer.interface.print(
-                "HTTP/1.1 200 OK\r\nContent-Encoding: {s}\r\nTransfer-Encoding: chunked\r\n\r\n{x}\r\n",
+                "HTTP/1.1 200 OK\r\nContent-Encoding: {s}\r\nX-Test: first\r\nx-test: second\r\nTransfer-Encoding: chunked\r\n\r\n{x}\r\n",
                 .{ self.encoding, midpoint },
             );
             try writer.interface.writeAll(self.encoded_response[0..midpoint]);
@@ -1463,7 +1644,7 @@ const LocalHttpServer = struct {
             try writer.interface.writeAll("\r\n0\r\n\r\n");
         } else {
             try writer.interface.print(
-                "HTTP/1.1 200 OK\r\nContent-Encoding: {s}\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n",
+                "HTTP/1.1 200 OK\r\nContent-Encoding: {s}\r\nX-Test: first\r\nx-test: second\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n",
                 .{ self.encoding, self.encoded_response.len },
             );
             try writer.interface.writeAll(self.encoded_response[0..midpoint]);

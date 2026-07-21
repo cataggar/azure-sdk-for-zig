@@ -53,12 +53,106 @@ pub const Url = struct {
 /// Encodes all characters except unreserved chars (A-Z, a-z, 0-9, '-', '.', '_', '~')
 /// per RFC 3986 §2.3.
 pub fn percentEncode(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+    return encodeWithMode(allocator, input, .segment);
+}
+
+/// Percent-encode one path segment.
+pub fn encodePathSegment(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+    return encodeWithMode(allocator, input, .segment);
+}
+
+/// Percent-encode an ACR repository name while preserving `/` separators.
+pub fn encodeRepositoryName(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+    return encodeWithMode(allocator, input, .repository);
+}
+
+/// Expand a greedy path value, preserving URI reserved characters and valid
+/// existing percent escapes.
+pub fn expandGreedyPathValue(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+    return encodeWithMode(allocator, input, .greedy);
+}
+
+/// Resolve an absolute or relative URL reference against an endpoint.
+pub fn resolveUrl(
+    allocator: std.mem.Allocator,
+    endpoint: []const u8,
+    reference: []const u8,
+) ![]u8 {
+    const base = std.Uri.parse(endpoint) catch return error.InvalidUrl;
+    if (base.host == null) return error.InvalidUrl;
+
+    var storage = try allocator.alloc(u8, reference.len + endpoint.len + 2);
+    defer allocator.free(storage);
+    @memcpy(storage[0..reference.len], reference);
+    var available = storage;
+    const resolved = std.Uri.resolveInPlace(base, reference.len, &available) catch
+        return error.InvalidUrl;
+
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    errdefer output.deinit();
+    try std.Uri.format(&resolved, &output.writer);
+    return output.toOwnedSlice();
+}
+
+/// Validate that a URL is HTTPS and uses one of the expected hosts.
+///
+/// Host matching is exact and case-insensitive. An empty expected-host list
+/// accepts any HTTPS host.
+pub fn validateHttpsUrl(raw: []const u8, expected_hosts: []const []const u8) !void {
+    const uri = std.Uri.parse(raw) catch return error.InvalidUrl;
+    if (!std.ascii.eqlIgnoreCase(uri.scheme, "https")) return error.HttpsRequired;
+    if (uri.host == null or uri.user != null or uri.password != null or uri.fragment != null)
+        return error.InvalidUrl;
+
+    var host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
+    const host = uri.getHost(&host_buffer) catch return error.InvalidUrl;
+    if (expected_hosts.len == 0) return;
+    for (expected_hosts) |expected| {
+        if (std.ascii.eqlIgnoreCase(host.bytes, expected)) return;
+    }
+    return error.UnexpectedHost;
+}
+
+/// Resolve a URL reference and validate the resulting HTTPS host.
+pub fn resolveAndValidateUrl(
+    allocator: std.mem.Allocator,
+    endpoint: []const u8,
+    reference: []const u8,
+    expected_hosts: []const []const u8,
+) ![]u8 {
+    const resolved = try resolveUrl(allocator, endpoint, reference);
+    errdefer allocator.free(resolved);
+    try validateHttpsUrl(resolved, expected_hosts);
+    return resolved;
+}
+
+const EncodeMode = enum {
+    segment,
+    repository,
+    greedy,
+};
+
+fn encodeWithMode(
+    allocator: std.mem.Allocator,
+    input: []const u8,
+    mode: EncodeMode,
+) ![]u8 {
     var buf: std.ArrayList(u8) = .empty;
     errdefer buf.deinit(allocator);
     const hex = "0123456789ABCDEF";
-    for (input) |c| {
-        if (isUnreserved(c)) {
+    var index: usize = 0;
+    while (index < input.len) : (index += 1) {
+        const c = input[index];
+        if (isUnreserved(c) or
+            (mode == .repository and c == '/') or
+            (mode == .greedy and isReserved(c)))
+        {
             try buf.append(allocator, c);
+        } else if (mode == .greedy and c == '%' and index + 2 < input.len and
+            hexVal(input[index + 1]) != null and hexVal(input[index + 2]) != null)
+        {
+            try buf.appendSlice(allocator, input[index .. index + 3]);
+            index += 2;
         } else {
             try buf.append(allocator, '%');
             try buf.append(allocator, hex[c >> 4]);
@@ -105,6 +199,13 @@ fn isUnreserved(c: u8) bool {
         c == '-' or c == '.' or c == '_' or c == '~';
 }
 
+fn isReserved(c: u8) bool {
+    return switch (c) {
+        ':', '/', '?', '#', '[', ']', '@', '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=' => true,
+        else => false,
+    };
+}
+
 fn hexVal(c: u8) ?u4 {
     if (c >= '0' and c <= '9') return @intCast(c - '0');
     if (c >= 'A' and c <= 'F') return @intCast(c - 'A' + 10);
@@ -138,6 +239,111 @@ test "percentEncode unreserved passthrough" {
     const encoded = try percentEncode(allocator, "abc-123_XYZ.~");
     defer allocator.free(encoded);
     try std.testing.expectEqualStrings("abc-123_XYZ.~", encoded);
+}
+
+test "path segment repository and greedy encoding" {
+    const allocator = std.testing.allocator;
+
+    const digest = try encodePathSegment(allocator, "sha256:abc/def");
+    defer allocator.free(digest);
+    try std.testing.expectEqualStrings("sha256%3Aabc%2Fdef", digest);
+
+    const repository = try encodeRepositoryName(allocator, "team/my image");
+    defer allocator.free(repository);
+    try std.testing.expectEqualStrings("team/my%20image", repository);
+
+    const upload = try expandGreedyPathValue(
+        allocator,
+        "/v2/team/app/blobs/uploads/id?_state=a%2Fb&digest=sha256:abc",
+    );
+    defer allocator.free(upload);
+    try std.testing.expectEqualStrings(
+        "/v2/team/app/blobs/uploads/id?_state=a%2Fb&digest=sha256:abc",
+        upload,
+    );
+}
+
+test "resolve relative and absolute URLs" {
+    const allocator = std.testing.allocator;
+
+    const relative = try resolveUrl(
+        allocator,
+        "https://registry.example/v2/team/app/",
+        "../tags/list?n=10",
+    );
+    defer allocator.free(relative);
+    try std.testing.expectEqualStrings(
+        "https://registry.example/v2/team/tags/list?n=10",
+        relative,
+    );
+
+    const root_relative = try resolveUrl(
+        allocator,
+        "https://registry.example/v2/",
+        "/oauth2/token?service=registry.example",
+    );
+    defer allocator.free(root_relative);
+    try std.testing.expectEqualStrings(
+        "https://registry.example/oauth2/token?service=registry.example",
+        root_relative,
+    );
+
+    const absolute = try resolveUrl(
+        allocator,
+        "https://registry.example/v2/",
+        "https://auth.example/oauth2/token",
+    );
+    defer allocator.free(absolute);
+    try std.testing.expectEqualStrings("https://auth.example/oauth2/token", absolute);
+}
+
+test "validate HTTPS URL expected hosts" {
+    const allocator = std.testing.allocator;
+    const expected = [_][]const u8{ "registry.example", "auth.example" };
+
+    const relative = try resolveAndValidateUrl(
+        allocator,
+        "https://registry.example/v2/",
+        "/v2/team/app/tags/list",
+        &expected,
+    );
+    defer allocator.free(relative);
+    try std.testing.expectEqualStrings(
+        "https://registry.example/v2/team/app/tags/list",
+        relative,
+    );
+
+    try validateHttpsUrl("https://AUTH.EXAMPLE/oauth2/token", &expected);
+    try std.testing.expectError(
+        error.HttpsRequired,
+        validateHttpsUrl("http://registry.example/v2/", &expected),
+    );
+    try std.testing.expectError(
+        error.UnexpectedHost,
+        validateHttpsUrl("https://registry.example.evil.test/v2/", &expected),
+    );
+    try std.testing.expectError(
+        error.UnexpectedHost,
+        resolveAndValidateUrl(
+            allocator,
+            "https://registry.example/v2/",
+            "//evil.test/v2/",
+            &expected,
+        ),
+    );
+    try std.testing.expectError(
+        error.HttpsRequired,
+        resolveAndValidateUrl(
+            allocator,
+            "https://registry.example/v2/",
+            "http://registry.example/v2/",
+            &expected,
+        ),
+    );
+    try std.testing.expectError(
+        error.InvalidUrl,
+        validateHttpsUrl("https://user@registry.example/v2/", &expected),
+    );
 }
 
 test "percentDecode round-trip" {

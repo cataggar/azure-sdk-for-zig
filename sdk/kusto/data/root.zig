@@ -466,12 +466,15 @@ fn responseFromOperation(
             return err;
         };
     }
+    var response_headers = try operation.response_headers.clone(allocator);
+    errdefer response_headers.deinit();
     try operation.finish();
     return .{
         .status_code = operation.status_code,
         .headers = headers,
         .body = owned_body,
         .allocator = allocator,
+        .response_headers = response_headers,
     };
 }
 

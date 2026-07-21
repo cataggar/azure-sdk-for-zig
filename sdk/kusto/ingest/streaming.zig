@@ -881,11 +881,14 @@ fn responseFromOperation(
         }
         entry.value_ptr.* = value;
     }
+    var response_headers = try operation.response_headers.clone(allocator);
+    errdefer response_headers.deinit();
     return .{
         .status_code = operation.status_code,
         .headers = headers,
         .body = try output.toOwnedSlice(allocator),
         .allocator = allocator,
+        .response_headers = response_headers,
     };
 }
 
