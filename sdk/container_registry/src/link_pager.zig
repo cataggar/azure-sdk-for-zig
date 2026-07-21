@@ -116,8 +116,18 @@ const LinkIterator = struct {
         self.index += 1;
         const target_start = self.index;
         while (self.index < self.value.len and self.value[self.index] != '>') {
-            if (self.value[self.index] == '\r' or self.value[self.index] == '\n')
+            if (!isUriReferenceByte(self.value[self.index]))
                 return error.MalformedLinkHeader;
+            if (self.value[self.index] == '%') {
+                if (self.index + 2 >= self.value.len or
+                    !std.ascii.isHex(self.value[self.index + 1]) or
+                    !std.ascii.isHex(self.value[self.index + 2]))
+                {
+                    return error.MalformedLinkHeader;
+                }
+                self.index += 3;
+                continue;
+            }
             self.index += 1;
         }
         if (self.index == self.value.len or self.index == target_start)
@@ -142,8 +152,9 @@ const LinkIterator = struct {
             if (self.index == name_start) return error.MalformedLinkHeader;
             const name = self.value[name_start..self.index];
             skipOws(self.value, &self.index);
-            if (self.index == self.value.len or self.value[self.index] != '=')
-                return error.MalformedLinkHeader;
+            if (self.index == self.value.len or self.value[self.index] != '=') {
+                continue;
+            }
             self.index += 1;
             skipOws(self.value, &self.index);
             const parameter = try parseParameterValue(self.value, &self.index);
@@ -154,40 +165,74 @@ const LinkIterator = struct {
     }
 };
 
-fn parseParameterValue(value: []const u8, index: *usize) ![]const u8 {
+const ParameterValue = struct {
+    bytes: []const u8,
+    quoted: bool,
+};
+
+fn parseParameterValue(value: []const u8, index: *usize) !ParameterValue {
     if (index.* == value.len) return error.MalformedLinkHeader;
     if (value[index.*] != '"') {
         const start = index.*;
-        while (index.* < value.len and
-            value[index.*] != ';' and value[index.*] != ',' and
-            value[index.*] != ' ' and value[index.*] != '\t')
-        {
+        while (index.* < value.len and isParameterNameByte(value[index.*]))
             index.* += 1;
-        }
         if (index.* == start) return error.MalformedLinkHeader;
-        return value[start..index.*];
+        return .{ .bytes = value[start..index.*], .quoted = false };
     }
 
     index.* += 1;
     const start = index.*;
     while (index.* < value.len and value[index.*] != '"') {
         const byte = value[index.*];
-        if (byte == '\\' or byte == '\r' or byte == '\n')
+        if (byte == '\\') {
+            index.* += 1;
+            if (index.* == value.len or !isQuotedPairByte(value[index.*]))
+                return error.MalformedLinkHeader;
+        } else if (!isQuotedTextByte(byte)) {
             return error.MalformedLinkHeader;
+        }
         index.* += 1;
     }
     if (index.* == value.len) return error.MalformedLinkHeader;
-    const result = value[start..index.*];
+    const result = ParameterValue{
+        .bytes = value[start..index.*],
+        .quoted = true,
+    };
     index.* += 1;
     return result;
 }
 
-fn containsNextRelation(value: []const u8) bool {
-    var iterator = std.mem.tokenizeAny(u8, value, " \t");
-    while (iterator.next()) |relation| {
-        if (std.ascii.eqlIgnoreCase(relation, "next")) return true;
+fn containsNextRelation(value: ParameterValue) bool {
+    var index: usize = 0;
+    var relation_length: usize = 0;
+    var matches_next = true;
+    while (nextDecodedByte(value, &index)) |byte| {
+        if (byte == ' ' or byte == '\t') {
+            if (relation_length == "next".len and matches_next) return true;
+            relation_length = 0;
+            matches_next = true;
+            continue;
+        }
+        if (relation_length >= "next".len or
+            std.ascii.toLower(byte) != "next"[relation_length])
+        {
+            matches_next = false;
+        }
+        relation_length += 1;
     }
-    return false;
+    return relation_length == "next".len and matches_next;
+}
+
+fn nextDecodedByte(value: ParameterValue, index: *usize) ?u8 {
+    if (index.* == value.bytes.len) return null;
+    const byte = value.bytes[index.*];
+    index.* += 1;
+    if (value.quoted and byte == '\\') {
+        const escaped = value.bytes[index.*];
+        index.* += 1;
+        return escaped;
+    }
+    return byte;
 }
 
 fn resolveTrustedContinuation(
@@ -223,6 +268,24 @@ fn skipOws(value: []const u8, index: *usize) void {
 fn isParameterNameByte(byte: u8) bool {
     return std.ascii.isAlphanumeric(byte) or switch (byte) {
         '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~' => true,
+        else => false,
+    };
+}
+
+fn isQuotedTextByte(byte: u8) bool {
+    return byte == '\t' or byte == ' ' or
+        (byte >= 0x21 and byte <= 0x7e and byte != '"' and byte != '\\') or
+        byte >= 0x80;
+}
+
+fn isQuotedPairByte(byte: u8) bool {
+    return byte == '\t' or byte == ' ' or
+        (byte >= 0x21 and byte <= 0x7e) or byte >= 0x80;
+}
+
+fn isUriReferenceByte(byte: u8) bool {
+    return std.ascii.isAlphanumeric(byte) or switch (byte) {
+        '-', '.', '_', '~', ':', '/', '?', '#', '[', ']', '@', '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=', '%' => true,
         else => false,
     };
 }

@@ -16,7 +16,11 @@ pub const ManifestPropertiesResult =
     service_error.Result(models.ArtifactManifestProperties);
 pub const TagPropertiesResult =
     service_error.Result(models.ArtifactTagProperties);
-pub const DeleteResult = service_error.Result(void);
+pub const DeleteOutcome = enum {
+    accepted,
+    not_found,
+};
+pub const DeleteResult = service_error.Result(DeleteOutcome);
 
 pub const ListRepositoriesOptions = struct {
     max_results: ?u32 = null,
@@ -390,7 +394,8 @@ pub const ContainerRegistryClient = struct {
     ) !DeleteResult {
         var response = try self.sendJson(allocator, .DELETE, url, null);
         defer response.deinit();
-        if (response.status_code == 202) return .{ .ok = {} };
+        if (response.status_code == 202) return .{ .ok = .accepted };
+        if (response.status_code == 404) return .{ .ok = .not_found };
         return .{ .err = try service_error.ServiceError.fromResponse(
             allocator,
             &response,

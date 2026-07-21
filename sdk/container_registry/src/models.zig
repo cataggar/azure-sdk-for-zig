@@ -182,17 +182,20 @@ pub fn parseRepositoryPage(
     const parsed = try parseJson(allocator, body);
     defer parsed.deinit();
     if (parsed.value != .object) return error.InvalidContainerRegistryResponse;
-    const repositories = parsed.value.object.get("repositories") orelse
-        return error.InvalidContainerRegistryResponse;
-    if (repositories != .array) return error.InvalidContainerRegistryResponse;
+    const repositories_value = parsed.value.object.get("repositories");
+    const repository_values = if (repositories_value) |value| switch (value) {
+        .null => &[_]std.json.Value{},
+        .array => |array| array.items,
+        else => return error.InvalidContainerRegistryResponse,
+    } else &[_]std.json.Value{};
 
-    const names = try allocator.alloc([]u8, repositories.array.items.len);
+    const names = try allocator.alloc([]u8, repository_values.len);
     var initialized: usize = 0;
     errdefer {
         for (names[0..initialized]) |name| allocator.free(name);
         allocator.free(names);
     }
-    for (repositories.array.items, 0..) |value, index| {
+    for (repository_values, 0..) |value, index| {
         if (value != .string) return error.InvalidContainerRegistryResponse;
         names[index] = try allocator.dupe(u8, value.string);
         initialized += 1;

@@ -93,6 +93,53 @@ test "repository pager follows a relative Link anonymously" {
     );
 }
 
+test "Link pager accepts valueless extensions and quoted-pair escapes" {
+    const allocator = std.testing.allocator;
+    const first_headers = [_]core.http.MockTransport.HeaderPair{
+        .{
+            .name = "Link",
+            .value =
+            \\</acr/v1/_catalog?api-version=2021-07-01&last=alpha>; extension; rel="prev\" \\ next"; title="a \"quote\" and \\ slash"
+            ,
+        },
+    };
+    const responses = [_]core.http.SequenceMockTransport.CannedResponse{
+        .{
+            .status = 200,
+            .body = "{\"repositories\":[\"alpha\"]}",
+            .headers = &first_headers,
+        },
+        .{ .status = 200, .body = "{\"repositories\":[\"omega\"]}" },
+    };
+    var transport = core.http.SequenceMockTransport.init(allocator, &responses);
+    var client = try client_mod.ContainerRegistryClient.init(
+        allocator,
+        "https://registry.example",
+        .{
+            .transport = transport.asTransport(),
+            .authentication = .anonymous,
+        },
+    );
+    defer client.deinit();
+    var pager = try client.listRepositories(allocator, .{});
+    defer pager.deinit();
+
+    var first = (try pager.next()).?;
+    defer first.deinit();
+    try expectOk(first);
+    var second = (try pager.next()).?;
+    defer second.deinit();
+    switch (second) {
+        .ok => |page| try std.testing.expectEqualStrings("omega", page.names[0]),
+        .err => return error.UnexpectedServiceError,
+    }
+    try std.testing.expect((try pager.next()) == null);
+    try std.testing.expectEqualStrings(
+        "https://registry.example/acr/v1/_catalog?api-version=2021-07-01&last=alpha",
+        capturedUrl(&transport, 1),
+    );
+}
+
 test "anonymous metadata reads use challenge authentication" {
     const allocator = std.testing.allocator;
     const challenge =
@@ -295,6 +342,22 @@ test "Link pager rejects unsafe and malformed continuations before sending" {
             .link = "not-a-link",
             .expected = error.MalformedLinkHeader,
         },
+        .{
+            .link = "<https://registry.example/acr/v1/bad path>; rel=\"next\"",
+            .expected = error.MalformedLinkHeader,
+        },
+        .{
+            .link = "<https://registry.example/acr/v1/%ZZ>; rel=\"next\"",
+            .expected = error.MalformedLinkHeader,
+        },
+        .{
+            .link = "<https://registry.example/acr/v1/_catalog>; rel=\"next\"; title=\"unterminated",
+            .expected = error.MalformedLinkHeader,
+        },
+        .{
+            .link = "<https://registry.example/acr/v1/_catalog?n=1>; rel=\"next\", </acr/v1/_catalog?n=2>; rel=next",
+            .expected = error.AmbiguousContinuationLink,
+        },
     };
     for (cases) |case| {
         const headers = [_]core.http.MockTransport.HeaderPair{
@@ -370,6 +433,75 @@ test "Link pager never sends credentials to an additionally trusted origin" {
     try std.testing.expectError(error.UntrustedContinuation, pager.next());
     try std.testing.expectEqual(@as(usize, 3), transport.call_count);
     try std.testing.expect(transport.captured_authorization[2]);
+}
+
+test "metadata deletes return idempotent outcomes on every surface" {
+    const allocator = std.testing.allocator;
+    const conflict =
+        \\{"errors":[{"code":"DENIED","message":"delete denied"}]}
+    ;
+    const responses = [_]core.http.SequenceMockTransport.CannedResponse{
+        .{ .status = 202, .body = "" },
+        .{ .status = 404, .body = "" },
+        .{ .status = 202, .body = "" },
+        .{ .status = 404, .body = "" },
+        .{ .status = 202, .body = "" },
+        .{ .status = 404, .body = "" },
+        .{ .status = 409, .body = conflict },
+    };
+    var transport = core.http.SequenceMockTransport.init(allocator, &responses);
+    var client = try client_mod.ContainerRegistryClient.init(
+        allocator,
+        "https://registry.example",
+        .{
+            .transport = transport.asTransport(),
+            .authentication = .anonymous,
+        },
+    );
+    defer client.deinit();
+
+    var repository_accepted = try client.deleteRepository(allocator, "team/app");
+    defer repository_accepted.deinit();
+    try expectDeleteOutcome(repository_accepted, .accepted);
+    var repository_missing = try client.deleteRepository(allocator, "team/app");
+    defer repository_missing.deinit();
+    try expectDeleteOutcome(repository_missing, .not_found);
+
+    var manifest_accepted = try client.deleteManifest(
+        allocator,
+        "team/app",
+        "sha256:one",
+    );
+    defer manifest_accepted.deinit();
+    try expectDeleteOutcome(manifest_accepted, .accepted);
+    var manifest_missing = try client.deleteManifest(
+        allocator,
+        "team/app",
+        "sha256:one",
+    );
+    defer manifest_missing.deinit();
+    try expectDeleteOutcome(manifest_missing, .not_found);
+
+    var tag_accepted = try client.deleteTag(allocator, "team/app", "v1");
+    defer tag_accepted.deinit();
+    try expectDeleteOutcome(tag_accepted, .accepted);
+    var tag_missing = try client.deleteTag(allocator, "team/app", "v1");
+    defer tag_missing.deinit();
+    try expectDeleteOutcome(tag_missing, .not_found);
+
+    var tag_conflict = try client.deleteTag(allocator, "team/app", "protected");
+    defer tag_conflict.deinit();
+    switch (tag_conflict) {
+        .ok => return error.ExpectedServiceError,
+        .err => |failure| {
+            try std.testing.expectEqual(@as(u16, 409), failure.status_code);
+            try std.testing.expect(failure.isCode("denied"));
+        },
+    }
+
+    for (transport.captured_methods[0..responses.len]) |method| {
+        try std.testing.expectEqual(core.http.Method.DELETE, method.?);
+    }
 }
 
 test "metadata CRUD preserves flags paths and structured not-found errors" {
@@ -616,12 +748,37 @@ fn parseErrorAllocationFixture(allocator: std.mem.Allocator) !void {
 }
 
 fn parsePageAllocationFixture(allocator: std.mem.Allocator) !void {
+    var missing_repositories = try models.parseRepositoryPage(allocator, "{}");
+    defer missing_repositories.deinit();
+    var null_repositories = try models.parseRepositoryPage(
+        allocator,
+        "{\"repositories\":null}",
+    );
+    defer null_repositories.deinit();
     var page = try models.parseManifestPage(
         allocator,
         "{\"registry\":\"registry.example\",\"imageName\":\"team/app\",\"manifests\":[{\"digest\":\"sha256:one\",\"createdTime\":\"2026-01-01T00:00:00Z\",\"lastUpdateTime\":\"2026-01-02T00:00:00Z\",\"references\":[{\"digest\":\"sha256:child\",\"architecture\":\"arm64\",\"os\":\"linux\"}],\"tags\":[\"v1\",\"latest\"],\"changeableAttributes\":{\"deleteEnabled\":true}}]}",
     );
     defer page.deinit();
     try std.testing.expectEqual(@as(usize, 1), page.items.len);
+}
+
+test "repository pages map missing and null repositories to owned empty slices" {
+    for ([_][]const u8{
+        "{}",
+        "{\"repositories\":null}",
+    }) |body| {
+        var page = try models.parseRepositoryPage(std.testing.allocator, body);
+        defer page.deinit();
+        try std.testing.expectEqual(@as(usize, 0), page.names.len);
+    }
+    try std.testing.expectError(
+        error.InvalidContainerRegistryResponse,
+        models.parseRepositoryPage(
+            std.testing.allocator,
+            "{\"repositories\":{}}",
+        ),
+    );
 }
 
 test "metadata parsers release every allocation failure path" {
@@ -674,6 +831,16 @@ fn capturedBody(
 fn expectOk(result: anytype) !void {
     switch (result) {
         .ok => {},
+        .err => return error.UnexpectedServiceError,
+    }
+}
+
+fn expectDeleteOutcome(
+    result: client_mod.DeleteResult,
+    expected: client_mod.DeleteOutcome,
+) !void {
+    switch (result) {
+        .ok => |outcome| try std.testing.expectEqual(expected, outcome),
         .err => return error.UnexpectedServiceError,
     }
 }

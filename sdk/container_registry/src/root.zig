@@ -25,6 +25,7 @@ pub const TagPager = client.TagPager;
 pub const RepositoryPropertiesResult = client.RepositoryPropertiesResult;
 pub const ManifestPropertiesResult = client.ManifestPropertiesResult;
 pub const TagPropertiesResult = client.TagPropertiesResult;
+pub const DeleteOutcome = client.DeleteOutcome;
 pub const DeleteResult = client.DeleteResult;
 pub const ChangeableProperties = models.ChangeableProperties;
 pub const ContainerRepositoryProperties = models.ContainerRepositoryProperties;

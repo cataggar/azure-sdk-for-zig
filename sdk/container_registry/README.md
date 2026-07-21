@@ -46,6 +46,10 @@ var update = try client.updateRepositoryProperties(
     .{ .can_write = false, .can_delete = true },
 );
 defer update.deinit();
+
+var deletion = try client.deleteRepository(allocator, "team/image");
+defer deletion.deinit();
+// Both 202 Accepted and 404 Not Found are successful, idempotent outcomes.
 ```
 
 Pages, property values, and service errors own their allocations. Keep the
