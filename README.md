@@ -1,8 +1,9 @@
 # Azure Container Registry for Zig
 
 `azure_sdk_container_registry` adds secure ACR challenge authentication,
-metadata operations, Link-header paging, and structured service errors to the
-generated `azure_rest_container_registry` protocol package.
+token caching, metadata operations, Link-header paging, structured service
+errors, and exact-byte manifest content operations to the generated
+`azure_rest_container_registry` protocol package.
 
 ```zig
 const acr = @import("azure_sdk_container_registry");
@@ -71,6 +72,42 @@ By default only the endpoint HTTPS origin is trusted. Hostname-only
 explicit origin such as `https://registry.example:8443` to trust another port.
 Requests and challenge realms on every other origin are rejected before tokens
 are sent.
+
+Use `ContainerRegistryContentClient` for OCI and Docker manifests:
+
+```zig
+var content = try acr.ContainerRegistryContentClient.init(
+    allocator,
+    registry_endpoint,
+    "team/app",
+    .{
+        .transport = transport,
+        .authentication = .{ .credential = credential },
+    },
+);
+defer content.deinit();
+
+var uploaded = try content.uploadManifest(manifest_bytes, .{
+    .reference = "v1",
+    // Defaults to .oci_image_manifest.
+    .media_type = .docker_v2_manifest,
+});
+defer uploaded.deinit(allocator);
+
+var downloaded = try content.downloadManifest(uploaded.digest);
+defer downloaded.deinit(allocator);
+
+const delete_outcome = try content.deleteManifest(uploaded.digest);
+// Both .accepted and .not_found are successful, idempotent outcomes.
+_ = delete_outcome;
+```
+
+Manifest bytes are never parsed or reserialized. Upload and download validate
+the exact-byte SHA-256 digest, downloads send the mature SDK Accept list, and
+both directions enforce the 4 MiB manifest limit. Omitting the upload
+reference uses the computed digest; deletes require a digest. Download limits
+apply to decoded bytes; `Content-Length` is exact only for identity responses.
+The `*Result` variants preserve structured ACR service errors.
 
 Long-lived clients use bounded LRU caches: 128 routes, 128 scoped access
 tokens, and 32 refresh tokens. Tokens that reach the configured expiry skew
