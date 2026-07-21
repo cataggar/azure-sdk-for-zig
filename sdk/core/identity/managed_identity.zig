@@ -112,7 +112,7 @@ fn parseImdsTokenResponse(allocator: std.mem.Allocator, body: []const u8) !Acces
     };
     if (expires_on <= 0) return error.InvalidTokenResponse;
     const token = try allocator.dupe(u8, token_value.string);
-    return .{ .token = token, .expires_on = expires_on };
+    return .{ .token = token, .expires_on = expires_on, .allocator = allocator };
 }
 
 test "ManagedIdentityCredential" {
@@ -122,11 +122,11 @@ test "ManagedIdentityCredential" {
     );
     defer mock.deinit();
     var cred = ManagedIdentityCredential.init(allocator, mock.asTransport());
-    const token = try cred.asCredential().getToken(
+    var token = try cred.asCredential().getToken(
         .{ .scopes = &.{"https://vault.azure.net/.default"} },
         Context.none,
     );
-    defer allocator.free(token.token);
+    defer token.deinit();
     try std.testing.expectEqualStrings("msi-token", token.token);
     try std.testing.expectEqual(@as(i64, 1743523200), token.expires_on);
     try std.testing.expectEqual(core.http.Method.GET, mock.last_method.?);
@@ -142,11 +142,11 @@ test "ManagedIdentityCredential with client_id" {
     defer mock.deinit();
     var cred = ManagedIdentityCredential.init(allocator, mock.asTransport());
     cred.withClientId("user-assigned-id");
-    const token = try cred.asCredential().getToken(
+    var token = try cred.asCredential().getToken(
         .{ .scopes = &.{"https://storage.azure.com/.default"} },
         Context.none,
     );
-    defer allocator.free(token.token);
+    defer token.deinit();
     try std.testing.expectEqualStrings("msi-ua", token.token);
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "client_id=user-assigned-id") != null);
 }
