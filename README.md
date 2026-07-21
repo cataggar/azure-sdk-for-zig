@@ -111,10 +111,10 @@ azure-core-amqp: azure-uamqp-zig (pure Zig AMQP 1.0)
 | `azure_messaging_eventhubs` | `ProducerClient`, `ConsumerClient` |
 | `azure_messaging_eventhubs_checkpointstore_blob` | Blob-backed checkpoint store |
 | `azure_messaging_servicebus` | `ServiceBusSenderClient`, `ServiceBusReceiverClient`, `ServiceBusAdministrationClient` |
-| `azure_kusto_data` | `KustoClient` (experimental buffered query and management support) |
+| `azure_kusto_data` | `KustoClient` (experimental buffered and progressive query plus management support) |
 | `azure_kusto_ingest` | `StreamingIngestClient` (experimental direct streaming ingestion); queued ingestion and managed queued fallback are planned, not implemented |
 
-Kusto datasets and non-null ingestion IDs are allocator-owned; call their `deinit` methods when finished. Buffered Kusto datasets retain the raw response and tagged `KustoFrame` slices (including unknown V2 frames), decode V1 plus normal, progressive, and fragmented V2 tables into owned `KustoValue` values (null, strings, booleans, integers, reals, and Kusto lexical types), and preserve dynamic or unknown cells as raw JSON.
+Kusto datasets and non-null ingestion IDs are allocator-owned; call their `deinit` methods when finished. Buffered Kusto datasets retain the raw response and tagged `KustoFrame` slices (including unknown V2 frames), decode V1 plus normal, progressive, and fragmented V2 tables into owned `KustoValue` values (null, strings, booleans, integers, reals, and Kusto lexical types), and preserve dynamic or unknown cells as raw JSON. Progressive query events instead own one exact raw V2 frame at a time and retain only table schemas and row counts in stream state.
 
 ### Kusto authentication and connections
 
@@ -165,12 +165,52 @@ Metadata can expose the login authority for a sovereign or private cloud, but `T
 
 - Typed helper areas cover timeout, truncation, progressive results, cache, consistency, resources, and security. Unknown options preserve their JSON types; raw JSON fragments are not accepted. Query parameter values must be strings or Kusto `long` values; encode other scalar types as KQL literal strings such as `datetime(...)` or `dynamic(...)`.
 - Query requests default to a 4-minute server timeout and management requests to 10 minutes. Explicit server timeouts range from 1 second through 1 hour with millisecond precision; the client budget defaults to the server timeout plus 30 seconds. `no_request_timeout` requests the maximum server timeout.
-- The client timeout still bounds retries and backoff only; it cannot interrupt an in-flight blocking `std.http` call. Azure Core now exposes explicit streaming-operation cancellation, but Kusto deadline and request-ID cancellation integration remains future work.
+- Buffered client timeouts still bound retries and backoff only; they cannot interrupt an in-flight blocking `std.http` call. `ProgressiveQueryOptions.deadline_ms` is checked before and after each pull, and a supplied `CancellationToken` is checked between pulls and during open. Neither can interrupt an already-blocking reader or socket call.
 - Explicit application, user, version, and request-ID headers override defaults. Results expose owned `client_request_id` and `activity_id`; dataset `deinit` frees them.
 - Buffered result rows are strict about matching the declared column width by default. Set `ClientRequestProperties.setClientResultsReaderAllowVaryingRowWidths` only for services that intentionally emit uneven rows; missing cells remain absent and extra cells are preserved as unknown raw JSON.
-- V2 buffered decoding requires a `DataSetHeader` first and `DataSetCompletion` last. It reconstructs progressive or fragmented `DataAppend`/`DataReplace` frames by table ID, treats row-embedded OneAPI errors as partial results, retains unknown frames, and exposes table/row iterators plus ID, kind, primary, properties, and status selectors. Kusto frame streaming and query cancellation remain future work.
+- V2 buffered decoding requires a `DataSetHeader` first and `DataSetCompletion` last. It reconstructs progressive or fragmented `DataAppend`/`DataReplace` frames by table ID, treats row-embedded OneAPI errors as partial results, retains unknown frames, and exposes table/row iterators plus ID, kind, primary, properties, and status selectors.
+- `executeProgressiveQuery` forces the V2 progressive result options, consumes one complete object from the top-level JSON array at a time, and enforces `max_frame_bytes` plus `max_table_count`. Its `ProgressiveFrame` values own exact raw JSON until `deinit`; `DataAppend` and `DataReplace` remain explicit rather than being flattened. Frame, table, and row pull adapters are exclusive. The row adapter emits one null-row `replace` reset before every replacement batch, followed by append row events, and retains table/dataset completion events so partial failures and cancellation remain visible. All row-adapter payloads are borrowed until its next call.
+- Call `ProgressiveQueryStream.finish` to drain and validate the full response. Calling `deinit` without `finish` intentionally aborts without draining. `cancel` first cancels the local operation, then sends a non-retryable management `.cancel query` command targeting the original query `x-ms-client-request-id`; its management result is structured as `KustoResult(KustoResponseDataSet)`.
 - Queries may retry; management operations and streaming ingestion remain non-retryable.
 - Kusto `*Result` APIs return `KustoResult(T)`: `.ok`, `.partial` (possibly unreliable decoded buffered tables plus an owned `KustoError`), or `.err`; call `deinit`. A streaming `.err` records `.known_not_accepted` for a received non-2xx response and `.unknown` with the transport cause after transport entry fails, while pre-transport credential/policy errors stay in the outer Zig error union. Permanent and partial failures are never retryable.
+
+### Progressive Kusto queries
+
+```zig
+var opened = try client.executeProgressiveQuery(
+    allocator,
+    "db",
+    "StormEvents | take 100",
+    null,
+    .{ .max_frame_bytes = 1024 * 1024, .deadline_ms = 30_000 },
+);
+const query_stream = switch (opened) {
+    .ok => |value| value,
+    .err => |*failure| {
+        defer failure.deinit();
+        return error.KustoQueryFailed;
+    },
+    .partial => unreachable,
+};
+defer query_stream.deinit(); // aborts if finish was not called
+
+while (try query_stream.next()) |frame| {
+    var owned = frame;
+    defer owned.deinit(allocator);
+    switch (owned.payload) {
+        .table_fragment => |batch| {
+            // `batch.action` is .append or .replace; do not flatten replaces.
+            _ = batch.table.rows;
+        },
+        .table_completion => |completion| if (completion.failure) |failure| {
+            // In-band partial failure, owned by this frame.
+            _ = failure;
+        },
+        else => {},
+    }
+}
+try query_stream.finish();
+```
 
 ### Typed KQL and result rows
 
