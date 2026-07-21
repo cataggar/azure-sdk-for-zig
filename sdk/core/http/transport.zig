@@ -275,7 +275,8 @@ pub const MockTransport = struct {
         }
         self.last_retryable = request.retryable;
 
-        const body_copy = try self.allocator.dupe(u8, self.response_body);
+        const response_body_copy = try self.allocator.dupe(u8, self.response_body);
+        errdefer self.allocator.free(response_body_copy);
         var headers = std.StringHashMap([]const u8).init(self.allocator);
         errdefer deinitOwnedHeaders(self.allocator, &headers);
         for (self.response_headers_list) |hdr| {
@@ -295,7 +296,7 @@ pub const MockTransport = struct {
         return .{
             .status_code = self.response_status,
             .headers = headers,
-            .body = body_copy,
+            .body = response_body_copy,
             .allocator = self.allocator,
         };
     }
@@ -386,10 +387,12 @@ test "mock transport" {
     defer mock.deinit();
     var req = Request.init(allocator, .POST, "https://vault.azure.net/secrets/mysecret");
     defer req.deinit();
+    req.body = "{\"value\":\"secret-value\"}";
     var resp = try mock.asTransport().send(&req);
     defer resp.deinit();
     try std.testing.expectEqual(@as(u16, 200), resp.status_code);
     try std.testing.expectEqualStrings("{\"status\":\"ok\"}", resp.body);
     try std.testing.expectEqual(Method.POST, mock.last_method.?);
     try std.testing.expectEqualStrings("https://vault.azure.net/secrets/mysecret", mock.last_url.?);
+    try std.testing.expectEqualStrings("{\"value\":\"secret-value\"}", mock.last_body.?);
 }
