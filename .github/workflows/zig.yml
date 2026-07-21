@@ -20,7 +20,7 @@ jobs:
           version: 0.16.0
 
       - name: Format Check
-        run: zig fmt --check sdk/ build.zig
+        run: zig fmt --check sdk/ examples/ build.zig
 
       - name: Build
         run: zig build

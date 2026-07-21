@@ -165,7 +165,7 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    _ = b.addModule("azure_kusto_ingest", .{
+    const kusto_ingest_mod = b.addModule("azure_kusto_ingest", .{
         .root_source_file = b.path("sdk/kusto/ingest/root.zig"),
         .target = target,
         .imports = &.{
@@ -535,6 +535,51 @@ pub fn build(b: *std.Build) void {
 
     const run_step = b.step("run", "Run the example");
     run_step.dependOn(&run_example.step);
+
+    const kusto_example = b.addExecutable(.{
+        .name = "azure_kusto_examples",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/kusto/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "azure_core", .module = core_mod },
+                .{ .name = "azure_kusto_common", .module = kusto_common_mod },
+                .{ .name = "azure_kusto_data", .module = kusto_data_mod },
+                .{ .name = "azure_kusto_ingest", .module = kusto_ingest_mod },
+            },
+        }),
+    });
+    b.installArtifact(kusto_example);
+
+    const run_kusto_example = b.addRunArtifact(kusto_example);
+    run_kusto_example.step.dependOn(b.getInstallStep());
+    if (b.args) |args| run_kusto_example.addArgs(args);
+    const run_kusto_step = b.step(
+        "run-kusto-examples",
+        "Run an opt-in Kusto example",
+    );
+    run_kusto_step.dependOn(&run_kusto_example.step);
+
+    const kusto_live_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/kusto/live_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "azure_core", .module = core_mod },
+                .{ .name = "azure_kusto_common", .module = kusto_common_mod },
+                .{ .name = "azure_kusto_data", .module = kusto_data_mod },
+                .{ .name = "azure_kusto_ingest", .module = kusto_ingest_mod },
+            },
+        }),
+    });
+    const run_kusto_live_tests = b.addRunArtifact(kusto_live_tests);
+    const kusto_live_test_step = b.step(
+        "kusto-live-test",
+        "Run opt-in Kusto live tests; unconfigured tests skip",
+    );
+    kusto_live_test_step.dependOn(&run_kusto_live_tests.step);
 
     // -- tspconfigs tool --
     //
