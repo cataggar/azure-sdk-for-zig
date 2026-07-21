@@ -65,6 +65,17 @@ pub const QueuedResourceOperation = queued.QueuedResourceOperation;
 pub const QueuedResourceAttemptOutcome = queued.QueuedResourceAttemptOutcome;
 pub const QueuedResourceAttempt = queued.QueuedResourceAttempt;
 pub const QueuedIngestionResult = queued.QueuedIngestionResult;
+pub const QueuedIngestionStatus = queued.QueuedIngestionStatus;
+pub const IngestionFailureDisposition = queued.IngestionFailureDisposition;
+pub const IngestionStatusResult = queued.IngestionStatusResult;
+pub const StatusPollOptions = queued.StatusPollOptions;
+pub const StatusPollOutcome = queued.StatusPollOutcome;
+pub const StatusPollingStopped = queued.StatusPollingStopped;
+pub const StatusPollingStopReason = queued.StatusPollingStopReason;
+pub const StatusClock = queued.StatusClock;
+pub const StatusSleeper = queued.StatusSleeper;
+pub const StatusRandom = queued.StatusRandom;
+pub const StatusTrackingHandle = queued.StatusTrackingHandle;
 
 test {
     _ = @import("resources.zig");
