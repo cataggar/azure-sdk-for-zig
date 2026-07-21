@@ -308,8 +308,10 @@ pub const RetryPolicy = struct {
         var prng = std.Random.DefaultPrng.init(@truncate(@as(u128, @bitCast(nanoTimestamp()))));
 
         while (true) {
+            try checkOpenCancelled(current_options);
             if (deadlineExpired(deadline_ns)) return error.OperationTimedOut;
             if (attempt > 0) {
+                try checkOpenCancelled(current_options);
                 if (current_options.body) |*body| try body.rewind();
             }
 
@@ -321,6 +323,7 @@ pub const RetryPolicy = struct {
                 const retry_after_ms = retryAfterOperationDelayMs(operation);
                 operation.abort();
                 operation.deinit();
+                try checkOpenCancelled(current_options);
                 attempt += 1;
                 const delay = if (retry_after_ms > 0)
                     @min(retry_after_ms, self.max_delay_ms)
@@ -328,6 +331,8 @@ pub const RetryPolicy = struct {
                     retryDelay(self, &prng, attempt);
                 if (!sleepWithinBudget(delay, deadline_ns)) return error.OperationTimedOut;
             } else |err| {
+                if (err == error.OperationCancelled) return err;
+                try checkOpenCancelled(current_options);
                 if (attempt >= self.max_retries) return err;
                 attempt += 1;
                 const delay = retryDelay(self, &prng, attempt);
@@ -707,6 +712,74 @@ test "RetryPolicy replays only explicitly rewindable streaming bodies" {
     try std.testing.expectEqual(@as(u16, 503), one_shot_operation.status_code);
     try std.testing.expectEqual(@as(usize, 1), one_shot_sequence.call_count);
     one_shot_operation.abort();
+}
+
+test "RetryPolicy propagates streaming cancellation without retry or rewind" {
+    const RewindSource = struct {
+        reader: std.Io.Reader,
+        bytes: []const u8,
+        rewind_count: usize = 0,
+
+        fn init(bytes: []const u8) @This() {
+            return .{ .reader = std.Io.Reader.fixed(bytes), .bytes = bytes };
+        }
+
+        fn rewind(context: *anyopaque) !*std.Io.Reader {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            self.rewind_count += 1;
+            self.reader = std.Io.Reader.fixed(self.bytes);
+            return &self.reader;
+        }
+    };
+
+    const CancellingTransport = struct {
+        transport: HttpTransport = .{ .sendFn = &send, .openFn = &open },
+        call_count: usize = 0,
+
+        fn send(_: *HttpTransport, _: *Request) anyerror!Response {
+            return error.UnexpectedBufferedSend;
+        }
+
+        fn open(
+            transport_impl: *HttpTransport,
+            _: *Request,
+            options: OpenOptions,
+        ) anyerror!*HttpOperation {
+            const self: *@This() = @alignCast(@fieldParentPtr("transport", transport_impl));
+            self.call_count += 1;
+            if (options.body) |body| {
+                var byte: [1]u8 = undefined;
+                _ = try body.reader.readSliceShort(&byte);
+            }
+            if (options.cancellation) |token| @constCast(token).cancel();
+            return error.OperationCancelled;
+        }
+    };
+
+    const allocator = std.testing.allocator;
+    var cancelling = CancellingTransport{};
+    var retry = RetryPolicy.init();
+    retry.initial_delay_ms = 0;
+    var policies = [_]*HttpPolicy{retry.asPolicy()};
+    var pipeline_inst = HttpPipeline{
+        .policies = &policies,
+        .transport_impl = &cancelling.transport,
+    };
+    var request = Request.init(allocator, .POST, "https://example.com/upload");
+    defer request.deinit();
+    var token = transport.CancellationToken{};
+    var source = RewindSource.init("body");
+    const body = transport.StreamingRequestBody.knownLength(
+        &source.reader,
+        source.bytes.len,
+    ).withRewind(&source, &RewindSource.rewind);
+
+    try std.testing.expectError(
+        error.OperationCancelled,
+        pipeline_inst.open(&request, .{ .body = body, .cancellation = &token }),
+    );
+    try std.testing.expectEqual(@as(usize, 1), cancelling.call_count);
+    try std.testing.expectEqual(@as(usize, 0), source.rewind_count);
 }
 
 test "pipeline rejects policies without streaming preparation" {
