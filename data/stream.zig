@@ -169,7 +169,10 @@ pub const ProgressiveQueryStream = struct {
     /// completion state, and finishes the HTTP operation. Drained events are
     /// discarded; use `next` when individual partial failures are required.
     pub fn finish(self: *ProgressiveQueryStream) !void {
-        while (try self.nextInternal()) |*frame| frame.deinit(self.allocator);
+        while (try self.nextInternal()) |frame| {
+            var owned = frame;
+            owned.deinit(self.allocator);
+        }
     }
 
     /// Does not auto-drain. An active operation is aborted before its storage
