@@ -8,6 +8,7 @@ const client = @import("client.zig");
 const models = @import("models.zig");
 const service_error = @import("service_error.zig");
 const content = @import("content_client.zig");
+const blob_download = @import("blob_download.zig");
 const digest = @import("digest.zig");
 const blob_upload = @import("blob_upload.zig");
 
@@ -55,6 +56,21 @@ pub const DownloadManifestResponse = content.DownloadManifestResponse;
 pub const DeleteManifestResponse = content.DeleteManifestResponse;
 pub const max_manifest_size = content.max_manifest_size;
 pub const manifest_accept = content.manifest_accept;
+pub const BlobDownloadClient = blob_download.BlobDownloadClient;
+pub const BlobDownloadClientOptions = blob_download.BlobDownloadClientOptions;
+pub const BufferedBlobDownloadOptions = blob_download.BufferedBlobDownloadOptions;
+pub const StreamingBlobDownloadOptions = blob_download.StreamingBlobDownloadOptions;
+pub const DownloadBlobToWriterOptions = blob_download.DownloadBlobToWriterOptions;
+pub const DownloadedBlob = blob_download.DownloadedBlob;
+pub const BlobDownloadDetails = blob_download.BlobDownloadDetails;
+pub const BlobDownloadStream = blob_download.BlobDownloadStream;
+pub const BufferedBlobDownloadResponse = blob_download.BufferedBlobDownloadResponse;
+pub const StreamingBlobDownloadResponse = blob_download.StreamingBlobDownloadResponse;
+pub const DownloadBlobToWriterResponse = blob_download.DownloadBlobToWriterResponse;
+pub const default_buffered_blob_limit = blob_download.default_buffered_blob_limit;
+pub const default_range_size = blob_download.default_range_size;
+pub const isRetryableDownloadError = blob_download.isRetryableDownloadError;
+pub const isRetryableDownloadStatus = blob_download.isRetryableStatus;
 pub const Sha256Digest = digest.Sha256Digest;
 pub const computeSha256Digest = digest.computeSha256Digest;
 pub const formatSha256Digest = digest.formatSha256Digest;
@@ -72,4 +88,5 @@ test {
     @import("std").testing.refAllDecls(@This());
     _ = @import("metadata_test.zig");
     _ = @import("blob_upload_test.zig");
+    _ = @import("blob_download_test.zig");
 }
