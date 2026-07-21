@@ -174,6 +174,7 @@ pub const QueuedIngestClient = struct {
         source: StreamingIngestSource,
         options: IngestOptions,
     ) !QueuedIngestionResult {
+        try checkCancelled(options.cancellation);
         var threaded: std.Io.Threaded = .init_single_threaded;
         var executor: resources.DataManagementCommandExecutor = undefined;
         var owned_manager: ?resources.ResourceManager = null;
@@ -193,6 +194,7 @@ pub const QueuedIngestClient = struct {
         defer if (owned_manager) |*owned| owned.deinit();
         try validateTargetAndOptions(target, source, options);
         const source_info = try sourceInfo(source, options);
+        try checkCancelled(options.cancellation);
 
         const source_id = try makeLogicalSourceId(allocator, options.source_id);
         const attempt_capacity = attemptCapacity(options.queued_max_resource_attempts) catch |err| {
@@ -224,6 +226,7 @@ pub const QueuedIngestClient = struct {
             ) orelse return result,
         };
         defer allocator.free(blob_uri);
+        try checkCancelled(options.cancellation);
 
         // This is Queue submission time, not user-provided extent creation
         // time. It remains stable if a received Queue rejection is retried.
@@ -242,8 +245,10 @@ pub const QueuedIngestClient = struct {
             // submission. From here an accepted Queue response cannot be
             // replaced by local setup or cleanup work.
             result.tracking = tracking;
+            try checkCancelled(options.cancellation);
         }
 
+        try checkCancelled(options.cancellation);
         return self.submitToQueue(
             allocator,
             manager,
@@ -332,6 +337,7 @@ pub const QueuedIngestClient = struct {
         const first_attempt = result.attempt_count;
         var attempt_number: u32 = 0;
         while (attempt_number < options.queued_max_resource_attempts) : (attempt_number += 1) {
+            try checkCancelled(options.cancellation);
             var selection_result = selectResourceForOperation(
                 allocator,
                 manager,
@@ -340,6 +346,7 @@ pub const QueuedIngestClient = struct {
                 first_attempt,
             ) catch |err| {
                 if (err == error.OutOfMemory) return err;
+                try checkCancelled(options.cancellation);
                 result.failure = err;
                 return null;
             };
@@ -353,6 +360,7 @@ pub const QueuedIngestClient = struct {
             };
             selection_result = undefined;
             defer manager.deinitSelection(&selection);
+            try checkCancelled(options.cancellation);
 
             const result_attempt = try appendAttempt(
                 allocator,
@@ -391,18 +399,20 @@ pub const QueuedIngestClient = struct {
             };
             defer blob_client.deinit();
 
-            var opened = OpenedSource.init(allocator, source, source_info.upload_size.?) catch |err| {
+            try checkCancelled(options.cancellation);
+            var opened = OpenedSource.init(allocator, source, source_info.upload_size) catch |err| {
                 if (err == error.OutOfMemory) return err;
                 result.attempts[result_attempt].outcome = .local_failure;
                 result.failure = err;
                 return null;
             };
             defer opened.deinit();
+            try checkCancelled(options.cancellation);
 
             const upload = blk: {
                 if (shouldGzip(source_info, options)) {
                     var gzip: GzipReader = undefined;
-                    gzip.init(opened.sourceReader(), source_info.upload_size.?) catch |err| {
+                    gzip.init(opened.sourceReader(), source_info.upload_size) catch |err| {
                         if (err == error.OutOfMemory) return err;
                         result.attempts[result_attempt].outcome = .local_failure;
                         result.failure = err;
@@ -410,22 +420,34 @@ pub const QueuedIngestClient = struct {
                     };
                     break :blk blob_client.uploadBlockStream(&gzip.interface, .{}) catch |err| {
                         if (err == error.OutOfMemory) return err;
+                        try checkCancelled(options.cancellation);
                         result.attempts[result_attempt].outcome = .local_failure;
                         result.failure = err;
                         return null;
                     };
                 }
-                break :blk blob_client.uploadReader(
-                    opened.sourceReader(),
-                    source_info.upload_size.?,
-                    .{},
-                ) catch |err| {
+                if (source_info.upload_size) |upload_size| {
+                    break :blk blob_client.uploadReader(
+                        opened.sourceReader(),
+                        upload_size,
+                        .{},
+                    ) catch |err| {
+                        if (err == error.OutOfMemory) return err;
+                        try checkCancelled(options.cancellation);
+                        result.attempts[result_attempt].outcome = .local_failure;
+                        result.failure = err;
+                        return null;
+                    };
+                }
+                break :blk blob_client.uploadBlockStream(opened.sourceReader(), .{}) catch |err| {
                     if (err == error.OutOfMemory) return err;
+                    try checkCancelled(options.cancellation);
                     result.attempts[result_attempt].outcome = .local_failure;
                     result.failure = err;
                     return null;
                 };
             };
+            try checkCancelled(options.cancellation);
             switch (upload) {
                 .accepted => {
                     result.attempts[result_attempt].outcome = .uploaded;
@@ -464,6 +486,7 @@ pub const QueuedIngestClient = struct {
                     if (!source.isReplayable()) return null;
                 },
             }
+            try checkCancelled(options.cancellation);
         }
         return null;
     }
@@ -486,6 +509,7 @@ pub const QueuedIngestClient = struct {
         const first_attempt = result.attempt_count;
         var attempt_number: u32 = 0;
         while (attempt_number < options.queued_max_resource_attempts) : (attempt_number += 1) {
+            try checkCancelled(options.cancellation);
             var selection_result = selectResourceForOperation(
                 allocator,
                 manager,
@@ -494,6 +518,7 @@ pub const QueuedIngestClient = struct {
                 first_attempt,
             ) catch |err| {
                 if (err == error.OutOfMemory) return err;
+                try checkCancelled(options.cancellation);
                 result.failure = err;
                 return null;
             };
@@ -507,6 +532,7 @@ pub const QueuedIngestClient = struct {
             };
             selection_result = undefined;
             defer manager.deinitSelection(&selection);
+            try checkCancelled(options.cancellation);
 
             const result_attempt = try appendAttempt(
                 allocator,
@@ -539,8 +565,10 @@ pub const QueuedIngestClient = struct {
                 result.failure = err;
                 return null;
             };
+            try checkCancelled(options.cancellation);
             const table_write = tracking.createInitialEntity(blob_uri, timestamp) catch |err| {
                 if (err == error.OutOfMemory) return err;
+                try checkCancelled(options.cancellation);
                 result.attempts[result_attempt].outcome = .local_failure;
                 result.failure = err;
                 return null;
@@ -574,6 +602,7 @@ pub const QueuedIngestClient = struct {
                     return null;
                 },
             }
+            try checkCancelled(options.cancellation);
         }
         return null;
     }
@@ -592,6 +621,7 @@ pub const QueuedIngestClient = struct {
         const first_attempt = result.attempt_count;
         var attempt_number: u32 = 0;
         while (attempt_number < options.queued_max_resource_attempts) : (attempt_number += 1) {
+            try checkCancelled(options.cancellation);
             var selection_result = selectResourceForOperation(
                 allocator,
                 manager,
@@ -600,6 +630,7 @@ pub const QueuedIngestClient = struct {
                 first_attempt,
             ) catch |err| {
                 if (err == error.OutOfMemory) return err;
+                try checkCancelled(options.cancellation);
                 result.failure = err;
                 result.outcome = .pre_queue_failed;
                 discardTracking(result);
@@ -617,6 +648,7 @@ pub const QueuedIngestClient = struct {
             };
             selection_result = undefined;
             defer manager.deinitSelection(&selection);
+            try checkCancelled(options.cancellation);
 
             const result_attempt = try appendAttempt(
                 allocator,
@@ -657,8 +689,10 @@ pub const QueuedIngestClient = struct {
                 return result.*;
             };
             defer queue_client.deinit();
+            try checkCancelled(options.cancellation);
             const queue = queue_client.sendMessage(message) catch |err| {
                 if (err == error.OutOfMemory) return err;
+                try checkCancelled(options.cancellation);
                 result.attempts[result_attempt].outcome = .local_failure;
                 result.failure = err;
                 result.outcome = .pre_queue_failed;
@@ -696,6 +730,7 @@ pub const QueuedIngestClient = struct {
                     return result.*;
                 },
             }
+            try checkCancelled(options.cancellation);
         }
         result.outcome = .queue_rejected;
         discardTracking(result);
@@ -706,6 +741,12 @@ pub const QueuedIngestClient = struct {
 fn discardTracking(result: *QueuedIngestionResult) void {
     if (result.tracking) |*tracking| tracking.deinit();
     result.tracking = null;
+}
+
+fn checkCancelled(cancellation: ?*const core.http.CancellationToken) !void {
+    if (cancellation) |token| {
+        if (token.isCancelled()) return error.OperationCancelled;
+    }
 }
 
 fn selectResourceForOperation(
@@ -743,13 +784,16 @@ fn appendAttempt(
     return index;
 }
 
-fn compatibilityResult(
+/// Flattens a rich queued result for legacy APIs, deliberately discarding
+/// resource attempts and any optional status-tracking handle.
+pub fn compatibilityResult(
     allocator: std.mem.Allocator,
     queued: *QueuedIngestionResult,
 ) IngestionResult {
     const ingestion_id = queued.ingestion_id;
     queued.ingestion_id = &.{};
     const outcome = queued.outcome;
+    const source_kind = queued.source_kind;
     queued.deinit(allocator);
     return .{
         .status = if (outcome == .queue_accepted) .queued else .failed,
@@ -759,7 +803,7 @@ fn compatibilityResult(
             .queue_rejected, .pre_queue_failed => .known_not_accepted,
         },
         .ingestion_id = ingestion_id,
-        .source_kind = .blob_uri,
+        .source_kind = source_kind,
     };
 }
 
@@ -858,7 +902,12 @@ fn sourceInfo(source: StreamingIngestSource, options: IngestOptions) !SourceInfo
             break :blk .{ .raw_size = size, .upload_size = size };
         },
         .reader => |reader| blk: {
-            const size = reader.raw_size orelse return error.QueuedRawSizeRequired;
+            if (reader.raw_size) |reader_size| {
+                if (options.raw_size) |expected| {
+                    if (expected != reader_size) return error.QueuedRawSizeMismatch;
+                }
+            }
+            const size = reader.raw_size orelse options.raw_size;
             break :blk .{ .raw_size = size, .upload_size = size };
         },
         .replay_reader => |factory| .{
@@ -880,7 +929,7 @@ fn sourceInfo(source: StreamingIngestSource, options: IngestOptions) !SourceInfo
     return info;
 }
 
-fn precompressedFileExtension(path: []const u8) ?[]const u8 {
+pub fn precompressedFileExtension(path: []const u8) ?[]const u8 {
     if (path.len >= 3 and std.ascii.eqlIgnoreCase(path[path.len - 3 ..], ".gz"))
         return path[path.len - 3 ..];
     if (path.len >= 4 and std.ascii.eqlIgnoreCase(path[path.len - 4 ..], ".zip"))
@@ -902,7 +951,10 @@ fn temporaryBlobExtension(info: SourceInfo, options: IngestOptions) []const u8 {
     return if (shouldGzip(info, options)) "gz" else options.format.toQueuedString();
 }
 
-fn makeLogicalSourceId(allocator: std.mem.Allocator, provided: ?[]const u8) ![]u8 {
+/// Creates a secure nonzero canonical UUID for Queue-compatible ingestion.
+/// Managed ingestion shares this helper so a streaming attempt and a fallback
+/// queue submission always use the exact same normalized ID.
+pub fn makeLogicalSourceId(allocator: std.mem.Allocator, provided: ?[]const u8) ![]u8 {
     const output = try allocator.alloc(u8, 36);
     errdefer allocator.free(output);
     if (provided) |source_id| {
@@ -986,7 +1038,7 @@ const OpenedSource = union(enum) {
     fn init(
         allocator: std.mem.Allocator,
         source: StreamingIngestSource,
-        expected_raw_size: u64,
+        expected_raw_size: ?u64,
     ) !OpenedSource {
         return switch (source) {
             .bytes => |bytes| .{ .bytes = std.Io.Reader.fixed(bytes) },
@@ -1007,7 +1059,9 @@ const OpenedSource = union(enum) {
                 errdefer handle.file.close(io);
                 const stat = try handle.file.stat(io);
                 if (stat.kind != .file) return error.QueuedSourceNotFile;
-                if (stat.size != expected_raw_size) return error.QueuedSourceChanged;
+                if (expected_raw_size) |expected| {
+                    if (stat.size != expected) return error.QueuedSourceChanged;
+                }
                 handle.reader_impl = handle.file.readerStreaming(io, &handle.buffer);
                 break :blk .{ .file = handle };
             },
@@ -1037,7 +1091,7 @@ const OpenedSource = union(enum) {
 const GzipReader = struct {
     interface: std.Io.Reader,
     source: *std.Io.Reader,
-    raw_remaining: u64,
+    raw_remaining: ?u64,
     source_checked: bool = false,
     finished: bool = false,
     source_buffer: [16 * 1024]u8 = undefined,
@@ -1047,7 +1101,7 @@ const GzipReader = struct {
     compressor_buffer: [std.compress.flate.max_window_len]u8 = undefined,
     compressor: std.compress.flate.Compress = undefined,
 
-    fn init(self: *GzipReader, source: *std.Io.Reader, raw_size: u64) !void {
+    fn init(self: *GzipReader, source: *std.Io.Reader, raw_size: ?u64) !void {
         self.* = .{
             .interface = .{
                 .vtable = &.{ .stream = &stream },
@@ -1090,13 +1144,27 @@ const GzipReader = struct {
     }
 
     fn produce(self: *GzipReader) !void {
-        if (self.raw_remaining != 0) {
-            const wanted: usize = @intCast(@min(self.raw_remaining, self.source_buffer.len));
-            const count = try self.source.readSliceShort(self.source_buffer[0..wanted]);
-            if (count == 0) return error.RequestBodyTooShort;
-            self.raw_remaining -= count;
-            try self.compressor.writer.writeAll(self.source_buffer[0..count]);
-            return;
+        if (self.raw_remaining) |remaining| {
+            if (remaining != 0) {
+                const wanted: usize = @intCast(@min(remaining, self.source_buffer.len));
+                const count = try self.source.readSliceShort(self.source_buffer[0..wanted]);
+                if (count == 0) return error.RequestBodyTooShort;
+                self.raw_remaining = remaining - count;
+                try self.compressor.writer.writeAll(self.source_buffer[0..count]);
+                return;
+            }
+            if (!self.source_checked) {
+                var extra: [1]u8 = undefined;
+                if (try self.source.readSliceShort(&extra) != 0) return error.RequestBodyTooLong;
+                self.source_checked = true;
+            }
+        } else {
+            const count = try self.source.readSliceShort(&self.source_buffer);
+            if (count != 0) {
+                try self.compressor.writer.writeAll(self.source_buffer[0..count]);
+                return;
+            }
+            self.source_checked = true;
         }
         if (!self.source_checked) {
             var extra: [1]u8 = undefined;
@@ -1552,6 +1620,40 @@ test "queued existing blob does not upload and keeps raw size optional" {
     try std.testing.expect(std.mem.indexOf(u8, json, "https://existing.blob.core.windows.net/c/a.csv?sig=source") != null);
 }
 
+test "queued unknown-length readers block upload and omit raw data size" {
+    const allocator = std.testing.allocator;
+
+    inline for ([_]QueuedCompression{ .none, .gzip }) |compression| {
+        var executor = QueuedTestExecutor{};
+        var manager = try initQueuedTestManager(allocator, &executor);
+        defer manager.deinit();
+        var transport = core.http.MockTransport.init(allocator, 201, "");
+        defer transport.deinit();
+        var client = QueuedIngestClient.initWithResourceManager(&manager, transport.asTransport());
+        var reader = std.Io.Reader.fixed("unknown reader\n");
+
+        var result = try client.ingest(
+            allocator,
+            .{ .database = "DB", .table = "Table" },
+            .{ .reader = .{ .reader = &reader } },
+            .{
+                .source_id = "31313131-3131-4131-8131-313131313131",
+                .queued_compression = compression,
+            },
+        );
+        defer result.deinit(allocator);
+
+        try std.testing.expectEqual(QueuedSubmissionOutcome.queue_accepted, result.outcome);
+        try std.testing.expectEqual(@as(?u64, null), result.raw_size);
+        // One staged block, its commit, and Queue submission prove an
+        // unknown-length plain or gzip stream did not use exact uploadReader.
+        try std.testing.expectEqual(@as(usize, 3), transport.call_count);
+        const json = try queueMessageJson(allocator, transport.last_body.?);
+        defer allocator.free(json);
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"RawDataSize\"") == null);
+    }
+}
+
 test "queued table reporting creates a reference entity before queue acceptance" {
     const allocator = std.testing.allocator;
     var executor = QueuedTestExecutor{};
@@ -1599,6 +1701,10 @@ test "queued table reporting creates a reference entity before queue acceptance"
         json,
         "\"IngestionStatusInTable\":{\"TableConnectionString\":\"https://accounta.table.core.windows.net/ingestion-status?sig=table-a\",\"PartitionKey\":\"abababab-abab-4bab-8bab-abababababab\",\"RowKey\":\"abababab-abab-4bab-8bab-abababababab\"}",
     ) != null);
+
+    var tracking = result.takeTracking() orelse return error.TestUnexpectedResult;
+    defer tracking.deinit();
+    try std.testing.expect(result.tracking == null);
 }
 
 test "queued unknown queue outcome never exposes a tracking handle" {

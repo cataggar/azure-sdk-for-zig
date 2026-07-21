@@ -1,13 +1,13 @@
 ///! Azure Kusto (Data Explorer) ingestion clients.
 ///!
-///! Provides experimental direct streaming and queued ingestion. Managed
-///! queued fallback remains intentionally unimplemented.
+///! Provides experimental direct streaming, queued, and managed ingestion.
 const std = @import("std");
 const core = @import("azure_core");
 const kusto_common = @import("azure_kusto_common");
 const streaming = @import("streaming.zig");
 const resources = @import("resources.zig");
 const queued = @import("queued.zig");
+const managed = @import("managed.zig");
 
 pub const ConnectionProperties = kusto_common.ConnectionProperties;
 pub const DataFormat = kusto_common.DataFormat;
@@ -87,58 +87,9 @@ pub const QueuedIngestClient = queued.QueuedIngestClient;
 
 // ─────────────── ManagedIngestClient ─────────────────
 
-/// Tries direct streaming ingestion; queued fallback is not implemented.
-pub const ManagedIngestClient = struct {
-    streaming: StreamingIngestClient,
-    queued: QueuedIngestClient,
-
-    pub fn init(connection: ConnectionProperties, transport: *core.http.HttpTransport) ManagedIngestClient {
-        return .{
-            .streaming = StreamingIngestClient.init(connection, transport),
-            .queued = QueuedIngestClient.init(connection, transport),
-        };
-    }
-
-    /// Creates a client whose streaming and queued clients borrow `connection`.
-    ///
-    /// The connection must outlive this client and all copies of it. Shared
-    /// clients are not thread-safe; serialize use of the client and connection.
-    /// This client does not deinitialize the borrowed connection.
-    pub fn initWithConnection(connection: *KustoConnection) ManagedIngestClient {
-        return .{
-            .streaming = StreamingIngestClient.initWithConnection(connection),
-            .queued = QueuedIngestClient.initWithConnection(connection),
-        };
-    }
-
-    /// Ingest data through direct streaming.
-    ///
-    /// Returns `error.ManagedIngestionFallbackNotImplemented` if streaming
-    /// fails because queued fallback would be required.
-    pub fn ingestFromSlice(self: *ManagedIngestClient, allocator: std.mem.Allocator, database: []const u8, table: []const u8, data: []const u8, options: IngestOptions) !IngestionResult {
-        var result = try self.ingestFromSliceResult(allocator, database, table, data, options);
-        return switch (result) {
-            .ok => |ingestion| ingestion,
-            .partial => unreachable,
-            .err => |*failure| {
-                const outcome = failure.outcome;
-                failure.deinit();
-                if (outcome == .unknown) return error.KustoIngestionOutcomeUnknown;
-                return error.ManagedIngestionFallbackNotImplemented;
-            },
-        };
-    }
-
-    /// Structured managed-ingestion result. Until queued fallback is
-    /// implemented, this preserves the direct-streaming failure and outcome.
-    pub fn ingestFromSliceResult(self: *ManagedIngestClient, allocator: std.mem.Allocator, database: []const u8, table: []const u8, data: []const u8, options: IngestOptions) !KustoResult(IngestionResult) {
-        return self.streaming.ingestFromSliceResult(allocator, database, table, data, options);
-    }
-
-    pub fn deinit(self: *ManagedIngestClient, allocator: std.mem.Allocator) void {
-        self.queued.deinit(allocator);
-    }
-};
+pub const ManagedIngestionRoute = managed.ManagedIngestionRoute;
+pub const ManagedIngestionResult = managed.ManagedIngestionResult;
+pub const ManagedIngestClient = managed.ManagedIngestClient;
 
 // ─────────────────────── Tests ───────────────────────
 
@@ -542,7 +493,7 @@ test "ManagedIngestClient ingestFromSlice success" {
     try std.testing.expectEqual(IngestionStatus.success, result.status);
 }
 
-test "ManagedIngestClient does not attempt unimplemented queued fallback" {
+test "ManagedIngestClient no longer returns unimplemented fallback" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 400,
         \\{"error":{"code":"BadRequest","message":"Invalid data"}}
@@ -554,7 +505,7 @@ test "ManagedIngestClient does not attempt unimplemented queued fallback" {
     defer client.deinit(allocator);
 
     try std.testing.expectError(
-        error.ManagedIngestionFallbackNotImplemented,
+        error.KustoIngestionFailed,
         client.ingestFromSlice(allocator, "DB", "Table", "bad", .{}),
     );
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "/v1/rest/ingest/DB/Table") != null);
