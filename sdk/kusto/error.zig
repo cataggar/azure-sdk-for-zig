@@ -112,8 +112,24 @@ pub fn KustoResult(comptime T: type) type {
 }
 
 fn deinitValue(comptime T: type, value: *T, allocator: std.mem.Allocator) void {
-    if (comptime @typeInfo(T) == .@"struct" and @hasDecl(T, "deinit")) {
-        value.deinit(allocator);
+    switch (@typeInfo(T)) {
+        .@"struct" => {
+            if (comptime @hasDecl(T, "deinit"))
+                value.deinit(allocator);
+        },
+        .pointer => |pointer| {
+            if (comptime pointer.size == .one and @hasDecl(pointer.child, "deinit")) {
+                const deinit_info = @typeInfo(@TypeOf(pointer.child.deinit)).@"fn";
+                if (comptime deinit_info.params.len == 1) {
+                    value.*.deinit();
+                } else if (comptime deinit_info.params.len == 2) {
+                    value.*.deinit(allocator);
+                } else {
+                    @compileError("KustoResult pointer payload deinit must accept self and optionally an allocator");
+                }
+            }
+        },
+        else => {},
     }
 }
 
@@ -227,7 +243,23 @@ pub fn applyResponseCorrelation(
     response: *const http.Response,
     fallback_request_id: ?[]const u8,
 ) !void {
-    if (response.getHeader("x-ms-client-request-id")) |value| {
+    return applyCorrelation(
+        result,
+        response.getHeader("x-ms-client-request-id"),
+        response.getHeader("x-ms-activity-id"),
+        fallback_request_id,
+    );
+}
+
+/// Prefer correlation IDs carried by a streaming HTTP operation over values
+/// embedded in a OneAPI context.
+pub fn applyCorrelation(
+    result: *KustoError,
+    response_request_id: ?[]const u8,
+    response_activity_id: ?[]const u8,
+    fallback_request_id: ?[]const u8,
+) !void {
+    if (response_request_id) |value| {
         const owned = try result.allocator.dupe(u8, value);
         if (result.client_request_id) |old| result.allocator.free(old);
         result.client_request_id = owned;
@@ -235,7 +267,7 @@ pub fn applyResponseCorrelation(
         if (fallback_request_id) |value|
             result.client_request_id = try result.allocator.dupe(u8, value);
     }
-    if (response.getHeader("x-ms-activity-id")) |value| {
+    if (response_activity_id) |value| {
         const owned = try result.allocator.dupe(u8, value);
         if (result.activity_id) |old| result.allocator.free(old);
         result.activity_id = owned;
