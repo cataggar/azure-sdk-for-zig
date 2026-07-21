@@ -9,6 +9,7 @@ const kusto_common = @import("azure_kusto_common");
 const data_result = @import("azure_kusto_data");
 const resources = @import("resources.zig");
 const streaming = @import("streaming.zig");
+const status = @import("status.zig");
 
 pub const StreamingIngestSource = streaming.StreamingIngestSource;
 pub const StreamingIngestTarget = streaming.StreamingIngestTarget;
@@ -18,6 +19,17 @@ pub const QueuedCompression = streaming.QueuedCompression;
 pub const IngestionProperties = kusto_common.IngestionProperties;
 pub const IngestionResult = streaming.IngestionResult;
 pub const KustoResult = kusto_common.KustoResult;
+pub const QueuedIngestionStatus = status.QueuedIngestionStatus;
+pub const IngestionFailureDisposition = status.IngestionFailureDisposition;
+pub const IngestionStatusResult = status.IngestionStatusResult;
+pub const StatusPollOptions = status.StatusPollOptions;
+pub const StatusPollOutcome = status.StatusPollOutcome;
+pub const StatusPollingStopped = status.StatusPollingStopped;
+pub const StatusPollingStopReason = status.StatusPollingStopReason;
+pub const StatusClock = status.StatusClock;
+pub const StatusSleeper = status.StatusSleeper;
+pub const StatusRandom = status.StatusRandom;
+pub const StatusTrackingHandle = status.StatusTrackingHandle;
 
 /// The final state of one queued submission. `queue_accepted` means only that
 /// Queue Storage accepted the message; it never represents ingestion
@@ -31,6 +43,7 @@ pub const QueuedSubmissionOutcome = enum {
 
 pub const QueuedResourceOperation = enum {
     temporary_blob,
+    status_table,
     queue,
 };
 
@@ -39,6 +52,9 @@ pub const QueuedResourceAttemptOutcome = enum {
     upload_rejected,
     upload_unknown,
     upload_incomplete,
+    status_table_created,
+    status_table_rejected,
+    status_table_unknown,
     queue_accepted,
     queue_rejected,
     queue_unknown,
@@ -75,13 +91,25 @@ pub const QueuedIngestionResult = struct {
     attempt_count: usize = 0,
     failure: ?anyerror = null,
     resource_failure: ?kusto_common.KustoError = null,
+    /// Present only after a known accepted Queue submission whose requested
+    /// table-reporting entity was successfully created before that POST.
+    tracking: ?StatusTrackingHandle = null,
 
     pub fn deinit(self: *QueuedIngestionResult, allocator: std.mem.Allocator) void {
         allocator.free(self.ingestion_id);
         for (self.attempts[0..self.attempt_count]) |*attempt| attempt.deinit(allocator);
         allocator.free(self.attempts);
         if (self.resource_failure) |*failure| failure.deinit();
+        if (self.tracking) |*tracking| tracking.deinit();
         self.* = undefined;
+    }
+
+    /// Transfers the optional polling handle from this result. The result no
+    /// longer owns it; callers must deinitialize the returned handle.
+    pub fn takeTracking(self: *QueuedIngestionResult) ?StatusTrackingHandle {
+        const tracking = self.tracking;
+        self.tracking = null;
+        return tracking;
     }
 };
 
@@ -200,6 +228,22 @@ pub const QueuedIngestClient = struct {
         // This is Queue submission time, not user-provided extent creation
         // time. It remains stable if a received Queue rejection is retried.
         const source_message_creation_time_ms = currentUnixMs();
+        if (shouldTrackInStatusTable(options)) {
+            const tracking = try self.prepareStatusTracking(
+                allocator,
+                manager,
+                target,
+                blob_uri,
+                source_message_creation_time_ms,
+                options,
+                &result,
+            ) orelse return result;
+            // Every allocation and the status-table write finish before Queue
+            // submission. From here an accepted Queue response cannot be
+            // replaced by local setup or cleanup work.
+            result.tracking = tracking;
+        }
+
         return self.submitToQueue(
             allocator,
             manager,
@@ -424,6 +468,116 @@ pub const QueuedIngestClient = struct {
         return null;
     }
 
+    /// Selects a service-issued status-table SAS URI and inserts the initial
+    /// reference entity before Queue submission, matching the Java and Go
+    /// queued-ingestion protocols. A table write with no received response is
+    /// not retried: the entity may exist and this submission has not yet
+    /// reached the Queue.
+    fn prepareStatusTracking(
+        self: *QueuedIngestClient,
+        allocator: std.mem.Allocator,
+        manager: *resources.ResourceManager,
+        target: StreamingIngestTarget,
+        blob_uri: []const u8,
+        source_message_creation_time_ms: i64,
+        options: IngestOptions,
+        result: *QueuedIngestionResult,
+    ) !?StatusTrackingHandle {
+        const first_attempt = result.attempt_count;
+        var attempt_number: u32 = 0;
+        while (attempt_number < options.queued_max_resource_attempts) : (attempt_number += 1) {
+            var selection_result = selectResourceForOperation(
+                allocator,
+                manager,
+                .ingestion_status_table,
+                result,
+                first_attempt,
+            ) catch |err| {
+                if (err == error.OutOfMemory) return err;
+                result.failure = err;
+                return null;
+            };
+            var selection = switch (selection_result) {
+                .ok => |value| value,
+                .err => |failure| {
+                    selection_result = undefined;
+                    result.resource_failure = failure;
+                    return null;
+                },
+            };
+            selection_result = undefined;
+            defer manager.deinitSelection(&selection);
+
+            const result_attempt = try appendAttempt(
+                allocator,
+                result,
+                &selection,
+                .status_table,
+            );
+            var tracking = status.StatusTrackingHandle.init(
+                allocator,
+                selection.resource.uri(),
+                self.transport,
+                result.ingestion_id,
+                target.database,
+                target.table,
+            ) catch |err| {
+                if (err == error.OutOfMemory) return err;
+                result.attempts[result_attempt].outcome = .local_failure;
+                result.failure = err;
+                return null;
+            };
+            var tracking_owned = true;
+            defer if (tracking_owned) tracking.deinit();
+
+            var timestamp_buffer: [32]u8 = undefined;
+            const timestamp = formatRfc3339Millis(
+                source_message_creation_time_ms,
+                &timestamp_buffer,
+            ) catch |err| {
+                result.attempts[result_attempt].outcome = .local_failure;
+                result.failure = err;
+                return null;
+            };
+            const table_write = tracking.createInitialEntity(blob_uri, timestamp) catch |err| {
+                if (err == error.OutOfMemory) return err;
+                result.attempts[result_attempt].outcome = .local_failure;
+                result.failure = err;
+                return null;
+            };
+            switch (table_write) {
+                .accepted => {
+                    result.attempts[result_attempt].outcome = .status_table_created;
+                    result.attempts[result_attempt].status_code = table_write.accepted.status_code;
+                    manager.reportAttemptNoAlloc(
+                        &result.attempts[result_attempt].attempt,
+                        true,
+                    );
+                    tracking_owned = false;
+                    return tracking;
+                },
+                .rejected => |rejected| {
+                    result.attempts[result_attempt].outcome = .status_table_rejected;
+                    result.attempts[result_attempt].status_code = rejected.status_code;
+                    manager.reportAttemptNoAlloc(
+                        &result.attempts[result_attempt].attempt,
+                        false,
+                    );
+                },
+                .unknown => |unknown| {
+                    result.attempts[result_attempt].outcome = .status_table_unknown;
+                    result.failure = unknown.cause;
+                    manager.reportAttemptNoAlloc(
+                        &result.attempts[result_attempt].attempt,
+                        false,
+                    );
+                    return null;
+                },
+            }
+        }
+        return null;
+    }
+
     fn submitToQueue(
         self: *QueuedIngestClient,
         allocator: std.mem.Allocator,
@@ -448,6 +602,7 @@ pub const QueuedIngestClient = struct {
                 if (err == error.OutOfMemory) return err;
                 result.failure = err;
                 result.outcome = .pre_queue_failed;
+                discardTracking(result);
                 return result.*;
             };
             var selection = switch (selection_result) {
@@ -456,6 +611,7 @@ pub const QueuedIngestClient = struct {
                     selection_result = undefined;
                     result.resource_failure = failure;
                     result.outcome = .pre_queue_failed;
+                    discardTracking(result);
                     return result.*;
                 },
             };
@@ -477,11 +633,13 @@ pub const QueuedIngestClient = struct {
                 blob_uri,
                 selection.authorization_context.token(),
                 source_message_creation_time_ms,
+                if (result.tracking) |*tracking| tracking.queueReference() else null,
             ) catch |err| {
                 if (err == error.OutOfMemory) return err;
                 result.attempts[result_attempt].outcome = .local_failure;
                 result.failure = err;
                 result.outcome = .pre_queue_failed;
+                discardTracking(result);
                 return result.*;
             };
             defer allocator.free(message);
@@ -495,6 +653,7 @@ pub const QueuedIngestClient = struct {
                 result.attempts[result_attempt].outcome = .local_failure;
                 result.failure = err;
                 result.outcome = .pre_queue_failed;
+                discardTracking(result);
                 return result.*;
             };
             defer queue_client.deinit();
@@ -503,6 +662,7 @@ pub const QueuedIngestClient = struct {
                 result.attempts[result_attempt].outcome = .local_failure;
                 result.failure = err;
                 result.outcome = .pre_queue_failed;
+                discardTracking(result);
                 return result.*;
             };
             switch (queue) {
@@ -532,14 +692,21 @@ pub const QueuedIngestClient = struct {
                         false,
                     );
                     result.outcome = .queue_unknown;
+                    discardTracking(result);
                     return result.*;
                 },
             }
         }
         result.outcome = .queue_rejected;
+        discardTracking(result);
         return result.*;
     }
 };
+
+fn discardTracking(result: *QueuedIngestionResult) void {
+    if (result.tracking) |*tracking| tracking.deinit();
+    result.tracking = null;
+}
 
 fn selectResourceForOperation(
     allocator: std.mem.Allocator,
@@ -598,7 +765,8 @@ fn compatibilityResult(
 
 fn attemptCapacity(max_attempts: u32) !usize {
     if (max_attempts == 0) return error.InvalidQueuedResourceAttemptLimit;
-    return std.math.mul(usize, @as(usize, max_attempts), 2) catch
+    // Blob, status-table, and Queue phases can each select a resource.
+    return std.math.mul(usize, @as(usize, max_attempts), 3) catch
         error.InvalidQueuedResourceAttemptLimit;
 }
 
@@ -634,8 +802,6 @@ fn validateTargetAndOptions(
             return error.InvalidQueuedMappingName;
     }
     if (options.source_id) |source_id| try validateQueuedSourceId(source_id);
-    if (options.report_method != .queue)
-        return error.QueuedStatusTableReportingUnsupported;
     if (options.validation_policy) |policy| {
         const validation_options = policy.validation_options orelse
             return error.InvalidQueuedValidationOptions;
@@ -644,6 +810,7 @@ fn validateTargetAndOptions(
         if (validation_options > 2) return error.InvalidQueuedValidationOptions;
         if (validation_implications > 1) return error.InvalidQueuedValidationImplications;
     }
+
     if (source == .blob_uri) {
         const uri = source.blob_uri.uri;
         if (uri.len == 0 or !std.unicode.utf8ValidateSlice(uri))
@@ -653,6 +820,10 @@ fn validateTargetAndOptions(
         if (options.queued_compression != .automatic)
             return error.QueuedBlobUriCompressionUnsupported;
     }
+}
+
+fn shouldTrackInStatusTable(options: IngestOptions) bool {
+    return options.report_level != .none and options.report_method != .queue;
 }
 
 const SourceInfo = struct {
@@ -954,6 +1125,12 @@ const AdditionalPropertiesWire = struct {
     ignoreFirstRecord: bool,
 };
 
+const IngestionStatusInTableWire = struct {
+    TableConnectionString: []const u8,
+    PartitionKey: []const u8,
+    RowKey: []const u8,
+};
+
 const IngestionMessageWire = struct {
     Id: []const u8,
     BlobPath: []const u8,
@@ -966,6 +1143,7 @@ const IngestionMessageWire = struct {
     ReportMethod: []const u8,
     SourceMessageCreationTime: []const u8,
     AdditionalProperties: AdditionalPropertiesWire,
+    IngestionStatusInTable: ?IngestionStatusInTableWire = null,
 };
 
 const IngestionMessageWithoutRawSizeWire = struct {
@@ -979,6 +1157,7 @@ const IngestionMessageWithoutRawSizeWire = struct {
     ReportMethod: []const u8,
     SourceMessageCreationTime: []const u8,
     AdditionalProperties: AdditionalPropertiesWire,
+    IngestionStatusInTable: ?IngestionStatusInTableWire = null,
 };
 
 fn buildQueueMessage(
@@ -990,6 +1169,7 @@ fn buildQueueMessage(
     blob_uri: []const u8,
     authorization_context: []const u8,
     source_message_creation_time_ms: i64,
+    tracking: ?status.StatusTableReference,
 ) ![]u8 {
     const tags = try serializedTags(allocator, options.tags, options.drop_by_tags);
     defer if (tags) |value| allocator.free(value);
@@ -1036,6 +1216,11 @@ fn buildQueueMessage(
         .creationTime = creation,
         .ignoreFirstRecord = options.ignore_first_record,
     };
+    const status_reference = if (tracking) |value| IngestionStatusInTableWire{
+        .TableConnectionString = value.table_connection_string,
+        .PartitionKey = value.partition_key,
+        .RowKey = value.row_key,
+    } else null;
     return if (raw_size) |size|
         try serializeJson(allocator, IngestionMessageWire{
             .Id = source_id,
@@ -1048,6 +1233,7 @@ fn buildQueueMessage(
             .ReportMethod = options.report_method.toString(),
             .SourceMessageCreationTime = source_creation,
             .AdditionalProperties = additional_properties,
+            .IngestionStatusInTable = status_reference,
         })
     else
         try serializeJson(allocator, IngestionMessageWithoutRawSizeWire{
@@ -1060,6 +1246,7 @@ fn buildQueueMessage(
             .ReportMethod = options.report_method.toString(),
             .SourceMessageCreationTime = source_creation,
             .AdditionalProperties = additional_properties,
+            .IngestionStatusInTable = status_reference,
         });
 }
 
@@ -1159,7 +1346,8 @@ const queued_test_resource_body =
     \\["SecuredReadyForAggregationQueue","https://accounta.queue.core.windows.net/ready-a?sig=queue-a"],
     \\["SecuredReadyForAggregationQueue","https://accountb.queue.core.windows.net/ready-b?sig=queue-b"],
     \\["TempStorage","https://accounta.blob.core.windows.net/temp-a?sig=blob-a"],
-    \\["TempStorage","https://accountb.blob.core.windows.net/temp-b?sig=blob-b"]
+    \\["TempStorage","https://accountb.blob.core.windows.net/temp-b?sig=blob-b"],
+    \\["IngestionStatusTable","https://accounta.table.core.windows.net/ingestion-status?sig=table-a"]
     \\]}]}
 ;
 
@@ -1217,23 +1405,34 @@ const QueuedOutcomeTransport = struct {
     allocator: std.mem.Allocator,
     steps: []const Step,
     call_count: usize = 0,
+    capture_body: bool = false,
+    last_body: ?[]u8 = null,
     transport: core.http.HttpTransport = .{ .sendFn = &send },
 
     fn asTransport(self: *QueuedOutcomeTransport) *core.http.HttpTransport {
         return &self.transport;
     }
 
+    fn deinit(self: *QueuedOutcomeTransport) void {
+        if (self.last_body) |body| self.allocator.free(body);
+        self.last_body = null;
+    }
+
     fn send(
         transport: *core.http.HttpTransport,
-        _: *core.http.Request,
+        request: *core.http.Request,
     ) !core.http.Response {
         const self: *QueuedOutcomeTransport = @alignCast(@fieldParentPtr("transport", transport));
         const index = @min(self.call_count, self.steps.len - 1);
         self.call_count += 1;
+        if (self.capture_body) {
+            if (self.last_body) |body| self.allocator.free(body);
+            self.last_body = try self.allocator.dupe(u8, request.body orelse "");
+        }
         return switch (self.steps[index]) {
             .unknown => error.ConnectionResetByPeer,
-            .status => |status| .{
-                .status_code = status,
+            .status => |status_code| .{
+                .status_code = status_code,
                 .headers = std.StringHashMap([]const u8).init(self.allocator),
                 .body = try self.allocator.dupe(u8, ""),
                 .allocator = self.allocator,
@@ -1351,6 +1550,80 @@ test "queued existing blob does not upload and keeps raw size optional" {
     const json = try queueMessageJson(allocator, transport.last_body.?);
     defer allocator.free(json);
     try std.testing.expect(std.mem.indexOf(u8, json, "https://existing.blob.core.windows.net/c/a.csv?sig=source") != null);
+}
+
+test "queued table reporting creates a reference entity before queue acceptance" {
+    const allocator = std.testing.allocator;
+    var executor = QueuedTestExecutor{};
+    var manager = try initQueuedTestManager(allocator, &executor);
+    defer manager.deinit();
+    const steps = [_]QueuedOutcomeTransport.Step{
+        .{ .status = 204 },
+        .{ .status = 201 },
+    };
+    var transport = QueuedOutcomeTransport{
+        .allocator = allocator,
+        .steps = &steps,
+        .capture_body = true,
+    };
+    defer transport.deinit();
+    var client = QueuedIngestClient.initWithResourceManager(&manager, transport.asTransport());
+
+    var result = try client.ingest(
+        allocator,
+        .{ .database = "DB", .table = "Table" },
+        .{ .blob_uri = .{ .uri = "https://existing.blob.core.windows.net/c/a.csv?sig=source" } },
+        .{
+            .source_id = "abababab-abab-4bab-8bab-abababababab",
+            .report_level = .failures_and_successes,
+            .report_method = .queue_and_table,
+        },
+    );
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(QueuedSubmissionOutcome.queue_accepted, result.outcome);
+    try std.testing.expect(result.tracking != null);
+    try std.testing.expectEqual(@as(usize, 2), result.attempt_count);
+    try std.testing.expectEqual(QueuedResourceOperation.status_table, result.attempts[0].operation);
+    try std.testing.expectEqual(
+        QueuedResourceAttemptOutcome.status_table_created,
+        result.attempts[0].outcome,
+    );
+    try std.testing.expectEqual(QueuedResourceOperation.queue, result.attempts[1].operation);
+    try std.testing.expectEqual(@as(usize, 2), transport.call_count);
+
+    const json = try queueMessageJson(allocator, transport.last_body.?);
+    defer allocator.free(json);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        json,
+        "\"IngestionStatusInTable\":{\"TableConnectionString\":\"https://accounta.table.core.windows.net/ingestion-status?sig=table-a\",\"PartitionKey\":\"abababab-abab-4bab-8bab-abababababab\",\"RowKey\":\"abababab-abab-4bab-8bab-abababababab\"}",
+    ) != null);
+}
+
+test "queued unknown queue outcome never exposes a tracking handle" {
+    const allocator = std.testing.allocator;
+    var executor = QueuedTestExecutor{};
+    var manager = try initQueuedTestManager(allocator, &executor);
+    defer manager.deinit();
+    const steps = [_]QueuedOutcomeTransport.Step{
+        .{ .status = 204 },
+        .unknown,
+    };
+    var transport = QueuedOutcomeTransport{ .allocator = allocator, .steps = &steps };
+    var client = QueuedIngestClient.initWithResourceManager(&manager, transport.asTransport());
+    var result = try client.ingest(
+        allocator,
+        .{ .database = "DB", .table = "Table" },
+        .{ .blob_uri = .{ .uri = "https://existing.blob.core.windows.net/c/a.csv?sig=source" } },
+        .{
+            .source_id = "acacacac-acac-4cac-8cac-acacacacacac",
+            .report_method = .table,
+        },
+    );
+    defer result.deinit(allocator);
+    try std.testing.expectEqual(QueuedSubmissionOutcome.queue_unknown, result.outcome);
+    try std.testing.expect(result.tracking == null);
 }
 
 test "queued file reader and replay reader sources submit through temporary blobs" {
@@ -1578,7 +1851,7 @@ test "queued source IDs are canonical nonzero UUIDs" {
     try std.testing.expectEqual(@as(u8, '4'), generated[14]);
 }
 
-test "queued validation rejects unsupported status reporting and invalid policies before requests" {
+test "queued validation rejects invalid policies before requests" {
     const allocator = std.testing.allocator;
     var executor = QueuedTestExecutor{};
     var manager = try initQueuedTestManager(allocator, &executor);
@@ -1593,20 +1866,6 @@ test "queued validation rejects unsupported status reporting and invalid policie
     try std.testing.expectError(
         error.InvalidQueuedSourceId,
         client.ingest(allocator, target, source, .{ .source_id = "not-a-uuid" }),
-    );
-    try std.testing.expectError(
-        error.QueuedStatusTableReportingUnsupported,
-        client.ingest(allocator, target, source, .{
-            .source_id = source_id,
-            .report_method = .table,
-        }),
-    );
-    try std.testing.expectError(
-        error.QueuedStatusTableReportingUnsupported,
-        client.ingest(allocator, target, source, .{
-            .source_id = source_id,
-            .report_method = .queue_and_table,
-        }),
     );
     try std.testing.expectError(
         error.InvalidQueuedValidationOptions,
@@ -1708,6 +1967,7 @@ test "queued source message time is independent of extent creation time" {
         "https://account.blob.core.windows.net/container/blob?sig=opaque",
         "identity-context",
         1_000,
+        null,
     );
     defer allocator.free(message);
     try std.testing.expect(
@@ -1903,6 +2163,7 @@ fn queueMessageAllocationTest(allocator: std.mem.Allocator) !void {
         "https://account.blob.core.windows.net/container/blob.gz?sig=opaque",
         "identity-context",
         1_000,
+        null,
     );
     defer allocator.free(message);
 }
