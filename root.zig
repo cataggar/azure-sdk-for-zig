@@ -284,7 +284,7 @@ pub const BlobClient = struct {
             return error.AzureRequestFailed;
         }
 
-        const etag = if (resp.headers.get("ETag")) |e| try allocator.dupe(u8, e) else null;
+        const etag = if (resp.getHeader("ETag")) |e| try allocator.dupe(u8, e) else null;
         return .{ .ok = .{ .etag = etag } };
     }
 
@@ -337,8 +337,8 @@ pub const BlobClient = struct {
         }
 
         return .{ .ok = .{
-            .etag = if (resp.headers.get("ETag")) |e| try allocator.dupe(u8, e) else null,
-            .last_modified = if (resp.headers.get("Last-Modified")) |lm| try allocator.dupe(u8, lm) else null,
+            .etag = if (resp.getHeader("ETag")) |e| try allocator.dupe(u8, e) else null,
+            .last_modified = if (resp.getHeader("Last-Modified")) |lm| try allocator.dupe(u8, lm) else null,
         } };
     }
 
