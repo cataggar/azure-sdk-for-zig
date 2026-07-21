@@ -463,7 +463,11 @@ fn sendFollowingRedirects(transport: *HttpTransport, request: *Request) !Respons
     var redirect_count: usize = 0;
     while (true) {
         var response = try transport.sendFn(transport, current);
-        const location = redirectLocation(response.status_code, response.getHeader("Location")) orelse
+        const action = redirectAction(
+            response.status_code,
+            current.method,
+            response.getHeader("Location"),
+        ) orelse
             return response;
         if (current.redirect_policy == .not_allowed) return response;
         if (redirect_count >= max_redirects) {
@@ -471,12 +475,18 @@ fn sendFollowingRedirects(transport: *HttpTransport, request: *Request) !Respons
             return error.TooManyRedirects;
         }
 
-        const target = resolveRedirect(current, location) catch |err| {
+        const target = resolveRedirect(current, action.location) catch |err| {
             response.deinit();
             return err;
         };
         response.deinit();
-        const next = OwnedRedirectRequest.create(current, target.url, target.cross_origin) catch |err| {
+        const next = OwnedRedirectRequest.create(
+            current,
+            target.url,
+            target.cross_origin,
+            action.method,
+            action.drop_body,
+        ) catch |err| {
             target.allocator.free(target.url);
             return err;
         };
@@ -501,28 +511,45 @@ fn openFollowingRedirects(
     var redirect_count: usize = 0;
     while (true) {
         var operation = try rawOpen(transport, current, current_options);
-        const location = redirectLocation(operation.status_code, operation.getHeader("Location")) orelse
+        const action = redirectAction(
+            operation.status_code,
+            current.method,
+            operation.getHeader("Location"),
+        ) orelse
             return operation;
-        if (current.redirect_policy == .not_allowed or !current_options.isReplayable())
+        if (current.redirect_policy == .not_allowed or
+            (!action.drop_body and !current_options.isReplayable()))
+        {
             return operation;
+        }
         if (redirect_count >= max_redirects) {
             operation.abort();
             operation.deinit();
             return error.TooManyRedirects;
         }
 
-        const target = resolveRedirect(current, location) catch |err| {
+        const target = resolveRedirect(current, action.location) catch |err| {
             operation.abort();
             operation.deinit();
             return err;
         };
         operation.abort();
         operation.deinit();
-        if (current_options.body) |*body| body.rewind() catch |err| {
-            target.allocator.free(target.url);
-            return err;
-        };
-        const next = OwnedRedirectRequest.create(current, target.url, target.cross_origin) catch |err| {
+        if (action.drop_body) {
+            current_options.body = null;
+        } else if (current_options.body) |*body| {
+            body.rewind() catch |err| {
+                target.allocator.free(target.url);
+                return err;
+            };
+        }
+        const next = OwnedRedirectRequest.create(
+            current,
+            target.url,
+            target.cross_origin,
+            action.method,
+            action.drop_body,
+        ) catch |err| {
             target.allocator.free(target.url);
             return err;
         };
@@ -545,9 +572,28 @@ fn rawOpen(
     return BufferedOperation.openRaw(transport, request);
 }
 
-fn redirectLocation(status_code: u16, location: ?[]const u8) ?[]const u8 {
-    if (status_code != 307 and status_code != 308) return null;
-    return location;
+const RedirectAction = struct {
+    location: []const u8,
+    method: Method,
+    drop_body: bool,
+};
+
+fn redirectAction(
+    status_code: u16,
+    method: Method,
+    location: ?[]const u8,
+) ?RedirectAction {
+    const target = location orelse return null;
+    // Match std.http.Client: 303 always becomes GET; 301/302 rewrite POST.
+    return switch (status_code) {
+        301, 302 => if (method == .POST)
+            .{ .location = target, .method = .GET, .drop_body = true }
+        else
+            .{ .location = target, .method = method, .drop_body = false },
+        303 => .{ .location = target, .method = .GET, .drop_body = true },
+        307, 308 => .{ .location = target, .method = method, .drop_body = false },
+        else => null,
+    };
 }
 
 const ResolvedRedirect = struct {
@@ -575,6 +621,8 @@ const OwnedRedirectRequest = struct {
         source: *const Request,
         target_url: []const u8,
         cross_origin: bool,
+        method: Method,
+        drop_body: bool,
     ) !*OwnedRedirectRequest {
         const self = try source.allocator.create(OwnedRedirectRequest);
         errdefer source.allocator.destroy(self);
@@ -582,7 +630,7 @@ const OwnedRedirectRequest = struct {
         errdefer source.allocator.free(owned_url);
         self.* = .{
             .allocator = source.allocator,
-            .request = Request.init(source.allocator, source.method, owned_url),
+            .request = Request.init(source.allocator, method, owned_url),
             .url = owned_url,
         };
         errdefer self.request.deinit();
@@ -590,9 +638,10 @@ const OwnedRedirectRequest = struct {
         while (headers.next()) |header| {
             if (cross_origin and std.ascii.eqlIgnoreCase(header.key_ptr.*, "Authorization"))
                 continue;
+            if (drop_body and isBodyHeader(header.key_ptr.*)) continue;
             try self.request.setHeader(header.key_ptr.*, header.value_ptr.*);
         }
-        self.request.body = source.body;
+        self.request.body = if (drop_body) null else source.body;
         self.request.retryable = source.retryable;
         self.request.transport_started = true;
         self.request.redirect_policy = source.redirect_policy;
@@ -606,6 +655,12 @@ const OwnedRedirectRequest = struct {
         self.allocator.destroy(self);
     }
 };
+
+fn isBodyHeader(name: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(name, "Content-Length") or
+        std.ascii.eqlIgnoreCase(name, "Transfer-Encoding") or
+        std.ascii.eqlIgnoreCase(name, "Content-Type");
+}
 
 const BufferedOperation = struct {
     operation: HttpOperation,
@@ -1469,8 +1524,12 @@ pub const SequenceMockTransport = struct {
     transport: HttpTransport,
     captured_methods: [16]?Method = .{null} ** 16,
     captured_authorization: [16]bool = .{false} ** 16,
+    captured_content_type: [16]bool = .{false} ** 16,
+    captured_content_length: [16]bool = .{false} ** 16,
+    captured_transfer_encoding: [16]bool = .{false} ** 16,
     captured_url_lengths: [16]usize = .{0} ** 16,
     captured_urls: [16][512]u8 = undefined,
+    captured_body_present: [16]bool = .{false} ** 16,
     captured_body_lengths: [16]usize = .{0} ** 16,
     captured_bodies: [16][512]u8 = undefined,
 
@@ -1583,8 +1642,12 @@ pub const SequenceMockTransport = struct {
         const call = self.call_count;
         self.captured_methods[call] = request.method;
         self.captured_authorization[call] = request.getHeader("Authorization") != null;
+        self.captured_content_type[call] = request.getHeader("Content-Type") != null;
+        self.captured_content_length[call] = request.getHeader("Content-Length") != null;
+        self.captured_transfer_encoding[call] = request.getHeader("Transfer-Encoding") != null;
         @memcpy(self.captured_urls[call][0..request.url.len], request.url);
         self.captured_url_lengths[call] = request.url.len;
+        self.captured_body_present[call] = body != null;
         @memcpy(self.captured_bodies[call][0..body_value.len], body_value);
         self.captured_body_lengths[call] = body_value.len;
         self.call_count += 1;
@@ -1787,6 +1850,96 @@ test "transport follows safe redirects and strips cross-origin authorization" {
         "https://registry.example/v2/continued",
         buffered_sequence.capturedUrl(1),
     );
+}
+
+test "transport preserves buffered 301 302 and 303 redirect semantics" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct {
+        status: u16,
+        method: Method,
+        location: []const u8,
+        expected_method: Method,
+        expected_body: ?[]const u8,
+        expected_authorization: bool,
+    }{
+        .{
+            .status = 301,
+            .method = .POST,
+            .location = "/moved",
+            .expected_method = .GET,
+            .expected_body = null,
+            .expected_authorization = true,
+        },
+        .{
+            .status = 302,
+            .method = .PUT,
+            .location = "/found",
+            .expected_method = .PUT,
+            .expected_body = "payload",
+            .expected_authorization = true,
+        },
+        .{
+            .status = 303,
+            .method = .PUT,
+            .location = "https://storage.example/result",
+            .expected_method = .GET,
+            .expected_body = null,
+            .expected_authorization = false,
+        },
+    };
+
+    for (cases) |case| {
+        const headers = [_]MockTransport.HeaderPair{
+            .{ .name = "Location", .value = case.location },
+        };
+        var sequence = SequenceMockTransport.init(allocator, &.{
+            .{ .status = case.status, .body = "", .headers = &headers },
+            .{ .status = 200, .body = "ok" },
+        });
+        var request = Request.init(allocator, case.method, "https://registry.example/start");
+        defer request.deinit();
+        request.body = "payload";
+        try request.setHeader("Authorization", "Bearer token");
+        try request.setHeader("Content-Type", "application/octet-stream");
+        try request.setHeader("Content-Length", "7");
+
+        var response = try sequence.asTransport().send(&request);
+        defer response.deinit();
+        try std.testing.expectEqual(@as(u16, 200), response.status_code);
+        try std.testing.expectEqual(@as(usize, 2), sequence.call_count);
+        try std.testing.expectEqual(case.expected_method, sequence.captured_methods[1].?);
+        try std.testing.expectEqual(case.expected_body != null, sequence.captured_body_present[1]);
+        try std.testing.expectEqual(case.expected_authorization, sequence.captured_authorization[1]);
+        if (case.expected_body) |body| {
+            try std.testing.expectEqualStrings(body, sequence.capturedBody(1));
+            try std.testing.expect(sequence.captured_content_type[1]);
+            try std.testing.expect(sequence.captured_content_length[1]);
+        } else {
+            try std.testing.expect(!sequence.captured_content_type[1]);
+            try std.testing.expect(!sequence.captured_content_length[1]);
+            try std.testing.expect(!sequence.captured_transfer_encoding[1]);
+        }
+    }
+
+    var one_shot_sequence = SequenceMockTransport.init(allocator, &.{
+        .{
+            .status = 302,
+            .body = "",
+            .headers = &.{.{ .name = "Location", .value = "/after-post" }},
+        },
+        .{ .status = 200, .body = "ok" },
+    });
+    var one_shot_request = Request.init(allocator, .POST, "https://registry.example/start");
+    defer one_shot_request.deinit();
+    var source = std.Io.Reader.fixed("one-shot");
+    var operation = try one_shot_sequence.asTransport().open(&one_shot_request, .{
+        .body = StreamingRequestBody.knownLength(&source, 8),
+    });
+    defer operation.deinit();
+    try std.testing.expectEqual(@as(u16, 200), operation.status_code);
+    try std.testing.expectEqual(Method.GET, one_shot_sequence.captured_methods[1].?);
+    try std.testing.expect(!one_shot_sequence.captured_body_present[1]);
+    try operation.finish();
 }
 
 test "transport does not replay one-shot bodies and rejects insecure redirects" {
