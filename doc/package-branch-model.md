@@ -178,6 +178,18 @@ When the canonical API changes, refresh
 `codegen/fixtures/container_registry.json` first using the command documented
 in `codegen/README.md`, then run the package generation command above.
 
+The hand-written package is validated independently with local path
+dependencies during development:
+
+```bash
+(cd sdk/container_registry && zig build test --summary all)
+```
+
+Before publishing `sdk/container_registry`, replace both local paths in its
+`build.zig.zon` with immutable `azure_sdk` and
+`azure_rest_container_registry` commit/hash pins, then rerun the same package
+test command from the orphan branch.
+
 For a release commit, generate complete immutable dependency metadata before
 splitting the package to its orphan branch:
 
