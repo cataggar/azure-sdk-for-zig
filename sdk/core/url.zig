@@ -126,6 +126,34 @@ pub fn resolveAndValidateUrl(
     return resolved;
 }
 
+/// Compare URL origins using case-insensitive schemes and hosts plus effective
+/// ports. Both URLs must be absolute and must not contain user information.
+pub fn sameOrigin(left_raw: []const u8, right_raw: []const u8) !bool {
+    const left = std.Uri.parse(left_raw) catch return error.InvalidUrl;
+    const right = std.Uri.parse(right_raw) catch return error.InvalidUrl;
+    if (left.host == null or right.host == null or
+        left.user != null or left.password != null or
+        right.user != null or right.password != null)
+    {
+        return error.InvalidUrl;
+    }
+
+    var left_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
+    var right_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
+    const left_host = left.getHost(&left_buffer) catch return error.InvalidUrl;
+    const right_host = right.getHost(&right_buffer) catch return error.InvalidUrl;
+    return std.ascii.eqlIgnoreCase(left.scheme, right.scheme) and
+        std.ascii.eqlIgnoreCase(left_host.bytes, right_host.bytes) and
+        effectivePort(left) == effectivePort(right);
+}
+
+fn effectivePort(uri: std.Uri) ?u16 {
+    if (uri.port) |port| return port;
+    if (std.ascii.eqlIgnoreCase(uri.scheme, "https")) return 443;
+    if (std.ascii.eqlIgnoreCase(uri.scheme, "http")) return 80;
+    return null;
+}
+
 const EncodeMode = enum {
     segment,
     repository,
@@ -344,6 +372,21 @@ test "validate HTTPS URL expected hosts" {
         error.InvalidUrl,
         validateHttpsUrl("https://user@registry.example/v2/", &expected),
     );
+}
+
+test "sameOrigin compares effective ports and host case" {
+    try std.testing.expect(try sameOrigin(
+        "https://REGISTRY.example/v2/",
+        "https://registry.example:443/blobs/data",
+    ));
+    try std.testing.expect(!(try sameOrigin(
+        "https://registry.example/v2/",
+        "https://storage.example/blobs/data",
+    )));
+    try std.testing.expect(!(try sameOrigin(
+        "https://registry.example/v2/",
+        "https://registry.example:444/blobs/data",
+    )));
 }
 
 test "percentDecode round-trip" {

@@ -42,6 +42,13 @@ pub const HttpPolicy = struct {
         self: *HttpPolicy,
         request: *Request,
     ) anyerror!void = null,
+    openFn: ?*const fn (
+        self: *HttpPolicy,
+        request: *Request,
+        options: OpenOptions,
+        next: []*HttpPolicy,
+        final_transport: *HttpTransport,
+    ) anyerror!*HttpOperation = null,
 
     pub fn process(
         self: *HttpPolicy,
@@ -56,6 +63,18 @@ pub const HttpPolicy = struct {
         const prepareFn = self.prepareFn orelse return error.StreamingPolicyUnsupported;
         return prepareFn(self, request);
     }
+
+    pub fn open(
+        self: *HttpPolicy,
+        request: *Request,
+        options: OpenOptions,
+        next: []*HttpPolicy,
+        final_transport: *HttpTransport,
+    ) !*HttpOperation {
+        if (self.openFn) |openFn| return openFn(self, request, options, next, final_transport);
+        try self.prepare(request);
+        return callNextOpen(request, options, next, final_transport);
+    }
 };
 
 /// Ordered chain of policy pointers that terminates at an `HttpTransport`.
@@ -68,8 +87,8 @@ pub const HttpPipeline = struct {
         return callNext(request, self.policies, self.transport_impl);
     }
 
-    /// Prepares each policy once, then opens a non-retrying streaming
-    /// operation. A policy must explicitly support request-only preparation.
+    /// Opens a streaming operation through the same ordered policy chain used
+    /// by buffered requests.
     pub fn open(
         self: *HttpPipeline,
         request: *Request,
@@ -77,11 +96,7 @@ pub const HttpPipeline = struct {
     ) !*HttpOperation {
         request.transport_started = false;
         try checkOpenCancelled(options);
-        for (self.policies) |policy| {
-            try policy.prepare(request);
-            try checkOpenCancelled(options);
-        }
-        return self.transport_impl.open(request, options);
+        return callNextOpen(request, options, self.policies, self.transport_impl);
     }
 };
 
@@ -97,6 +112,17 @@ fn callNext(request: *Request, next: []*HttpPolicy, final_transport: *HttpTransp
         return final_transport.send(request);
     }
     return next[0].process(request, next[1..], final_transport);
+}
+
+fn callNextOpen(
+    request: *Request,
+    options: OpenOptions,
+    next: []*HttpPolicy,
+    final_transport: *HttpTransport,
+) !*HttpOperation {
+    try checkOpenCancelled(options);
+    if (next.len == 0) return final_transport.open(request, options);
+    return next[0].open(request, options, next[1..], final_transport);
 }
 
 // ───────────────────────────── Policies ─────────────────────────────
@@ -168,7 +194,8 @@ pub const LoggingPolicy = struct {
 /// `Retry-After` response header when present. For retryable requests,
 /// `Request.operation_timeout_ms` limits attempts and backoff, but blocking
 /// transports cannot interrupt an in-flight send. Non-retryable requests
-/// always make one send, which is likewise not interruptible.
+/// always make one send, which is likewise not interruptible. Streaming
+/// requests are retried only when their body exposes an explicit rewind.
 pub const RetryPolicy = struct {
     max_retries: u32 = 3,
     initial_delay_ms: u64 = 800,
@@ -177,7 +204,11 @@ pub const RetryPolicy = struct {
 
     pub fn init() RetryPolicy {
         return .{
-            .policy = .{ .processFn = &processImpl, .prepareFn = &prepareImpl },
+            .policy = .{
+                .processFn = &processImpl,
+                .prepareFn = &prepareImpl,
+                .openFn = &openImpl,
+            },
         };
     }
 
@@ -253,6 +284,68 @@ pub const RetryPolicy = struct {
         }
     }
 
+    fn openImpl(
+        policy: *HttpPolicy,
+        request: *Request,
+        options: OpenOptions,
+        next: []*HttpPolicy,
+        final_transport: *HttpTransport,
+    ) !*HttpOperation {
+        if (!request.retryable or !options.isReplayable())
+            return callNextOpen(request, options, next, final_transport);
+
+        const self: *RetryPolicy = @alignCast(@fieldParentPtr("policy", policy));
+        const deadline_ns: ?i128 = if (request.operation_timeout_ms) |timeout_ms|
+            std.math.add(
+                i128,
+                monotonicNanoTimestamp(),
+                @as(i128, timeout_ms) * std.time.ns_per_ms,
+            ) catch std.math.maxInt(i128)
+        else
+            null;
+        var current_options = options;
+        var attempt: u32 = 0;
+        var prng = std.Random.DefaultPrng.init(@truncate(@as(u128, @bitCast(nanoTimestamp()))));
+
+        while (true) {
+            if (deadlineExpired(deadline_ns)) return error.OperationTimedOut;
+            if (attempt > 0) {
+                if (current_options.body) |*body| try body.rewind();
+            }
+
+            const result = callNextOpen(request, current_options, next, final_transport);
+            if (result) |operation| {
+                if (!isRetryable(operation.status_code) or attempt >= self.max_retries)
+                    return operation;
+
+                const retry_after_ms = retryAfterOperationDelayMs(operation);
+                operation.abort();
+                operation.deinit();
+                attempt += 1;
+                const delay = if (retry_after_ms > 0)
+                    @min(retry_after_ms, self.max_delay_ms)
+                else
+                    retryDelay(self, &prng, attempt);
+                if (!sleepWithinBudget(delay, deadline_ns)) return error.OperationTimedOut;
+            } else |err| {
+                if (attempt >= self.max_retries) return err;
+                attempt += 1;
+                const delay = retryDelay(self, &prng, attempt);
+                if (!sleepWithinBudget(delay, deadline_ns)) return error.OperationTimedOut;
+            }
+        }
+    }
+
+    fn retryDelay(self: *const RetryPolicy, prng: *std.Random.DefaultPrng, attempt: u32) u64 {
+        const base_delay = exponentialDelayMs(
+            self.initial_delay_ms,
+            self.max_delay_ms,
+            attempt,
+        );
+        const jitter = prng.random().uintLessThan(u64, @max(base_delay, 1));
+        return base_delay / 2 + jitter / 2;
+    }
+
     fn deadlineExpired(deadline_ns: ?i128) bool {
         const deadline = deadline_ns orelse return false;
         return monotonicNanoTimestamp() >= deadline;
@@ -297,6 +390,12 @@ pub const RetryPolicy = struct {
 
     fn retryAfterDelayMs(resp: Response) u64 {
         const seconds = parseRetryAfter(resp) orelse return 0;
+        return std.math.mul(u64, seconds, 1000) catch std.math.maxInt(u64);
+    }
+
+    fn retryAfterOperationDelayMs(operation: *const HttpOperation) u64 {
+        const value = operation.getHeader("Retry-After") orelse return 0;
+        const seconds = std.fmt.parseInt(u64, value, 10) catch return 0;
         return std.math.mul(u64, seconds, 1000) catch std.math.maxInt(u64);
     }
 };
@@ -439,7 +538,7 @@ pub const TracingPolicy = struct {
         return .{
             .tracer = tracer,
             .az_namespace = az_namespace,
-            .policy = .{ .processFn = &processImpl },
+            .policy = .{ .processFn = &processImpl, .openFn = &openImpl },
         };
     }
 
@@ -484,6 +583,29 @@ pub const TracingPolicy = struct {
 
         span.end();
         return response;
+    }
+
+    fn openImpl(
+        policy: *HttpPolicy,
+        request: *Request,
+        options: OpenOptions,
+        next: []*HttpPolicy,
+        final_transport: *HttpTransport,
+    ) !*HttpOperation {
+        const self: *TracingPolicy = @alignCast(@fieldParentPtr("policy", policy));
+        const span = self.tracer.startSpan("HTTP", .client) catch
+            return callNextOpen(request, options, next, final_transport);
+        span.setAttribute("http.method", @tagName(request.method)) catch {};
+        span.setAttribute("url.full", request.url) catch {};
+        span.setAttribute("az.namespace", self.az_namespace) catch {};
+        const operation = callNextOpen(request, options, next, final_transport) catch |err| {
+            span.setStatus(.@"error");
+            span.end();
+            return err;
+        };
+        span.setStatus(if (operation.isSuccess()) .ok else .@"error");
+        span.end();
+        return operation;
     }
 };
 
@@ -540,6 +662,51 @@ test "pipeline prepares streaming policies without retrying" {
     );
     try std.testing.expect(cancelled_request.getHeader("User-Agent") == null);
     try std.testing.expectEqual(@as(usize, 1), mock.call_count);
+}
+
+test "RetryPolicy replays only explicitly rewindable streaming bodies" {
+    const allocator = std.testing.allocator;
+    var retry = RetryPolicy.init();
+    retry.initial_delay_ms = 0;
+    var policies = [_]*HttpPolicy{retry.asPolicy()};
+
+    var replay_sequence = transport.SequenceMockTransport.init(allocator, &.{
+        .{ .status = 503, .body = "retry" },
+        .{ .status = 200, .body = "ok" },
+    });
+    var replay_pipeline = HttpPipeline{
+        .policies = &policies,
+        .transport_impl = replay_sequence.asTransport(),
+    };
+    var replay_request = Request.init(allocator, .POST, "https://example.com/upload");
+    defer replay_request.deinit();
+    var replay = transport.ReplayableBytes.init("replayable");
+    var replay_operation = try replay_pipeline.open(&replay_request, .{ .body = replay.body() });
+    defer replay_operation.deinit();
+    try std.testing.expectEqual(@as(u16, 200), replay_operation.status_code);
+    try std.testing.expectEqual(@as(usize, 2), replay_sequence.call_count);
+    try std.testing.expectEqualStrings("replayable", replay_sequence.capturedBody(0));
+    try std.testing.expectEqualStrings("replayable", replay_sequence.capturedBody(1));
+    try replay_operation.finish();
+
+    var one_shot_sequence = transport.SequenceMockTransport.init(allocator, &.{
+        .{ .status = 503, .body = "retry" },
+        .{ .status = 200, .body = "unexpected" },
+    });
+    var one_shot_pipeline = HttpPipeline{
+        .policies = &policies,
+        .transport_impl = one_shot_sequence.asTransport(),
+    };
+    var one_shot_request = Request.init(allocator, .POST, "https://example.com/upload");
+    defer one_shot_request.deinit();
+    var source = std.Io.Reader.fixed("one-shot");
+    var one_shot_operation = try one_shot_pipeline.open(&one_shot_request, .{
+        .body = transport.StreamingRequestBody.chunked(&source),
+    });
+    defer one_shot_operation.deinit();
+    try std.testing.expectEqual(@as(u16, 503), one_shot_operation.status_code);
+    try std.testing.expectEqual(@as(usize, 1), one_shot_sequence.call_count);
+    one_shot_operation.abort();
 }
 
 test "pipeline rejects policies without streaming preparation" {
