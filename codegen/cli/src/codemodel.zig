@@ -67,6 +67,9 @@ pub const Method = struct {
     doc: ?[]const u8 = null,
     http_method: []const u8,
     path: []const u8,
+    /// RFC 6570 URI template from TCGC. Unlike `path`, this preserves
+    /// reserved expansion (`{+path}`) used by greedy path parameters.
+    uri_template: ?[]const u8 = null,
     /// User-facing method parameters in declaration order (after the
     /// implicit `self` and `allocator`). Client-level params
     /// (`subscription_id`, `api_version`, `endpoint`) and constants
@@ -83,6 +86,11 @@ pub const Method = struct {
     /// Body to serialize; null for verbs without a payload.
     body_parameter: ?BodyParameter = null,
     response: MethodResponse,
+    /// Protocol-level success and error alternatives. These retain
+    /// exact status codes, response headers, and raw-body metadata
+    /// even when the convenient response above collapses a union.
+    responses: []ResponseVariant = &.{},
+    exceptions: []ResponseVariant = &.{},
     paging: ?Paging = null,
     long_running: ?LongRunning = null,
     kind: []const u8 = "basic",
@@ -100,6 +108,9 @@ pub const WireParameter = struct {
     wire_name: []const u8,
     source: WireSource,
     optional: bool = false,
+    style: ?[]const u8 = null,
+    explode: ?bool = null,
+    allow_reserved: ?bool = null,
 };
 
 pub const WireSource = struct {
@@ -114,11 +125,31 @@ pub const WireSource = struct {
 pub const BodyParameter = struct {
     user_param_name: []const u8,
     content_type: []const u8,
+    content_types: [][]const u8 = &.{},
+    body_type: ?TypeRef = null,
+    /// "json" | "raw" | "multipart"
+    serialization_kind: []const u8 = "json",
 };
 
 pub const MethodResponse = struct {
     response_type: ?TypeRef = null,
     status_codes: []std.json.Value = &.{},
+};
+
+pub const ResponseVariant = struct {
+    status_codes: []std.json.Value = &.{},
+    response_type: ?TypeRef = null,
+    headers: []ResponseHeader = &.{},
+    content_types: [][]const u8 = &.{},
+    /// "none" | "json" | "raw" | "multipart"
+    body_kind: []const u8 = "none",
+};
+
+pub const ResponseHeader = struct {
+    name: []const u8,
+    wire_name: []const u8,
+    header_type: TypeRef,
+    optional: bool = false,
 };
 
 pub const Paging = struct {
@@ -155,6 +186,9 @@ pub const Model = struct {
     /// inside the generated struct so `core.arm` helpers can dispatch
     /// on it.
     arm_resource_kind: ?[]const u8 = null,
+    /// Type accepted for undeclared JSON properties. Null means the
+    /// model is closed.
+    additional_properties: ?TypeRef = null,
 };
 
 pub const Field = struct {
@@ -165,6 +199,14 @@ pub const Field = struct {
     optional: bool = false,
     read_only: bool = false,
     flatten: bool = false,
+    multipart: ?MultipartField = null,
+};
+
+pub const MultipartField = struct {
+    name: []const u8,
+    is_file: bool = false,
+    is_multi: bool = false,
+    content_types: [][]const u8 = &.{},
 };
 
 pub const Enum = struct {
@@ -174,6 +216,8 @@ pub const Enum = struct {
     values: []EnumValue = &.{},
     value_type: []const u8 = "string",
     extensible: bool = true,
+    /// TCGC represents string-literal unions as extensible enums.
+    is_union: bool = false,
 };
 
 pub const EnumValue = struct {
@@ -184,7 +228,10 @@ pub const EnumValue = struct {
 
 pub const Union = struct {
     name: []const u8,
+    namespace: ?[]const u8 = null,
     doc: ?[]const u8 = null,
+    variants: []TypeRef = &.{},
+    nullable: bool = false,
 };
 
 pub const TypeRef = struct {

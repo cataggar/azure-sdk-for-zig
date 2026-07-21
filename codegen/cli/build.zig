@@ -49,6 +49,21 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(t).step);
 
+    const fixture_test_mod = b.createModule(.{
+        .root_source_file = b.path("../fixtures/container_registry_test.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    fixture_test_mod.addImport("codemodel", b.createModule(.{
+        .root_source_file = b.path("src/codemodel.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    }));
+    const fixture_test = b.addTest(.{
+        .root_module = fixture_test_mod,
+    });
+    test_step.dependOn(&b.addRunArtifact(fixture_test).step);
+
     // ── Componentization step ────────────────────────────────────
     //
     // Drives wabt + wac to produce the composed component:

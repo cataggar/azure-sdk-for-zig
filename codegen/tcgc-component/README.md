@@ -27,6 +27,13 @@ npm run build          # produces tcgc.wasm
 
 # Optional: dev-run on plain Node for fast iteration.
 node src/index.js ../../../../azure-rest-api-specs/specification/keyvault/data-plane/Secrets/tspconfig.yaml
+
+# Regenerate the checked-in Container Registry wire-contract fixture.
+# AZURE_REST_API_SPECS may point at a non-default specs checkout.
+npm run fixture:container-registry
+
+# Run focused adapter tests.
+npm test
 ```
 
 ## Inspect the resulting component

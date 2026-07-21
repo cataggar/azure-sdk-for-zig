@@ -89,7 +89,6 @@ export async function $onEmit(context) {
           errors.map((d) => `  ${d.code}: ${d.message}`).join("\n"),
       );
     }
-
     const opts = context.options ?? {};
     // Flatten the SdkClient tree (TCGC keeps children nested under
     // `client.children`). The Zig emitter renders one struct per
@@ -109,7 +108,7 @@ export async function $onEmit(context) {
       clients: flatClients,
       models: sdkContext.sdkPackage.models.map(adaptModel),
       enums: sdkContext.sdkPackage.enums.map(adaptEnum),
-      unions: [],
+      unions: sdkContext.sdkPackage.unions.map(adaptUnion),
     };
     __slot.json = JSON.stringify(codeModel, null, 2);
   } catch (err) {
@@ -266,7 +265,7 @@ function defaultCredentialScopes(client) {
     : ["{endpoint}/.default"];
 }
 
-function adaptMethod(method, clientParamNames) {
+export function adaptMethod(method, clientParamNames) {
   const op = method.operation ?? {};
   const user = adaptUserParameters(method.parameters ?? [], clientParamNames);
   const wire = adaptWireParameters(op, clientParamNames, user.byMethodName);
@@ -276,6 +275,7 @@ function adaptMethod(method, clientParamNames) {
     doc: method.doc ?? null,
     http_method: (op.verb ?? "get").toLowerCase(),
     path: op.path ?? "",
+    uri_template: op.uriTemplate ?? op.path ?? "",
     /** User-facing args. Snake-cased name + type; the emitter renders
      *  these as method parameters in order. */
     user_parameters: user.list,
@@ -288,7 +288,9 @@ function adaptMethod(method, clientParamNames) {
     header_parameters: wire.header,
     /** Body to serialize; null for no-body operations. */
     body_parameter: wire.body,
-    response: adaptMethodResponse(method.response),
+    response: adaptMethodResponse(method.response, op.responses),
+    responses: (op.responses ?? []).map(adaptResponseVariant),
+    exceptions: (op.exceptions ?? []).map(adaptResponseVariant),
     paging: adaptPaging(method),
     long_running: adaptLro(method),
     kind: method.kind ?? "basic",
@@ -382,6 +384,10 @@ function adaptWireParameters(op, clientParamNames, userByMethodName) {
       wire_name: p.serializedName ?? p.name,
       source: src,
       optional: !!p.optional,
+      style: p.kind === "path" ? (p.style ?? null) : null,
+      explode:
+        p.kind === "path" || p.kind === "query" ? !!p.explode : null,
+      allow_reserved: p.kind === "path" ? !!p.allowReserved : null,
     };
     switch (p.kind) {
       case "path":
@@ -414,18 +420,64 @@ function adaptWireParameters(op, clientParamNames, userByMethodName) {
         bp.defaultContentType ??
         (bp.contentTypes && bp.contentTypes[0]) ??
         "application/json",
+      content_types: bp.contentTypes ?? [],
+      body_type: adaptType(bp.type),
+      serialization_kind: serializationKind(
+        bp.serializationOptions,
+        bp.contentTypes,
+      ),
     };
   }
 
   return { path, query, header, body };
 }
 
-function adaptMethodResponse(resp) {
-  if (!resp) return { response_type: null, status_codes: [] };
+function adaptMethodResponse(resp, responses) {
   return {
-    response_type: resp.type ? adaptType(resp.type) : null,
-    status_codes: [],
+    response_type: resp?.type ? adaptType(resp.type) : null,
+    status_codes: (responses ?? []).flatMap((r) => normalizeStatusCodes(r.statusCodes)),
   };
+}
+
+function adaptResponseVariant(resp) {
+  return {
+    status_codes: normalizeStatusCodes(resp.statusCodes),
+    response_type: resp.type ? adaptType(resp.type) : null,
+    headers: (resp.headers ?? []).map((h) => ({
+      name: toSnakeCase(h.name),
+      wire_name: h.serializedName ?? h.name,
+      header_type: adaptType(h.type),
+      optional: !!h.optional,
+    })),
+    content_types: resp.contentTypes ?? [],
+    body_kind: resp.type
+      ? serializationKind(resp.serializationOptions, resp.contentTypes)
+      : "none",
+  };
+}
+
+function normalizeStatusCodes(statusCodes) {
+  return typeof statusCodes === "undefined" ? [] : [statusCodes];
+}
+
+function serializationKind(options, contentTypes) {
+  if (
+    options?.multipart ||
+    (contentTypes ?? []).some((c) =>
+      c.toLowerCase().startsWith("multipart/"),
+    )
+  ) {
+    return "multipart";
+  }
+  if (
+    options?.json ||
+    (contentTypes ?? []).some((c) =>
+      c.toLowerCase().includes("json"),
+    )
+  ) {
+    return "json";
+  }
+  return "raw";
 }
 
 function adaptPaging(method) {
@@ -571,7 +623,7 @@ function detectArmResourceKind(model) {
   return null;
 }
 
-function adaptModel(model) {
+export function adaptModel(model) {
   const props = collectInheritedProperties(model);
   return {
     name: model.name,
@@ -585,16 +637,30 @@ function adaptModel(model) {
       optional: !!p.optional,
       read_only: !!p.readOnly,
       flatten: !!p.flatten,
+      multipart: adaptMultipartField(p.serializationOptions?.multipart),
     })),
     parents: model.baseModel ? [model.baseModel.name] : [],
     discriminator: model.discriminatorProperty?.name ?? null,
     is_input: !!(model.usage & 1),
     is_output: !!(model.usage & 2),
     arm_resource_kind: detectArmResourceKind(model),
+    additional_properties: model.additionalProperties
+      ? adaptType(model.additionalProperties)
+      : null,
   };
 }
 
-function adaptEnum(en) {
+function adaptMultipartField(multipart) {
+  if (!multipart) return null;
+  return {
+    name: multipart.name,
+    is_file: !!multipart.isFilePart,
+    is_multi: !!multipart.isMulti,
+    content_types: multipart.defaultContentTypes ?? [],
+  };
+}
+
+export function adaptEnum(en) {
   return {
     name: en.name,
     namespace: en.namespace ?? null,
@@ -606,10 +672,30 @@ function adaptEnum(en) {
     })),
     value_type: en.valueType?.kind ?? "string",
     extensible: en.isFixed === false,
+    is_union: !!en.isUnionAsEnum,
   };
 }
 
-function adaptType(type) {
+export function adaptUnion(union) {
+  if (union.kind === "nullable") {
+    return {
+      name: union.name,
+      namespace: union.namespace ?? null,
+      doc: union.doc ?? null,
+      variants: [adaptType(union.type)],
+      nullable: true,
+    };
+  }
+  return {
+    name: union.name,
+    namespace: union.namespace ?? null,
+    doc: union.doc ?? null,
+    variants: (union.variantTypes ?? []).map(adaptType),
+    nullable: false,
+  };
+}
+
+export function adaptType(type) {
   if (!type) return { kind: "Scalar", value: "unknown" };
   switch (type.kind) {
     case "string":
@@ -651,6 +737,8 @@ function adaptType(type) {
       return { kind: "Union", value: type.name ?? "anonymous" };
     case "array":
       return { kind: "Array", value: adaptType(type.valueType) };
+    case "tuple":
+      return { kind: "Tuple", value: (type.valueTypes ?? []).map(adaptType) };
     case "dict":
       return { kind: "Map", value: adaptType(type.valueType) };
     case "nullable":

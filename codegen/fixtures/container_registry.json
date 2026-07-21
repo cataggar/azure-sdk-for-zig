@@ -1,0 +1,6193 @@
+{
+  "package_name": "container_registry",
+  "package_version": "0.1.0",
+  "target_kind": "client",
+  "service_kind": "azure-dataplane",
+  "clients": [
+    {
+      "name": "ContainerRegistry",
+      "namespace": "ContainerRegistry",
+      "doc": "Metadata API definition for the Azure Container Registry runtime",
+      "is_root": true,
+      "parent_name": null,
+      "init_parameters": [],
+      "api_version_default": "2021-07-01",
+      "endpoint": {
+        "name": "endpoint",
+        "default_value": null
+      },
+      "methods": [],
+      "sub_clients": [
+        {
+          "accessor_camel": "containerRegistry",
+          "accessor_snake": "container_registry",
+          "client_name": "ContainerRegistry"
+        },
+        {
+          "accessor_camel": "containerRegistryBlob",
+          "accessor_snake": "container_registry_blob",
+          "client_name": "ContainerRegistryBlob"
+        },
+        {
+          "accessor_camel": "authentication",
+          "accessor_snake": "authentication",
+          "client_name": "Authentication"
+        }
+      ],
+      "credential_scopes": [
+        "https://containerregistry.azure.net/.default"
+      ]
+    },
+    {
+      "name": "ContainerRegistry",
+      "namespace": "ContainerRegistry",
+      "doc": null,
+      "is_root": false,
+      "parent_name": "ContainerRegistry",
+      "init_parameters": [],
+      "api_version_default": "2021-07-01",
+      "endpoint": {
+        "name": "endpoint",
+        "default_value": null
+      },
+      "methods": [
+        {
+          "name": "check_docker_v2_support",
+          "name_camel": "checkDockerV2Support",
+          "doc": "Tells whether this Docker Registry instance supports Docker Registry HTTP API v2",
+          "http_method": "get",
+          "path": "/v2/",
+          "uri_template": "/v2/{?api%2Dversion}",
+          "user_parameters": [],
+          "path_parameters": [],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [],
+          "body_parameter": null,
+          "response": {
+            "response_type": null,
+            "status_codes": [
+              200
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                200
+              ],
+              "response_type": null,
+              "headers": [],
+              "content_types": [],
+              "body_kind": "none"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "get_manifest",
+          "name_camel": "getManifest",
+          "doc": "Get the manifest identified by `name` and `reference` where `reference` can be\na tag or digest.",
+          "http_method": "get",
+          "path": "/v2/{name}/manifests/{reference}",
+          "uri_template": "/v2/{name}/manifests/{reference}{?api%2Dversion}",
+          "user_parameters": [
+            {
+              "name": "name",
+              "method_name": "name",
+              "doc": "Name of the image (including the namespace)",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "reference",
+              "method_name": "reference",
+              "doc": "A tag or a digest, pointing to a specific image",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "accept",
+              "method_name": "accept",
+              "doc": "Accept header string delimited by comma. For example,\napplication/vnd.docker.distribution.manifest.v2+json",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "name",
+              "source": {
+                "kind": "user",
+                "name": "name"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            },
+            {
+              "wire_name": "reference",
+              "source": {
+                "kind": "user",
+                "name": "reference"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "accept",
+              "source": {
+                "kind": "user",
+                "name": "accept"
+              },
+              "optional": true,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            }
+          ],
+          "body_parameter": null,
+          "response": {
+            "response_type": {
+              "kind": "Model",
+              "value": "ManifestWrapper"
+            },
+            "status_codes": [
+              200
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                200
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "ManifestWrapper"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "create_manifest",
+          "name_camel": "createManifest",
+          "doc": "Put the manifest identified by `name` and `reference` where `reference` can be\na tag or digest.",
+          "http_method": "put",
+          "path": "/v2/{name}/manifests/{reference}",
+          "uri_template": "/v2/{name}/manifests/{reference}{?api%2Dversion}",
+          "user_parameters": [
+            {
+              "name": "name",
+              "method_name": "name",
+              "doc": "Name of the image (including the namespace)",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "reference",
+              "method_name": "reference",
+              "doc": "A tag or a digest, pointing to a specific image",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "payload",
+              "method_name": "payload",
+              "doc": "Manifest body, can take v1 or v2 values depending on accept header",
+              "param_type": {
+                "kind": "Model",
+                "value": "Manifest"
+              },
+              "optional": false
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "name",
+              "source": {
+                "kind": "user",
+                "name": "name"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            },
+            {
+              "wire_name": "reference",
+              "source": {
+                "kind": "user",
+                "name": "reference"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "Content-Type",
+              "source": {
+                "kind": "constant",
+                "value": "application/vnd.docker.distribution.manifest.v2+json"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            }
+          ],
+          "body_parameter": {
+            "user_param_name": "payload",
+            "content_type": "application/vnd.docker.distribution.manifest.v2+json",
+            "content_types": [
+              "application/vnd.docker.distribution.manifest.v2+json"
+            ],
+            "body_type": {
+              "kind": "Model",
+              "value": "Manifest"
+            },
+            "serialization_kind": "json"
+          },
+          "response": {
+            "response_type": null,
+            "status_codes": [
+              201
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                201
+              ],
+              "response_type": null,
+              "headers": [
+                {
+                  "name": "location",
+                  "wire_name": "Location",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "content_length",
+                  "wire_name": "Content-Length",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "int64"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "docker_content_digest",
+                  "wire_name": "Docker-Content-Digest",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [],
+              "body_kind": "none"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "delete_manifest",
+          "name_camel": "deleteManifest",
+          "doc": "Delete the manifest identified by `name` and `reference`. Note that a manifest\ncan _only_ be deleted by `digest`.",
+          "http_method": "delete",
+          "path": "/v2/{name}/manifests/{reference}",
+          "uri_template": "/v2/{name}/manifests/{reference}{?api%2Dversion}",
+          "user_parameters": [
+            {
+              "name": "name",
+              "method_name": "name",
+              "doc": "Name of the image (including the namespace)",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "reference",
+              "method_name": "reference",
+              "doc": "Digest of a BLOB",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "name",
+              "source": {
+                "kind": "user",
+                "name": "name"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            },
+            {
+              "wire_name": "reference",
+              "source": {
+                "kind": "user",
+                "name": "reference"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [],
+          "body_parameter": null,
+          "response": {
+            "response_type": null,
+            "status_codes": [
+              202,
+              404
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                202
+              ],
+              "response_type": null,
+              "headers": [],
+              "content_types": [],
+              "body_kind": "none"
+            },
+            {
+              "status_codes": [
+                404
+              ],
+              "response_type": null,
+              "headers": [],
+              "content_types": [],
+              "body_kind": "none"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "get_repositories",
+          "name_camel": "getRepositories",
+          "doc": "List repositories",
+          "http_method": "get",
+          "path": "/acr/v1/_catalog",
+          "uri_template": "/acr/v1/_catalog{?api%2Dversion,last,n}",
+          "user_parameters": [
+            {
+              "name": "last",
+              "method_name": "last",
+              "doc": "Query parameter for the last item in previous query. Result set will include values lexically after last.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "n",
+              "method_name": "n",
+              "doc": "Query parameter for max number of items",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "int32"
+              },
+              "optional": true
+            }
+          ],
+          "path_parameters": [],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            },
+            {
+              "wire_name": "last",
+              "source": {
+                "kind": "user",
+                "name": "last"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            },
+            {
+              "wire_name": "n",
+              "source": {
+                "kind": "user",
+                "name": "n"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/json"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            }
+          ],
+          "body_parameter": null,
+          "response": {
+            "response_type": {
+              "kind": "Array",
+              "value": {
+                "kind": "Scalar",
+                "value": "string"
+              }
+            },
+            "status_codes": [
+              200
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                200
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "Repositories"
+              },
+              "headers": [
+                {
+                  "name": "link",
+                  "wire_name": "Link",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                }
+              ],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": {
+            "items_segments": [
+              "repositories"
+            ],
+            "next_link_segments": [
+              "link"
+            ],
+            "next_link_verb": "GET",
+            "next_link_operation": null,
+            "envelope": null,
+            "item_type": {
+              "kind": "Scalar",
+              "value": "string"
+            }
+          },
+          "long_running": null,
+          "kind": "paging"
+        },
+        {
+          "name": "get_properties",
+          "name_camel": "getProperties",
+          "doc": "Get repository attributes",
+          "http_method": "get",
+          "path": "/acr/v1/{name}",
+          "uri_template": "/acr/v1/{name}{?api%2Dversion}",
+          "user_parameters": [
+            {
+              "name": "name",
+              "method_name": "name",
+              "doc": "Name of the image (including the namespace)",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "name",
+              "source": {
+                "kind": "user",
+                "name": "name"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/json"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            }
+          ],
+          "body_parameter": null,
+          "response": {
+            "response_type": {
+              "kind": "Model",
+              "value": "ContainerRepositoryProperties"
+            },
+            "status_codes": [
+              200
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                200
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "ContainerRepositoryProperties"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "delete_repository",
+          "name_camel": "deleteRepository",
+          "doc": "Delete the repository identified by `name`",
+          "http_method": "delete",
+          "path": "/acr/v1/{name}",
+          "uri_template": "/acr/v1/{name}{?api%2Dversion}",
+          "user_parameters": [
+            {
+              "name": "name",
+              "method_name": "name",
+              "doc": "Name of the image (including the namespace)",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "name",
+              "source": {
+                "kind": "user",
+                "name": "name"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [],
+          "body_parameter": null,
+          "response": {
+            "response_type": null,
+            "status_codes": [
+              202,
+              404
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                202
+              ],
+              "response_type": null,
+              "headers": [],
+              "content_types": [],
+              "body_kind": "none"
+            },
+            {
+              "status_codes": [
+                404
+              ],
+              "response_type": null,
+              "headers": [],
+              "content_types": [],
+              "body_kind": "none"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "update_properties",
+          "name_camel": "updateProperties",
+          "doc": "Update the attribute identified by `name` where `reference` is the name of the\nrepository.",
+          "http_method": "patch",
+          "path": "/acr/v1/{name}",
+          "uri_template": "/acr/v1/{name}{?api%2Dversion}",
+          "user_parameters": [
+            {
+              "name": "name",
+              "method_name": "name",
+              "doc": "Name of the image (including the namespace)",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "value",
+              "method_name": "value",
+              "doc": "Repository attribute value",
+              "param_type": {
+                "kind": "Model",
+                "value": "RepositoryChangeableAttributes"
+              },
+              "optional": true
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "name",
+              "source": {
+                "kind": "user",
+                "name": "name"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "Content-Type",
+              "source": {
+                "kind": "constant",
+                "value": "application/json"
+              },
+              "optional": true,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            },
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/json"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            }
+          ],
+          "body_parameter": {
+            "user_param_name": "value",
+            "content_type": "application/json",
+            "content_types": [
+              "application/json"
+            ],
+            "body_type": {
+              "kind": "Model",
+              "value": "RepositoryChangeableAttributes"
+            },
+            "serialization_kind": "json"
+          },
+          "response": {
+            "response_type": {
+              "kind": "Model",
+              "value": "ContainerRepositoryProperties"
+            },
+            "status_codes": [
+              200
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                200
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "ContainerRepositoryProperties"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "get_tags",
+          "name_camel": "getTags",
+          "doc": "List tags of a repository",
+          "http_method": "get",
+          "path": "/acr/v1/{name}/_tags",
+          "uri_template": "/acr/v1/{name}/_tags{?api%2Dversion,last,n,orderby,digest}",
+          "user_parameters": [
+            {
+              "name": "name",
+              "method_name": "name",
+              "doc": "Name of the image (including the namespace)",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "last",
+              "method_name": "last",
+              "doc": "Query parameter for the last item in previous query. Result set will include\nvalues lexically after last.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "n",
+              "method_name": "n",
+              "doc": "query parameter for max number of items",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "int32"
+              },
+              "optional": true
+            },
+            {
+              "name": "orderby",
+              "method_name": "orderby",
+              "doc": "orderby query parameter",
+              "param_type": {
+                "kind": "Enum",
+                "value": "ArtifactTagOrder"
+              },
+              "optional": true
+            },
+            {
+              "name": "digest",
+              "method_name": "digest",
+              "doc": "filter by digest",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "name",
+              "source": {
+                "kind": "user",
+                "name": "name"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            },
+            {
+              "wire_name": "last",
+              "source": {
+                "kind": "user",
+                "name": "last"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            },
+            {
+              "wire_name": "n",
+              "source": {
+                "kind": "user",
+                "name": "n"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            },
+            {
+              "wire_name": "orderby",
+              "source": {
+                "kind": "user",
+                "name": "orderby"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            },
+            {
+              "wire_name": "digest",
+              "source": {
+                "kind": "user",
+                "name": "digest"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/json"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            }
+          ],
+          "body_parameter": null,
+          "response": {
+            "response_type": {
+              "kind": "Model",
+              "value": "TagList"
+            },
+            "status_codes": [
+              200
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                200
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "TagList"
+              },
+              "headers": [
+                {
+                  "name": "link",
+                  "wire_name": "Link",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                }
+              ],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "get_tag_properties",
+          "name_camel": "getTagProperties",
+          "doc": "Get tag attributes by tag",
+          "http_method": "get",
+          "path": "/acr/v1/{name}/_tags/{reference}",
+          "uri_template": "/acr/v1/{name}/_tags/{reference}{?api%2Dversion}",
+          "user_parameters": [
+            {
+              "name": "name",
+              "method_name": "name",
+              "doc": "Name of the image (including the namespace)",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "reference",
+              "method_name": "reference",
+              "doc": "Tag name",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "name",
+              "source": {
+                "kind": "user",
+                "name": "name"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            },
+            {
+              "wire_name": "reference",
+              "source": {
+                "kind": "user",
+                "name": "reference"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/json"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            }
+          ],
+          "body_parameter": null,
+          "response": {
+            "response_type": {
+              "kind": "Model",
+              "value": "ArtifactTagProperties"
+            },
+            "status_codes": [
+              200
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                200
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "ArtifactTagProperties"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "update_tag_attributes",
+          "name_camel": "updateTagAttributes",
+          "doc": "Update tag attributes",
+          "http_method": "patch",
+          "path": "/acr/v1/{name}/_tags/{reference}",
+          "uri_template": "/acr/v1/{name}/_tags/{reference}{?api%2Dversion}",
+          "user_parameters": [
+            {
+              "name": "name",
+              "method_name": "name",
+              "doc": "Name of the image (including the namespace)",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "reference",
+              "method_name": "reference",
+              "doc": "Tag name",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "value",
+              "method_name": "value",
+              "doc": "Tag attribute value",
+              "param_type": {
+                "kind": "Model",
+                "value": "TagChangeableAttributes"
+              },
+              "optional": true
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "name",
+              "source": {
+                "kind": "user",
+                "name": "name"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            },
+            {
+              "wire_name": "reference",
+              "source": {
+                "kind": "user",
+                "name": "reference"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "Content-Type",
+              "source": {
+                "kind": "constant",
+                "value": "application/json"
+              },
+              "optional": true,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            },
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/json"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            }
+          ],
+          "body_parameter": {
+            "user_param_name": "value",
+            "content_type": "application/json",
+            "content_types": [
+              "application/json"
+            ],
+            "body_type": {
+              "kind": "Model",
+              "value": "TagChangeableAttributes"
+            },
+            "serialization_kind": "json"
+          },
+          "response": {
+            "response_type": {
+              "kind": "Model",
+              "value": "ArtifactTagProperties"
+            },
+            "status_codes": [
+              200
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                200
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "ArtifactTagProperties"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "delete_tag",
+          "name_camel": "deleteTag",
+          "doc": "Delete tag",
+          "http_method": "delete",
+          "path": "/acr/v1/{name}/_tags/{reference}",
+          "uri_template": "/acr/v1/{name}/_tags/{reference}{?api%2Dversion}",
+          "user_parameters": [
+            {
+              "name": "name",
+              "method_name": "name",
+              "doc": "Name of the image (including the namespace)",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "reference",
+              "method_name": "reference",
+              "doc": "Tag name",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "name",
+              "source": {
+                "kind": "user",
+                "name": "name"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            },
+            {
+              "wire_name": "reference",
+              "source": {
+                "kind": "user",
+                "name": "reference"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [],
+          "body_parameter": null,
+          "response": {
+            "response_type": null,
+            "status_codes": [
+              202,
+              404
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                202
+              ],
+              "response_type": null,
+              "headers": [],
+              "content_types": [],
+              "body_kind": "none"
+            },
+            {
+              "status_codes": [
+                404
+              ],
+              "response_type": null,
+              "headers": [],
+              "content_types": [],
+              "body_kind": "none"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "get_manifests",
+          "name_camel": "getManifests",
+          "doc": "List manifests of a repository",
+          "http_method": "get",
+          "path": "/acr/v1/{name}/_manifests",
+          "uri_template": "/acr/v1/{name}/_manifests{?api%2Dversion,last,n,orderby}",
+          "user_parameters": [
+            {
+              "name": "name",
+              "method_name": "name",
+              "doc": "Name of the image (including the namespace)",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "last",
+              "method_name": "last",
+              "doc": "Query parameter for the last item in previous query. Result set will include\nvalues lexically after last.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "n",
+              "method_name": "n",
+              "doc": "query parameter for max number of items",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "int32"
+              },
+              "optional": true
+            },
+            {
+              "name": "orderby",
+              "method_name": "orderby",
+              "doc": "orderby query parameter",
+              "param_type": {
+                "kind": "Enum",
+                "value": "ArtifactManifestOrder"
+              },
+              "optional": true
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "name",
+              "source": {
+                "kind": "user",
+                "name": "name"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            },
+            {
+              "wire_name": "last",
+              "source": {
+                "kind": "user",
+                "name": "last"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            },
+            {
+              "wire_name": "n",
+              "source": {
+                "kind": "user",
+                "name": "n"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            },
+            {
+              "wire_name": "orderby",
+              "source": {
+                "kind": "user",
+                "name": "orderby"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/json"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            }
+          ],
+          "body_parameter": null,
+          "response": {
+            "response_type": {
+              "kind": "Model",
+              "value": "AcrManifests"
+            },
+            "status_codes": [
+              200
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                200
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrManifests"
+              },
+              "headers": [
+                {
+                  "name": "link",
+                  "wire_name": "Link",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                }
+              ],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "get_manifest_properties",
+          "name_camel": "getManifestProperties",
+          "doc": "Get manifest attributes",
+          "http_method": "get",
+          "path": "/acr/v1/{name}/_manifests/{digest}",
+          "uri_template": "/acr/v1/{name}/_manifests/{digest}{?api%2Dversion}",
+          "user_parameters": [
+            {
+              "name": "name",
+              "method_name": "name",
+              "doc": "Name of the image (including the namespace)",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "digest",
+              "method_name": "digest",
+              "doc": "Digest of a BLOB",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "name",
+              "source": {
+                "kind": "user",
+                "name": "name"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            },
+            {
+              "wire_name": "digest",
+              "source": {
+                "kind": "user",
+                "name": "digest"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/json"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            }
+          ],
+          "body_parameter": null,
+          "response": {
+            "response_type": {
+              "kind": "Model",
+              "value": "ArtifactManifestProperties"
+            },
+            "status_codes": [
+              200
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                200
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "ArtifactManifestProperties"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "update_manifest_properties",
+          "name_camel": "updateManifestProperties",
+          "doc": "Update properties of a manifest",
+          "http_method": "patch",
+          "path": "/acr/v1/{name}/_manifests/{digest}",
+          "uri_template": "/acr/v1/{name}/_manifests/{digest}{?api%2Dversion}",
+          "user_parameters": [
+            {
+              "name": "name",
+              "method_name": "name",
+              "doc": "Name of the image (including the namespace)",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "digest",
+              "method_name": "digest",
+              "doc": "Digest of a BLOB",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "value",
+              "method_name": "value",
+              "doc": "Manifest attribute value",
+              "param_type": {
+                "kind": "Model",
+                "value": "ManifestChangeableAttributes"
+              },
+              "optional": true
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "name",
+              "source": {
+                "kind": "user",
+                "name": "name"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            },
+            {
+              "wire_name": "digest",
+              "source": {
+                "kind": "user",
+                "name": "digest"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "Content-Type",
+              "source": {
+                "kind": "constant",
+                "value": "application/json"
+              },
+              "optional": true,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            },
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/json"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            }
+          ],
+          "body_parameter": {
+            "user_param_name": "value",
+            "content_type": "application/json",
+            "content_types": [
+              "application/json"
+            ],
+            "body_type": {
+              "kind": "Model",
+              "value": "ManifestChangeableAttributes"
+            },
+            "serialization_kind": "json"
+          },
+          "response": {
+            "response_type": {
+              "kind": "Model",
+              "value": "ArtifactManifestProperties"
+            },
+            "status_codes": [
+              200
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                200
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "ArtifactManifestProperties"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        }
+      ],
+      "sub_clients": [],
+      "credential_scopes": [
+        "https://containerregistry.azure.net/.default"
+      ]
+    },
+    {
+      "name": "ContainerRegistryBlob",
+      "namespace": "ContainerRegistry",
+      "doc": null,
+      "is_root": false,
+      "parent_name": "ContainerRegistry",
+      "init_parameters": [],
+      "api_version_default": "2021-07-01",
+      "endpoint": {
+        "name": "endpoint",
+        "default_value": null
+      },
+      "methods": [
+        {
+          "name": "get_blob",
+          "name_camel": "getBlob",
+          "doc": "Retrieve the blob from the registry identified by digest.",
+          "http_method": "get",
+          "path": "/v2/{name}/blobs/{digest}",
+          "uri_template": "/v2/{name}/blobs/{digest}{?api%2Dversion}",
+          "user_parameters": [
+            {
+              "name": "name",
+              "method_name": "name",
+              "doc": "Name of the image (including the namespace)",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "digest",
+              "method_name": "digest",
+              "doc": "Digest of a BLOB",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "name",
+              "source": {
+                "kind": "user",
+                "name": "name"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            },
+            {
+              "wire_name": "digest",
+              "source": {
+                "kind": "user",
+                "name": "digest"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/octet-stream"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            }
+          ],
+          "body_parameter": null,
+          "response": {
+            "response_type": {
+              "kind": "Scalar",
+              "value": "bytes"
+            },
+            "status_codes": [
+              200,
+              307
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                200
+              ],
+              "response_type": {
+                "kind": "Scalar",
+                "value": "bytes"
+              },
+              "headers": [
+                {
+                  "name": "content_length",
+                  "wire_name": "Content-Length",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "int64"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "docker_content_digest",
+                  "wire_name": "Docker-Content-Digest",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [
+                "application/octet-stream"
+              ],
+              "body_kind": "raw"
+            },
+            {
+              "status_codes": [
+                307
+              ],
+              "response_type": null,
+              "headers": [
+                {
+                  "name": "location",
+                  "wire_name": "Location",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [],
+              "body_kind": "none"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "check_blob_exists",
+          "name_camel": "checkBlobExists",
+          "doc": "Same as GET, except only the headers are returned.",
+          "http_method": "head",
+          "path": "/v2/{name}/blobs/{digest}",
+          "uri_template": "/v2/{name}/blobs/{digest}{?api%2Dversion}",
+          "user_parameters": [
+            {
+              "name": "name",
+              "method_name": "name",
+              "doc": "Name of the image (including the namespace)",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "digest",
+              "method_name": "digest",
+              "doc": "Digest of a BLOB",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "name",
+              "source": {
+                "kind": "user",
+                "name": "name"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            },
+            {
+              "wire_name": "digest",
+              "source": {
+                "kind": "user",
+                "name": "digest"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [],
+          "body_parameter": null,
+          "response": {
+            "response_type": null,
+            "status_codes": [
+              200,
+              307
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                200
+              ],
+              "response_type": null,
+              "headers": [
+                {
+                  "name": "content_length",
+                  "wire_name": "Content-Length",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "int64"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "docker_content_digest",
+                  "wire_name": "Docker-Content-Digest",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [],
+              "body_kind": "none"
+            },
+            {
+              "status_codes": [
+                307
+              ],
+              "response_type": null,
+              "headers": [
+                {
+                  "name": "location",
+                  "wire_name": "Location",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [],
+              "body_kind": "none"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "delete_blob",
+          "name_camel": "deleteBlob",
+          "doc": "Removes an already uploaded blob.",
+          "http_method": "delete",
+          "path": "/v2/{name}/blobs/{digest}",
+          "uri_template": "/v2/{name}/blobs/{digest}{?api%2Dversion}",
+          "user_parameters": [
+            {
+              "name": "name",
+              "method_name": "name",
+              "doc": "Name of the image (including the namespace)",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "digest",
+              "method_name": "digest",
+              "doc": "Digest of a BLOB",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "name",
+              "source": {
+                "kind": "user",
+                "name": "name"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            },
+            {
+              "wire_name": "digest",
+              "source": {
+                "kind": "user",
+                "name": "digest"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [],
+          "body_parameter": null,
+          "response": {
+            "response_type": null,
+            "status_codes": [
+              202
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                202
+              ],
+              "response_type": null,
+              "headers": [
+                {
+                  "name": "docker_content_digest",
+                  "wire_name": "Docker-Content-Digest",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [],
+              "body_kind": "none"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "mount_blob",
+          "name_camel": "mountBlob",
+          "doc": "Mount a blob identified by the `mount` parameter from another repository.",
+          "http_method": "post",
+          "path": "/v2/{name}/blobs/uploads/",
+          "uri_template": "/v2/{name}/blobs/uploads/{?api%2Dversion,from,mount}",
+          "user_parameters": [
+            {
+              "name": "name",
+              "method_name": "name",
+              "doc": "Name of the image (including the namespace)",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "from",
+              "method_name": "from",
+              "doc": "Name of the source repository.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "mount",
+              "method_name": "mount",
+              "doc": "Digest of blob to mount from the source repository.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "name",
+              "source": {
+                "kind": "user",
+                "name": "name"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            },
+            {
+              "wire_name": "from",
+              "source": {
+                "kind": "user",
+                "name": "from"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            },
+            {
+              "wire_name": "mount",
+              "source": {
+                "kind": "user",
+                "name": "mount"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [],
+          "body_parameter": null,
+          "response": {
+            "response_type": null,
+            "status_codes": [
+              201
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                201
+              ],
+              "response_type": null,
+              "headers": [
+                {
+                  "name": "location",
+                  "wire_name": "Location",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "docker_upload_uuid",
+                  "wire_name": "Docker-Upload-UUID",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "docker_content_digest",
+                  "wire_name": "Docker-Content-Digest",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [],
+              "body_kind": "none"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "get_upload_status",
+          "name_camel": "getUploadStatus",
+          "doc": "Retrieve status of upload identified by uuid. The primary purpose of this\nendpoint is to resolve the current status of a resumable upload.",
+          "http_method": "get",
+          "path": "/{nextBlobUuidLink}",
+          "uri_template": "/{+nextBlobUuidLink}{?api%2Dversion}",
+          "user_parameters": [
+            {
+              "name": "next_blob_uuid_link",
+              "method_name": "nextBlobUuidLink",
+              "doc": "Link acquired from upload start or previous chunk. Note, do not include initial\n/ (must do substring(1) )",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "nextBlobUuidLink",
+              "source": {
+                "kind": "user",
+                "name": "next_blob_uuid_link"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": true
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [],
+          "body_parameter": null,
+          "response": {
+            "response_type": null,
+            "status_codes": [
+              204
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                204
+              ],
+              "response_type": null,
+              "headers": [
+                {
+                  "name": "range",
+                  "wire_name": "Range",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "docker_upload_uuid",
+                  "wire_name": "Docker-Upload-UUID",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [],
+              "body_kind": "none"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "upload_chunk",
+          "name_camel": "uploadChunk",
+          "doc": "Upload a stream of data without completing the upload.",
+          "http_method": "patch",
+          "path": "/{nextBlobUuidLink}",
+          "uri_template": "/{+nextBlobUuidLink}{?api%2Dversion}",
+          "user_parameters": [
+            {
+              "name": "next_blob_uuid_link",
+              "method_name": "nextBlobUuidLink",
+              "doc": "Link acquired from upload start or previous chunk. Note, do not include initial\n/ (must do substring(1) )",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "value",
+              "method_name": "value",
+              "doc": "Raw data of blob",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "bytes"
+              },
+              "optional": false
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "nextBlobUuidLink",
+              "source": {
+                "kind": "user",
+                "name": "next_blob_uuid_link"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": true
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "Content-Type",
+              "source": {
+                "kind": "constant",
+                "value": "application/octet-stream"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            }
+          ],
+          "body_parameter": {
+            "user_param_name": "value",
+            "content_type": "application/octet-stream",
+            "content_types": [
+              "application/octet-stream"
+            ],
+            "body_type": {
+              "kind": "Scalar",
+              "value": "bytes"
+            },
+            "serialization_kind": "raw"
+          },
+          "response": {
+            "response_type": null,
+            "status_codes": [
+              202
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                202
+              ],
+              "response_type": null,
+              "headers": [
+                {
+                  "name": "location",
+                  "wire_name": "Location",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "range",
+                  "wire_name": "Range",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "docker_upload_uuid",
+                  "wire_name": "Docker-Upload-UUID",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [],
+              "body_kind": "none"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "complete_upload",
+          "name_camel": "completeUpload",
+          "doc": "Complete the upload, providing all the data in the body, if necessary. A\nrequest without a body will just complete the upload with previously uploaded\ncontent.",
+          "http_method": "put",
+          "path": "/{nextBlobUuidLink}",
+          "uri_template": "/{+nextBlobUuidLink}{?api%2Dversion,digest}",
+          "user_parameters": [
+            {
+              "name": "digest",
+              "method_name": "digest",
+              "doc": "Digest of a BLOB",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "next_blob_uuid_link",
+              "method_name": "nextBlobUuidLink",
+              "doc": "Link acquired from upload start or previous chunk. Note, do not include initial\n/ (must do substring(1) )",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "value",
+              "method_name": "value",
+              "doc": "Optional raw data of blob",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "bytes"
+              },
+              "optional": true
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "nextBlobUuidLink",
+              "source": {
+                "kind": "user",
+                "name": "next_blob_uuid_link"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": true
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            },
+            {
+              "wire_name": "digest",
+              "source": {
+                "kind": "user",
+                "name": "digest"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "Content-Type",
+              "source": {
+                "kind": "constant",
+                "value": "application/octet-stream"
+              },
+              "optional": true,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            }
+          ],
+          "body_parameter": {
+            "user_param_name": "value",
+            "content_type": "application/octet-stream",
+            "content_types": [
+              "application/octet-stream"
+            ],
+            "body_type": {
+              "kind": "Scalar",
+              "value": "bytes"
+            },
+            "serialization_kind": "raw"
+          },
+          "response": {
+            "response_type": null,
+            "status_codes": [
+              201
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                201
+              ],
+              "response_type": null,
+              "headers": [
+                {
+                  "name": "location",
+                  "wire_name": "Location",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "range",
+                  "wire_name": "Range",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "docker_content_digest",
+                  "wire_name": "Docker-Content-Digest",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [],
+              "body_kind": "none"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "cancel_upload",
+          "name_camel": "cancelUpload",
+          "doc": "Cancel outstanding upload processes, releasing associated resources. If this is\nnot called, the unfinished uploads will eventually timeout.",
+          "http_method": "delete",
+          "path": "/{nextBlobUuidLink}",
+          "uri_template": "/{+nextBlobUuidLink}{?api%2Dversion}",
+          "user_parameters": [
+            {
+              "name": "next_blob_uuid_link",
+              "method_name": "nextBlobUuidLink",
+              "doc": "Link acquired from upload start or previous chunk. Note, do not include initial\n/ (must do substring(1) )",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "nextBlobUuidLink",
+              "source": {
+                "kind": "user",
+                "name": "next_blob_uuid_link"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": true
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [],
+          "body_parameter": null,
+          "response": {
+            "response_type": null,
+            "status_codes": [
+              204
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                204
+              ],
+              "response_type": null,
+              "headers": [],
+              "content_types": [],
+              "body_kind": "none"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "start_upload",
+          "name_camel": "startUpload",
+          "doc": "Initiate a resumable blob upload with an empty request body.",
+          "http_method": "post",
+          "path": "/v2/{name}/blobs/uploads/",
+          "uri_template": "/v2/{name}/blobs/uploads/{?api%2Dversion}",
+          "user_parameters": [
+            {
+              "name": "name",
+              "method_name": "name",
+              "doc": "Name of the image (including the namespace)",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "name",
+              "source": {
+                "kind": "user",
+                "name": "name"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [],
+          "body_parameter": null,
+          "response": {
+            "response_type": null,
+            "status_codes": [
+              202
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                202
+              ],
+              "response_type": null,
+              "headers": [
+                {
+                  "name": "location",
+                  "wire_name": "Location",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "range",
+                  "wire_name": "Range",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "docker_upload_uuid",
+                  "wire_name": "Docker-Upload-UUID",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [],
+              "body_kind": "none"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "get_chunk",
+          "name_camel": "getChunk",
+          "doc": "Retrieve the blob from the registry identified by `digest`. This endpoint may\nalso support RFC7233 compliant range requests. Support can be detected by\nissuing a HEAD request. If the header `Accept-Range: bytes` is returned, range\nrequests can be used to fetch partial content.",
+          "http_method": "get",
+          "path": "/v2/{name}/blobs/{digest}",
+          "uri_template": "/v2/{name}/blobs/{digest}{?api%2Dversion}",
+          "user_parameters": [
+            {
+              "name": "name",
+              "method_name": "name",
+              "doc": "Name of the image (including the namespace)",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "digest",
+              "method_name": "digest",
+              "doc": "Digest of a BLOB",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "range",
+              "method_name": "Range",
+              "doc": "Format : bytes=<start>-<end>,  HTTP Range header specifying blob chunk.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "name",
+              "source": {
+                "kind": "user",
+                "name": "name"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            },
+            {
+              "wire_name": "digest",
+              "source": {
+                "kind": "user",
+                "name": "digest"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "range",
+              "source": {
+                "kind": "user",
+                "name": "range"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            },
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/octet-stream"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            }
+          ],
+          "body_parameter": null,
+          "response": {
+            "response_type": {
+              "kind": "Scalar",
+              "value": "bytes"
+            },
+            "status_codes": [
+              206
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                206
+              ],
+              "response_type": {
+                "kind": "Scalar",
+                "value": "bytes"
+              },
+              "headers": [
+                {
+                  "name": "content_length",
+                  "wire_name": "Content-Length",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "int64"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "content_range",
+                  "wire_name": "Content-Range",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [
+                "application/octet-stream"
+              ],
+              "body_kind": "raw"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "check_chunk_exists",
+          "name_camel": "checkChunkExists",
+          "doc": "Same as GET, except only the headers are returned.",
+          "http_method": "head",
+          "path": "/v2/{name}/blobs/{digest}",
+          "uri_template": "/v2/{name}/blobs/{digest}{?api%2Dversion}",
+          "user_parameters": [
+            {
+              "name": "name",
+              "method_name": "name",
+              "doc": "Name of the image (including the namespace)",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "digest",
+              "method_name": "digest",
+              "doc": "Digest of a BLOB",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "range",
+              "method_name": "Range",
+              "doc": "Format : bytes=<start>-<end>,  HTTP Range header specifying blob chunk.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "name",
+              "source": {
+                "kind": "user",
+                "name": "name"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            },
+            {
+              "wire_name": "digest",
+              "source": {
+                "kind": "user",
+                "name": "digest"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "range",
+              "source": {
+                "kind": "user",
+                "name": "range"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            }
+          ],
+          "body_parameter": null,
+          "response": {
+            "response_type": null,
+            "status_codes": [
+              200
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                200
+              ],
+              "response_type": null,
+              "headers": [
+                {
+                  "name": "content_length",
+                  "wire_name": "Content-Length",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "int64"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "content_range",
+                  "wire_name": "Content-Range",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [],
+              "body_kind": "none"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        }
+      ],
+      "sub_clients": [],
+      "credential_scopes": [
+        "https://containerregistry.azure.net/.default"
+      ]
+    },
+    {
+      "name": "Authentication",
+      "namespace": "ContainerRegistry",
+      "doc": null,
+      "is_root": false,
+      "parent_name": "ContainerRegistry",
+      "init_parameters": [],
+      "api_version_default": "2021-07-01",
+      "endpoint": {
+        "name": "endpoint",
+        "default_value": null
+      },
+      "methods": [
+        {
+          "name": "exchange_aad_access_token_for_acr_refresh_token",
+          "name_camel": "exchangeAadAccessTokenForAcrRefreshToken",
+          "doc": "Exchange AAD tokens for an ACR refresh Token",
+          "http_method": "post",
+          "path": "/oauth2/exchange",
+          "uri_template": "/oauth2/exchange",
+          "user_parameters": [
+            {
+              "name": "body",
+              "method_name": "body",
+              "doc": "The body of the request",
+              "param_type": {
+                "kind": "Model",
+                "value": "MultipartBodyParameter"
+              },
+              "optional": false
+            }
+          ],
+          "path_parameters": [],
+          "query_parameters": [],
+          "header_parameters": [
+            {
+              "wire_name": "content-type",
+              "source": {
+                "kind": "constant",
+                "value": "multipart/form-data"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            },
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/json"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            }
+          ],
+          "body_parameter": {
+            "user_param_name": "body",
+            "content_type": "multipart/form-data",
+            "content_types": [
+              "multipart/form-data"
+            ],
+            "body_type": {
+              "kind": "Model",
+              "value": "MultipartBodyParameter"
+            },
+            "serialization_kind": "multipart"
+          },
+          "response": {
+            "response_type": {
+              "kind": "Model",
+              "value": "AcrRefreshToken"
+            },
+            "status_codes": [
+              200
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                200
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrRefreshToken"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "exchange_acr_refresh_token_for_acr_access_token",
+          "name_camel": "exchangeAcrRefreshTokenForAcrAccessToken",
+          "doc": "Exchange ACR Refresh token for an ACR Access Token",
+          "http_method": "post",
+          "path": "/oauth2/token",
+          "uri_template": "/oauth2/token",
+          "user_parameters": [
+            {
+              "name": "body",
+              "method_name": "body",
+              "doc": "The body of the request",
+              "param_type": {
+                "kind": "Model",
+                "value": "MultipartBodyParameter"
+              },
+              "optional": false
+            }
+          ],
+          "path_parameters": [],
+          "query_parameters": [],
+          "header_parameters": [
+            {
+              "wire_name": "content-type",
+              "source": {
+                "kind": "constant",
+                "value": "multipart/form-data"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            },
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/json"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            }
+          ],
+          "body_parameter": {
+            "user_param_name": "body",
+            "content_type": "multipart/form-data",
+            "content_types": [
+              "multipart/form-data"
+            ],
+            "body_type": {
+              "kind": "Model",
+              "value": "MultipartBodyParameter"
+            },
+            "serialization_kind": "multipart"
+          },
+          "response": {
+            "response_type": {
+              "kind": "Model",
+              "value": "AcrAccessToken"
+            },
+            "status_codes": [
+              200
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                200
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrAccessToken"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "get_acr_access_token_from_login",
+          "name_camel": "getAcrAccessTokenFromLogin",
+          "doc": "Exchange Username, Password and Scope for an ACR Access Token",
+          "http_method": "get",
+          "path": "/oauth2/token",
+          "uri_template": "/oauth2/token{?api%2Dversion,service,scope}",
+          "user_parameters": [
+            {
+              "name": "service",
+              "method_name": "service",
+              "doc": "Indicates the name of your Azure container registry.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "scope",
+              "method_name": "scope",
+              "doc": "Expected to be a valid scope, and can be specified more than once for multiple\nscope requests. You can obtain this from the Www-Authenticate response header\nfrom the challenge.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            }
+          ],
+          "path_parameters": [],
+          "query_parameters": [
+            {
+              "wire_name": "api-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            },
+            {
+              "wire_name": "service",
+              "source": {
+                "kind": "user",
+                "name": "service"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            },
+            {
+              "wire_name": "scope",
+              "source": {
+                "kind": "user",
+                "name": "scope"
+              },
+              "optional": false,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/json"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null
+            }
+          ],
+          "body_parameter": null,
+          "response": {
+            "response_type": {
+              "kind": "Model",
+              "value": "AcrAccessToken"
+            },
+            "status_codes": [
+              200
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                200
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrAccessToken"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "AcrErrors"
+              },
+              "headers": [],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        }
+      ],
+      "sub_clients": [],
+      "credential_scopes": [
+        "https://containerregistry.azure.net/.default"
+      ]
+    }
+  ],
+  "models": [
+    {
+      "name": "AcrErrors",
+      "namespace": "ContainerRegistry",
+      "doc": "Acr error response describing why the operation failed",
+      "fields": [
+        {
+          "name": "errors",
+          "serialized_name": "errors",
+          "doc": "Array of detailed error",
+          "field_type": {
+            "kind": "Array",
+            "value": {
+              "kind": "Model",
+              "value": "AcrErrorInfo"
+            }
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "AcrErrorInfo",
+      "namespace": "ContainerRegistry",
+      "doc": "Error information",
+      "fields": [
+        {
+          "name": "code",
+          "serialized_name": "code",
+          "doc": "Error code",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "message",
+          "serialized_name": "message",
+          "doc": "Error message",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "detail",
+          "serialized_name": "detail",
+          "doc": "Error details",
+          "field_type": {
+            "kind": "Model",
+            "value": "AcrErrorInfoDetail"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "AcrErrorInfoDetail",
+      "namespace": "ContainerRegistry",
+      "doc": null,
+      "fields": [],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "ManifestWrapper",
+      "namespace": "ContainerRegistry",
+      "doc": "Returns the requested manifest file",
+      "fields": [
+        {
+          "name": "schema_version",
+          "serialized_name": "schemaVersion",
+          "doc": "Schema version",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "int32"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "media_type",
+          "serialized_name": "mediaType",
+          "doc": "Media type for this Manifest",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "manifests",
+          "serialized_name": "manifests",
+          "doc": "(ManifestList, OCIIndex) List of V2 image layer information",
+          "field_type": {
+            "kind": "Array",
+            "value": {
+              "kind": "Model",
+              "value": "ManifestListAttributes"
+            }
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "config",
+          "serialized_name": "config",
+          "doc": "(V2, OCI) Image config descriptor",
+          "field_type": {
+            "kind": "Model",
+            "value": "Descriptor"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "layers",
+          "serialized_name": "layers",
+          "doc": "(V2, OCI) List of V2 image layer information",
+          "field_type": {
+            "kind": "Array",
+            "value": {
+              "kind": "Model",
+              "value": "Descriptor"
+            }
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "annotations",
+          "serialized_name": "annotations",
+          "doc": "(OCI, OCIIndex) Additional metadata",
+          "field_type": {
+            "kind": "Model",
+            "value": "Annotations"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "architecture",
+          "serialized_name": "architecture",
+          "doc": "(V1) CPU architecture",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "name",
+          "serialized_name": "name",
+          "doc": "(V1) Image name",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "tag",
+          "serialized_name": "tag",
+          "doc": "(V1) Image tag",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "fs_layers",
+          "serialized_name": "fsLayers",
+          "doc": "(V1) List of layer information",
+          "field_type": {
+            "kind": "Array",
+            "value": {
+              "kind": "Model",
+              "value": "FsLayer"
+            }
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "history",
+          "serialized_name": "history",
+          "doc": "(V1) Image history",
+          "field_type": {
+            "kind": "Array",
+            "value": {
+              "kind": "Model",
+              "value": "History"
+            }
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "signatures",
+          "serialized_name": "signatures",
+          "doc": "(V1) Image signature",
+          "field_type": {
+            "kind": "Array",
+            "value": {
+              "kind": "Model",
+              "value": "ImageSignature"
+            }
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [
+        "Manifest"
+      ],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "ManifestListAttributes",
+      "namespace": "ContainerRegistry",
+      "doc": "Attributes of a manifest in a manifest list.",
+      "fields": [
+        {
+          "name": "media_type",
+          "serialized_name": "mediaType",
+          "doc": "The MIME type of the referenced object. This will generally be\napplication/vnd.docker.image.manifest.v2+json, but it could also be\napplication/vnd.docker.image.manifest.v1+json",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "size",
+          "serialized_name": "size",
+          "doc": "The size in bytes of the object",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "int64"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "digest",
+          "serialized_name": "digest",
+          "doc": "The digest of the content, as defined by the Registry V2 HTTP API Specification",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "platform",
+          "serialized_name": "platform",
+          "doc": "The platform object describes the platform which the image in the manifest runs\non. A full list of valid operating system and architecture values are listed in\nthe Go language documentation for $GOOS and $GOARCH",
+          "field_type": {
+            "kind": "Model",
+            "value": "Platform"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "Platform",
+      "namespace": "ContainerRegistry",
+      "doc": "The platform object describes the platform which the image in the manifest runs\non. A full list of valid operating system and architecture values are listed in\nthe Go language documentation for $GOOS and $GOARCH",
+      "fields": [
+        {
+          "name": "architecture",
+          "serialized_name": "architecture",
+          "doc": "Specifies the CPU architecture, for example amd64 or ppc64le.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "os",
+          "serialized_name": "os",
+          "doc": "The os field specifies the operating system, for example linux or windows.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "os_version",
+          "serialized_name": "os.version",
+          "doc": "The optional os.version field specifies the operating system version, for\nexample 10.0.10586.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "os_features",
+          "serialized_name": "os.features",
+          "doc": "The optional os.features field specifies an array of strings, each listing a\nrequired OS feature (for example on Windows win32k",
+          "field_type": {
+            "kind": "Array",
+            "value": {
+              "kind": "Scalar",
+              "value": "string"
+            }
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "variant",
+          "serialized_name": "variant",
+          "doc": "The optional variant field specifies a variant of the CPU, for example armv6l\nto specify a particular CPU variant of the ARM CPU.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "features",
+          "serialized_name": "features",
+          "doc": "The optional features field specifies an array of strings, each listing a\nrequired CPU feature (for example sse4 or aes",
+          "field_type": {
+            "kind": "Array",
+            "value": {
+              "kind": "Scalar",
+              "value": "string"
+            }
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "Descriptor",
+      "namespace": "ContainerRegistry",
+      "doc": "Docker V2 image layer descriptor including config and layers",
+      "fields": [
+        {
+          "name": "media_type",
+          "serialized_name": "mediaType",
+          "doc": "Layer media type",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "size",
+          "serialized_name": "size",
+          "doc": "Layer size",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "int64"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "digest",
+          "serialized_name": "digest",
+          "doc": "Layer digest",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "urls",
+          "serialized_name": "urls",
+          "doc": "Specifies a list of URIs from which this object may be downloaded.",
+          "field_type": {
+            "kind": "Array",
+            "value": {
+              "kind": "Scalar",
+              "value": "string"
+            }
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "annotations",
+          "serialized_name": "annotations",
+          "doc": "Additional information provided through arbitrary metadata.",
+          "field_type": {
+            "kind": "Model",
+            "value": "Annotations"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "Annotations",
+      "namespace": "ContainerRegistry",
+      "doc": "Additional information provided through arbitrary metadata.",
+      "fields": [
+        {
+          "name": "created",
+          "serialized_name": "org.opencontainers.image.created",
+          "doc": "Date and time on which the image was built (string, date-time as defined by\nhttps://tools.ietf.org/html/rfc3339#section-5.6)",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "datetime"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "authors",
+          "serialized_name": "org.opencontainers.image.authors",
+          "doc": "Contact details of the people or organization responsible for the image.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "url",
+          "serialized_name": "org.opencontainers.image.url",
+          "doc": "URL to find more information on the image.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "documentation",
+          "serialized_name": "org.opencontainers.image.documentation",
+          "doc": "URL to get documentation on the image.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "source",
+          "serialized_name": "org.opencontainers.image.source",
+          "doc": "URL to get source code for building the image.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "version",
+          "serialized_name": "org.opencontainers.image.version",
+          "doc": "Version of the packaged software. The version MAY match a label or tag in the\nsource code repository, may also be Semantic versioning-compatible",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "revision",
+          "serialized_name": "org.opencontainers.image.revision",
+          "doc": "Source control revision identifier for the packaged software.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "vendor",
+          "serialized_name": "org.opencontainers.image.vendor",
+          "doc": "Name of the distributing entity, organization or individual.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "licenses",
+          "serialized_name": "org.opencontainers.image.licenses",
+          "doc": "License(s) under which contained software is distributed as an SPDX License\nExpression.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "name",
+          "serialized_name": "org.opencontainers.image.ref.name",
+          "doc": "Name of the reference for a target.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "title",
+          "serialized_name": "org.opencontainers.image.title",
+          "doc": "Human-readable title of the image",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "description",
+          "serialized_name": "org.opencontainers.image.description",
+          "doc": "Human-readable description of the software packaged in the image",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": {
+        "kind": "Map",
+        "value": {
+          "kind": "Scalar",
+          "value": "unknown"
+        }
+      }
+    },
+    {
+      "name": "FsLayer",
+      "namespace": "ContainerRegistry",
+      "doc": "Image layer information",
+      "fields": [
+        {
+          "name": "blob_sum",
+          "serialized_name": "blobSum",
+          "doc": "SHA of an image layer",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "History",
+      "namespace": "ContainerRegistry",
+      "doc": "A list of unstructured historical data for v1 compatibility",
+      "fields": [
+        {
+          "name": "v1_compatibility",
+          "serialized_name": "v1Compatibility",
+          "doc": "The raw v1 compatibility information",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "ImageSignature",
+      "namespace": "ContainerRegistry",
+      "doc": "Signature of a signed manifest",
+      "fields": [
+        {
+          "name": "header",
+          "serialized_name": "header",
+          "doc": "A JSON web signature",
+          "field_type": {
+            "kind": "Model",
+            "value": "JWK"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "signature",
+          "serialized_name": "signature",
+          "doc": "A signature for the image manifest, signed by a libtrust private key",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "protected",
+          "serialized_name": "protected",
+          "doc": "The signed protected header",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "JWK",
+      "namespace": "ContainerRegistry",
+      "doc": "A JSON web signature",
+      "fields": [
+        {
+          "name": "jwk",
+          "serialized_name": "jwk",
+          "doc": "JSON web key parameter",
+          "field_type": {
+            "kind": "Model",
+            "value": "JWKHeader"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "alg",
+          "serialized_name": "alg",
+          "doc": "The algorithm used to sign or encrypt the JWT",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "JWKHeader",
+      "namespace": "ContainerRegistry",
+      "doc": "JSON web key parameter",
+      "fields": [
+        {
+          "name": "crv",
+          "serialized_name": "crv",
+          "doc": "crv value",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "kid",
+          "serialized_name": "kid",
+          "doc": "kid value",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "kty",
+          "serialized_name": "kty",
+          "doc": "kty value",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "x",
+          "serialized_name": "x",
+          "doc": "x value",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "y",
+          "serialized_name": "y",
+          "doc": "y value",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "Manifest",
+      "namespace": "ContainerRegistry",
+      "doc": "Returns the requested manifest file",
+      "fields": [
+        {
+          "name": "schema_version",
+          "serialized_name": "schemaVersion",
+          "doc": "Schema version",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "int32"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": true,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "Repositories",
+      "namespace": "ContainerRegistry",
+      "doc": "List of repositories",
+      "fields": [
+        {
+          "name": "repositories",
+          "serialized_name": "repositories",
+          "doc": "Repository names",
+          "field_type": {
+            "kind": "Array",
+            "value": {
+              "kind": "Scalar",
+              "value": "string"
+            }
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "link",
+          "serialized_name": "link",
+          "doc": "Link to the next page of results",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "ContainerRepositoryProperties",
+      "namespace": "ContainerRegistry",
+      "doc": "Properties of this repository.",
+      "fields": [
+        {
+          "name": "registry_login_server",
+          "serialized_name": "registry",
+          "doc": "Registry login server name. This is likely to be similar to\n{registry-name}.azurecr.io.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "name",
+          "serialized_name": "imageName",
+          "doc": "Image name",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "created_on",
+          "serialized_name": "createdTime",
+          "doc": "Image created time",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "datetime"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "last_updated_on",
+          "serialized_name": "lastUpdateTime",
+          "doc": "Image last update time",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "datetime"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "manifest_count",
+          "serialized_name": "manifestCount",
+          "doc": "Number of the manifests",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "int32"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "tag_count",
+          "serialized_name": "tagCount",
+          "doc": "Number of the tags",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "int32"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "changeable_attributes",
+          "serialized_name": "changeableAttributes",
+          "doc": "Writeable properties of the resource",
+          "field_type": {
+            "kind": "Model",
+            "value": "RepositoryChangeableAttributes"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "RepositoryChangeableAttributes",
+      "namespace": "ContainerRegistry",
+      "doc": "Changeable attributes for Repository",
+      "fields": [
+        {
+          "name": "can_delete",
+          "serialized_name": "deleteEnabled",
+          "doc": "Delete enabled",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "bool"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "can_write",
+          "serialized_name": "writeEnabled",
+          "doc": "Write enabled",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "bool"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "can_list",
+          "serialized_name": "listEnabled",
+          "doc": "List enabled",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "bool"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "can_read",
+          "serialized_name": "readEnabled",
+          "doc": "Read enabled",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "bool"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": true,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "TagList",
+      "namespace": "ContainerRegistry",
+      "doc": "List of tag details",
+      "fields": [
+        {
+          "name": "registry_login_server",
+          "serialized_name": "registry",
+          "doc": "Registry login server name. This is likely to be similar to\n{registry-name}.azurecr.io.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "repository",
+          "serialized_name": "imageName",
+          "doc": "Image name",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "tag_attribute_bases",
+          "serialized_name": "tags",
+          "doc": "List of tag attribute details",
+          "field_type": {
+            "kind": "Array",
+            "value": {
+              "kind": "Model",
+              "value": "TagAttributesBase"
+            }
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "link",
+          "serialized_name": "link",
+          "doc": "Link to the next page of results",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "TagAttributesBase",
+      "namespace": "ContainerRegistry",
+      "doc": "Tag attribute details",
+      "fields": [
+        {
+          "name": "name",
+          "serialized_name": "name",
+          "doc": "Tag name",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "digest",
+          "serialized_name": "digest",
+          "doc": "Tag digest",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "created_on",
+          "serialized_name": "createdTime",
+          "doc": "Tag created time",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "datetime"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "last_updated_on",
+          "serialized_name": "lastUpdateTime",
+          "doc": "Tag last update time",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "datetime"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "signed",
+          "serialized_name": "signed",
+          "doc": "Is signed",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "bool"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "changeable_attributes",
+          "serialized_name": "changeableAttributes",
+          "doc": "Writeable properties of the resource",
+          "field_type": {
+            "kind": "Model",
+            "value": "TagChangeableAttributes"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "TagChangeableAttributes",
+      "namespace": "ContainerRegistry",
+      "doc": "Changeable attributes",
+      "fields": [
+        {
+          "name": "can_delete",
+          "serialized_name": "deleteEnabled",
+          "doc": "Delete enabled",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "bool"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "can_write",
+          "serialized_name": "writeEnabled",
+          "doc": "Write enabled",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "bool"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "can_list",
+          "serialized_name": "listEnabled",
+          "doc": "List enabled",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "bool"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "can_read",
+          "serialized_name": "readEnabled",
+          "doc": "Read enabled",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "bool"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": true,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "ArtifactTagProperties",
+      "namespace": "ContainerRegistry",
+      "doc": "Tag attributes",
+      "fields": [
+        {
+          "name": "registry_login_server",
+          "serialized_name": "registry",
+          "doc": "Registry login server name. This is likely to be similar to\n{registry-name}.azurecr.io.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "repository_name",
+          "serialized_name": "imageName",
+          "doc": "Image name",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "tag",
+          "serialized_name": "tag",
+          "doc": "List of tag attribute details",
+          "field_type": {
+            "kind": "Model",
+            "value": "TagAttributesBase"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "AcrManifests",
+      "namespace": "ContainerRegistry",
+      "doc": "Manifest attributes",
+      "fields": [
+        {
+          "name": "registry_login_server",
+          "serialized_name": "registry",
+          "doc": "Registry login server name. This is likely to be similar to\n{registry-name}.azurecr.io.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "repository",
+          "serialized_name": "imageName",
+          "doc": "Image name",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "manifests",
+          "serialized_name": "manifests",
+          "doc": "List of manifests",
+          "field_type": {
+            "kind": "Array",
+            "value": {
+              "kind": "Model",
+              "value": "ManifestAttributesBase"
+            }
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "link",
+          "serialized_name": "link",
+          "doc": "Link to the next page of results",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "ManifestAttributesBase",
+      "namespace": "ContainerRegistry",
+      "doc": "Manifest details",
+      "fields": [
+        {
+          "name": "digest",
+          "serialized_name": "digest",
+          "doc": "Manifest",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "size",
+          "serialized_name": "imageSize",
+          "doc": "Image size",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "int64"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "created_on",
+          "serialized_name": "createdTime",
+          "doc": "Created time",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "datetime"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "last_updated_on",
+          "serialized_name": "lastUpdateTime",
+          "doc": "Last update time",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "datetime"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "architecture",
+          "serialized_name": "architecture",
+          "doc": "CPU architecture",
+          "field_type": {
+            "kind": "Enum",
+            "value": "ArtifactArchitecture"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "operating_system",
+          "serialized_name": "os",
+          "doc": "Operating system",
+          "field_type": {
+            "kind": "Enum",
+            "value": "ArtifactOperatingSystem"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "related_artifacts",
+          "serialized_name": "references",
+          "doc": "List of artifacts that are referenced by this manifest list, with information\nabout the platform each supports.  This list will be empty if this is a leaf\nmanifest and not a manifest list.",
+          "field_type": {
+            "kind": "Array",
+            "value": {
+              "kind": "Model",
+              "value": "ArtifactManifestPlatform"
+            }
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "config_media_type",
+          "serialized_name": "configMediaType",
+          "doc": "Config blob media type",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "tags",
+          "serialized_name": "tags",
+          "doc": "List of tags",
+          "field_type": {
+            "kind": "Array",
+            "value": {
+              "kind": "Scalar",
+              "value": "string"
+            }
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "changeable_attributes",
+          "serialized_name": "changeableAttributes",
+          "doc": "Writeable properties of the resource",
+          "field_type": {
+            "kind": "Model",
+            "value": "ManifestChangeableAttributes"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "ArtifactManifestPlatform",
+      "namespace": "ContainerRegistry",
+      "doc": "The artifact's platform, consisting of operating system and architecture.",
+      "fields": [
+        {
+          "name": "digest",
+          "serialized_name": "digest",
+          "doc": "Manifest digest",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "architecture",
+          "serialized_name": "architecture",
+          "doc": "CPU architecture",
+          "field_type": {
+            "kind": "Enum",
+            "value": "ArtifactArchitecture"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "operating_system",
+          "serialized_name": "os",
+          "doc": "Operating system",
+          "field_type": {
+            "kind": "Enum",
+            "value": "ArtifactOperatingSystem"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "ManifestChangeableAttributes",
+      "namespace": "ContainerRegistry",
+      "doc": "Changeable attributes",
+      "fields": [
+        {
+          "name": "can_delete",
+          "serialized_name": "deleteEnabled",
+          "doc": "Delete enabled",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "bool"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "can_write",
+          "serialized_name": "writeEnabled",
+          "doc": "Write enabled",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "bool"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "can_list",
+          "serialized_name": "listEnabled",
+          "doc": "List enabled",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "bool"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "can_read",
+          "serialized_name": "readEnabled",
+          "doc": "Read enabled",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "bool"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": true,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "ArtifactManifestProperties",
+      "namespace": "ContainerRegistry",
+      "doc": "Manifest attributes details",
+      "fields": [
+        {
+          "name": "registry_login_server",
+          "serialized_name": "registry",
+          "doc": "Registry login server name. This is likely to be similar to\n{registry-name}.azurecr.io.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "repository_name",
+          "serialized_name": "imageName",
+          "doc": "Repository name",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        },
+        {
+          "name": "manifest",
+          "serialized_name": "manifest",
+          "doc": "Manifest attributes",
+          "field_type": {
+            "kind": "Model",
+            "value": "ManifestAttributesBase"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "MultipartBodyParameter",
+      "namespace": "ContainerRegistry",
+      "doc": "The multipart body parameter for AAD token exchange.",
+      "fields": [
+        {
+          "name": "grant_type",
+          "serialized_name": "grantType",
+          "doc": "Can take a value of access_token_refresh_token, or access_token, or\nrefresh_token",
+          "field_type": {
+            "kind": "Enum",
+            "value": "PostContentSchemaGrantType"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": {
+            "name": "grantType",
+            "is_file": false,
+            "is_multi": false,
+            "content_types": [
+              "text/plain"
+            ]
+          }
+        },
+        {
+          "name": "service",
+          "serialized_name": "service",
+          "doc": "Indicates the name of your Azure container registry.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": {
+            "name": "service",
+            "is_file": false,
+            "is_multi": false,
+            "content_types": [
+              "text/plain"
+            ]
+          }
+        },
+        {
+          "name": "tenant",
+          "serialized_name": "tenant",
+          "doc": "AAD tenant associated to the AAD credentials.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": {
+            "name": "tenant",
+            "is_file": false,
+            "is_multi": false,
+            "content_types": [
+              "text/plain"
+            ]
+          }
+        },
+        {
+          "name": "refresh_token",
+          "serialized_name": "refreshToken",
+          "doc": "AAD refresh token, mandatory when grant_type is access_token_refresh_token or\nrefresh_token",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": {
+            "name": "refreshToken",
+            "is_file": false,
+            "is_multi": false,
+            "content_types": [
+              "text/plain"
+            ]
+          }
+        },
+        {
+          "name": "access_token",
+          "serialized_name": "accessToken",
+          "doc": "AAD access token, mandatory when grant_type is access_token_refresh_token or\naccess_token.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": {
+            "name": "accessToken",
+            "is_file": false,
+            "is_multi": false,
+            "content_types": [
+              "text/plain"
+            ]
+          }
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": true,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "AcrRefreshToken",
+      "namespace": "ContainerRegistry",
+      "doc": "The ACR refresh token response containing the refresh token for authentication.",
+      "fields": [
+        {
+          "name": "refresh_token",
+          "serialized_name": "refresh_token",
+          "doc": "The refresh token to be used for generating access tokens",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    },
+    {
+      "name": "AcrAccessToken",
+      "namespace": "ContainerRegistry",
+      "doc": "The ACR access token response containing the access token for authentication.",
+      "fields": [
+        {
+          "name": "access_token",
+          "serialized_name": "access_token",
+          "doc": "The access token for performing authenticated requests",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null
+    }
+  ],
+  "enums": [
+    {
+      "name": "ArtifactTagOrder",
+      "namespace": "ContainerRegistry",
+      "doc": "Sort options for ordering tags in a collection.",
+      "values": [
+        {
+          "name": "None",
+          "value": "none",
+          "doc": "Do not provide an orderby value in the request."
+        },
+        {
+          "name": "LastUpdatedOnDescending",
+          "value": "timedesc",
+          "doc": "Order tags by LastUpdatedOn field, from most recently updated to least recently\nupdated."
+        },
+        {
+          "name": "LastUpdatedOnAscending",
+          "value": "timeasc",
+          "doc": "Order tags by LastUpdatedOn field, from least recently updated to most recently\nupdated."
+        }
+      ],
+      "value_type": "string",
+      "extensible": true,
+      "is_union": true
+    },
+    {
+      "name": "ArtifactManifestOrder",
+      "namespace": "ContainerRegistry",
+      "doc": "Sort options for ordering manifests in a collection.",
+      "values": [
+        {
+          "name": "None",
+          "value": "none",
+          "doc": "Do not provide an orderby value in the request."
+        },
+        {
+          "name": "LastUpdatedOnDescending",
+          "value": "timedesc",
+          "doc": "Order manifests by LastUpdatedOn field, from most recently updated to least\nrecently updated."
+        },
+        {
+          "name": "LastUpdatedOnAscending",
+          "value": "timeasc",
+          "doc": "Order manifest by LastUpdatedOn field, from least recently updated to most\nrecently updated."
+        }
+      ],
+      "value_type": "string",
+      "extensible": true,
+      "is_union": true
+    },
+    {
+      "name": "ArtifactArchitecture",
+      "namespace": "ContainerRegistry",
+      "doc": "The artifact platform's architecture.",
+      "values": [
+        {
+          "name": "I386",
+          "value": "386",
+          "doc": "i386"
+        },
+        {
+          "name": "Amd64",
+          "value": "amd64",
+          "doc": "AMD64"
+        },
+        {
+          "name": "Arm",
+          "value": "arm",
+          "doc": "ARM"
+        },
+        {
+          "name": "Arm64",
+          "value": "arm64",
+          "doc": "ARM64"
+        },
+        {
+          "name": "Mips",
+          "value": "mips",
+          "doc": "MIPS"
+        },
+        {
+          "name": "MipsLe",
+          "value": "mipsle",
+          "doc": "MIPSLE"
+        },
+        {
+          "name": "Mips64",
+          "value": "mips64",
+          "doc": "MIPS64"
+        },
+        {
+          "name": "Mips64Le",
+          "value": "mips64le",
+          "doc": "MIPS64LE"
+        },
+        {
+          "name": "Ppc64",
+          "value": "ppc64",
+          "doc": "PPC64"
+        },
+        {
+          "name": "Ppc64Le",
+          "value": "ppc64le",
+          "doc": "PPC64LE"
+        },
+        {
+          "name": "RiscV64",
+          "value": "riscv64",
+          "doc": "RISCv64"
+        },
+        {
+          "name": "S390x",
+          "value": "s390x",
+          "doc": "s390x"
+        },
+        {
+          "name": "Wasm",
+          "value": "wasm",
+          "doc": "Wasm"
+        }
+      ],
+      "value_type": "string",
+      "extensible": true,
+      "is_union": true
+    },
+    {
+      "name": "ArtifactOperatingSystem",
+      "namespace": "ContainerRegistry",
+      "doc": "The artifact platform's operating system.",
+      "values": [
+        {
+          "name": "Aix",
+          "value": "aix",
+          "doc": "AIX operating system"
+        },
+        {
+          "name": "Android",
+          "value": "android",
+          "doc": "Android operating system"
+        },
+        {
+          "name": "Darwin",
+          "value": "darwin",
+          "doc": "Darwin operating system"
+        },
+        {
+          "name": "Dragonfly",
+          "value": "dragonfly",
+          "doc": "Dragonfly operating system"
+        },
+        {
+          "name": "FreeBsd",
+          "value": "freebsd",
+          "doc": "FreeBSD operating system"
+        },
+        {
+          "name": "Illumos",
+          "value": "illumos",
+          "doc": "Illumos operating system"
+        },
+        {
+          "name": "iOS",
+          "value": "ios",
+          "doc": "iOS operating system"
+        },
+        {
+          "name": "JS",
+          "value": "js",
+          "doc": "JavaScript operating system"
+        },
+        {
+          "name": "Linux",
+          "value": "linux",
+          "doc": "Linux operating system"
+        },
+        {
+          "name": "NetBsd",
+          "value": "netbsd",
+          "doc": "NetBSD operating system"
+        },
+        {
+          "name": "OpenBsd",
+          "value": "openbsd",
+          "doc": "OpenBSD operating system"
+        },
+        {
+          "name": "Plan9",
+          "value": "plan9",
+          "doc": "Plan 9 operating system"
+        },
+        {
+          "name": "Solaris",
+          "value": "solaris",
+          "doc": "Solaris operating system"
+        },
+        {
+          "name": "Windows",
+          "value": "windows",
+          "doc": "Windows operating system"
+        }
+      ],
+      "value_type": "string",
+      "extensible": true,
+      "is_union": true
+    },
+    {
+      "name": "PostContentSchemaGrantType",
+      "namespace": "ContainerRegistry",
+      "doc": "Can take a value of access_token_refresh_token, or access_token, or\nrefresh_token",
+      "values": [
+        {
+          "name": "access_token_refresh_token",
+          "value": "access_token_refresh_token",
+          "doc": "Grant type for exchanging both access token and refresh token"
+        },
+        {
+          "name": "access_token",
+          "value": "access_token",
+          "doc": "Grant type for exchanging access token only"
+        },
+        {
+          "name": "refresh_token",
+          "value": "refresh_token",
+          "doc": "Grant type for exchanging refresh token only"
+        }
+      ],
+      "value_type": "string",
+      "extensible": true,
+      "is_union": true
+    },
+    {
+      "name": "Versions",
+      "namespace": "ContainerRegistry",
+      "doc": "The available API versions.",
+      "values": [
+        {
+          "name": "v2021_07_01",
+          "value": "2021-07-01",
+          "doc": "The 2021-07-01 API version."
+        }
+      ],
+      "value_type": "string",
+      "extensible": false,
+      "is_union": false
+    },
+    {
+      "name": "TokenGrantType",
+      "namespace": "ContainerRegistry",
+      "doc": "Grant type is expected to be refresh_token",
+      "values": [
+        {
+          "name": "refresh_token",
+          "value": "refresh_token",
+          "doc": "Grant type for refreshing the token"
+        },
+        {
+          "name": "password",
+          "value": "password",
+          "doc": "Grant type for password authentication"
+        }
+      ],
+      "value_type": "string",
+      "extensible": true,
+      "is_union": true
+    }
+  ],
+  "unions": []
+}
