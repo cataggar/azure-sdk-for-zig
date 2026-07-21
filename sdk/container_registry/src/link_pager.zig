@@ -136,6 +136,8 @@ const LinkIterator = struct {
         self.index += 1;
 
         var is_next = false;
+        var rel_seen = false;
+        var has_anchor = false;
         while (true) {
             skipOws(self.value, &self.index);
             if (self.index == self.value.len) break;
@@ -151,17 +153,24 @@ const LinkIterator = struct {
                 self.index += 1;
             if (self.index == name_start) return error.MalformedLinkHeader;
             const name = self.value[name_start..self.index];
+            const is_rel = std.ascii.eqlIgnoreCase(name, "rel");
+            const is_anchor = std.ascii.eqlIgnoreCase(name, "anchor");
             skipOws(self.value, &self.index);
             if (self.index == self.value.len or self.value[self.index] != '=') {
+                if (is_rel and !rel_seen) rel_seen = true;
+                if (is_anchor) has_anchor = true;
                 continue;
             }
             self.index += 1;
             skipOws(self.value, &self.index);
             const parameter = try parseParameterValue(self.value, &self.index);
-            if (std.ascii.eqlIgnoreCase(name, "rel") and containsNextRelation(parameter))
-                is_next = true;
+            if (is_rel and !rel_seen) {
+                rel_seen = true;
+                is_next = containsNextRelation(parameter);
+            }
+            if (is_anchor) has_anchor = true;
         }
-        return .{ .target = target, .is_next = is_next };
+        return .{ .target = target, .is_next = is_next and !has_anchor };
     }
 };
 
@@ -288,4 +297,74 @@ fn isUriReferenceByte(byte: u8) bool {
         '-', '.', '_', '~', ':', '/', '?', '#', '[', ']', '@', '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=', '%' => true,
         else => false,
     };
+}
+
+test "Link parser uses only the first rel parameter" {
+    const cases = [_]struct {
+        value: []const u8,
+        expected_next: bool,
+    }{
+        .{
+            .value = "</first>; rel=prev; rel=next",
+            .expected_next = false,
+        },
+        .{
+            .value = "</second>; rel=next; rel=prev",
+            .expected_next = true,
+        },
+        .{
+            .value = "</third>; rel; rel=next",
+            .expected_next = false,
+        },
+    };
+
+    for (cases) |case| {
+        var iterator = LinkIterator{ .value = case.value };
+        const link = (try iterator.next()).?;
+        try std.testing.expectEqual(case.expected_next, link.is_next);
+        try std.testing.expect((try iterator.next()) == null);
+    }
+}
+
+test "Link parser ignores next links with anchor parameters" {
+    const cases = [_][]const u8{
+        "</before>; anchor=context; rel=next",
+        "</after>; rel=next; anchor=context",
+        "</quoted>; rel=next; anchor=\"https://registry.example/context\"",
+    };
+
+    for (cases) |value| {
+        var iterator = LinkIterator{ .value = value };
+        const link = (try iterator.next()).?;
+        try std.testing.expect(!link.is_next);
+        try std.testing.expect((try iterator.next()) == null);
+    }
+}
+
+test "Link continuation selects valid next beside ignored anchored link" {
+    const allocator = std.testing.allocator;
+    var response = core.http.Response{
+        .status_code = 200,
+        .headers = std.StringHashMap([]const u8).init(allocator),
+        .body = try allocator.dupe(u8, ""),
+        .allocator = allocator,
+        .response_headers = core.http.ResponseHeaders.init(allocator),
+    };
+    defer response.deinit();
+    try response.response_headers.append(
+        "Link",
+        "<https://evil.example/anchored>; rel=next; anchor=\"/context\", </safe>; rel=next",
+    );
+
+    const continuation = (try continuationFromResponse(
+        allocator,
+        "https://registry.example/current",
+        "https://registry.example",
+        &response,
+    )).?;
+    defer allocator.free(continuation);
+    try std.testing.expectEqualStrings(
+        "https://registry.example/safe",
+        continuation,
+    );
 }
