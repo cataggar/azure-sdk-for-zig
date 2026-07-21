@@ -266,8 +266,10 @@ pub const HttpTransport = struct {
         request: *Request,
         options: OpenOptions,
     ) !*HttpOperation {
-        request.transport_started = true;
-        if (self.openFn) |openFn| return openFn(self, request, options);
+        if (self.openFn) |openFn| {
+            request.transport_started = true;
+            return openFn(self, request, options);
+        }
         if (options.body != null) return error.StreamingRequestUnsupported;
         if (options.cancellation) |token| {
             if (token.isCancelled()) return error.OperationCancelled;
@@ -447,7 +449,7 @@ const StdStreamingOperation = struct {
         self.request = try transport.client.request(request.method.toStd(), uri, .{
             .extra_headers = self.extra_headers,
             .redirect_behavior = if (authenticated or request.redirect_policy == .not_allowed)
-                .not_allowed
+                .unhandled
             else
                 @enumFromInt(3),
         });

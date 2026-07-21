@@ -1,6 +1,17 @@
 const std = @import("std");
 const core = @import("azure_core");
 
+const sas = @import("sas.zig");
+
+pub const SasQueueClient = sas.SasQueueClient;
+pub const CompleteSasQueueClient = sas.CompleteSasQueueClient;
+pub const QueueMessageOutcome = sas.QueueMessageOutcome;
+pub const max_queue_message_bytes = sas.max_queue_message_bytes;
+
+test {
+    std.testing.refAllDecls(sas);
+}
+
 // ─────────────────────────── Models ───────────────────────────
 
 pub const QueueMessage = struct {

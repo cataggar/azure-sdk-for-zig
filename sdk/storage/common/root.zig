@@ -2,6 +2,12 @@ const std = @import("std");
 const core = @import("azure_core");
 const base64 = core.base64;
 
+pub const sas = @import("sas.zig");
+
+test {
+    std.testing.refAllDecls(sas);
+}
+
 const HmacSha256 = std.crypto.auth.hmac.sha2.HmacSha256;
 
 /// Shared Key credential for Azure Storage.
@@ -166,11 +172,11 @@ test "StorageSharedKeyCredential signRequest produces real HMAC" {
 
 test "SasBuilder sign produces HMAC signature" {
     const allocator = std.testing.allocator;
-    const sas = SasBuilder{
+    const builder = SasBuilder{
         .permissions = "rl",
         .expiry = "2026-12-31T23:59:59Z",
     };
-    const qs = try sas.sign(allocator, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+    const qs = try builder.sign(allocator, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
     defer allocator.free(qs);
     // Must contain sig= with a base64 value.
     try std.testing.expect(std.mem.find(u8, qs, "&sig=") != null);
@@ -179,11 +185,11 @@ test "SasBuilder sign produces HMAC signature" {
 
 test "SasBuilder toQueryString unsigned" {
     const allocator = std.testing.allocator;
-    const sas = SasBuilder{
+    const builder = SasBuilder{
         .permissions = "rl",
         .expiry = "2026-12-31T23:59:59Z",
     };
-    const qs = try sas.toQueryString(allocator);
+    const qs = try builder.toQueryString(allocator);
     defer allocator.free(qs);
     try std.testing.expect(std.mem.find(u8, qs, "sp=rl") != null);
     try std.testing.expect(std.mem.find(u8, qs, "se=2026-12-31T23:59:59Z") != null);
