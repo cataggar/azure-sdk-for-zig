@@ -8,6 +8,7 @@ const std = @import("std");
 const core = @import("azure_core");
 const kusto_common = @import("azure_kusto_common");
 const streaming = @import("streaming.zig");
+const resources = @import("resources.zig");
 
 pub const ConnectionProperties = kusto_common.ConnectionProperties;
 pub const DataFormat = kusto_common.DataFormat;
@@ -41,6 +42,26 @@ pub const IngestionStatus = streaming.IngestionStatus;
 pub const IngestOptions = streaming.IngestOptions;
 pub const StreamingIngestClient = streaming.StreamingIngestClient;
 pub const JsonRows = streaming.JsonRows;
+pub const ResourceService = resources.ResourceService;
+pub const ResourceKind = resources.ResourceKind;
+pub const StorageResource = resources.StorageResource;
+pub const AuthorizationContext = resources.AuthorizationContext;
+pub const IngestionResourceSnapshot = resources.IngestionResourceSnapshot;
+pub const ResourceSnapshotLease = resources.ResourceSnapshotLease;
+pub const ResourceSnapshotResult = resources.ResourceSnapshotResult;
+pub const ResourceAttempt = resources.ResourceAttempt;
+pub const ResourceSelection = resources.ResourceSelection;
+pub const ResourceSelectionResult = resources.ResourceSelectionResult;
+pub const ResourceCommandExecutor = resources.ResourceCommandExecutor;
+pub const DataManagementCommandExecutor = resources.DataManagementCommandExecutor;
+pub const ResourceManagerOptions = resources.ResourceManagerOptions;
+pub const ResourceManager = resources.ResourceManager;
+pub const TimeSource = resources.TimeSource;
+pub const default_resource_database = resources.default_resource_database;
+
+test {
+    _ = @import("resources.zig");
+}
 
 // ─────────────── QueuedIngestClient ──────────────────
 
