@@ -27,7 +27,7 @@
 //! WASI under wasmtime.
 
 const std = @import("std");
-const cm = @import("codemodel.zig");
+const cm = @import("codemodel");
 const emit = @import("emit.zig");
 const tcgc = @import("tcgc_import.zig");
 
@@ -327,7 +327,7 @@ fn acceptFile(name: []const u8, kind: SourceKind) bool {
 
 test {
     _ = @import("naming.zig");
-    _ = @import("codemodel.zig");
+    _ = @import("codemodel");
     _ = @import("types.zig");
     _ = @import("emit.zig");
     _ = @import("identifiers.zig");

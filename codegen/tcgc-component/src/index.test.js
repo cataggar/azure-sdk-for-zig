@@ -8,6 +8,7 @@ import {
   adaptMethod,
   adaptModel,
   adaptUnion,
+  disambiguateRootClientNames,
 } from "./index.js";
 
 const stringType = { kind: "string" };
@@ -90,12 +91,60 @@ test("method adapter preserves protocol wire alternatives", () => {
 
   assert.equal(method.uri_template, "/{+nextBlobUuidLink}");
   assert.equal(method.path_parameters[0].allow_reserved, true);
+  assert.equal(method.path_parameters[0].path_encoding, "greedy");
   assert.equal(method.header_parameters[0].source.kind, "user");
   assert.equal(method.body_parameter.serialization_kind, "raw");
   assert.deepEqual(method.response.status_codes, [202]);
   assert.equal(method.responses[0].headers[0].wire_name, "Docker-Upload-UUID");
   assert.equal(method.exceptions[0].status_codes[0], "*");
   assert.equal(method.exceptions[0].body_kind, "json");
+});
+
+test("path adapter selects ACR repository and segment encoding", () => {
+  const name = {
+    kind: "method",
+    name: "name",
+    type: stringType,
+    optional: false,
+  };
+  const digest = {
+    kind: "method",
+    name: "digest",
+    type: stringType,
+    optional: false,
+  };
+  const method = adaptMethod(
+    {
+      name: "getBlob",
+      kind: "basic",
+      parameters: [name, digest],
+      operation: {
+        verb: "GET",
+        path: "/v2/{name}/blobs/{digest}",
+        parameters: [
+          {
+            ...name,
+            kind: "path",
+            serializedName: "name",
+            methodParameterSegments: [[name]],
+          },
+          {
+            ...digest,
+            kind: "path",
+            serializedName: "digest",
+            methodParameterSegments: [[digest]],
+          },
+        ],
+        responses: [{ statusCodes: [200, 206] }],
+      },
+      response: {},
+    },
+    new Set(),
+  );
+
+  assert.equal(method.path_parameters[0].path_encoding, "repository");
+  assert.equal(method.path_parameters[1].path_encoding, "segment");
+  assert.deepEqual(method.response.status_codes, [200, 206]);
 });
 
 test("model adapter preserves multipart fields and open records", () => {
@@ -162,5 +211,17 @@ test("union metadata is not collapsed away", () => {
   assert.deepEqual(union.variants, [
     { kind: "Scalar", value: "string" },
     { kind: "Scalar", value: "bytes" },
+  ]);
+});
+
+test("root clients are disambiguated from same-named operation groups", () => {
+  const clients = [
+    { name: "ContainerRegistry", is_root: true },
+    { name: "ContainerRegistry", is_root: false },
+  ];
+  disambiguateRootClientNames(clients);
+  assert.deepEqual(clients.map((client) => client.name), [
+    "ContainerRegistryClient",
+    "ContainerRegistry",
   ]);
 });

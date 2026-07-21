@@ -1,5 +1,6 @@
 const std = @import("std");
 const cm = @import("codemodel");
+const emitter = @import("emit");
 
 fn findMethod(model: cm.CodeModel, name: []const u8) ?cm.Method {
     for (model.clients) |client| {
@@ -65,6 +66,7 @@ test "Container Registry fixture preserves the complete wire contract" {
 
     try testing.expectEqualStrings("container_registry", model.package_name);
     try testing.expectEqual(@as(usize, 4), model.clients.len);
+    try testing.expectEqualStrings("ContainerRegistryClient", model.clients[0].name);
 
     var operation_group_count: usize = 0;
     var operation_count: usize = 0;
@@ -135,6 +137,20 @@ test "Container Registry fixture preserves the complete wire contract" {
         upload_chunk.uri_template.?,
     );
     try testing.expect(upload_chunk.path_parameters[0].allow_reserved.?);
+    try testing.expectEqualStrings(
+        "greedy",
+        upload_chunk.path_parameters[0].path_encoding.?,
+    );
+
+    const get_blob_path = findMethod(model, "get_blob").?;
+    try testing.expectEqualStrings(
+        "repository",
+        get_blob_path.path_parameters[0].path_encoding.?,
+    );
+    try testing.expectEqualStrings(
+        "segment",
+        get_blob_path.path_parameters[1].path_encoding.?,
+    );
 
     const exchange = findMethod(
         model,
@@ -205,4 +221,70 @@ test "Container Registry fixture preserves the complete wire contract" {
     try testing.expect(annotations.additional_properties.?.isMap());
     const map_value = annotations.additional_properties.?.value.object.get("value").?;
     try testing.expectEqualStrings("unknown", map_value.string);
+}
+
+test "Container Registry golden preserves protocol fidelity" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var parsed = try std.json.parseFromSlice(
+        emitter.CodeModel,
+        allocator,
+        @embedFile("container_registry.json"),
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed.deinit();
+
+    const clients = try emitter.renderClients(allocator, parsed.value);
+    defer allocator.free(clients);
+    try expectValidZig(allocator, clients);
+    try testing.expect(std.mem.indexOf(u8, clients, "pub fn initWithPipeline(") != null);
+    try testing.expect(std.mem.indexOf(u8, clients, "core.url.encodeRepositoryName(alloc, name)") != null);
+    try testing.expect(std.mem.indexOf(u8, clients, "core.url.expandGreedyPathValue(alloc, next_blob_uuid_link)") != null);
+    try testing.expect(std.mem.indexOf(u8, clients, "core.url.resolveUrl(alloc, self.endpoint, encoded_path_0)") != null);
+    try testing.expect(std.mem.indexOf(u8, clients, "try req.setHeader(\"range\", range);") != null);
+    try testing.expect(std.mem.indexOf(u8, clients, "if (accept) |value| try req.setHeader(\"accept\", value);") != null);
+    try testing.expect(std.mem.indexOf(u8, clients, "req.body = value;") != null);
+    try testing.expect(std.mem.indexOf(u8, clients, "multipart/form-data; boundary=azure-sdk-for-zig-acr-boundary") != null);
+    try testing.expect(std.mem.indexOf(u8, clients, "pub const GetBlobResult = union(enum)") != null);
+    try testing.expect(std.mem.indexOf(u8, clients, "status_307: struct") != null);
+    try testing.expect(std.mem.indexOf(u8, clients, "status_404: struct") != null);
+    try testing.expect(std.mem.indexOf(u8, clients, "status_206: struct") != null);
+    try testing.expect(std.mem.indexOf(u8, clients, "const response_body = try bufferRawResponseBody(alloc, resp.body);") != null);
+
+    const models = try emitter.renderModels(allocator, parsed.value);
+    defer allocator.free(models);
+    try expectValidZig(allocator, models);
+    try testing.expect(std.mem.indexOf(u8, models, "pub const JsonValue = union(enum)") != null);
+    try testing.expect(std.mem.indexOf(u8, models, "additional_properties: std.StringArrayHashMapUnmanaged(JsonValue) = .empty") != null);
+    try testing.expect(std.mem.indexOf(u8, models, ".created = \"org.opencontainers.image.created\"") != null);
+}
+
+fn expectValidZig(allocator: std.mem.Allocator, source: []const u8) !void {
+    const zsource = try allocator.dupeZ(u8, source);
+    defer allocator.free(zsource);
+    var tree = try std.zig.Ast.parse(allocator, zsource, .zig);
+    defer tree.deinit(allocator);
+    for (tree.errors) |parse_error| {
+        const location = tree.tokenLocation(0, parse_error.token);
+        std.debug.print(
+            "generated parse error {s} at {d}:{d}: {s}\n",
+            .{
+                @tagName(parse_error.tag),
+                location.line + 1,
+                location.column + 1,
+                sourceLine(source, location.line),
+            },
+        );
+    }
+
+    try std.testing.expectEqual(@as(usize, 0), tree.errors.len);
+}
+
+fn sourceLine(source: []const u8, target_line: usize) []const u8 {
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    var line: usize = 0;
+    while (lines.next()) |value| : (line += 1) {
+        if (line == target_line) return value;
+    }
+    return "";
 }
