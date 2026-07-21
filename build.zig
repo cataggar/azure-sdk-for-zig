@@ -37,7 +37,7 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    _ = b.addModule("azure_sdk_container_registry", .{
+    const container_registry_sdk_mod = b.addModule("azure_sdk_container_registry", .{
         .root_source_file = b.path("sdk/container_registry/src/root.zig"),
         .target = target,
         .imports = &.{
@@ -630,6 +630,87 @@ pub fn build(b: *std.Build) void {
         "Run opt-in Kusto live tests; unconfigured tests skip",
     );
     kusto_live_test_step.dependOn(&run_kusto_live_tests.step);
+
+    const acr_example_support_mod = b.createModule(.{
+        .root_source_file = b.path("sdk/container_registry/examples/support.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "azure_core", .module = core_mod },
+            .{
+                .name = "azure_sdk_container_registry",
+                .module = container_registry_sdk_mod,
+            },
+        },
+    });
+    const acr_examples_step = b.step(
+        "container-registry-examples",
+        "Compile all Container Registry examples",
+    );
+    const acr_example_sources = [_]struct {
+        name: []const u8,
+        source: []const u8,
+    }{
+        .{
+            .name = "acr-list-repositories-tags",
+            .source = "sdk/container_registry/examples/list_repositories_tags.zig",
+        },
+        .{
+            .name = "acr-anonymous-read",
+            .source = "sdk/container_registry/examples/anonymous_read.zig",
+        },
+        .{
+            .name = "acr-oci-push-pull",
+            .source = "sdk/container_registry/examples/oci_push_pull.zig",
+        },
+        .{
+            .name = "acr-delete-artifact",
+            .source = "sdk/container_registry/examples/delete_artifact.zig",
+        },
+    };
+    for (acr_example_sources) |acr_example| {
+        const executable = b.addExecutable(.{
+            .name = acr_example.name,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(acr_example.source),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "azure_core", .module = core_mod },
+                    .{
+                        .name = "azure_sdk_container_registry",
+                        .module = container_registry_sdk_mod,
+                    },
+                    .{
+                        .name = "acr_example_support",
+                        .module = acr_example_support_mod,
+                    },
+                },
+            }),
+        });
+        acr_examples_step.dependOn(&executable.step);
+        test_step.dependOn(&executable.step);
+    }
+
+    const acr_live_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("sdk/container_registry/live_tests/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "azure_core", .module = core_mod },
+                .{
+                    .name = "azure_sdk_container_registry",
+                    .module = container_registry_sdk_mod,
+                },
+            },
+        }),
+    });
+    const acr_live_test_step = b.step(
+        "container-registry-live-test",
+        "Run destructive opt-in Container Registry live tests; unconfigured tests skip",
+    );
+    acr_live_test_step.dependOn(&b.addRunArtifact(acr_live_tests).step);
 
     // -- tspconfigs tool --
     //

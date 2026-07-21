@@ -374,6 +374,7 @@ CMakeUserPresets.json
 
 zig-out/
 zig-pkg/
+.release/
 # codegen local-dev scratch output
 .tsp-generated/
 codegen/tcgc-component/.tsp-staging/

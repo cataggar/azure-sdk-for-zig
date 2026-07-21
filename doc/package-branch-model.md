@@ -185,29 +185,84 @@ dependencies during development:
 (cd sdk/container_registry && zig build test --summary all)
 ```
 
-Before publishing `sdk/container_registry`, replace both local paths in its
-`build.zig.zon` with immutable `azure_sdk` and
-`azure_rest_container_registry` commit/hash pins, then rerun the same package
-test command from the orphan branch.
-
-For a release commit, generate complete immutable dependency metadata before
-splitting the package to its orphan branch:
+The checked-in packages intentionally retain relative paths so monorepo
+development never depends on an unpublished orphan branch. Immutable release
+metadata is staged outside the tracked tree:
 
 ```bash
-SDK_COMMIT="$(git rev-parse origin/main)"
-SDK_HASH="$(zig fetch "git+https://github.com/cataggar/azure-sdk-for-zig#$SDK_COMMIT")"
-(cd codegen/cli && zig build generate-container-registry-package \
-  -Dazure-core-commit="$SDK_COMMIT" \
-  -Dazure-core-hash="$SDK_HASH")
-(cd rest/container_registry && zig build test --summary all)
-git add rest/container_registry
-git commit -m "rest/container_registry: release generated package"
-REST_COMMIT="$(git subtree split --prefix=rest/container_registry HEAD)"
-git push origin "$REST_COMMIT:refs/heads/rest/container_registry"
+# Verifies the recorded main commit/hash, generates the pinned REST package,
+# stages the SDK beside it, validates exact package/module names, independently
+# tests both packages, compiles all examples, and checks the unconfigured live
+# test skip. `dry-run` is an alias.
+scripts/container-registry-release.sh verify
+
+# Also verify that canonical regeneration is deterministic and cannot touch the
+# handwritten SDK package.
+scripts/verify-container-registry-regeneration.sh
+
+# Stage the publishable REST package. This creates no ref.
+scripts/container-registry-release.sh prepare-rest
 ```
 
-The release generation is still deterministic: the commit and Zig package
-hash are explicit inputs, and no generated package file is edited afterward.
+The common dependency pin is recorded in
+`eng/container_registry_release/metadata.sh`. It is the immutable
+`origin/main` commit immediately after PR #100 and its verified Zig package
+hash. The REST stage is
+`.release/container_registry/publish/rest`.
+
+Publish the staged REST package from a disposable worktree (the commands below
+are intentionally explicit and are not run by the preparation tool):
+
+```bash
+ROOT="$(git rev-parse --show-toplevel)"
+REST_STAGE="$ROOT/.release/container_registry/publish/rest"
+REST_WORKTREE="${ROOT}-rest-container-registry-release"
+git worktree add --detach "$REST_WORKTREE" HEAD
+(
+  cd "$REST_WORKTREE"
+  git switch --orphan rest-container-registry-release
+  git rm -rf .
+  cp -R "$REST_STAGE/." .
+  git add -A
+  git commit -m "rest/container_registry: release generated package"
+  git push origin HEAD:refs/heads/rest/container_registry
+)
+REST_COMMIT="$(git ls-remote origin refs/heads/rest/container_registry | cut -f1)"
+git worktree remove "$REST_WORKTREE"
+```
+
+The SDK cannot contain an honest immutable REST hash until that orphan commit
+exists. After REST publication, the second stage fetches that exact commit,
+computes (or verifies a supplied) Zig package hash, applies both immutable
+dependency pins, and tests the publishable SDK package:
+
+```bash
+scripts/container-registry-release.sh prepare-sdk "$REST_COMMIT"
+```
+
+The SDK stage is `.release/container_registry/publish/sdk`. Publish it only
+after inspecting its two URL/hash pins:
+
+```bash
+ROOT="$(git rev-parse --show-toplevel)"
+SDK_STAGE="$ROOT/.release/container_registry/publish/sdk"
+SDK_WORKTREE="${ROOT}-sdk-container-registry-release"
+git worktree add --detach "$SDK_WORKTREE" HEAD
+(
+  cd "$SDK_WORKTREE"
+  git switch --orphan sdk-container-registry-release
+  git rm -rf .
+  cp -R "$SDK_STAGE/." .
+  git add -A
+  git commit -m "sdk/container_registry: release package"
+  git push origin HEAD:refs/heads/sdk/container_registry
+)
+git worktree remove "$SDK_WORKTREE"
+```
+
+This two-stage process never invents a REST commit or hash. Both preparation
+commands are deterministic, create only ignored `.release/` staging, and never
+create branches, tags, commits, or remote refs themselves.
 
 ## Versioning
 
