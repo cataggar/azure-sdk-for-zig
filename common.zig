@@ -746,6 +746,33 @@ pub const ClientRequestProperties = struct {
         try setProperty(&self.options, allocator, name, value);
     }
 
+    /// Set whether buffered result rows may have a width different from their
+    /// declared column count.
+    pub fn setClientResultsReaderAllowVaryingRowWidths(
+        self: *ClientRequestProperties,
+        allocator: std.mem.Allocator,
+        enabled: bool,
+    ) !void {
+        try self.setOption(
+            allocator,
+            "client_results_reader_allow_varying_row_widths",
+            enabled,
+        );
+    }
+
+    /// Reads the buffered-result width option without coercing arbitrary JSON
+    /// values. A non-boolean option is rejected before a request is sent.
+    pub fn allowVaryingRowWidths(self: *const ClientRequestProperties) !bool {
+        const property = findProperty(
+            self.options.items,
+            "client_results_reader_allow_varying_row_widths",
+        ) orelse return false;
+        return switch (property.value) {
+            .bool => |enabled| enabled,
+            else => error.InvalidVaryingRowWidthOption,
+        };
+    }
+
     /// Set an arbitrary Kusto query parameter. The name and value are copied.
     pub fn setParameter(self: *ClientRequestProperties, allocator: std.mem.Allocator, name: []const u8, value: anytype) !void {
         var owned_value = try ownedValueFromAny(value, allocator);
@@ -873,6 +900,7 @@ pub const ClientRequestProperties = struct {
             if (timeout == 0 or timeout > max_server_timeout_ms + client_timeout_grace_ms)
                 return error.InvalidClientTimeout;
         }
+        _ = try self.allowVaryingRowWidths();
         const no_request_timeout = try self.requestsNoTimeout();
         if (!no_request_timeout and self.server_timeout_ms == null) {
             if (findProperty(self.options.items, "servertimeout")) |property| {
@@ -2148,6 +2176,17 @@ test "ClientRequestProperties applies reserved timeout precedence" {
 
     try props.setOption(allocator, "norequesttimeout", "invalid");
     try std.testing.expectError(error.InvalidNoRequestTimeout, props.validate(.query));
+}
+
+test "ClientRequestProperties reads varying row width option safely" {
+    const allocator = std.testing.allocator;
+    var props = ClientRequestProperties{};
+    defer props.deinit(allocator);
+    try std.testing.expect(!(try props.allowVaryingRowWidths()));
+    try props.setClientResultsReaderAllowVaryingRowWidths(allocator, true);
+    try std.testing.expect(try props.allowVaryingRowWidths());
+    try props.setOption(allocator, "client_results_reader_allow_varying_row_widths", "true");
+    try std.testing.expectError(error.InvalidVaryingRowWidthOption, props.validate(.query));
 }
 
 fn setRequestPropertiesForAllocationTest(allocator: std.mem.Allocator) !void {
