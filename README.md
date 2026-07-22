@@ -10,6 +10,14 @@ Pure Zig implementation of Azure service clients with **zero C dependencies**.
 
 **69 source files · 481 tests · Zig 0.16+**
 
+## Documentation
+
+- [Documentation index](doc/README.md)
+- [Development](doc/development.md)
+- [Package catalog](doc/package-catalog.md)
+- [Package and branch model](doc/package-branch-model.md)
+- [Migration to independent packages](doc/migrating-to-independent-packages.md)
+
 ## Quick Start
 
 ```zig

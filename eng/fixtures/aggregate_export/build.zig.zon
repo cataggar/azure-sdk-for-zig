@@ -1,0 +1,16 @@
+.{
+    .name = .aggregate_export_fixture,
+    .version = "0.0.0",
+    .fingerprint = 0x87fa1755d3a0688c,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .provider = .{
+            .path = "provider",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "provider",
+    },
+}

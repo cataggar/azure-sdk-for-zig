@@ -1,4 +1,5 @@
 const std = @import("std");
+const package_registry = @import("eng/packages.zig");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -321,6 +322,96 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_storage_common_tests.step);
     test_step.dependOn(&run_kv_secrets_tests.step);
     test_step.dependOn(&run_tables_tests.step);
+
+    const package_tool_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("eng/package_tool_test.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(package_tool_tests).step);
+
+    const package_tool = b.addExecutable(.{
+        .name = "package-tool",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("eng/package_tool.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    const package_check_run = b.addRunArtifact(package_tool);
+    package_check_run.addArg("check");
+    package_check_run.setCwd(b.path("."));
+    test_step.dependOn(&package_check_run.step);
+    const package_check_step = b.step(
+        "package-check",
+        "Validate package metadata, documentation, licenses, and manifests",
+    );
+    package_check_step.dependOn(&package_check_run.step);
+
+    const package_list_run = b.addRunArtifact(package_tool);
+    package_list_run.addArg("list");
+    package_list_run.setCwd(b.path("."));
+    const package_list_step = b.step("package-list", "List packages in release order");
+    package_list_step.dependOn(&package_list_run.step);
+
+    const package_graph_run = b.addRunArtifact(package_tool);
+    package_graph_run.addArg("graph");
+    package_graph_run.setCwd(b.path("."));
+    const package_graph_step = b.step("package-graph", "Print the package dependency graph");
+    package_graph_step.dependOn(&package_graph_run.step);
+
+    const package_matrix_run = b.addRunArtifact(package_tool);
+    package_matrix_run.addArg("ci-matrix");
+    package_matrix_run.setCwd(b.path("."));
+    const package_matrix_step = b.step(
+        "package-ci-matrix",
+        "Print the independently buildable package CI matrix",
+    );
+    package_matrix_step.dependOn(&package_matrix_run.step);
+
+    const package_sync_run = b.addRunArtifact(package_tool);
+    package_sync_run.addArg("sync-local");
+    package_sync_run.setCwd(b.path("."));
+    package_sync_run.has_side_effects = true;
+    const package_sync_step = b.step(
+        "package-sync",
+        "Synchronize package licenses and local manifest identities",
+    );
+    package_sync_step.dependOn(&package_sync_run.step);
+
+    const aggregate_export_fixture = b.dependency("aggregate_export_fixture", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const aggregate_export_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("eng/fixtures/aggregate_export_consumer.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{
+                    .name = "fixture_module",
+                    .module = aggregate_export_fixture.module("fixture_module"),
+                },
+            },
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(aggregate_export_tests).step);
+
+    for (package_registry.all) |package| {
+        if (package.state != .package) continue;
+        const package_tests = b.addSystemCommand(&.{
+            b.graph.zig_exe,
+            "build",
+            "test",
+            "--summary",
+            "all",
+        });
+        package_tests.setCwd(b.path(package.source_path));
+        test_step.dependOn(&package_tests.step);
+    }
 
     const container_registry_tests = b.addTest(.{
         .root_module = b.createModule(.{

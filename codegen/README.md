@@ -86,11 +86,11 @@ Each generated package can be published from its own **orphan branch** named
 rest/<service>
 ```
 
-- New generated packages use the module name `azure_rest_<service>`.
-  Existing packages such as `keyvault_secrets` and `arm_avs` retain
-  their pre-convention names until migrated separately.
-- The orphan branch references `azure_core` (and friends) from `main`
-  through a pinned git URL+hash in `build.zig.zon`.
+- Generated packages use the module name `azure_rest_<service>`.
+  `keyvault_secrets` and `arm_avs` are declared migrations to
+  `azure_rest_keyvault_secrets` and `azure_rest_arm_avs`.
+- Canonical generated packages reference `azure_sdk_core` through an exact
+  release commit and Zig package hash in `build.zig.zon`.
 
 See [`../doc/package-branch-model.md`](../doc/package-branch-model.md) for the
 long-term generated REST and hand-written SDK branch, package, dependency, and

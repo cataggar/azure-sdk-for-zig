@@ -207,9 +207,11 @@ Long-lived clients use bounded LRU caches: 128 routes, 128 scoped access
 tokens, and 32 refresh tokens. Tokens that reach the configured expiry skew
 are pruned before lookup or insertion.
 
-Local development uses relative package dependencies. Release branches replace
-them with immutable `azure_sdk` and `azure_rest_container_registry` Git
-commit/hash pins as described in `doc/package-branch-model.md`.
+Local development uses relative package dependencies. The canonical package
+split changes the common dependency to `azure_sdk_core`. Release branches
+replace local paths with immutable Core and
+`azure_rest_container_registry` Git commit/hash pins as described in the
+[package branch model](../../doc/package-branch-model.md).
 
 ## Ownership and lifetime rules
 
@@ -305,6 +307,5 @@ The checked-in package keeps local path dependencies for monorepo development.
 Run `scripts/container-registry-release.sh verify` for deterministic local
 release-layout staging. Publish REST first, then run
 `scripts/container-registry-release.sh prepare-sdk <rest-commit>` so Zig
-computes and applies the immutable REST package hash. Exact commands and the
-pinned common SDK revision are documented in
-`doc/package-branch-model.md` and `release/container_registry/README.md`.
+computes and applies the immutable REST package hash. Exact commands and the pinned common SDK revision are documented in
+[Container Registry release staging](../../eng/container_registry_release/README.md).

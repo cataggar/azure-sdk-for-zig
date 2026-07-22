@@ -144,6 +144,7 @@ expected = {
     ".gitignore",
     "build.zig",
     "build.zig.zon",
+    "LICENSE.txt",
     "README.md",
     "src",
 }
@@ -247,6 +248,7 @@ output = Path(sys.argv[2])
 subtree = Path("sdk/container_registry")
 declared = {
     ".gitignore",
+    "LICENSE.txt",
     "README.md",
     "build.zig",
     "build.zig.zon",
@@ -658,6 +660,7 @@ write_fixture_package() {
   rm -rf "$directory"
   mkdir -p "$directory/src"
   printf '.zig-cache/\nzig-out/\nzig-pkg/\n' >"$directory/.gitignore"
+  cp "$ROOT/LICENSE.txt" "$directory/LICENSE.txt"
   printf '# fixture %s\n' "$package" >"$directory/README.md"
   printf 'pub const fixture = true;\n' >"$directory/src/root.zig"
   cat >"$directory/build.zig" <<EOF
@@ -689,6 +692,7 @@ EOF
         "build.zig.zon",
         "src",
         "README.md",
+        "LICENSE.txt",
     },
 }
 EOF
@@ -706,6 +710,7 @@ EOF
         "build.zig.zon",
         "src",
         "README.md",
+        "LICENSE.txt",
     },
 }
 EOF

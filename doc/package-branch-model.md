@@ -15,7 +15,8 @@ orphan branch.
 
 ## Branch and Package Naming
 
-Use a snake-cased service identifier such as `container_registry`.
+Use a snake-cased identifier derived from the package's path below `rest/` or
+`sdk/`. Join nested path segments with underscores.
 
 | Layer | Branch | Package and module name |
 | --- | --- | --- |
@@ -30,7 +31,34 @@ For Azure Container Registry:
 | Hand-written SDK | `sdk/container_registry` | `azure_sdk_container_registry` |
 
 Existing generated packages that predate this convention can retain their
-current names until they are migrated separately.
+current names only until their declared canonical migration. ARM AVS and Key
+Vault Secrets migrate to `azure_rest_arm_avs` and
+`azure_rest_keyvault_secrets`.
+
+Shared packages follow the same rule:
+
+| Source path | Branch | Package and module |
+| --- | --- | --- |
+| `sdk/core` | `sdk/core` | `azure_sdk_core` |
+| `sdk/storage/blobs` | `sdk/storage_blobs` | `azure_sdk_storage_blobs` |
+| `sdk/kusto/data` | `sdk/kusto_data` | `azure_sdk_kusto_data` |
+
+The aggregate is the only exception: source `sdk/aggregate`, branch
+`sdk/aggregate`, package `azure_sdk`.
+
+Zig package names are limited to 32 characters. Public service packages may
+therefore use a shorter cross-language service identity while retaining their
+domain-oriented source path:
+
+| Source | Branch | Package/module |
+| --- | --- | --- |
+| `sdk/messaging/eventhubs` | `sdk/eventhubs` | `azure_sdk_eventhubs` |
+| `sdk/messaging/servicebus` | `sdk/servicebus` | `azure_sdk_servicebus` |
+
+Closely related APIs may share one versioned package and use namespaces.
+`azure_sdk_keyvault` exposes `secrets`, `keys`, `certificates`, and
+`administration`; `azure_sdk_eventhubs` exposes
+`checkpoint_store_blob`.
 
 ## Ownership Boundary
 
@@ -67,10 +95,10 @@ Dependencies flow in one direction:
 ```text
 azure_sdk_<service>
 ├── azure_rest_<service>
-└── azure_sdk                 # common azure_core and related modules
+└── azure_sdk_core
 
 azure_rest_<service>
-└── azure_sdk                 # common azure_core and serialization modules
+└── azure_sdk_core
 ```
 
 The generated REST package never depends on the service-specific SDK package.
@@ -86,8 +114,8 @@ The generated package uses the REST-prefixed package name:
     .name = .azure_rest_container_registry,
     .version = "0.1.0",
     .dependencies = .{
-        .azure_sdk = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig#<main-commit>",
+        .azure_sdk_core = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig#<core-commit>",
             .hash = "<package-hash>",
         },
     },
@@ -102,8 +130,8 @@ REST package revision:
     .name = .azure_sdk_container_registry,
     .version = "0.1.0",
     .dependencies = .{
-        .azure_sdk = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig#<main-commit>",
+        .azure_sdk_core = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig#<core-commit>",
             .hash = "<package-hash>",
         },
         .azure_rest_container_registry = .{
@@ -164,108 +192,11 @@ A REST release does not require an SDK release unless its API or behavior
 changes what the SDK consumes. An SDK release always pins the exact REST
 revision used during testing.
 
-### Container Registry Commands
-
-`rest/container_registry` is regenerated from the checked-in TypeSpec code
-model and includes generator-owned contract tests:
-
-```bash
-(cd codegen/cli && zig build generate-container-registry-package)
-(cd rest/container_registry && zig build test --summary all)
-```
-
-When the canonical API changes, refresh
-`codegen/fixtures/container_registry.json` first using the command documented
-in `codegen/README.md`, then run the package generation command above.
-
-The hand-written package is validated independently with local path
-dependencies during development:
-
-```bash
-(cd sdk/container_registry && zig build test --summary all)
-```
-
-The checked-in packages intentionally retain relative paths so monorepo
-development never depends on an unpublished orphan branch. Immutable release
-metadata is staged outside the tracked tree:
-
-```bash
-# Verifies the recorded main commit/hash, generates the pinned REST package,
-# stages the SDK beside it, validates exact package/module names, independently
-# tests both packages, compiles all examples, and checks the unconfigured live
-# test skip. `dry-run` is an alias.
-scripts/container-registry-release.sh verify
-
-# Also verify that canonical regeneration is deterministic and cannot touch the
-# handwritten SDK package.
-scripts/verify-container-registry-regeneration.sh
-
-# Stage the publishable REST package. This creates no ref.
-scripts/container-registry-release.sh prepare-rest
-```
-
-The common dependency pin is recorded in
-`eng/container_registry_release/metadata.sh`. It is the immutable
-`origin/main` commit immediately after PR #100 and its verified Zig package
-hash. The REST stage is
-`.release/container_registry/publish/rest`.
-
-Preview the exact initial-or-descendant REST commit without changing the
-remote, then publish it:
-
-```bash
-scripts/container-registry-release.sh publish-rest --dry-run
-scripts/container-registry-release.sh publish-rest
-REST_COMMIT="$(
-  git ls-remote origin refs/heads/rest/container_registry | cut -f1
-)"
-```
-
-The SDK cannot contain an honest immutable REST hash until that orphan commit
-exists. After REST publication, the second stage fetches that exact commit,
-requires it to equal the current remote release-branch tip, archives and
-validates the package root/name/dependency structure, computes (or verifies a
-supplied) Zig package hash from those exact bytes, applies both immutable
-dependency pins, and tests a disposable copy of the publishable SDK package:
-
-```bash
-scripts/container-registry-release.sh prepare-sdk "$REST_COMMIT"
-```
-
-The SDK stage is `.release/container_registry/publish/sdk`. Publish it only
-after inspecting its two URL/hash pins:
-
-```bash
-scripts/container-registry-release.sh publish-sdk --dry-run
-scripts/container-registry-release.sh publish-sdk
-```
-
-The publication commands create disposable no-checkout worktrees and install
-only validated stage files. Cleanup traps remove temporary worktrees and local
-branches on success or failure. A missing release branch gets an orphan root;
-an existing release branch is fetched and the new commit must descend directly
-from its current tip. Pushes are ordinary fast-forwards and never force.
-
-Staging uses only tracked SDK files in the package's explicit `.paths`
-manifest. Generated REST output is checked against its own `.paths` manifest.
-Neither staging nor publication copies ignored/untracked trees, and validation
-rejects `.zig-cache`, `zig-pkg`, `zig-out`, `.release`, or any undeclared
-top-level entry. Builds run from disposable copies with external local/global
-Zig caches, so publishable directories remain byte-clean.
-
-Run the isolated workflow regression tests at any time:
-
-```bash
-scripts/container-registry-release.sh self-test
-```
-
-They use a local bare remote to prove that a main commit and a mismatched REST
-package are rejected, initial and subsequent publication dry-runs have the
-correct parentage, cleanup succeeds, and a normal local fast-forward push
-works. They never create GitHub branches or tags.
-
-This two-stage process never invents a REST commit or hash. Preparation creates
-only ignored `.release/` staging; publication is always an explicit command.
+Container Registry's current two-stage commands and regression tests are
+documented in
+[`eng/container_registry_release/README.md`](../eng/container_registry_release/README.md).
+The generic release contract is documented in
+[`doc/releasing-packages.md`](releasing-packages.md).
 
 ## Versioning
 
@@ -274,12 +205,17 @@ only ignored `.release/` staging; publication is always an explicit command.
 - A breaking REST change requires a REST major-version increment.
 - A breaking public SDK change requires an SDK major-version increment.
 - The two package versions do not need to match.
+- Every canonical package begins at `0.1.0`.
+- A release creates `<package>/v<version>` on the release commit.
+- Versions must advance monotonically for one package identity; version tags
+  are immutable.
 
 ## Repository Integration
 
 `main` remains the development and integration branch for:
 
-- `azure_core` and shared infrastructure.
+- The non-published integration workspace.
+- `azure_sdk_core` and shared infrastructure source.
 - The TypeSpec adapter and Zig emitter.
 - Cross-package tests and local path-based development.
 - Documentation of package and branch conventions.
