@@ -1,4 +1,4 @@
-# arm-avs examples
+# azure_rest_arm_avs examples
 
 Hand-written examples that exercise the generated `arm_avs` client. They
 live alongside (not inside) `src/` so the generator never overwrites
@@ -18,7 +18,7 @@ my-cloud                                  eastus          Succeeded
 3 private cloud(s).
 ```
 
-Auth: [`AzureCliCredential`](../../../sdk/identity/azure_cli.zig) —
+Auth: [`AzureCliCredential`](../../../sdk/core/identity/azure_cli.zig) —
 shells out to `az account get-access-token`, so run `az login` first.
 
 ### Running
