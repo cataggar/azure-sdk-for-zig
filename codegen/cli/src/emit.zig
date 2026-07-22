@@ -38,18 +38,18 @@ pub const EmitOptions = struct {
     /// (e.g. `@azure/arm-avs` → `arm-avs`).
     display_name: ?[]const u8 = null,
     /// Commit SHA of the `azure-sdk-for-zig` main branch that the
-    /// generated `build.zig.zon` should pin `azure_core` to. May be
+    /// generated `build.zig.zon` should pin `azure_sdk_core` to. May be
     /// null during local development; in that case the generated
-    /// build.zig.zon references `azure_core` by a local `path =` entry
+    /// build.zig.zon references `azure_sdk_core` by a local `path =` entry
     /// pointing relative to the worktree root.
-    azure_core_commit: ?[]const u8 = null,
-    /// Zig package hash for `azure_core_commit`. Required whenever a
+    azure_sdk_core_commit: ?[]const u8 = null,
+    /// Zig package hash for `azure_sdk_core_commit`. Required whenever a
     /// commit is supplied so release output is complete and reproducible.
-    azure_core_hash: ?[]const u8 = null,
-    /// Local path used for the `azure_sdk` dependency when
-    /// `azure_core_commit` is null. Defaults to the sibling-worktree
+    azure_sdk_core_hash: ?[]const u8 = null,
+    /// Local path used for the `azure_sdk_core` dependency when
+    /// `azure_sdk_core_commit` is null. Defaults to the sibling-worktree
     /// layout used by orphan package development.
-    azure_sdk_path: []const u8 = "../azure-sdk-for-zig",
+    azure_sdk_core_path: []const u8 = "../azure-sdk-for-zig",
     /// Run the in-process formatter (`std.zig.Ast.parse` +
     /// `renderAlloc`) on every `.zig` and `.zon` file before writing
     /// it out. Set to `false` to skip — useful when debugging emitter
@@ -101,9 +101,9 @@ pub fn emit(
             allocator,
             pkg_name,
             model.package_version,
-            opts.azure_core_commit,
-            opts.azure_core_hash,
-            opts.azure_sdk_path,
+            opts.azure_sdk_core_commit,
+            opts.azure_sdk_core_hash,
+            opts.azure_sdk_core_path,
         );
         defer allocator.free(s);
         try writeFile(allocator, io, out_dir, "build.zig.zon", s, opts.run_zig_fmt);
@@ -236,7 +236,7 @@ pub fn renderClients(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
         \\
         \\const std = @import("std");
         \\const serde = @import("serde");
-        \\const core = @import("azure_core");
+        \\const core = @import("azure_sdk_core");
         \\const models = @import("models.zig");
         \\const enums = @import("enums.zig");
         \\
@@ -1497,7 +1497,7 @@ pub fn renderModels(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
     const w = &aw.writer;
 
     // Whether any generated struct will reference `core.arm.ResourceKind`.
-    // If so, models.zig needs `const core = @import("azure_core");`.
+    // If so, models.zig needs `const core = @import("azure_sdk_core");`.
     var needs_core = false;
     for (model.models) |m| {
         if (m.arm_resource_kind != null) {
@@ -1515,7 +1515,7 @@ pub fn renderModels(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
     );
     if (needs_core) {
         try w.writeAll(
-            \\const core = @import("azure_core");
+            \\const core = @import("azure_sdk_core");
             \\
         );
     }
@@ -1830,7 +1830,7 @@ fn renderEnums(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
     );
     if (any_extensible) {
         try w.writeAll(
-            \\const core = @import("azure_core");
+            \\const core = @import("azure_sdk_core");
             \\
         );
     }
@@ -1914,11 +1914,11 @@ fn renderBuildZig(allocator: std.mem.Allocator, pkg_name: []const u8) ![]u8 {
         \\    const target = b.standardTargetOptions(.{{}});
         \\    const optimize = b.standardOptimizeOption(.{{}});
         \\
-        \\    const azure_sdk_dep = b.dependency("azure_sdk", .{{
+        \\    const azure_sdk_core_dep = b.dependency("azure_sdk_core", .{{
         \\        .target = target,
         \\        .optimize = optimize,
         \\    }});
-        \\    const azure_core_mod = azure_sdk_dep.module("azure_core");
+        \\    const azure_sdk_core_mod = azure_sdk_core_dep.module("azure_sdk_core");
         \\
         \\    const serde_dep = b.dependency("serde", .{{
         \\        .target = target,
@@ -1930,7 +1930,7 @@ fn renderBuildZig(allocator: std.mem.Allocator, pkg_name: []const u8) ![]u8 {
         \\        .root_source_file = b.path("src/root.zig"),
         \\        .target = target,
         \\        .imports = &.{{
-        \\            .{{ .name = "azure_core", .module = azure_core_mod }},
+        \\            .{{ .name = "azure_sdk_core", .module = azure_sdk_core_mod }},
         \\            .{{ .name = "serde", .module = serde_mod }},
         \\        }},
         \\    }});
@@ -1941,7 +1941,7 @@ fn renderBuildZig(allocator: std.mem.Allocator, pkg_name: []const u8) ![]u8 {
         \\            .target = target,
         \\            .optimize = optimize,
         \\            .imports = &.{{
-        \\                .{{ .name = "azure_core", .module = azure_core_mod }},
+        \\                .{{ .name = "azure_sdk_core", .module = azure_sdk_core_mod }},
         \\                .{{ .name = "serde", .module = serde_mod }},
         \\            }},
         \\        }}),
@@ -1957,26 +1957,26 @@ fn renderBuildZigZon(
     allocator: std.mem.Allocator,
     pkg_name: []const u8,
     pkg_version: []const u8,
-    azure_core_commit: ?[]const u8,
-    azure_core_hash: ?[]const u8,
-    azure_sdk_path: []const u8,
+    azure_sdk_core_commit: ?[]const u8,
+    azure_sdk_core_hash: ?[]const u8,
+    azure_sdk_core_path: []const u8,
 ) ![]u8 {
-    const azure_sdk_entry = if (azure_core_commit) |sha| blk: {
-        const hash = azure_core_hash orelse return error.MissingAzureCoreHash;
+    const azure_sdk_core_entry = if (azure_sdk_core_commit) |sha| blk: {
+        const hash = azure_sdk_core_hash orelse return error.MissingAzureSdkCoreHash;
         break :blk try std.fmt.allocPrint(allocator,
-            \\        .azure_sdk = .{{
+            \\        .azure_sdk_core = .{{
             \\            .url = "git+https://github.com/cataggar/azure-sdk-for-zig#{s}",
             \\            .hash = "{s}",
             \\        }},
             \\
         , .{ sha, hash });
     } else try std.fmt.allocPrint(allocator,
-        \\        .azure_sdk = .{{
+        \\        .azure_sdk_core = .{{
         \\            .path = "{s}",
         \\        }},
         \\
-    , .{azure_sdk_path});
-    defer allocator.free(azure_sdk_entry);
+    , .{azure_sdk_core_path});
+    defer allocator.free(azure_sdk_core_entry);
 
     const serde_entry =
         \\        .serde = .{
@@ -2007,7 +2007,7 @@ fn renderBuildZigZon(
         .name_id = pkg_name,
         .version = pkg_version,
         .fp = computeFingerprint(pkg_name),
-        .sdk = azure_sdk_entry,
+        .sdk = azure_sdk_core_entry,
         .serde = serde_entry,
     });
 }
@@ -2085,7 +2085,7 @@ test "display_name surfaces in root.zig + README, not build.zig" {
     const alloc = testing.allocator;
 
     const model: cm.CodeModel = .{
-        .package_name = "arm_avs",
+        .package_name = "azure_rest_arm_avs",
         .package_version = "0.1.0",
         .target_kind = "arm",
         .service_kind = "default",
@@ -2094,34 +2094,34 @@ test "display_name surfaces in root.zig + README, not build.zig" {
     const root = try renderRoot(alloc, model, "arm-avs");
     defer alloc.free(root);
     try testing.expect(std.mem.indexOf(u8, root, "//! arm-avs — generated") != null);
-    try testing.expect(std.mem.indexOf(u8, root, "arm_avs") == null);
+    try testing.expect(std.mem.indexOf(u8, root, "azure_rest_arm_avs") == null);
 
     const readme = try renderReadme(alloc, "arm-avs", model);
     defer alloc.free(readme);
     try testing.expect(std.mem.indexOf(u8, readme, "# arm-avs\n") != null);
-    try testing.expect(std.mem.indexOf(u8, readme, "arm_avs") == null);
+    try testing.expect(std.mem.indexOf(u8, readme, "azure_rest_arm_avs") == null);
 
     // build.zig and build.zig.zon stay on the snake-cased package name —
     // Zig module identifiers (and `addModule` keys) must be snake_case.
-    const build_zig = try renderBuildZig(alloc, "arm_avs");
+    const build_zig = try renderBuildZig(alloc, "azure_rest_arm_avs");
     defer alloc.free(build_zig);
-    try testing.expect(std.mem.indexOf(u8, build_zig, "\"arm_avs\"") != null);
+    try testing.expect(std.mem.indexOf(u8, build_zig, "\"azure_rest_arm_avs\"") != null);
     try testing.expect(std.mem.indexOf(u8, build_zig, "arm-avs") == null);
 
     const zon = try renderBuildZigZon(
         alloc,
-        "arm_avs",
+        "azure_rest_arm_avs",
         "0.1.0",
         null,
         null,
         "../azure-sdk-for-zig",
     );
     defer alloc.free(zon);
-    try testing.expect(std.mem.indexOf(u8, zon, ".name = .arm_avs") != null);
+    try testing.expect(std.mem.indexOf(u8, zon, ".name = .azure_rest_arm_avs") != null);
     try testing.expect(std.mem.indexOf(u8, zon, "arm-avs") == null);
 }
 
-test "REST package metadata supports local and pinned azure_sdk dependencies" {
+test "REST package metadata supports local and pinned azure_sdk_core dependencies" {
     const testing = std.testing;
     const alloc = testing.allocator;
 
@@ -2148,13 +2148,14 @@ test "REST package metadata supports local and pinned azure_sdk dependencies" {
         ".name = .azure_rest_container_registry",
     ) != null);
     try testing.expect(std.mem.indexOf(u8, local_zon, ".path = \"../..\"") != null);
+    try testing.expect(std.mem.indexOf(u8, local_zon, ".azure_sdk_core = .{") != null);
 
     const pinned_zon = try renderBuildZigZon(
         alloc,
         "azure_rest_container_registry",
         "0.1.0",
         "0123456789abcdef",
-        "azure_sdk-0.1.0-example",
+        "azure_sdk_core-0.1.0-example",
         "../..",
     );
     defer alloc.free(pinned_zon);
@@ -2166,11 +2167,11 @@ test "REST package metadata supports local and pinned azure_sdk dependencies" {
     try testing.expect(std.mem.indexOf(
         u8,
         pinned_zon,
-        ".hash = \"azure_sdk-0.1.0-example\"",
+        ".hash = \"azure_sdk_core-0.1.0-example\"",
     ) != null);
 
     try testing.expectError(
-        error.MissingAzureCoreHash,
+        error.MissingAzureSdkCoreHash,
         renderBuildZigZon(
             alloc,
             "azure_rest_container_registry",

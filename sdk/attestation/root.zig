@@ -1,5 +1,5 @@
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 const serde = @import("serde");
 
 // ─────────────────────────── Models ───────────────────────────
@@ -153,7 +153,7 @@ test "AttestationClient attestSgxEnclave" {
     );
     defer mock.deinit();
 
-    const identity = @import("azure_core").identity;
+    const identity = @import("azure_sdk_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );

@@ -1,5 +1,5 @@
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 const service_error = @import("service_error.zig");
 
 pub fn LinkPager(comptime Page: type) type {

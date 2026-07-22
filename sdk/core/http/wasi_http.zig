@@ -14,7 +14,7 @@
 //! wired up and returns `error.RequestBodyUnsupported`.
 //!
 //! Compiles only on `wasm32-wasi`. Callers should reach this through the
-//! target-guarded `azure_core.wasi_http` re-export in `root.zig`.
+//! target-guarded `azure_sdk_core.wasi_http` re-export in `root.zig`.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -22,7 +22,7 @@ const transport = @import("transport.zig");
 
 comptime {
     if (!(builtin.target.cpu.arch == .wasm32 and builtin.target.os.tag == .wasi))
-        @compileError("azure_core.wasi_http is only supported on wasm32-wasi");
+        @compileError("azure_sdk_core.wasi_http is only supported on wasm32-wasi");
 }
 
 // ── Canonical-ABI lowered host imports ─────────────────────────────────

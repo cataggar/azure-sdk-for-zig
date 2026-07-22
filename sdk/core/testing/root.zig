@@ -6,7 +6,7 @@
 ///!   - `record`   — runs live requests, records exchanges to JSON files
 ///!   - `playback` — replays previously recorded exchanges (default)
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 
 // ──────────────────── Recorded Exchange ────────────────────
 

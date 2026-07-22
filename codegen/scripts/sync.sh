@@ -221,11 +221,16 @@ for pkg in "${PKGS[@]}"; do
     mkdir -p "$out_tmp"
 
     display="$(lookup_display_name "$pkg")"
+    package_name="azure_rest_$pkg"
 
     echo "  spec: $spec_rel"
     echo "  display: $display"
+    echo "  package: $package_name"
     echo "  regen: $out_tmp"
-    if ! "$RUN_SH" "$spec_dir" "$out_tmp" --package-name "$pkg" --display-name "$display" >"$TMPROOT/$pkg.log" 2>&1; then
+    if ! "$RUN_SH" "$spec_dir" "$out_tmp" \
+        --package-name "$package_name" \
+        --display-name "$display" \
+        --azure-sdk-core-path ../.. >"$TMPROOT/$pkg.log" 2>&1; then
         echo "  ERROR: emitter failed; see $TMPROOT/$pkg.log"
         tail -20 "$TMPROOT/$pkg.log" | sed 's/^/    /'
         EXIT_CODE=1

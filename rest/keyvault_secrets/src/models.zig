@@ -14,7 +14,12 @@ pub const SecretSetParameters = struct {
     /// The secret management attributes.
     secret_attributes: ?SecretAttributes = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+        .rename = .{
+            .secret_attributes = "attributes",
+        },
+    };
 };
 
 /// The secret management attributes.
@@ -34,7 +39,13 @@ pub const SecretAttributes = struct {
     /// Reflects the deletion recovery level currently in effect for secrets in the current vault. If it contains 'Purgeable', the secret can be permanently deleted by a privileged user; otherwise, only the system can purge the secret, at the end of the retention interval.
     recovery_level: ?enums.DeletionRecoveryLevel = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+        .rename = .{
+            .not_before = "nbf",
+            .expires = "exp",
+        },
+    };
 };
 
 /// A secret consisting of a value, id and its attributes.
@@ -56,7 +67,9 @@ pub const SecretBundle = struct {
     /// The version of the previous certificate, if applicable. Applies only to certificates created after June 1, 2025. Certificates created before this date are not retroactively updated.
     previous_version: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The key vault error exception.
@@ -64,7 +77,9 @@ pub const KeyVaultError = struct {
     /// The key vault server error.
     @"error": ?KeyVaultErrorError = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 pub const KeyVaultErrorError = struct {
@@ -75,7 +90,12 @@ pub const KeyVaultErrorError = struct {
     /// The key vault server error.
     inner_error: ?KeyVaultErrorError = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+        .rename = .{
+            .inner_error = "innererror",
+        },
+    };
 };
 
 /// A Deleted Secret consisting of its previous id, attributes and its tags, as well as information on when it will be purged.
@@ -103,7 +123,9 @@ pub const DeletedSecretBundle = struct {
     /// The time when the secret was deleted, in UTC
     deleted_date: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The secret update parameters.
@@ -115,7 +137,12 @@ pub const SecretUpdateParameters = struct {
     /// Application specific metadata in the form of key-value pairs.
     tags: ?std.json.ArrayHashMap([]const u8) = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+        .rename = .{
+            .secret_attributes = "attributes",
+        },
+    };
 };
 
 /// The secret list result.
@@ -125,7 +152,9 @@ pub const SecretListResult = struct {
     /// The URL to get the next set of secrets.
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The secret item containing secret metadata.
@@ -141,7 +170,9 @@ pub const SecretItem = struct {
     /// True if the secret's lifetime is managed by key vault. If this is a key backing a certificate, then managed will be true.
     managed: ?bool = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The deleted secret list result
@@ -151,7 +182,9 @@ pub const DeletedSecretListResult = struct {
     /// The URL to get the next set of deleted secrets.
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The deleted secret item containing metadata about the deleted secret.
@@ -173,7 +206,9 @@ pub const DeletedSecretItem = struct {
     /// The time when the secret was deleted, in UTC
     deleted_date: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The backup secret result, containing the backup blob.
@@ -181,7 +216,9 @@ pub const BackupSecretResult = struct {
     /// The backup blob containing the backed up secret.
     value: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The secret restore parameters.
@@ -189,5 +226,10 @@ pub const SecretRestoreParameters = struct {
     /// The backup blob associated with a secret bundle.
     secret_bundle_backup: []const u8,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+        .rename = .{
+            .secret_bundle_backup = "value",
+        },
+    };
 };

@@ -4,7 +4,7 @@
     .fingerprint = 0x2f086101dd514bc1,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
-        .azure_sdk = .{
+        .azure_sdk_core = .{
             .path = "../..",
         },
         .serde = .{

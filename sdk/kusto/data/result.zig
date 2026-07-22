@@ -1,6 +1,6 @@
 const std = @import("std");
 const serde = @import("serde");
-const kusto_common = @import("azure_kusto_common");
+const kusto_common = @import("azure_sdk_kusto_common");
 const KustoErrorSource = kusto_common.KustoErrorSource;
 
 pub const DecodeOptions = struct {

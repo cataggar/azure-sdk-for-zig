@@ -4,11 +4,11 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const azure_sdk_dep = b.dependency("azure_sdk", .{
+    const azure_sdk_core_dep = b.dependency("azure_sdk_core", .{
         .target = target,
         .optimize = optimize,
     });
-    const azure_core_mod = azure_sdk_dep.module("azure_core");
+    const azure_sdk_core_mod = azure_sdk_core_dep.module("azure_sdk_core");
 
     const serde_dep = b.dependency("serde", .{
         .target = target,
@@ -16,11 +16,11 @@ pub fn build(b: *std.Build) void {
     });
     const serde_mod = serde_dep.module("serde");
 
-    const lib_mod = b.addModule("arm_avs", .{
+    const lib_mod = b.addModule("azure_rest_arm_avs", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .imports = &.{
-            .{ .name = "azure_core", .module = azure_core_mod },
+            .{ .name = "azure_sdk_core", .module = azure_sdk_core_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
@@ -31,7 +31,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "azure_core", .module = azure_core_mod },
+                .{ .name = "azure_sdk_core", .module = azure_sdk_core_mod },
                 .{ .name = "serde", .module = serde_mod },
             },
         }),
@@ -39,47 +39,45 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(t).step);
 
-    // -- Examples --
-    //
-    // `zig build list-private-clouds` (or `zig build list-private-clouds -- <sub-id>`).
-    const example = b.addExecutable(.{
+    const list_private_clouds = b.addExecutable(.{
         .name = "list-private-clouds",
         .root_module = b.createModule(.{
             .root_source_file = b.path("examples/list_private_clouds.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "arm_avs", .module = lib_mod },
-                .{ .name = "azure_core", .module = azure_core_mod },
+                .{ .name = "azure_rest_arm_avs", .module = lib_mod },
+                .{ .name = "azure_sdk_core", .module = azure_sdk_core_mod },
             },
         }),
     });
-    const run_example = b.addRunArtifact(example);
-    if (b.args) |args| run_example.addArgs(args);
-    const example_step = b.step(
+    const run_list_private_clouds = b.addRunArtifact(list_private_clouds);
+    if (b.args) |args| run_list_private_clouds.addArgs(args);
+    const list_private_clouds_step = b.step(
         "list-private-clouds",
-        "List Microsoft.AVS private clouds in $AZURE_SUBSCRIPTION_ID (or argv[1]).",
+        "List Microsoft.AVS private clouds in a subscription",
     );
-    example_step.dependOn(&run_example.step);
+    list_private_clouds_step.dependOn(&run_list_private_clouds.step);
+    test_step.dependOn(&list_private_clouds.step);
 
-    // `zig build list-clusters -- <sub-id> <rg> <private-cloud>`
-    const list_clusters_exe = b.addExecutable(.{
+    const list_clusters = b.addExecutable(.{
         .name = "list-clusters",
         .root_module = b.createModule(.{
             .root_source_file = b.path("examples/list_clusters.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "arm_avs", .module = lib_mod },
-                .{ .name = "azure_core", .module = azure_core_mod },
+                .{ .name = "azure_rest_arm_avs", .module = lib_mod },
+                .{ .name = "azure_sdk_core", .module = azure_sdk_core_mod },
             },
         }),
     });
-    const run_list_clusters = b.addRunArtifact(list_clusters_exe);
+    const run_list_clusters = b.addRunArtifact(list_clusters);
     if (b.args) |args| run_list_clusters.addArgs(args);
     const list_clusters_step = b.step(
         "list-clusters",
-        "List clusters in a private cloud (argv: <sub-id> <rg> <private-cloud>).",
+        "List clusters in a private cloud",
     );
     list_clusters_step.dependOn(&run_list_clusters.step);
+    test_step.dependOn(&list_clusters.step);
 }

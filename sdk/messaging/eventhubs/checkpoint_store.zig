@@ -3,10 +3,10 @@
 ///! Persists consumer progress and partition ownership in Azure Blob Storage,
 ///! enabling distributed event processing with load balancing.
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 const serde = @import("serde");
-const blobs = @import("azure_storage_blobs");
-const eventhubs = @import("azure_messaging_eventhubs");
+const blobs = @import("azure_sdk_storage_blobs");
+const eventhubs = @import("checkpoint.zig");
 
 /// Checkpoint store backed by Azure Blob Storage.
 ///
@@ -292,7 +292,7 @@ test "BlobCheckpointStore updateCheckpoint" {
     var mock = core.http.MockTransport.init(allocator, 201, "");
     defer mock.deinit();
 
-    const identity = @import("azure_core").identity;
+    const identity = @import("azure_sdk_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );

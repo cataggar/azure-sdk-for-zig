@@ -1,7 +1,7 @@
 //! Credential-isolated helpers for operations on complete, service-issued
 //! Azure Storage SAS URLs.
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 
 /// An owned complete HTTPS SAS URL.
 ///

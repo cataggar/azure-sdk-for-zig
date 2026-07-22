@@ -8,25 +8,25 @@ pub fn main(init: std.process.Init) !void {
     var args = init.minimal.args.iterate();
     _ = args.skip();
     const output_path = args.next() orelse return error.MissingOutputPath;
-    var azure_core_commit: ?[]const u8 = null;
-    var azure_core_hash: ?[]const u8 = null;
-    var azure_sdk_path: ?[]const u8 = null;
+    var azure_sdk_core_commit: ?[]const u8 = null;
+    var azure_sdk_core_hash: ?[]const u8 = null;
+    var azure_sdk_core_path: ?[]const u8 = null;
     while (args.next()) |arg| {
-        if (std.mem.eql(u8, arg, "--azure-core-commit")) {
-            azure_core_commit = args.next() orelse return error.MissingAzureCoreCommit;
-        } else if (std.mem.eql(u8, arg, "--azure-core-hash")) {
-            azure_core_hash = args.next() orelse return error.MissingAzureCoreHash;
-        } else if (std.mem.eql(u8, arg, "--azure-sdk-path")) {
-            azure_sdk_path = args.next() orelse return error.MissingAzureSdkPath;
+        if (std.mem.eql(u8, arg, "--azure-sdk-core-commit")) {
+            azure_sdk_core_commit = args.next() orelse return error.MissingAzureSdkCoreCommit;
+        } else if (std.mem.eql(u8, arg, "--azure-sdk-core-hash")) {
+            azure_sdk_core_hash = args.next() orelse return error.MissingAzureSdkCoreHash;
+        } else if (std.mem.eql(u8, arg, "--azure-sdk-core-path")) {
+            azure_sdk_core_path = args.next() orelse return error.MissingAzureSdkCorePath;
         } else {
             return error.UnexpectedArgument;
         }
     }
-    if ((azure_core_commit == null) != (azure_core_hash == null)) {
-        return error.IncompleteAzureCorePin;
+    if ((azure_sdk_core_commit == null) != (azure_sdk_core_hash == null)) {
+        return error.IncompleteAzureSdkCorePin;
     }
-    if (azure_core_commit != null and azure_sdk_path != null) {
-        return error.ConflictingAzureSdkDependency;
+    if (azure_sdk_core_commit != null and azure_sdk_core_path != null) {
+        return error.ConflictingAzureSdkCoreDependency;
     }
 
     var parsed = try std.json.parseFromSlice(
@@ -56,9 +56,9 @@ pub fn main(init: std.process.Init) !void {
     try emitter.emit(allocator, io, output, parsed.value, .{
         .package_name = "azure_rest_container_registry",
         .display_name = "container-registry",
-        .azure_core_commit = azure_core_commit,
-        .azure_core_hash = azure_core_hash,
-        .azure_sdk_path = azure_sdk_path orelse "../..",
+        .azure_sdk_core_commit = azure_sdk_core_commit,
+        .azure_sdk_core_hash = azure_sdk_core_hash,
+        .azure_sdk_core_path = azure_sdk_core_path orelse "../..",
     });
     const zon = try output.readFileAlloc(
         io,
@@ -93,6 +93,24 @@ pub fn main(init: std.process.Init) !void {
         .sub_path = "README.md",
         .data = generated_readme,
     });
+}
+
+fn addLicensePath(allocator: std.mem.Allocator, zon: []const u8) ![]u8 {
+    const marker = "        \"README.md\",\n";
+    const index = std.mem.indexOf(u8, zon, marker) orelse
+        return error.MissingReadmePath;
+    const insertion = marker ++ "        \"LICENSE.txt\",\n";
+    const output = try allocator.alloc(
+        u8,
+        zon.len - marker.len + insertion.len,
+    );
+    @memcpy(output[0..index], zon[0..index]);
+    @memcpy(output[index .. index + insertion.len], insertion);
+    @memcpy(
+        output[index + insertion.len ..],
+        zon[index + marker.len ..],
+    );
+    return output;
 }
 
 const generated_readme =
@@ -150,27 +168,9 @@ const generated_readme =
     \\
 ;
 
-fn addLicensePath(allocator: std.mem.Allocator, zon: []const u8) ![]u8 {
-    const marker = "        \"README.md\",\n";
-    const index = std.mem.indexOf(u8, zon, marker) orelse
-        return error.MissingReadmePath;
-    const insertion = marker ++ "        \"LICENSE.txt\",\n";
-    const output = try allocator.alloc(
-        u8,
-        zon.len - marker.len + insertion.len,
-    );
-    @memcpy(output[0..index], zon[0..index]);
-    @memcpy(output[index .. index + insertion.len], insertion);
-    @memcpy(
-        output[index + insertion.len ..],
-        zon[index + marker.len ..],
-    );
-    return output;
-}
-
 const generated_tests =
     \\const std = @import("std");
-    \\const core = @import("azure_core");
+    \\const core = @import("azure_sdk_core");
     \\const serde = @import("serde");
     \\const clients = @import("clients.zig");
     \\const models = @import("models.zig");

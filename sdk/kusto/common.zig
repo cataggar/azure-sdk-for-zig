@@ -3,7 +3,7 @@
 ///! Provides `KustoConnectionStringBuilder` for connection configuration
 ///! and common types used by both the data and ingest clients.
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 const serde = @import("serde");
 
 pub const errors = @import("error.zig");
@@ -2077,7 +2077,7 @@ test "KustoConnection cleans up discovery initialization allocation failures" {
 }
 
 test "KustoConnectionStringBuilder withTokenCredential" {
-    const identity = @import("azure_core").identity;
+    const identity = @import("azure_sdk_core").identity;
     const allocator = std.testing.allocator;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}

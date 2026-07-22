@@ -1,5 +1,5 @@
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 const challenge_mod = @import("challenge.zig");
 
 const BearerChallenge = challenge_mod.BearerChallenge;

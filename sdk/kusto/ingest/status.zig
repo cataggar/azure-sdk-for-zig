@@ -5,8 +5,8 @@
 //! sent to Storage.
 const std = @import("std");
 const serde = @import("serde");
-const core = @import("azure_core");
-const storage_common = @import("azure_storage_common");
+const core = @import("azure_sdk_core");
+const storage_common = @import("azure_sdk_storage_common");
 
 const sas = storage_common.sas;
 

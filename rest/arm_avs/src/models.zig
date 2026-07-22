@@ -2,7 +2,93 @@
 
 const std = @import("std");
 const enums = @import("enums.zig");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
+
+pub const JsonValue = union(enum) {
+    null_value: void,
+    boolean: bool,
+    integer: i64,
+    float: f64,
+    string: []const u8,
+    array: []JsonValue,
+    object: std.StringArrayHashMapUnmanaged(JsonValue),
+
+    pub fn zerdeDeserialize(
+        comptime T: type,
+        allocator: std.mem.Allocator,
+        deserializer: anytype,
+    ) @TypeOf(deserializer.*).Error!T {
+        const saved = deserializer.*;
+        if (deserializer.deserializeVoid()) |_| {
+            return .{ .null_value = {} };
+        } else |_| deserializer.* = saved;
+        if (deserializer.deserializeBool()) |value| {
+            return .{ .boolean = value };
+        } else |_| deserializer.* = saved;
+        if (deserializer.deserializeInt(i64)) |value| {
+            return .{ .integer = value };
+        } else |_| deserializer.* = saved;
+        if (deserializer.deserializeFloat(f64)) |value| {
+            return .{ .float = value };
+        } else |_| deserializer.* = saved;
+        if (deserializer.deserializeString(allocator)) |value| {
+            return .{ .string = value };
+        } else |_| deserializer.* = saved;
+
+        if (deserializer.deserializeSeqAccess()) |sequence_value| {
+            var sequence = sequence_value;
+            var values: std.ArrayList(JsonValue) = .empty;
+            errdefer values.deinit(allocator);
+            while (try sequence.nextElement(JsonValue, allocator)) |value| {
+                values.append(allocator, value) catch
+                    return deserializer.raiseError(error.OutOfMemory);
+            }
+            return .{ .array = values.toOwnedSlice(allocator) catch
+                return deserializer.raiseError(error.OutOfMemory) };
+        } else |_| deserializer.* = saved;
+
+        var map = deserializer.deserializeStruct(T) catch
+            return deserializer.raiseError(error.UnexpectedToken);
+        var values: std.StringArrayHashMapUnmanaged(JsonValue) = .empty;
+        errdefer values.deinit(allocator);
+        while (try map.nextKey(allocator)) |key| {
+            const owned_key = allocator.dupe(u8, key) catch
+                return deserializer.raiseError(error.OutOfMemory);
+            const value = map.nextValue(JsonValue, allocator) catch |err| {
+                allocator.free(owned_key);
+                return err;
+            };
+            values.put(allocator, owned_key, value) catch {
+                allocator.free(owned_key);
+                return deserializer.raiseError(error.OutOfMemory);
+            };
+        }
+        return .{ .object = values };
+    }
+
+    pub fn zerdeSerialize(self: JsonValue, serializer: anytype) @TypeOf(serializer.*).Error!void {
+        switch (self) {
+            .null_value => return serializer.serializeNull(),
+            .boolean => |value| return serializer.serializeBool(value),
+            .integer => |value| return serializer.serializeInt(value),
+            .float => |value| return serializer.serializeFloat(value),
+            .string => |value| return serializer.serializeString(value),
+            .array => |values| {
+                var array = try serializer.beginArray();
+                for (values) |value| try value.zerdeSerialize(&array);
+                return array.end();
+            },
+            .object => |values| {
+                var object = try serializer.beginStruct();
+                var iterator = values.iterator();
+                while (iterator.next()) |entry| {
+                    try object.serializeEntry(entry.key_ptr.*, entry.value_ptr.*);
+                }
+                return object.end();
+            },
+        }
+    }
+};
 
 /// A list of REST API operations supported by an Azure Resource Provider. It contains an URL link to get the next set of results.
 pub const OperationListResult = struct {
@@ -11,7 +97,9 @@ pub const OperationListResult = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Details of a REST API operation, returned from the Resource Provider Operations API
@@ -27,7 +115,9 @@ pub const Operation = struct {
     /// Extensible enum. Indicates the action type. "Internal" refers to actions that are for internal only APIs.
     action_type: ?enums.ActionType = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Localized display information for an operation.
@@ -41,7 +131,9 @@ pub const OperationDisplay = struct {
     /// The short, localized friendly description of the operation; suitable for tool tips and detailed views.
     description: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Common error response for all Azure Resource Manager APIs to return error details for failed operations.
@@ -49,7 +141,9 @@ pub const ErrorResponse = struct {
     /// The error object.
     @"error": ?ErrorDetail = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The error detail.
@@ -65,7 +159,9 @@ pub const ErrorDetail = struct {
     /// The error additional info.
     additional_info: ?[]const ErrorAdditionalInfo = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The resource management error additional info.
@@ -73,9 +169,11 @@ pub const ErrorAdditionalInfo = struct {
     /// The additional info type.
     type: ?[]const u8 = null,
     /// The additional info.
-    info: ?[]const u8 = null,
+    info: ?JsonValue = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a Addon list operation.
@@ -85,7 +183,9 @@ pub const AddonList = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// An addon resource
@@ -101,7 +201,9 @@ pub const Addon = struct {
     /// The resource-specific properties for this resource.
     properties: ?AddonProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -112,7 +214,9 @@ pub const AddonProperties = struct {
     /// The state of the addon provisioning
     provisioning_state: ?enums.AddonProvisioningState = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The properties of a Site Recovery Manager (SRM) addon
@@ -124,7 +228,9 @@ pub const AddonSrmProperties = struct {
     /// The Site Recovery Manager (SRM) license
     license_key: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The properties of a vSphere Replication (VR) addon
@@ -136,7 +242,9 @@ pub const AddonVrProperties = struct {
     /// The vSphere Replication Server (VRS) count
     vrs_count: i32,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The properties of an HCX addon
@@ -152,7 +260,9 @@ pub const AddonHcxProperties = struct {
     /// HCX uplink network
     uplink_network: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The properties of an Arc addon
@@ -164,7 +274,9 @@ pub const AddonArcProperties = struct {
     /// The VMware vCenter resource ID
     v_center: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Metadata pertaining to creation and last modification of the resource.
@@ -182,7 +294,9 @@ pub const SystemData = struct {
     /// The timestamp of resource last modification (UTC)
     last_modified_at: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Standard Azure Resource Manager operation status response, used as the response
@@ -203,7 +317,9 @@ pub const ArmOperationStatusResourceProvisioningState = struct {
     /// Errors that occurred if the operation ended with Canceled or Failed status
     @"error": ?ErrorDetail = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a ExpressRouteAuthorization list operation.
@@ -213,7 +329,9 @@ pub const ExpressRouteAuthorizationList = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// ExpressRoute Circuit Authorization
@@ -229,7 +347,9 @@ pub const ExpressRouteAuthorization = struct {
     /// The resource-specific properties for this resource.
     properties: ?ExpressRouteAuthorizationProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -244,7 +364,9 @@ pub const ExpressRouteAuthorizationProperties = struct {
     /// The ID of the ExpressRoute Circuit
     express_route_id: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a CloudLink list operation.
@@ -254,7 +376,9 @@ pub const CloudLinkList = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// A cloud link resource
@@ -270,7 +394,9 @@ pub const CloudLink = struct {
     /// The resource-specific properties for this resource.
     properties: ?CloudLinkProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -283,7 +409,9 @@ pub const CloudLinkProperties = struct {
     /// Identifier of the other private cloud participating in the link.
     linked_cloud: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a Cluster list operation.
@@ -293,7 +421,9 @@ pub const ClusterList = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// A cluster resource
@@ -311,7 +441,9 @@ pub const Cluster = struct {
     /// The SKU (Stock Keeping Unit) assigned to this resource.
     sku: Sku,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -328,7 +460,9 @@ pub const ClusterProperties = struct {
     /// Name of the vsan datastore associated with the cluster
     vsan_datastore_name: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The resource model definition representing SKU
@@ -344,7 +478,9 @@ pub const Sku = struct {
     /// If the SKU supports scale out/in then the capacity integer should be included. If scale out/in is not possible for the resource this may be omitted.
     capacity: ?i32 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// An update of a cluster resource
@@ -354,7 +490,9 @@ pub const ClusterUpdate = struct {
     /// The properties of a cluster resource that may be updated
     properties: ?ClusterUpdateProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The properties of a cluster that may be updated
@@ -364,7 +502,9 @@ pub const ClusterUpdateProperties = struct {
     /// The hosts
     hosts: ?[]const []const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// List of all zones and associated hosts for a cluster
@@ -372,7 +512,9 @@ pub const ClusterZoneList = struct {
     /// Zone and associated hosts info
     zones: ?[]const ClusterZone = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Zone and associated hosts info
@@ -382,7 +524,9 @@ pub const ClusterZone = struct {
     /// Availability zone identifier
     zone: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a Datastore list operation.
@@ -392,7 +536,9 @@ pub const DatastoreList = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// A datastore resource
@@ -408,7 +554,9 @@ pub const Datastore = struct {
     /// The resource-specific properties for this resource.
     properties: ?DatastoreProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -427,7 +575,9 @@ pub const DatastoreProperties = struct {
     /// The operational status of the datastore
     status: ?enums.DatastoreStatus = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// An Azure NetApp Files volume from Microsoft.NetApp provider
@@ -435,7 +585,9 @@ pub const NetAppVolume = struct {
     /// Azure resource ID of the NetApp volume
     id: []const u8,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// An iSCSI volume from Microsoft.StoragePool provider
@@ -450,7 +602,9 @@ pub const DiskPoolVolume = struct {
     /// Device path
     path: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// An Elastic SAN volume from Microsoft.ElasticSan provider
@@ -458,7 +612,9 @@ pub const ElasticSanVolume = struct {
     /// Azure resource ID of the Elastic SAN Volume
     target_id: []const u8,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// A Pure Storage volume from PureStorage.Block provider
@@ -468,7 +624,9 @@ pub const PureStorageVolume = struct {
     /// Volume size to be used to create a Virtual Volumes (vVols) datastore
     size_gb: i32,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a GlobalReachConnection list operation.
@@ -478,7 +636,9 @@ pub const GlobalReachConnectionList = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// A global reach connection resource
@@ -494,7 +654,9 @@ pub const GlobalReachConnection = struct {
     /// The resource-specific properties for this resource.
     properties: ?GlobalReachConnectionProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -517,7 +679,9 @@ pub const GlobalReachConnectionProperties = struct {
     /// global reach connection
     express_route_id: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a HcxEnterpriseSite list operation.
@@ -527,7 +691,9 @@ pub const HcxEnterpriseSiteList = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// An HCX Enterprise Site resource
@@ -543,7 +709,9 @@ pub const HcxEnterpriseSite = struct {
     /// The resource-specific properties for this resource.
     properties: ?HcxEnterpriseSiteProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -556,7 +724,9 @@ pub const HcxEnterpriseSiteProperties = struct {
     /// The status of the HCX Enterprise Site
     status: ?enums.HcxEnterpriseSiteStatus = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a Host list operation.
@@ -566,7 +736,9 @@ pub const HostListResult = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// A host resource
@@ -586,7 +758,9 @@ pub const Host = struct {
     /// The SKU (Stock Keeping Unit) assigned to this resource.
     sku: ?Sku = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -606,7 +780,9 @@ pub const HostProperties = struct {
     maintenance: ?enums.HostMaintenance = null,
     fault_domain: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The properties of a general host.
@@ -625,7 +801,9 @@ pub const GeneralHostProperties = struct {
     maintenance: ?enums.HostMaintenance = null,
     fault_domain: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The properties of a specialized host.
@@ -644,7 +822,9 @@ pub const SpecializedHostProperties = struct {
     maintenance: ?enums.HostMaintenance = null,
     fault_domain: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a IscsiPath list operation.
@@ -654,7 +834,9 @@ pub const IscsiPathListResult = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// An iSCSI path resource
@@ -670,7 +852,9 @@ pub const IscsiPath = struct {
     /// The resource-specific properties for this resource.
     properties: ?IscsiPathProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -681,7 +865,9 @@ pub const IscsiPathProperties = struct {
     /// CIDR Block for iSCSI path.
     network_block: []const u8,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a License list operation.
@@ -691,7 +877,9 @@ pub const LicenseListResult = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// A license resource
@@ -707,7 +895,9 @@ pub const License = struct {
     /// The resource-specific properties for this resource.
     properties: ?LicenseProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -718,7 +908,9 @@ pub const LicenseProperties = struct {
     /// The state of the license provisioning
     provisioning_state: ?enums.LicenseProvisioningState = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The properties of a VMware Firewall license
@@ -740,7 +932,9 @@ pub const VmwareFirewallLicenseProperties = struct {
     /// Additional labels passed through for license reporting.
     labels: ?[]const Label = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// A key-value pair representing a label.
@@ -750,7 +944,9 @@ pub const Label = struct {
     /// The value of the label.
     value: []const u8,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Subscription trial availability
@@ -760,7 +956,9 @@ pub const Trial = struct {
     /// Number of trial hosts available
     available_hosts: ?i32 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Subscription quotas
@@ -770,7 +968,9 @@ pub const Quota = struct {
     /// Host quota is active for current subscription
     quota_enabled: ?enums.QuotaEnabled = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a Maintenance list operation.
@@ -780,7 +980,9 @@ pub const MaintenanceListResult = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// A cluster resource
@@ -796,7 +998,9 @@ pub const Maintenance = struct {
     /// The resource-specific properties for this resource.
     properties: ?MaintenanceProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -827,7 +1031,9 @@ pub const MaintenanceProperties = struct {
     /// Indicates whether the maintenance is ready to proceed
     maintenance_readiness: ?MaintenanceReadiness = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// state of the maintenance
@@ -841,7 +1047,9 @@ pub const MaintenanceState = struct {
     /// Time when current state ended
     ended_at: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Defines operations that can be performed on maintenance
@@ -849,7 +1057,9 @@ pub const MaintenanceManagementOperation = struct {
     /// The kind of operation
     kind: enums.MaintenanceManagementOperationKind,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Scheduling window constraint
@@ -863,7 +1073,9 @@ pub const ScheduleOperation = struct {
     /// Constraints for scheduling maintenance
     constraints: ?[]const ScheduleOperationConstraint = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Defines constraints for schedule operation on maintenance
@@ -871,7 +1083,9 @@ pub const ScheduleOperationConstraint = struct {
     /// The kind of operation
     kind: enums.ScheduleOperationConstraintKind,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Time window in which Customer has option to schedule maintenance
@@ -883,7 +1097,9 @@ pub const SchedulingWindow = struct {
     /// End date Time
     ends_at: []const u8,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Time window in which Customer can to schedule maintenance
@@ -895,7 +1111,9 @@ pub const AvailableWindowForMaintenanceWhileScheduleOperation = struct {
     /// End date Time
     ends_at: []const u8,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Time ranges blocked for scheduling maintenance
@@ -907,7 +1125,9 @@ pub const BlockedWhileScheduleOperation = struct {
     /// Date ranges blocked for schedule
     time_ranges: ?[]const BlockedDatesConstraintTimeRange = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Blocked Time range Constraints for maintenance
@@ -919,7 +1139,9 @@ pub const BlockedDatesConstraintTimeRange = struct {
     /// Reason category for blocking maintenance reschedule
     reason: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Constraints for rescheduling maintenance
@@ -933,7 +1155,9 @@ pub const RescheduleOperation = struct {
     /// Constraints for rescheduling maintenance
     constraints: ?[]const RescheduleOperationConstraint = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Defines constraints for reschedule operation on maintenance
@@ -941,7 +1165,9 @@ pub const RescheduleOperationConstraint = struct {
     /// The kind of operation
     kind: enums.RescheduleOperationConstraintKind,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Time window in which Customer can reschedule maintenance
@@ -953,7 +1179,9 @@ pub const AvailableWindowForMaintenanceWhileRescheduleOperation = struct {
     /// End date Time
     ends_at: []const u8,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Time ranges blocked for rescheduling maintenance
@@ -965,7 +1193,9 @@ pub const BlockedWhileRescheduleOperation = struct {
     /// Date ranges blocked for schedule
     time_ranges: ?[]const BlockedDatesConstraintTimeRange = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Refresh MaintenanceReadiness status
@@ -983,7 +1213,9 @@ pub const MaintenanceReadinessRefreshOperation = struct {
     /// Additional message about the operation
     message: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Maintenance readiness details
@@ -999,7 +1231,9 @@ pub const MaintenanceReadiness = struct {
     /// The timestamp of the last readiness update
     last_updated: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Details about a failed maintenance check
@@ -1009,7 +1243,9 @@ pub const MaintenanceFailedCheck = struct {
     /// A list of resources impacted by the failed check
     impacted_resources: ?[]const ImpactedMaintenanceResource = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Details about a resource impacted by a failed check
@@ -1019,7 +1255,9 @@ pub const ImpactedMaintenanceResource = struct {
     /// A list of errors associated with the impacted resource
     errors: ?[]const ImpactedMaintenanceResourceError = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Details about an error affecting a resource
@@ -1035,7 +1273,9 @@ pub const ImpactedMaintenanceResourceError = struct {
     /// Indicates whether action is required by the customer
     action_required: ?bool = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// reschedule a maintenance
@@ -1045,7 +1285,9 @@ pub const MaintenanceReschedule = struct {
     /// rescheduling reason
     message: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// schedule a maintenance
@@ -1055,7 +1297,9 @@ pub const MaintenanceSchedule = struct {
     /// scheduling message
     message: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a PlacementPolicy list operation.
@@ -1065,7 +1309,9 @@ pub const PlacementPoliciesList = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// A vSphere Distributed Resource Scheduler (DRS) placement policy
@@ -1081,7 +1327,9 @@ pub const PlacementPolicy = struct {
     /// The resource-specific properties for this resource.
     properties: ?PlacementPolicyProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -1096,7 +1344,9 @@ pub const PlacementPolicyProperties = struct {
     /// The provisioning state
     provisioning_state: ?enums.PlacementPolicyProvisioningState = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// VM-VM placement policy properties
@@ -1114,7 +1364,9 @@ pub const VmPlacementPolicyProperties = struct {
     /// placement policy affinity type
     affinity_type: enums.AffinityType,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// VM-Host placement policy properties
@@ -1138,7 +1390,9 @@ pub const VmHostPlacementPolicyProperties = struct {
     /// placement policy azure hybrid benefit opt-in type
     azure_hybrid_benefit_type: ?enums.AzureHybridBenefitType = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// An update of a DRS placement policy resource
@@ -1146,7 +1400,9 @@ pub const PlacementPolicyUpdate = struct {
     /// The properties of a placement policy resource that may be updated
     properties: ?PlacementPolicyUpdateProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The properties of a placement policy resource that may be updated
@@ -1162,7 +1418,9 @@ pub const PlacementPolicyUpdateProperties = struct {
     /// placement policy azure hybrid benefit opt-in type
     azure_hybrid_benefit_type: ?enums.AzureHybridBenefitType = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a PrivateCloud list operation.
@@ -1172,7 +1430,9 @@ pub const PrivateCloudList = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// A private cloud resource
@@ -1198,7 +1458,9 @@ pub const PrivateCloud = struct {
     /// The availability zones.
     zones: ?[]const []const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .tracked;
 };
 
@@ -1258,7 +1520,9 @@ pub const PrivateCloudProperties = struct {
     /// The private cloud license
     vcf_license: ?VcfLicense = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The properties of a management cluster
@@ -1274,7 +1538,9 @@ pub const ManagementCluster = struct {
     /// Name of the vsan datastore associated with the cluster
     vsan_datastore_name: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// vCenter Single Sign On Identity Source
@@ -1302,7 +1568,13 @@ pub const IdentitySource = struct {
     /// Base DN for users and groups.
     password: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+        .rename = .{
+            .base_user_dn = "baseUserDN",
+            .base_group_dn = "baseGroupDN",
+        },
+    };
 };
 
 /// The properties describing private cloud availability zone distribution
@@ -1314,7 +1586,9 @@ pub const AvailabilityProperties = struct {
     /// The secondary availability zone for the private cloud
     secondary_zone: ?i32 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The properties of customer managed encryption key
@@ -1324,7 +1598,9 @@ pub const Encryption = struct {
     /// The key vault where the encryption key is stored
     key_vault_properties: ?EncryptionKeyVaultProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// An Encryption Key
@@ -1342,7 +1618,9 @@ pub const EncryptionKeyVaultProperties = struct {
     /// Property of the key if user provided or auto detected
     version_type: ?enums.EncryptionVersionType = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// An ExpressRoute Circuit
@@ -1356,7 +1634,13 @@ pub const Circuit = struct {
     /// ExpressRoute Circuit private peering identifier
     express_route_private_peering_id: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+        .rename = .{
+            .express_route_id = "expressRouteID",
+            .express_route_private_peering_id = "expressRoutePrivatePeeringID",
+        },
+    };
 };
 
 /// Endpoint addresses
@@ -1374,7 +1658,9 @@ pub const Endpoints = struct {
     /// Endpoint IP for the HCX Cloud Manager
     hcx_cloud_manager_ip: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// A VMware Cloud Foundation license
@@ -1384,7 +1670,9 @@ pub const VcfLicense = struct {
     /// The state of the license provisioning
     provisioning_state: ?enums.LicenseProvisioningState = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// A VMware Cloud Foundation (VCF) 5.0 license
@@ -1406,7 +1694,9 @@ pub const Vcf5License = struct {
     /// Additional labels passed through for license reporting.
     labels: ?[]const Label = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Managed service identity (either system assigned, or none)
@@ -1418,7 +1708,9 @@ pub const SystemAssignedServiceIdentity = struct {
     /// The type of managed identity assigned to this resource.
     type: enums.SystemAssignedServiceIdentityType,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// An update to a private cloud resource
@@ -1432,7 +1724,9 @@ pub const PrivateCloudUpdate = struct {
     /// The updatable properties of a private cloud resource
     properties: ?PrivateCloudUpdateProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The properties of a private cloud resource that may be updated
@@ -1455,7 +1749,9 @@ pub const PrivateCloudUpdateProperties = struct {
     /// The type of DNS zone to use.
     dns_zone_type: ?enums.DnsZoneType = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Administrative credentials for accessing vCenter and NSX-T
@@ -1469,7 +1765,9 @@ pub const AdminCredentials = struct {
     /// vCenter admin password
     vcenter_password: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a ProvisionedNetwork list operation.
@@ -1479,7 +1777,9 @@ pub const ProvisionedNetworkListResult = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// A provisioned network resource
@@ -1495,7 +1795,9 @@ pub const ProvisionedNetwork = struct {
     /// The resource-specific properties for this resource.
     properties: ?ProvisionedNetworkProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -1508,7 +1810,9 @@ pub const ProvisionedNetworkProperties = struct {
     /// The type of network provisioned.
     network_type: ?enums.ProvisionedNetworkTypes = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a PureStoragePolicy list operation.
@@ -1518,7 +1822,9 @@ pub const PureStoragePolicyListResult = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// An instance describing a Pure Storage Policy Based Management policy
@@ -1534,7 +1840,9 @@ pub const PureStoragePolicy = struct {
     /// The resource-specific properties for this resource.
     properties: ?PureStoragePolicyProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -1547,7 +1855,9 @@ pub const PureStoragePolicyProperties = struct {
     /// The state of the Pure Storage Policy Based Management policy provisioning
     provisioning_state: ?enums.PureStoragePolicyProvisioningState = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a ScriptCmdlet list operation.
@@ -1557,7 +1867,9 @@ pub const ScriptCmdletsList = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// A cmdlet available for script execution
@@ -1573,7 +1885,9 @@ pub const ScriptCmdlet = struct {
     /// The resource-specific properties for this resource.
     properties: ?ScriptCmdletProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -1590,7 +1904,9 @@ pub const ScriptCmdletProperties = struct {
     /// Parameters the script will accept
     parameters: ?[]const ScriptParameter = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// An parameter that the script will accept
@@ -1608,7 +1924,9 @@ pub const ScriptParameter = struct {
     /// Is this parameter required or optional
     optional: ?enums.OptionalParamEnum = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a ScriptExecution list operation.
@@ -1618,7 +1936,9 @@ pub const ScriptExecutionsList = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// An instance of a script executed by a user - custom or AVS
@@ -1634,7 +1954,9 @@ pub const ScriptExecution = struct {
     /// The resource-specific properties for this resource.
     properties: ?ScriptExecutionProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -1673,7 +1995,9 @@ pub const ScriptExecutionProperties = struct {
     /// Standard error output stream from the powershell execution
     errors: ?[]const []const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The arguments passed in to the execution
@@ -1683,7 +2007,9 @@ pub const ScriptExecutionParameter = struct {
     /// The parameter name
     name: []const u8,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// a plain text value execution parameter
@@ -1695,7 +2021,9 @@ pub const ScriptSecureStringExecutionParameter = struct {
     /// A secure value for the passed parameter, not to be stored in logs
     secure_value: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// a plain text value execution parameter
@@ -1707,7 +2035,9 @@ pub const ScriptStringExecutionParameter = struct {
     /// The value for the passed parameter
     value: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// a powershell credential object
@@ -1721,11 +2051,15 @@ pub const PSCredentialExecutionParameter = struct {
     /// password for login
     password: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 pub const ScriptExecutionPropertiesNamedOutput = struct {
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a ScriptPackage list operation.
@@ -1735,7 +2069,9 @@ pub const ScriptPackagesList = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Script Package resources available for execution
@@ -1751,7 +2087,9 @@ pub const ScriptPackage = struct {
     /// The resource-specific properties for this resource.
     properties: ?ScriptPackageProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -1768,7 +2106,9 @@ pub const ScriptPackageProperties = struct {
     /// Link to support by the package vendor
     uri: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Paged collection of ResourceSku items
@@ -1778,7 +2118,9 @@ pub const PagedResourceSku = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// A SKU for a resource.
@@ -1802,7 +2144,9 @@ pub const ResourceSku = struct {
     /// The restrictions of the SKU.
     restrictions: []const ResourceSkuRestrictions,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Describes an available Compute SKU Location Information.
@@ -1814,7 +2158,9 @@ pub const ResourceSkuLocationInfo = struct {
     /// Gets details of capabilities available to a SKU in specific zones.
     zone_details: []const ResourceSkuZoneDetails,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Describes The zonal capabilities of a SKU.
@@ -1824,7 +2170,9 @@ pub const ResourceSkuZoneDetails = struct {
     /// A list of capabilities that are available for the SKU in the specified list of zones.
     capabilities: []const ResourceSkuCapabilities,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Describes The SKU capabilities object.
@@ -1834,7 +2182,9 @@ pub const ResourceSkuCapabilities = struct {
     /// The value of the SKU capability.
     value: []const u8,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The restrictions of the SKU.
@@ -1848,7 +2198,9 @@ pub const ResourceSkuRestrictions = struct {
     /// the reason for restriction.
     reason_code: ?enums.ResourceSkuRestrictionsReasonCode = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Describes an available Compute SKU Restriction Information.
@@ -1858,7 +2210,9 @@ pub const ResourceSkuRestrictionInfo = struct {
     /// List of availability zones where the SKU is restricted.
     zones: ?[]const []const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a VirtualMachine list operation.
@@ -1868,7 +2222,9 @@ pub const VirtualMachinesList = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Virtual Machine
@@ -1884,7 +2240,9 @@ pub const VirtualMachine = struct {
     /// The resource-specific properties for this resource.
     properties: ?VirtualMachineProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -1901,7 +2259,9 @@ pub const VirtualMachineProperties = struct {
     /// Whether VM DRS-driven movement is restricted (enabled) or not (disabled)
     restrict_movement: ?enums.VirtualMachineRestrictMovementState = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Set VM DRS-driven movement to restricted (enabled) or not (disabled)
@@ -1909,7 +2269,9 @@ pub const VirtualMachineRestrictMovement = struct {
     /// Whether VM DRS-driven movement is restricted (enabled) or not (disabled)
     restrict_movement: ?enums.VirtualMachineRestrictMovementState = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Workload Network
@@ -1925,7 +2287,9 @@ pub const WorkloadNetwork = struct {
     /// The resource-specific properties for this resource.
     properties: ?WorkloadNetworkProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -1934,7 +2298,9 @@ pub const WorkloadNetworkProperties = struct {
     /// The provisioning state of the resource.
     provisioning_state: ?enums.WorkloadNetworkProvisioningState = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a WorkloadNetwork list operation.
@@ -1944,7 +2310,9 @@ pub const WorkloadNetworkList = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a WorkloadNetworkDhcp list operation.
@@ -1954,7 +2322,9 @@ pub const WorkloadNetworkDhcpList = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// NSX DHCP
@@ -1970,7 +2340,9 @@ pub const WorkloadNetworkDhcp = struct {
     /// The resource-specific properties for this resource.
     properties: ?WorkloadNetworkDhcpEntity = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -1988,7 +2360,9 @@ pub const WorkloadNetworkDhcpEntity = struct {
     /// NSX revision number.
     revision: ?i64 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// NSX DHCP Server
@@ -2008,7 +2382,9 @@ pub const WorkloadNetworkDhcpServer = struct {
     /// DHCP Server Lease Time.
     lease_time: ?i64 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// NSX DHCP Relay
@@ -2026,7 +2402,9 @@ pub const WorkloadNetworkDhcpRelay = struct {
     /// DHCP Relay Addresses. Max 3.
     server_addresses: ?[]const []const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a WorkloadNetworkDnsService list operation.
@@ -2036,7 +2414,9 @@ pub const WorkloadNetworkDnsServicesList = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// NSX DNS Service
@@ -2052,7 +2432,9 @@ pub const WorkloadNetworkDnsService = struct {
     /// The resource-specific properties for this resource.
     properties: ?WorkloadNetworkDnsServiceProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -2075,7 +2457,9 @@ pub const WorkloadNetworkDnsServiceProperties = struct {
     /// NSX revision number.
     revision: ?i64 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a WorkloadNetworkDnsZone list operation.
@@ -2085,7 +2469,9 @@ pub const WorkloadNetworkDnsZonesList = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// NSX DNS Zone
@@ -2101,7 +2487,9 @@ pub const WorkloadNetworkDnsZone = struct {
     /// The resource-specific properties for this resource.
     properties: ?WorkloadNetworkDnsZoneProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -2122,7 +2510,9 @@ pub const WorkloadNetworkDnsZoneProperties = struct {
     /// NSX revision number.
     revision: ?i64 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a WorkloadNetworkGateway list operation.
@@ -2132,7 +2522,9 @@ pub const WorkloadNetworkGatewayList = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// NSX Gateway.
@@ -2148,7 +2540,9 @@ pub const WorkloadNetworkGateway = struct {
     /// The resource-specific properties for this resource.
     properties: ?WorkloadNetworkGatewayProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -2161,7 +2555,9 @@ pub const WorkloadNetworkGatewayProperties = struct {
     /// NSX Gateway Path.
     path: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a WorkloadNetworkPortMirroring list operation.
@@ -2171,7 +2567,9 @@ pub const WorkloadNetworkPortMirroringList = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// NSX Port Mirroring
@@ -2187,7 +2585,9 @@ pub const WorkloadNetworkPortMirroring = struct {
     /// The resource-specific properties for this resource.
     properties: ?WorkloadNetworkPortMirroringProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -2208,7 +2608,9 @@ pub const WorkloadNetworkPortMirroringProperties = struct {
     /// NSX revision number.
     revision: ?i64 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a WorkloadNetworkPublicIP list operation.
@@ -2218,7 +2620,9 @@ pub const WorkloadNetworkPublicIPsList = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// NSX Public IP Block
@@ -2234,7 +2638,9 @@ pub const WorkloadNetworkPublicIP = struct {
     /// The resource-specific properties for this resource.
     properties: ?WorkloadNetworkPublicIPProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -2249,7 +2655,12 @@ pub const WorkloadNetworkPublicIPProperties = struct {
     /// The provisioning state
     provisioning_state: ?enums.WorkloadNetworkPublicIPProvisioningState = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+        .rename = .{
+            .public_ip_block = "publicIPBlock",
+        },
+    };
 };
 
 /// The response of a WorkloadNetworkSegment list operation.
@@ -2259,7 +2670,9 @@ pub const WorkloadNetworkSegmentsList = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// NSX Segment
@@ -2275,7 +2688,9 @@ pub const WorkloadNetworkSegment = struct {
     /// The resource-specific properties for this resource.
     properties: ?WorkloadNetworkSegmentProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -2296,7 +2711,9 @@ pub const WorkloadNetworkSegmentProperties = struct {
     /// NSX revision number.
     revision: ?i64 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Subnet configuration for segment
@@ -2306,7 +2723,9 @@ pub const WorkloadNetworkSegmentSubnet = struct {
     /// Gateway address.
     gateway_address: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// Ports and any VIF attached to segment.
@@ -2314,7 +2733,9 @@ pub const WorkloadNetworkSegmentPortVif = struct {
     /// Name of port or VIF attached to segment.
     port_name: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a WorkloadNetworkVirtualMachine list operation.
@@ -2324,7 +2745,9 @@ pub const WorkloadNetworkVirtualMachinesList = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// NSX Virtual Machine
@@ -2340,7 +2763,9 @@ pub const WorkloadNetworkVirtualMachine = struct {
     /// The resource-specific properties for this resource.
     properties: ?WorkloadNetworkVirtualMachineProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -2353,7 +2778,9 @@ pub const WorkloadNetworkVirtualMachineProperties = struct {
     /// Virtual machine type.
     vm_type: ?enums.VMTypeEnum = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// The response of a WorkloadNetworkVMGroup list operation.
@@ -2363,7 +2790,9 @@ pub const WorkloadNetworkVMGroupsList = struct {
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };
 
 /// NSX VM Group
@@ -2379,7 +2808,9 @@ pub const WorkloadNetworkVMGroup = struct {
     /// The resource-specific properties for this resource.
     properties: ?WorkloadNetworkVMGroupProperties = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
     pub const arm_resource_kind: core.arm.ResourceKind = .proxy;
 };
 
@@ -2396,5 +2827,7 @@ pub const WorkloadNetworkVMGroupProperties = struct {
     /// NSX revision number.
     revision: ?i64 = null,
 
-    pub const serde = .{ .rename_all = .camel_case };
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
 };

@@ -22,10 +22,10 @@ Pure Zig implementation of Azure service clients with **zero C dependencies**.
 
 ```zig
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 const identity = core.identity;
-const kusto_common = @import("azure_kusto_common");
-const kusto_data = @import("azure_kusto_data");
+const kusto_common = @import("azure_sdk_kusto_common");
+const kusto_data = @import("azure_sdk_kusto_data");
 
 pub fn main(init: std.process.Init) !void {
     // Authenticate with environment, workload identity, managed identity, or Azure CLI.
@@ -79,18 +79,18 @@ zig build kusto-live-test     # skips unless Kusto is configured
 ```
 Service SDKs (Storage, Key Vault, Tables, Event Hubs, etc.)
     │
-azure-core (Zig)
+azure-sdk-core (Zig)
     HTTP Pipeline: RequestId → Telemetry → Logging → Retry → Auth → Decompression → Transport
     Transport: std.http.Client (TLS via std.crypto.tls)
     │
 azure-identity: DefaultAzureCredential + 7 credential types
     │
-azure-core-amqp: azure-uamqp-zig (pure Zig AMQP 1.0)
+azure-sdk-core-amqp: azure-uamqp-zig (pure Zig AMQP 1.0)
 ```
 
 ## Modules
 
-### Core (`azure_core`)
+### Core (`azure_sdk_core`)
 
 | Module | Description |
 |--------|-------------|
@@ -129,24 +129,20 @@ azure-core-amqp: azure-uamqp-zig (pure Zig AMQP 1.0)
 | Package | Clients |
 |---------|---------|
 | `azure_sdk_container_registry` | Challenge-authenticated metadata, manifest content, resumable blob uploads, and bounded/resumable blob downloads; generated APIs under `protocol` |
-| `azure_storage_blobs` | `BlobClient`, `BlobContainerClient`, `SasBlobClient` |
-| `azure_storage_queues` | `QueueClient`, `QueueServiceClient`, `SasQueueClient` |
-| `azure_storage_files_shares` | `ShareClient`, `ShareDirectoryClient`, `ShareFileClient` |
-| `azure_storage_files_datalake` | `DataLakeFileSystemClient`, `DataLakeFileClient` |
-| `azure_storage_common` | `StorageSharedKeyCredential`, `SasBuilder`, complete-SAS helpers |
-| `azure_keyvault_secrets` | `SecretClient` |
-| `azure_keyvault_keys` | `KeyClient`, `CryptographyClient` |
-| `azure_keyvault_certificates` | `CertificateClient` |
-| `azure_keyvault_admin` | `BackupClient`, `SettingsClient` |
-| `azure_data_tables` | `TableClient`, `TableServiceClient` |
-| `azure_data_appconfiguration` | `ConfigurationClient` |
-| `azure_data_cosmos` | `CosmosClient`, `DatabaseClient`, `ContainerClient` |
-| `azure_attestation` | `AttestationClient` |
-| `azure_messaging_eventhubs` | `ProducerClient`, `ConsumerClient` |
-| `azure_messaging_eventhubs_checkpointstore_blob` | Blob-backed checkpoint store |
-| `azure_messaging_servicebus` | `ServiceBusSenderClient`, `ServiceBusReceiverClient`, `ServiceBusAdministrationClient` |
-| `azure_kusto_data` | `KustoClient` (experimental buffered and progressive query plus management support) |
-| `azure_kusto_ingest` | `StreamingIngestClient`, `QueuedIngestClient`, `ManagedIngestClient`, and queued-ingestion resource discovery |
+| `azure_sdk_storage_blobs` | `BlobClient`, `BlobContainerClient`, `SasBlobClient` |
+| `azure_sdk_storage_queues` | `QueueClient`, `QueueServiceClient`, `SasQueueClient` |
+| `azure_sdk_storage_files_shares` | `ShareClient`, `ShareDirectoryClient`, `ShareFileClient` |
+| `azure_sdk_storage_files_datalake` | `DataLakeFileSystemClient`, `DataLakeFileClient` |
+| `azure_sdk_storage_common` | `StorageSharedKeyCredential`, `SasBuilder`, complete-SAS helpers |
+| `azure_sdk_keyvault` | `secrets.SecretClient`, `keys.KeyClient`, `keys.CryptographyClient`, `certificates.CertificateClient`, `administration.BackupClient`, `administration.SettingsClient` |
+| `azure_sdk_data_tables` | `TableClient`, `TableServiceClient` |
+| `azure_sdk_data_appconfiguration` | `ConfigurationClient` |
+| `azure_sdk_data_cosmos` | `CosmosClient`, `DatabaseClient`, `ContainerClient` |
+| `azure_sdk_attestation` | `AttestationClient` |
+| `azure_sdk_eventhubs` | `ProducerClient`, `ConsumerClient`, `checkpoint_store_blob.BlobCheckpointStore` |
+| `azure_sdk_servicebus` | `ServiceBusSenderClient`, `ServiceBusReceiverClient`, `ServiceBusAdministrationClient` |
+| `azure_sdk_kusto_data` | `KustoClient` (experimental buffered and progressive query plus management support) |
+| `azure_sdk_kusto_ingest` | `StreamingIngestClient`, `QueuedIngestClient`, `ManagedIngestClient`, and queued-ingestion resource discovery |
 
 ### Complete SAS Blob and Queue operations
 
@@ -245,7 +241,7 @@ Connections and their derived clients are not safe for concurrent use. Externall
 
 The existing client constructors remain unauthenticated compatibility APIs only. Passing authentication configuration to them returns `AuthenticatedConnectionRequired`; authenticated code must use `initWithConnection`.
 
-`withAadAppKey` is deprecated and inert for connection creation. It is rejected with `AadAppKeyAuthenticationUnsupported`; supply an `azure_core.credentials.TokenCredential` instead.
+`withAadAppKey` is deprecated and inert for connection creation. It is rejected with `AadAppKeyAuthenticationUnsupported`; supply an `azure_sdk_core.credentials.TokenCredential` instead.
 
 Metadata discovery is enabled by default for authenticated connections. Before acquiring a token, the connection makes an unauthenticated, no-follow `GET` request to `/v1/rest/auth/metadata` on the engine endpoint. The response provides login authority details and `KustoServiceResourceId`; the resource ID is used to derive the token scope. Only a 404 or an empty metadata response uses the public-cloud fallback. When the caller supplies a `KustoCloudInfoCache`, discovered metadata is cached for reuse.
 
@@ -264,14 +260,14 @@ const connection = try KustoConnection.init(allocator, properties, transport, op
 
 Set `.metadata_mode = .disabled` for offline or custom bootstrap control. Trust validation still runs with discovery disabled, and the token scope defaults to the public-cloud scope unless `token_scope` is explicitly provided. Explicit endpoint and scope overrides are still subject to endpoint validation.
 
-Metadata can expose the login authority for a sovereign or private cloud, but `TokenCredential` is an opaque credential boundary: Kusto cannot reconfigure a generic credential at runtime. Callers using those clouds must construct or configure their credential for the discovered authority themselves; do not assume that every `azure_core` credential supports runtime authority changes.
+Metadata can expose the login authority for a sovereign or private cloud, but `TokenCredential` is an opaque credential boundary: Kusto cannot reconfigure a generic credential at runtime. Callers using those clouds must construct or configure their credential for the discovered authority themselves; do not assume that every `azure_sdk_core` credential supports runtime authority changes.
 
 ### Kusto direct streaming ingestion
 
 `StreamingIngestClient.ingestResult` accepts a `StreamingIngestTarget` and a runtime `StreamingIngestSource`: borrowed bytes, a local file, a borrowed one-shot `std.Io.Reader`, a replay-reader factory, or an existing blob URI. Files and readers stream through `HttpPipeline.open`; they are not loaded wholly into memory. Direct streaming is limited to a 4 MiB uncompressed source.
 
 ```zig
-const ingest = @import("azure_kusto_ingest");
+const ingest = @import("azure_sdk_kusto_ingest");
 var client = ingest.StreamingIngestClient.initWithConnection(connection);
 var result = try client.ingestFromFileResult(
     allocator,
@@ -481,10 +477,10 @@ try query_stream.finish();
 
 ### Typed KQL and result rows
 
-Use `azure_kusto_data.kql.QueryParameters` to declare parameter types once. Its generated `Name` enum is the only runtime value accepted by `kql.Builder.parameter`, and `bind` copies values into `ClientRequestProperties.Parameters`; values are never interpolated into CSL.
+Use `azure_sdk_kusto_data.kql.QueryParameters` to declare parameter types once. Its generated `Name` enum is the only runtime value accepted by `kql.Builder.parameter`, and `bind` copies values into `ClientRequestProperties.Parameters`; values are never interpolated into CSL.
 
 ```zig
-const kusto = @import("azure_kusto_data");
+const kusto = @import("azure_sdk_kusto_data");
 const Params = struct { account: []const u8, minimum: i64 };
 const Binding = kusto.kql.QueryParameters(Params);
 
@@ -541,10 +537,10 @@ Kusto behavior and protocol choices were compared against the [Rust SDK](https:/
 
 | Package | Description |
 |---------|-------------|
-| `azure_core_amqp` | AMQP 1.0 via azure-uamqp-zig |
-| `azure_core_tracing` | `Span`, `Tracer`, `NoopTracer` |
-| `azure_core_testing` | `PlaybackTransport` for recorded HTTP replay |
-| `azure_core_perf` | `benchmark()` harness with timing stats |
+| `azure_sdk_core_amqp` | AMQP 1.0 via azure-uamqp-zig |
+| `azure_sdk_core_tracing` | `Span`, `Tracer`, `NoopTracer` |
+| `azure_sdk_core_testing` | `PlaybackTransport` for recorded HTTP replay |
+| `azure_sdk_core_perf` | `benchmark()` harness with timing stats |
 
 ## Dependencies
 
@@ -573,7 +569,7 @@ Then in `build.zig`:
 
 ```zig
 const azure = b.dependency("azure_sdk", .{});
-exe.root_module.addImport("azure_core", azure.module("azure_core"));
+exe.root_module.addImport("azure_sdk_core", azure.module("azure_sdk_core"));
 exe.root_module.addImport("azure_identity", azure.module("azure_identity"));
 ```
 

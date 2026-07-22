@@ -5,6 +5,9 @@ AZURE_SDK_COMMIT="${AZURE_SDK_COMMIT:-c2d7812c683ae5d2cb3d769939d2027a200d7284}"
 AZURE_SDK_HASH="${AZURE_SDK_HASH:-azure_sdk-0.1.0--PMlNXKHJwC-jWWN3uEDAhxGVU0CMEXEc-ZPZ4ikXCGL}"
 AZURE_SDK_URL="${AZURE_SDK_URL:-git+https://github.com/cataggar/azure-sdk-for-zig}"
 AZURE_SDK_GIT_URL="${AZURE_SDK_GIT_URL:-${AZURE_SDK_URL#git+}}"
+# The immutable pin above predates the canonical azure_sdk_core module.
+# PR 3 replaces it with the independently published Core package.
+AZURE_SDK_CORE_READY="${AZURE_SDK_CORE_READY:-false}"
 
 REST_BRANCH="${REST_BRANCH:-rest/container_registry}"
 REST_PACKAGE="${REST_PACKAGE:-azure_rest_container_registry}"

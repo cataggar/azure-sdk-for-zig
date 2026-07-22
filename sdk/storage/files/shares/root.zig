@@ -1,5 +1,5 @@
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 
 // ─────────────────────────── ShareClient ──────────────────────
 
@@ -311,7 +311,7 @@ test "ShareFileClient create and download" {
     var mock_create = core.http.MockTransport.init(allocator, 201, "");
     defer mock_create.deinit();
 
-    const identity = @import("azure_core").identity;
+    const identity = @import("azure_sdk_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );

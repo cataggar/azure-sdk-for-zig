@@ -97,35 +97,35 @@ pub fn build(b: *std.Build) void {
             "Container Registry package output directory",
         ) orelse "../../rest/container_registry",
     );
-    const azure_core_commit = b.option(
+    const azure_sdk_core_commit = b.option(
         []const u8,
-        "azure-core-commit",
+        "azure-sdk-core-commit",
         "azure-sdk-for-zig commit for an independently consumable package",
     );
-    const azure_core_hash = b.option(
+    const azure_sdk_core_hash = b.option(
         []const u8,
-        "azure-core-hash",
-        "Zig package hash for -Dazure-core-commit",
+        "azure-sdk-core-hash",
+        "Zig package hash for -Dazure-sdk-core-commit",
     );
-    if ((azure_core_commit == null) != (azure_core_hash == null)) {
+    if ((azure_sdk_core_commit == null) != (azure_sdk_core_hash == null)) {
         std.debug.panic(
-            "-Dazure-core-commit and -Dazure-core-hash must be supplied together",
+            "-Dazure-sdk-core-commit and -Dazure-sdk-core-hash must be supplied together",
             .{},
         );
     }
-    if (azure_core_commit) |commit| {
+    if (azure_sdk_core_commit) |commit| {
         generate_container_registry.addArgs(&.{
-            "--azure-core-commit",
+            "--azure-sdk-core-commit",
             commit,
-            "--azure-core-hash",
-            azure_core_hash.?,
+            "--azure-sdk-core-hash",
+            azure_sdk_core_hash.?,
         });
     } else {
         generate_container_registry.addArgs(&.{
-            "--azure-sdk-path",
+            "--azure-sdk-core-path",
             b.option(
                 []const u8,
-                "azure-sdk-path",
+                "azure-sdk-core-path",
                 "Local azure_sdk dependency path in generated build.zig.zon",
             ) orelse "../..",
         });
@@ -136,7 +136,7 @@ pub fn build(b: *std.Build) void {
     );
     generate_container_registry_step.dependOn(&generate_container_registry.step);
 
-    const azure_sdk_dep = b.dependency("azure_sdk", .{
+    const azure_sdk_core_dep = b.dependency("azure_sdk_core", .{
         .target = host_target,
         .optimize = optimize,
     });
@@ -149,7 +149,7 @@ pub fn build(b: *std.Build) void {
         .target = host_target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "azure_core", .module = azure_sdk_dep.module("azure_core") },
+            .{ .name = "azure_sdk_core", .module = azure_sdk_core_dep.module("azure_sdk_core") },
             .{ .name = "serde", .module = serde_dep.module("serde") },
         },
     });

@@ -1,5 +1,5 @@
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 
 /// A single table entity (row) — key/value pairs.
 pub const TableEntity = struct {
@@ -193,7 +193,7 @@ test "TableClient getEntity builds correct URL" {
     var mock = core.http.MockTransport.init(allocator, 200, "{}");
     defer mock.deinit();
 
-    const client_secret = @import("azure_core").identity.client_secret;
+    const client_secret = @import("azure_sdk_core").identity.client_secret;
     var inner_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
