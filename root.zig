@@ -1,5 +1,5 @@
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 
 const sas = @import("sas.zig");
 
@@ -303,7 +303,7 @@ test "QueueClient sendMessage" {
     var mock = core.http.MockTransport.init(allocator, 201, "");
     defer mock.deinit();
 
-    const identity = @import("azure_core").identity;
+    const identity = @import("azure_sdk_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -331,7 +331,7 @@ test "QueueClient receiveMessages" {
     var mock = core.http.MockTransport.init(allocator, 200, body);
     defer mock.deinit();
 
-    const identity2 = @import("azure_core").identity;
+    const identity2 = @import("azure_sdk_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
