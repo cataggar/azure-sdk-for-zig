@@ -185,29 +185,87 @@ dependencies during development:
 (cd sdk/container_registry && zig build test --summary all)
 ```
 
-Before publishing `sdk/container_registry`, replace both local paths in its
-`build.zig.zon` with immutable `azure_sdk` and
-`azure_rest_container_registry` commit/hash pins, then rerun the same package
-test command from the orphan branch.
-
-For a release commit, generate complete immutable dependency metadata before
-splitting the package to its orphan branch:
+The checked-in packages intentionally retain relative paths so monorepo
+development never depends on an unpublished orphan branch. Immutable release
+metadata is staged outside the tracked tree:
 
 ```bash
-SDK_COMMIT="$(git rev-parse origin/main)"
-SDK_HASH="$(zig fetch "git+https://github.com/cataggar/azure-sdk-for-zig#$SDK_COMMIT")"
-(cd codegen/cli && zig build generate-container-registry-package \
-  -Dazure-core-commit="$SDK_COMMIT" \
-  -Dazure-core-hash="$SDK_HASH")
-(cd rest/container_registry && zig build test --summary all)
-git add rest/container_registry
-git commit -m "rest/container_registry: release generated package"
-REST_COMMIT="$(git subtree split --prefix=rest/container_registry HEAD)"
-git push origin "$REST_COMMIT:refs/heads/rest/container_registry"
+# Verifies the recorded main commit/hash, generates the pinned REST package,
+# stages the SDK beside it, validates exact package/module names, independently
+# tests both packages, compiles all examples, and checks the unconfigured live
+# test skip. `dry-run` is an alias.
+scripts/container-registry-release.sh verify
+
+# Also verify that canonical regeneration is deterministic and cannot touch the
+# handwritten SDK package.
+scripts/verify-container-registry-regeneration.sh
+
+# Stage the publishable REST package. This creates no ref.
+scripts/container-registry-release.sh prepare-rest
 ```
 
-The release generation is still deterministic: the commit and Zig package
-hash are explicit inputs, and no generated package file is edited afterward.
+The common dependency pin is recorded in
+`eng/container_registry_release/metadata.sh`. It is the immutable
+`origin/main` commit immediately after PR #100 and its verified Zig package
+hash. The REST stage is
+`.release/container_registry/publish/rest`.
+
+Preview the exact initial-or-descendant REST commit without changing the
+remote, then publish it:
+
+```bash
+scripts/container-registry-release.sh publish-rest --dry-run
+scripts/container-registry-release.sh publish-rest
+REST_COMMIT="$(
+  git ls-remote origin refs/heads/rest/container_registry | cut -f1
+)"
+```
+
+The SDK cannot contain an honest immutable REST hash until that orphan commit
+exists. After REST publication, the second stage fetches that exact commit,
+requires it to equal the current remote release-branch tip, archives and
+validates the package root/name/dependency structure, computes (or verifies a
+supplied) Zig package hash from those exact bytes, applies both immutable
+dependency pins, and tests a disposable copy of the publishable SDK package:
+
+```bash
+scripts/container-registry-release.sh prepare-sdk "$REST_COMMIT"
+```
+
+The SDK stage is `.release/container_registry/publish/sdk`. Publish it only
+after inspecting its two URL/hash pins:
+
+```bash
+scripts/container-registry-release.sh publish-sdk --dry-run
+scripts/container-registry-release.sh publish-sdk
+```
+
+The publication commands create disposable no-checkout worktrees and install
+only validated stage files. Cleanup traps remove temporary worktrees and local
+branches on success or failure. A missing release branch gets an orphan root;
+an existing release branch is fetched and the new commit must descend directly
+from its current tip. Pushes are ordinary fast-forwards and never force.
+
+Staging uses only tracked SDK files in the package's explicit `.paths`
+manifest. Generated REST output is checked against its own `.paths` manifest.
+Neither staging nor publication copies ignored/untracked trees, and validation
+rejects `.zig-cache`, `zig-pkg`, `zig-out`, `.release`, or any undeclared
+top-level entry. Builds run from disposable copies with external local/global
+Zig caches, so publishable directories remain byte-clean.
+
+Run the isolated workflow regression tests at any time:
+
+```bash
+scripts/container-registry-release.sh self-test
+```
+
+They use a local bare remote to prove that a main commit and a mismatched REST
+package are rejected, initial and subsequent publication dry-runs have the
+correct parentage, cleanup succeeds, and a normal local fast-forward push
+works. They never create GitHub branches or tags.
+
+This two-stage process never invents a REST commit or hash. Preparation creates
+only ignored `.release/` staging; publication is always an explicit command.
 
 ## Versioning
 
