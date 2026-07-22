@@ -1,5 +1,5 @@
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 const protocol = @import("azure_rest_container_registry");
 const auth = @import("auth_policy.zig");
 const link_pager = @import("link_pager.zig");

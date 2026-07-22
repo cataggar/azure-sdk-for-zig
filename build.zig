@@ -4,11 +4,11 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const azure_sdk_dep = b.dependency("azure_sdk", .{
+    const azure_sdk_core_dep = b.dependency("azure_sdk_core", .{
         .target = target,
         .optimize = optimize,
     });
-    const azure_core_mod = azure_sdk_dep.module("azure_core");
+    const azure_sdk_core_mod = azure_sdk_core_dep.module("azure_sdk_core");
 
     const rest_dep = b.dependency("azure_rest_container_registry", .{
         .target = target,
@@ -20,7 +20,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .imports = &.{
-            .{ .name = "azure_core", .module = azure_core_mod },
+            .{ .name = "azure_sdk_core", .module = azure_sdk_core_mod },
             .{ .name = "azure_rest_container_registry", .module = rest_mod },
         },
     });
@@ -31,7 +31,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "azure_core", .module = azure_core_mod },
+                .{ .name = "azure_sdk_core", .module = azure_sdk_core_mod },
                 .{ .name = "azure_rest_container_registry", .module = rest_mod },
             },
         }),
@@ -44,7 +44,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "azure_core", .module = azure_core_mod },
+            .{ .name = "azure_sdk_core", .module = azure_sdk_core_mod },
             .{ .name = "azure_sdk_container_registry", .module = sdk_mod },
         },
     });
@@ -81,7 +81,7 @@ pub fn build(b: *std.Build) void {
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
-                    .{ .name = "azure_core", .module = azure_core_mod },
+                    .{ .name = "azure_sdk_core", .module = azure_sdk_core_mod },
                     .{
                         .name = "azure_sdk_container_registry",
                         .module = sdk_mod,
@@ -100,7 +100,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "azure_core", .module = azure_core_mod },
+                .{ .name = "azure_sdk_core", .module = azure_sdk_core_mod },
                 .{ .name = "azure_sdk_container_registry", .module = sdk_mod },
             },
         }),

@@ -1,5 +1,5 @@
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 const acr = @import("azure_sdk_container_registry");
 const support = @import("acr_example_support");
 
