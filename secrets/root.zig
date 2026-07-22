@@ -1,5 +1,5 @@
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 const serde = @import("serde");
 
 const Context = core.context.Context;
@@ -420,7 +420,7 @@ test "SecretClient getSecretResult: ok path" {
     var mock = core.http.MockTransport.init(allocator, 200, body);
     defer mock.deinit();
 
-    const identity = @import("azure_core").identity;
+    const identity = @import("azure_sdk_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -449,7 +449,7 @@ test "SecretClient getSecretResult: err path surfaces SecretNotFound code" {
     var mock = core.http.MockTransport.init(allocator, 404, body);
     defer mock.deinit();
 
-    const identity = @import("azure_core").identity;
+    const identity = @import("azure_sdk_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -477,7 +477,7 @@ test "SecretClient getSecretResult: err path with no parseable body" {
     var mock = core.http.MockTransport.init(allocator, 500, "Internal Server Error");
     defer mock.deinit();
 
-    const identity = @import("azure_core").identity;
+    const identity = @import("azure_sdk_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -512,7 +512,7 @@ test "SecretClient getSecret" {
     var mock = core.http.MockTransport.init(allocator, 200, body);
     defer mock.deinit();
 
-    const identity = @import("azure_core").identity;
+    const identity = @import("azure_sdk_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -543,7 +543,7 @@ test "SecretClient setSecret" {
     );
     defer mock.deinit();
 
-    const identity2 = @import("azure_core").identity;
+    const identity2 = @import("azure_sdk_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -573,7 +573,7 @@ test "SecretClient getSecret 404" {
     var mock = core.http.MockTransport.init(allocator, 404, body);
     defer mock.deinit();
 
-    const identity3 = @import("azure_core").identity;
+    const identity3 = @import("azure_sdk_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -598,7 +598,7 @@ test "SecretClient setSecret failure" {
     );
     defer mock.deinit();
 
-    const identity4 = @import("azure_core").identity;
+    const identity4 = @import("azure_sdk_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -624,7 +624,7 @@ test "SecretClient listSecrets" {
     var mock = core.http.MockTransport.init(allocator, 200, body);
     defer mock.deinit();
 
-    const identity5 = @import("azure_core").identity;
+    const identity5 = @import("azure_sdk_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
