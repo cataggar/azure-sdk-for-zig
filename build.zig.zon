@@ -12,9 +12,12 @@
         },
     },
     .paths = .{
+        ".gitignore",
         "build.zig",
         "build.zig.zon",
         "src",
+        "examples",
+        "live_tests",
         "README.md",
     },
 }
