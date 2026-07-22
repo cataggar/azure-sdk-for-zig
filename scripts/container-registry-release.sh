@@ -15,6 +15,10 @@ ACTIVE_BRANCH=""
 SELF_TEST_ROOT=""
 PUBLISHED_COMMIT=""
 REMOVE_CODEGEN_ZIG_PKG=0
+ROOT_ZIG_PKG_EXISTED=0
+if [[ -e "$ROOT/zig-pkg" ]]; then
+  ROOT_ZIG_PKG_EXISTED=1
+fi
 
 cleanup_active_publication() {
   set +e
@@ -42,6 +46,9 @@ cleanup_on_exit() {
   cleanup_active_publication
   if [[ "$REMOVE_CODEGEN_ZIG_PKG" == 1 ]]; then
     rm -rf "$ROOT/codegen/cli/zig-pkg"
+  fi
+  if [[ "$ROOT_ZIG_PKG_EXISTED" == 0 ]]; then
+    rm -rf "$ROOT/zig-pkg"
   fi
   if [[ -n "$SELF_TEST_ROOT" ]]; then
     case "$SELF_TEST_ROOT" in
@@ -79,8 +86,11 @@ reset_work() {
 
 fetch_hash() {
   local source="$1"
-  mkdir -p "$WORK_ROOT/global-cache"
-  zig fetch --global-cache-dir "$WORK_ROOT/global-cache" "$source"
+  mkdir -p "$WORK_ROOT/fetch-cwd" "$WORK_ROOT/global-cache"
+  (
+    cd "$WORK_ROOT/fetch-cwd"
+    zig fetch --global-cache-dir "$WORK_ROOT/global-cache" "$source"
+  )
 }
 
 check_hash() {
@@ -736,8 +746,8 @@ run_self_test() {
   git -C "$source_repo" archive "$main_commit" |
     tar -x -C "$SELF_TEST_ROOT/main-archive"
   main_hash="$(
-    zig fetch --global-cache-dir "$SELF_TEST_ROOT/cache" \
-      "$SELF_TEST_ROOT/main-archive"
+    cd "$SELF_TEST_ROOT"
+    zig fetch --global-cache-dir "$SELF_TEST_ROOT/cache" main-archive
   )"
 
   git -C "$source_repo" switch -c rest-fixture >/dev/null
