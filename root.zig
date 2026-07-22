@@ -3,7 +3,7 @@
 ///! Provides `CosmosClient`, `DatabaseClient`, and `ContainerClient`
 ///! for account, database, and container/item operations via REST API.
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 const serde = @import("serde");
 
 // ─────────────────────── Enums ───────────────────────
@@ -698,7 +698,7 @@ test "ConsistencyLevel toString" {
 }
 
 fn createTestClient(mock: *core.http.MockTransport) CosmosClient {
-    const identity = @import("azure_core").identity;
+    const identity = @import("azure_sdk_core").identity;
     // Use a stack-allocated mock for credential — not actually called in tests.
     var cred_mock = core.http.MockTransport.init(mock.allocator, 200,
         \\{"access_token":"t","expires_in":3600}
@@ -901,7 +901,7 @@ test "CosmosClient with consistency level" {
         \\{"Databases":[],"_count":0}
     );
     defer mock.deinit();
-    const identity = @import("azure_core").identity;
+    const identity = @import("azure_sdk_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
