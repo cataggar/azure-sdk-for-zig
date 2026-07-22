@@ -19,5 +19,6 @@
         "examples",
         "live_tests",
         "README.md",
+        "LICENSE.txt",
     },
 }

@@ -4,7 +4,7 @@ JavaScript wrapper around [TypeSpec](https://typespec.io) +
 [TCGC](https://github.com/Azure/typespec-azure/tree/main/packages/typespec-client-generator-core),
 compiled into a [WebAssembly Component](https://component-model.bytecodealliance.org/)
 via [`jco`](https://github.com/bytecodealliance/jco). The Zig code
-generator at `../codegen` loads the resulting `tcgc.wasm` to obtain a
+generator at `../cli` loads the resulting `tcgc.wasm` to obtain a
 TCGC code model from `.tsp` files.
 
 ## WIT world

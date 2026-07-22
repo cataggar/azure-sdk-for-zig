@@ -34,4 +34,6 @@ available as `dry-run`) mirrors both package roots without creating remote refs.
 `self-test` exercises invalid main/mismatched REST commits plus initial and
 subsequent publication dry-runs against an isolated local bare remote.
 
-See `doc/package-branch-model.md` for the complete workflow.
+See the [package branch model](../../doc/package-branch-model.md) for the
+generic policy and [package release workflow](../../doc/releasing-packages.md)
+for the target registry-driven release process.

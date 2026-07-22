@@ -1,9 +1,12 @@
 .{
-    .name = .azure_sdk,
+    .name = .azure_sdk_workspace,
     .version = "0.1.0",
-    .fingerprint = 0x27c178e43525f3f8,
+    .fingerprint = 0x96c2d79909d9671,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
+        .aggregate_export_fixture = .{
+            .path = "eng/fixtures/aggregate_export",
+        },
         .uamqp = .{
             .url = "git+https://github.com/cataggar/azure-uamqp-zig#1121d1e68dde8d188516083555cc7e1553b0f595",
             .hash = "uamqp-0.1.0-lXMcafDqAQD3LSUZbUbyfrWhQfGG7OevKFUwhWxvGZDU",
@@ -19,6 +22,10 @@
         "sdk",
         "rest",
         "examples",
+        "eng",
+        "doc",
+        "codegen",
+        "scripts",
         "LICENSE.txt",
         "README.md",
     },

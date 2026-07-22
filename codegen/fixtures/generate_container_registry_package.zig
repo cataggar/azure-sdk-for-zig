@@ -60,6 +60,31 @@ pub fn main(init: std.process.Init) !void {
         .azure_core_hash = azure_core_hash,
         .azure_sdk_path = azure_sdk_path orelse "../..",
     });
+    const zon = try output.readFileAlloc(
+        io,
+        "build.zig.zon",
+        allocator,
+        .limited(1024 * 1024),
+    );
+    defer allocator.free(zon);
+    const zon_with_license = try addLicensePath(allocator, zon);
+    defer allocator.free(zon_with_license);
+    try output.writeFile(io, .{
+        .sub_path = "build.zig.zon",
+        .data = zon_with_license,
+    });
+    const license = try std.Io.Dir.readFileAlloc(
+        .cwd(),
+        io,
+        "../../LICENSE.txt",
+        allocator,
+        .limited(1024 * 1024),
+    );
+    defer allocator.free(license);
+    try output.writeFile(io, .{
+        .sub_path = "LICENSE.txt",
+        .data = license,
+    });
     try output.writeFile(io, .{
         .sub_path = "src/clients_test.zig",
         .data = generated_tests,
@@ -116,12 +141,32 @@ const generated_readme =
     \\../../scripts/verify-container-registry-regeneration.sh
     \\```
     \\
-    \\Local development uses the repository-relative `azure_sdk` dependency.
-    \\Release staging replaces it with the immutable commit/hash recorded in
-    \\`eng/container_registry_release/metadata.sh`; see
-    \\`doc/package-branch-model.md`.
+    \\Local development currently uses the repository-relative workspace dependency.
+    \\The canonical package split changes the direct dependency to
+    \\`azure_sdk_core`. Release staging replaces local paths with immutable
+    \\commit/hash pins. See the
+    \\[package branch model](../../doc/package-branch-model.md) and
+    \\[Container Registry release staging](../../eng/container_registry_release/README.md).
     \\
 ;
+
+fn addLicensePath(allocator: std.mem.Allocator, zon: []const u8) ![]u8 {
+    const marker = "        \"README.md\",\n";
+    const index = std.mem.indexOf(u8, zon, marker) orelse
+        return error.MissingReadmePath;
+    const insertion = marker ++ "        \"LICENSE.txt\",\n";
+    const output = try allocator.alloc(
+        u8,
+        zon.len - marker.len + insertion.len,
+    );
+    @memcpy(output[0..index], zon[0..index]);
+    @memcpy(output[index .. index + insertion.len], insertion);
+    @memcpy(
+        output[index + insertion.len ..],
+        zon[index + marker.len ..],
+    );
+    return output;
+}
 
 const generated_tests =
     \\const std = @import("std");

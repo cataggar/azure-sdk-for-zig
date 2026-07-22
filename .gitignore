@@ -51,6 +51,9 @@ Generated\ Files/
 
 # CTest test results
 [Tt]esting/
+!sdk/core/testing/
+!sdk/core/testing/README.md
+!sdk/core/testing/LICENSE.txt
 
 # NUNIT
 *.VisualState.xml
@@ -375,6 +378,7 @@ CMakeUserPresets.json
 zig-out/
 zig-pkg/
 .release/
+/thoughts/
 # codegen local-dev scratch output
 .tsp-generated/
 codegen/tcgc-component/.tsp-staging/
