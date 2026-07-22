@@ -1,5 +1,5 @@
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 const serde = @import("serde");
 
 // ─────────────────────────── Models ───────────────────────────
@@ -299,7 +299,7 @@ test "ConfigurationClient getSetting" {
     var mock = core.http.MockTransport.init(allocator, 200, body);
     defer mock.deinit();
 
-    const identity = @import("azure_core").identity;
+    const identity = @import("azure_sdk_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -332,7 +332,7 @@ test "ConfigurationClient setSetting and listSettings" {
     );
     defer mock_set.deinit();
 
-    const identity2 = @import("azure_core").identity;
+    const identity2 = @import("azure_sdk_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
