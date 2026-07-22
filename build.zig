@@ -4,17 +4,24 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const azure_sdk_dep = b.dependency("azure_sdk", .{
+    const azure_sdk_core_dep = b.dependency("azure_sdk_core", .{
         .target = target,
         .optimize = optimize,
     });
-    const azure_core_mod = azure_sdk_dep.module("azure_core");
+    const azure_sdk_core_mod = azure_sdk_core_dep.module("azure_sdk_core");
 
-    _ = b.addModule("keyvault-secrets", .{
+    const serde_dep = b.dependency("serde", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const serde_mod = serde_dep.module("serde");
+
+    _ = b.addModule("azure_rest_keyvault_secrets", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .imports = &.{
-            .{ .name = "azure_core", .module = azure_core_mod },
+            .{ .name = "azure_sdk_core", .module = azure_sdk_core_mod },
+            .{ .name = "serde", .module = serde_mod },
         },
     });
 
@@ -24,7 +31,8 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "azure_core", .module = azure_core_mod },
+                .{ .name = "azure_sdk_core", .module = azure_sdk_core_mod },
+                .{ .name = "serde", .module = serde_mod },
             },
         }),
     });
