@@ -1,6 +1,6 @@
 # azure_rest_arm_avs examples
 
-Hand-written examples that exercise the generated `arm_avs` client. They
+Hand-written examples that exercise the generated `azure_rest_arm_avs` client. They
 live alongside (not inside) `src/` so the generator never overwrites
 them.
 
@@ -43,5 +43,5 @@ The example resolves the subscription id in that order
 (`argv[1]` → `$AZURE_SUBSCRIPTION_ID` → `.env`), erroring with
 `error.MissingAzureSubscriptionId` if none is set.
 
-`.env` is gitignored repo-wide, so it is safe to drop one in the cwd
-for local iteration.
+`.env` is ignored by this package, so it is safe to drop one in the cwd for
+local iteration.
