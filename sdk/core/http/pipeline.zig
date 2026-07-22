@@ -533,7 +533,7 @@ pub const RequestIdPolicy = struct {
 /// - `az.client_request_id` (if present)
 /// - W3C `traceparent` / `tracestate` header propagation
 pub const TracingPolicy = struct {
-    const tracing = @import("../tracing/root.zig");
+    const tracing = @import("azure_sdk_core_tracing");
 
     tracer: *tracing.Tracer,
     az_namespace: []const u8,
@@ -1104,7 +1104,7 @@ test "isRetryable status codes" {
 
 test "TracingPolicy creates span with attributes" {
     const allocator = std.testing.allocator;
-    const tracing = @import("../tracing/root.zig");
+    const tracing = @import("azure_sdk_core_tracing");
     var mock = transport.MockTransport.init(allocator, 200, "ok");
     defer mock.deinit();
 
@@ -1132,7 +1132,7 @@ test "TracingPolicy creates span with attributes" {
 
 test "TracingPolicy sets error status on failure" {
     const allocator = std.testing.allocator;
-    const tracing = @import("../tracing/root.zig");
+    const tracing = @import("azure_sdk_core_tracing");
     var mock = transport.MockTransport.init(allocator, 500, "error");
     defer mock.deinit();
 
