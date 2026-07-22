@@ -1,5 +1,5 @@
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 const client_mod = @import("client.zig");
 const blob_upload = @import("blob_upload.zig");
 const digest_mod = @import("digest.zig");

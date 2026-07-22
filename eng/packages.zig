@@ -116,7 +116,7 @@ pub const all = [_]Package{
         .dependencies = &.{"azure_sdk_core"},
         .external_dependencies = &.{"serde"},
         .examples_command = "zig build",
-        .regeneration_command = "codegen/scripts/sync.sh --force arm_avs",
+        .regeneration_command = "codegen/scripts/sync.sh arm_avs",
     },
     .{
         .kind = .rest,
@@ -128,7 +128,7 @@ pub const all = [_]Package{
         .legacy_names = &.{"keyvault_secrets"},
         .dependencies = &.{"azure_sdk_core"},
         .external_dependencies = &.{"serde"},
-        .regeneration_command = "codegen/scripts/sync.sh --force keyvault_secrets",
+        .regeneration_command = "codegen/scripts/sync.sh keyvault_secrets",
     },
     .{
         .kind = .rest,

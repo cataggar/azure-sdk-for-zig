@@ -5,7 +5,7 @@
 
 const std = @import("std");
 const serde = @import("serde");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 
 const HttpPipeline = core.pipeline.HttpPipeline;
 const HttpPolicy = core.pipeline.HttpPolicy;

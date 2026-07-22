@@ -1,11 +1,11 @@
 ///! Azure Service Bus client — sender, receiver, and administration.
 ///!
-///! Built on top of azure-core-amqp for messaging and azure-core HTTP
+///! Built on top of azure-sdk-core-amqp for messaging and azure-sdk-core HTTP
 ///! pipeline for administration operations.
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 const uamqp = @import("uamqp");
-const messaging_common = @import("azure_messaging_common");
+const messaging_common = @import("azure_sdk_messaging_common");
 
 pub const ConnectionStringProperties = messaging_common.ConnectionStringProperties;
 
@@ -1073,7 +1073,7 @@ test "AdministrationClient createQueue" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 201, "<entry/>");
     defer mock.deinit();
-    const identity = @import("azure_core").identity;
+    const identity = @import("azure_sdk_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -1089,7 +1089,7 @@ test "AdministrationClient deleteQueue" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 200, "");
     defer mock.deinit();
-    const identity = @import("azure_core").identity;
+    const identity = @import("azure_sdk_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -1107,7 +1107,7 @@ test "AdministrationClient listQueues" {
     ;
     var mock = core.http.MockTransport.init(allocator, 200, body);
     defer mock.deinit();
-    const identity = @import("azure_core").identity;
+    const identity = @import("azure_sdk_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -1128,7 +1128,7 @@ test "AdministrationClient createSubscription" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 201, "<entry/>");
     defer mock.deinit();
-    const identity = @import("azure_core").identity;
+    const identity = @import("azure_sdk_core").identity;
     var cred_mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );

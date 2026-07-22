@@ -1,9 +1,14 @@
 # Container Registry release staging
 
-`metadata.sh` records the immutable common `azure_sdk` commit and Zig package
-hash used by both independently published ACR packages. The commit is
+`metadata.sh` records the immutable common SDK commit and Zig package hash used
+by both independently published ACR packages. The commit is
 `origin/main` immediately after PR #100, which contains the complete shared
 core required by the REST and hand-written packages.
+
+The canonical import migration now requires the `azure_sdk_core` module, which
+that historical pin does not export. Release preparation is therefore paused
+until the Core package extraction replaces this metadata pin. The release
+self-test remains active and exercises the canonical dependency shape.
 
 The release is intentionally two-stage:
 

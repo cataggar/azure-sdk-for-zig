@@ -4,9 +4,9 @@
 //! polling. It owns the service-issued SAS URIs and authorization context, and
 //! never renders either secret in diagnostics.
 const std = @import("std");
-const core = @import("azure_core");
-const kusto_common = @import("azure_kusto_common");
-const data_result = @import("azure_kusto_data");
+const core = @import("azure_sdk_core");
+const kusto_common = @import("azure_sdk_kusto_common");
+const data_result = @import("azure_sdk_kusto_data");
 
 pub const default_cache_ttl_ms: i64 = 60 * 60 * 1_000;
 pub const default_expiry_safety_skew_ms: i64 = 2 * 60 * 1_000;

@@ -5,9 +5,9 @@
 //! a larger reader is uploaded once through Queue using its consumed prefix
 //! followed by the same reader, preserving any internal reader buffering.
 const std = @import("std");
-const core = @import("azure_core");
-const kusto_common = @import("azure_kusto_common");
-const data_result = @import("azure_kusto_data");
+const core = @import("azure_sdk_core");
+const kusto_common = @import("azure_sdk_kusto_common");
+const data_result = @import("azure_sdk_kusto_data");
 const streaming = @import("streaming.zig");
 const queued = @import("queued.zig");
 const resources = @import("resources.zig");

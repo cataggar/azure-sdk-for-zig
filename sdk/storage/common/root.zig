@@ -1,5 +1,5 @@
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 const base64 = core.base64;
 
 pub const sas = @import("sas.zig");

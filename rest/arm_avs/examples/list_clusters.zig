@@ -10,9 +10,9 @@
 //!   # via env or `.env`.
 
 const std = @import("std");
-const core = @import("azure_core");
-const identity = @import("azure_core").identity;
-const arm_avs = @import("arm_avs");
+const core = @import("azure_sdk_core");
+const identity = @import("azure_sdk_core").identity;
+const arm_avs = @import("azure_rest_arm_avs");
 
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;

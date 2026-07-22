@@ -43,12 +43,12 @@ sdk/
 ## Adding a New Service SDK
 
 1. Create `sdk/<service>/<subservice>/root.zig`
-2. Import `azure_core` for HTTP pipeline, credentials, errors
+2. Import `azure_sdk_core` for HTTP pipeline, credentials, errors
 3. Define models (request/response structs)
 4. Implement the client struct with CRUD operations
 5. Add tests using `MockTransport` or `SequenceMockTransport`
 6. Register the module in `build.zig` (add `b.addModule(...)` and test step)
-7. For paginated list operations, use `PipelinePager(T)` from `azure_core.pager`
+7. For paginated list operations, use `PipelinePager(T)` from `azure_sdk_core.pager`
 
 ## Interface Pattern
 

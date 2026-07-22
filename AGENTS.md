@@ -29,7 +29,7 @@ zig fmt --check sdk/ examples/ build.zig # check formatting without modifying
 - **Functions/methods**: `camelCase` (e.g., `getSecret`, `listBlobs`)
 - **Constants**: `snake_case` (e.g., `azure_public`, `user_agent_prefix`)
 - **Files**: `snake_case.zig` (e.g., `client_secret.zig`, `azure_cli.zig`)
-- **Modules in build.zig**: `snake_case` with `azure_` prefix (e.g., `azure_core`, `azure_identity`)
+- **Modules in build.zig**: `snake_case` with `azure_` prefix (e.g., `azure_sdk_core`, `azure_identity`)
 
 ## Key Patterns
 

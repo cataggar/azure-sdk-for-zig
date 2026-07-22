@@ -1,12 +1,10 @@
 .{
-    .name = .arm_avs,
+    .name = .azure_rest_arm_avs,
     .version = "0.1.0",
-    .fingerprint = 0xfdf7c70c65f63020,
+    .fingerprint = 0xa125d6aff0d22b24,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
-        .azure_sdk = .{
-            // Local-dev relative path: from `rest/arm_avs/` up to the
-            // repo root.
+        .azure_sdk_core = .{
             .path = "../..",
         },
         .serde = .{
@@ -15,6 +13,7 @@
         },
     },
     .paths = .{
+        ".gitignore",
         "build.zig",
         "build.zig.zon",
         "src",

@@ -6,7 +6,7 @@
 //! catch-all `unrecognized` variant.
 
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 
 /// Reflects the deletion recovery level currently in effect for secrets in the current vault. If it contains 'Purgeable', the secret can be permanently deleted by a privileged user; otherwise, only the system can purge the secret, at the end of the retention interval.
 pub const DeletionRecoveryLevel = union(enum) {

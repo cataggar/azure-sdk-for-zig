@@ -6,7 +6,7 @@
 //! catch-all `unrecognized` variant.
 
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 
 /// Sort options for ordering tags in a collection.
 pub const ArtifactTagOrder = union(enum) {

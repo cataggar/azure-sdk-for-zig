@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const serde = @import("serde");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 const models = @import("models.zig");
 const enums = @import("enums.zig");
 

@@ -1,5 +1,5 @@
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 const acr = @import("azure_sdk_container_registry");
 
 pub const endpoint_environment = "AZURE_CONTAINER_REGISTRY_ENDPOINT";

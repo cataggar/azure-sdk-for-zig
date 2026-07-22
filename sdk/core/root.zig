@@ -11,7 +11,7 @@
 ///!   Crypto → std.crypto (HMAC-SHA256, SHA-256, MD5)
 ///!   Base64 → std.base64
 
-// Re-export sub-modules for `@import("azure_core").http`, etc.
+// Re-export sub-modules for `@import("azure_sdk_core").http`, etc.
 pub const http = @import("http/transport.zig");
 pub const pipeline = @import("http/pipeline.zig");
 pub const decompression = @import("http/decompression.zig");

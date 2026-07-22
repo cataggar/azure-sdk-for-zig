@@ -130,14 +130,14 @@ scripts/build-component.sh   # produces zig-out/bin/codegen-cli.composed.wasm
 #    tcgc-component/dist/stdlib-preopens.txt and constructs the right
 #    set of wasmtime --dir flags for the stdlib + user spec + output.
 cd ../../..
-#    `--package-name` is the snake_case Zig module id (also the orphan
-#    branch suffix); `--display-name` is the dash-cased human label used
-#    in README.md / doc comments. Both come from tspconfigs.yaml.
+#    `--package-name` is the canonical snake_case Zig module id;
+#    `--display-name` is the dash-cased human label used in README.md /
+#    doc comments. The spec and display name come from tspconfigs.yaml.
 codegen/cli/scripts/run.sh \
     ../azure-rest-api-specs/specification/keyvault/data-plane/Secrets \
     .tsp-generated/client/keyvault_secrets \
-    --package-name keyvault_secrets --display-name keyvault-secrets \
-    --azure-sdk-path ../../..
+    --package-name azure_rest_keyvault_secrets --display-name keyvault-secrets \
+    --azure-sdk-core-path ../../..
 ```
 
 ## How to resync a tracked package
@@ -151,7 +151,7 @@ file the emitter currently owns end-to-end.
 ```bash
 codegen/scripts/sync.sh                 # every existing rest/<pkg>/
 codegen/scripts/sync.sh arm_avs         # one package
-codegen/scripts/sync.sh --force arm_avs # also overwrite build.zig etc.
+codegen/scripts/sync.sh --force <pkg>   # overwrite operator-owned files when onboarding
 ```
 
 Default behaviour copies `src/models.zig` only and reports every

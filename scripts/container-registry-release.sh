@@ -79,6 +79,15 @@ validates the prospective commit but does not push it.
 EOF
 }
 
+require_core_pin() {
+  if [[ "$AZURE_SDK_CORE_READY" == "true" ]]; then
+    return
+  fi
+  printf '%s\n' \
+    'Container Registry release preparation is paused until the immutable azure_sdk_core pin is published.' >&2
+  return 1
+}
+
 reset_work() {
   rm -rf "$WORK_ROOT"
   mkdir -p "$WORK_ROOT"
@@ -202,19 +211,19 @@ if not dependencies:
     raise SystemExit(f"{path}: missing dependencies block")
 block = dependencies.group(1)
 names = set(re.findall(r"(?m)^\s{8}\.([A-Za-z0-9_]+)\s*=\s*\.\{\s*$", block))
-if names != {"azure_sdk", "serde"}:
+if names != {"azure_sdk_core", "serde"}:
     raise SystemExit(
-        f"{path}: expected azure_sdk and serde dependencies, got {sorted(names)}"
+        f"{path}: expected azure_sdk_core and serde dependencies, got {sorted(names)}"
     )
 if re.search(r"(?m)^\s*\.path\s*=", block):
     raise SystemExit(f"{path}: published REST package contains a path dependency")
 
 sdk = re.search(
-    r"(?ms)^\s{8}\.azure_sdk\s*=\s*\.\{(.*?)^\s{8}\},\s*$",
+    r"(?ms)^\s{8}\.azure_sdk_core\s*=\s*\.\{(.*?)^\s{8}\},\s*$",
     block,
 )
 if not sdk:
-    raise SystemExit(f"{path}: malformed azure_sdk dependency")
+    raise SystemExit(f"{path}: malformed azure_sdk_core dependency")
 sdk_block = sdk.group(1)
 url = re.search(r'(?m)^\s*\.url\s*=\s*"([^"]+)"\s*,\s*$', sdk_block)
 package_hash = re.search(
@@ -222,9 +231,9 @@ package_hash = re.search(
     sdk_block,
 )
 if not url or url.group(1) != expected_sdk_url:
-    raise SystemExit(f"{path}: azure_sdk URL/commit pin differs")
+    raise SystemExit(f"{path}: azure_sdk_core URL/commit pin differs")
 if not package_hash or package_hash.group(1) != expected_sdk_hash:
-    raise SystemExit(f"{path}: azure_sdk package hash differs")
+    raise SystemExit(f"{path}: azure_sdk_core package hash differs")
 PY
 }
 
@@ -286,15 +295,15 @@ import sys
 path = Path(sys.argv[1])
 mode, sdk_url, sdk_commit, sdk_hash, rest_commit, rest_hash = sys.argv[2:]
 text = path.read_text()
-sdk_old = '''        .azure_sdk = .{
+sdk_old = '''        .azure_sdk_core = .{
             .path = "../..",
         },'''
-sdk_new = f'''        .azure_sdk = .{{
+sdk_new = f'''        .azure_sdk_core = .{{
             .url = "{sdk_url}#{sdk_commit}",
             .hash = "{sdk_hash}",
         }},'''
 if text.count(sdk_old) != 1:
-    raise SystemExit(f"{path}: expected one local azure_sdk dependency")
+    raise SystemExit(f"{path}: expected one local azure_sdk_core dependency")
 text = text.replace(sdk_old, sdk_new)
 
 rest_old = '''        .azure_rest_container_registry = .{
@@ -335,8 +344,8 @@ generate_rest() {
       --global-cache-dir "$WORK_ROOT/global-cache" \
       generate-container-registry-package \
       -Dcontainer-registry-output="$output" \
-      -Dazure-core-commit="$AZURE_SDK_COMMIT" \
-      -Dazure-core-hash="$AZURE_SDK_HASH"
+      -Dazure-sdk-core-commit="$AZURE_SDK_COMMIT" \
+      -Dazure-sdk-core-hash="$AZURE_SDK_HASH"
   )
   if [[ "$REMOVE_CODEGEN_ZIG_PKG" == 1 ]]; then
     rm -rf "$ROOT/codegen/cli/zig-pkg"
@@ -653,7 +662,7 @@ write_fixture_package() {
   local sdk_hash="${4:-}"
   local fingerprint="0x1234567890abcdef"
   case "$package" in
-    azure_sdk) fingerprint="0x27c178e4bf582df6" ;;
+    azure_sdk_core) fingerprint="0x0fdf522a12345678" ;;
     azure_rest_container_registry) fingerprint="0x5dd0e10aa1e38a93" ;;
     wrong_rest_package) fingerprint="0xb618af810095b2e1" ;;
   esac
@@ -677,7 +686,7 @@ EOF
     .fingerprint = $fingerprint,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
-        .azure_sdk = .{
+        .azure_sdk_core = .{
             .url = "$sdk_url",
             .hash = "$sdk_hash",
         },
@@ -736,7 +745,7 @@ run_self_test() {
   git init --quiet "$source_repo"
   git -C "$source_repo" config user.name "Container Registry release test"
   git -C "$source_repo" config user.email "release-test@example.invalid"
-  write_fixture_package "$package_dir" azure_sdk
+  write_fixture_package "$package_dir" azure_sdk_core
   cp -R "$package_dir/." "$source_repo/"
   rm -rf "$package_dir"
   git -C "$source_repo" add --all
@@ -877,15 +886,18 @@ run_self_test() {
 command="${1:-}"
 case "$command" in
   hash-check)
+    require_core_pin
     reset_work
     check_hash "$AZURE_SDK_URL#$AZURE_SDK_COMMIT" "$AZURE_SDK_HASH"
     rm -rf "$WORK_ROOT"
-    printf 'verified immutable azure_sdk pin %s\n' "$AZURE_SDK_COMMIT"
+    printf 'verified immutable azure_sdk_core pin %s\n' "$AZURE_SDK_COMMIT"
     ;;
   verify|dry-run)
+    require_core_pin
     verify_local_stage
     ;;
   prepare-rest)
+    require_core_pin
     reset_work
     check_hash "$AZURE_SDK_URL#$AZURE_SDK_COMMIT" "$AZURE_SDK_HASH"
     output="$STAGE_ROOT/publish/rest"
@@ -899,6 +911,7 @@ case "$command" in
     printf 'Publish it with: %s publish-rest\n' "$SCRIPT"
     ;;
   prepare-sdk)
+    require_core_pin
     rest_commit="${2:-}"
     if [[ ! "$rest_commit" =~ ^[0-9a-f]{40}$ ]]; then
       printf 'prepare-sdk requires a full lowercase 40-character REST commit ID\n' >&2

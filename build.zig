@@ -21,7 +21,7 @@ pub fn build(b: *std.Build) void {
 
     // -- Modules (libraries exposed to consumers) --
 
-    const core_mod = b.addModule("azure_core", .{
+    const core_mod = b.addModule("azure_sdk_core", .{
         .root_source_file = b.path("sdk/core/root.zig"),
         .target = target,
         .imports = &.{
@@ -33,7 +33,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("rest/container_registry/src/root.zig"),
         .target = target,
         .imports = &.{
-            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_sdk_core", .module = core_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
@@ -42,7 +42,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("sdk/container_registry/src/root.zig"),
         .target = target,
         .imports = &.{
-            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_sdk_core", .module = core_mod },
             .{
                 .name = "azure_rest_container_registry",
                 .module = container_registry_protocol_mod,
@@ -50,158 +50,131 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    const storage_common_mod = b.addModule("azure_storage_common", .{
+    const storage_common_mod = b.addModule("azure_sdk_storage_common", .{
         .root_source_file = b.path("sdk/storage/common/root.zig"),
         .target = target,
         .imports = &.{
-            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_sdk_core", .module = core_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
 
-    const blobs_mod = b.addModule("azure_storage_blobs", .{
+    const blobs_mod = b.addModule("azure_sdk_storage_blobs", .{
         .root_source_file = b.path("sdk/storage/blobs/root.zig"),
         .target = target,
         .imports = &.{
-            .{ .name = "azure_core", .module = core_mod },
-            .{ .name = "azure_storage_common", .module = storage_common_mod },
+            .{ .name = "azure_sdk_core", .module = core_mod },
+            .{ .name = "azure_sdk_storage_common", .module = storage_common_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
 
-    _ = b.addModule("azure_keyvault_secrets", .{
-        .root_source_file = b.path("sdk/keyvault/secrets/root.zig"),
+    _ = b.addModule("azure_sdk_keyvault", .{
+        .root_source_file = b.path("sdk/keyvault/root.zig"),
         .target = target,
         .imports = &.{
-            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_sdk_core", .module = core_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
 
-    _ = b.addModule("azure_data_tables", .{
+    _ = b.addModule("azure_sdk_data_tables", .{
         .root_source_file = b.path("sdk/data/tables/root.zig"),
         .target = target,
         .imports = &.{
-            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_sdk_core", .module = core_mod },
         },
     });
 
-    _ = b.addModule("azure_data_cosmos", .{
+    _ = b.addModule("azure_sdk_data_cosmos", .{
         .root_source_file = b.path("sdk/data/cosmos/root.zig"),
         .target = target,
         .imports = &.{
-            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_sdk_core", .module = core_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
 
-    _ = b.addModule("azure_keyvault_keys", .{
-        .root_source_file = b.path("sdk/keyvault/keys/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "azure_core", .module = core_mod },
-            .{ .name = "serde", .module = serde_mod },
-        },
-    });
-
-    _ = b.addModule("azure_keyvault_certificates", .{
-        .root_source_file = b.path("sdk/keyvault/certificates/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "azure_core", .module = core_mod },
-            .{ .name = "serde", .module = serde_mod },
-        },
-    });
-
-    _ = b.addModule("azure_keyvault_admin", .{
-        .root_source_file = b.path("sdk/keyvault/administration/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "azure_core", .module = core_mod },
-            .{ .name = "serde", .module = serde_mod },
-        },
-    });
-
-    const queues_mod = b.addModule("azure_storage_queues", .{
+    const queues_mod = b.addModule("azure_sdk_storage_queues", .{
         .root_source_file = b.path("sdk/storage/queues/root.zig"),
         .target = target,
         .imports = &.{
-            .{ .name = "azure_core", .module = core_mod },
-            .{ .name = "azure_storage_common", .module = storage_common_mod },
+            .{ .name = "azure_sdk_core", .module = core_mod },
+            .{ .name = "azure_sdk_storage_common", .module = storage_common_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
 
-    _ = b.addModule("azure_storage_files_shares", .{
+    _ = b.addModule("azure_sdk_storage_files_shares", .{
         .root_source_file = b.path("sdk/storage/files/shares/root.zig"),
         .target = target,
         .imports = &.{
-            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_sdk_core", .module = core_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
 
-    _ = b.addModule("azure_storage_files_datalake", .{
+    _ = b.addModule("azure_sdk_storage_files_datalake", .{
         .root_source_file = b.path("sdk/storage/files/datalake/root.zig"),
         .target = target,
         .imports = &.{
-            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_sdk_core", .module = core_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
 
-    _ = b.addModule("azure_data_appconfiguration", .{
+    _ = b.addModule("azure_sdk_data_appconfiguration", .{
         .root_source_file = b.path("sdk/data/appconfiguration/root.zig"),
         .target = target,
         .imports = &.{
-            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_sdk_core", .module = core_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
 
-    _ = b.addModule("azure_attestation", .{
+    _ = b.addModule("azure_sdk_attestation", .{
         .root_source_file = b.path("sdk/attestation/root.zig"),
         .target = target,
         .imports = &.{
-            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_sdk_core", .module = core_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
 
-    const kusto_common_mod = b.addModule("azure_kusto_common", .{
+    const kusto_common_mod = b.addModule("azure_sdk_kusto_common", .{
         .root_source_file = b.path("sdk/kusto/common.zig"),
         .target = target,
         .imports = &.{
-            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_sdk_core", .module = core_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
 
-    const kusto_data_mod = b.addModule("azure_kusto_data", .{
+    const kusto_data_mod = b.addModule("azure_sdk_kusto_data", .{
         .root_source_file = b.path("sdk/kusto/data/root.zig"),
         .target = target,
         .imports = &.{
-            .{ .name = "azure_core", .module = core_mod },
-            .{ .name = "azure_kusto_common", .module = kusto_common_mod },
+            .{ .name = "azure_sdk_core", .module = core_mod },
+            .{ .name = "azure_sdk_kusto_common", .module = kusto_common_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
 
-    const kusto_ingest_mod = b.addModule("azure_kusto_ingest", .{
+    const kusto_ingest_mod = b.addModule("azure_sdk_kusto_ingest", .{
         .root_source_file = b.path("sdk/kusto/ingest/root.zig"),
         .target = target,
         .imports = &.{
-            .{ .name = "azure_core", .module = core_mod },
-            .{ .name = "azure_kusto_common", .module = kusto_common_mod },
-            .{ .name = "azure_kusto_data", .module = kusto_data_mod },
-            .{ .name = "azure_storage_blobs", .module = blobs_mod },
-            .{ .name = "azure_storage_common", .module = storage_common_mod },
-            .{ .name = "azure_storage_queues", .module = queues_mod },
+            .{ .name = "azure_sdk_core", .module = core_mod },
+            .{ .name = "azure_sdk_kusto_common", .module = kusto_common_mod },
+            .{ .name = "azure_sdk_kusto_data", .module = kusto_data_mod },
+            .{ .name = "azure_sdk_storage_blobs", .module = blobs_mod },
+            .{ .name = "azure_sdk_storage_common", .module = storage_common_mod },
+            .{ .name = "azure_sdk_storage_queues", .module = queues_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
 
-    _ = b.addModule("azure_core_amqp", .{
+    _ = b.addModule("azure_sdk_core_amqp", .{
         .root_source_file = b.path("sdk/core/amqp/root.zig"),
         .target = target,
         .imports = &.{
@@ -209,57 +182,48 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    const messaging_common_mod = b.addModule("azure_messaging_common", .{
+    const messaging_common_mod = b.addModule("azure_sdk_messaging_common", .{
         .root_source_file = b.path("sdk/messaging/common.zig"),
         .target = target,
     });
 
-    const eventhubs_mod = b.addModule("azure_messaging_eventhubs", .{
+    _ = b.addModule("azure_sdk_eventhubs", .{
         .root_source_file = b.path("sdk/messaging/eventhubs/root.zig"),
         .target = target,
         .imports = &.{
-            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_sdk_core", .module = core_mod },
             .{ .name = "uamqp", .module = uamqp_mod },
-            .{ .name = "azure_messaging_common", .module = messaging_common_mod },
-        },
-    });
-
-    _ = b.addModule("azure_messaging_eventhubs_checkpointstore_blob", .{
-        .root_source_file = b.path("sdk/messaging/eventhubs/checkpoint_store.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "azure_core", .module = core_mod },
-            .{ .name = "azure_storage_blobs", .module = blobs_mod },
-            .{ .name = "azure_messaging_eventhubs", .module = eventhubs_mod },
+            .{ .name = "azure_sdk_messaging_common", .module = messaging_common_mod },
+            .{ .name = "azure_sdk_storage_blobs", .module = blobs_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
 
-    _ = b.addModule("azure_messaging_servicebus", .{
+    _ = b.addModule("azure_sdk_servicebus", .{
         .root_source_file = b.path("sdk/messaging/servicebus/root.zig"),
         .target = target,
         .imports = &.{
-            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_sdk_core", .module = core_mod },
             .{ .name = "uamqp", .module = uamqp_mod },
-            .{ .name = "azure_messaging_common", .module = messaging_common_mod },
+            .{ .name = "azure_sdk_messaging_common", .module = messaging_common_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
 
-    _ = b.addModule("azure_core_tracing", .{
+    _ = b.addModule("azure_sdk_core_tracing", .{
         .root_source_file = b.path("sdk/core/tracing/root.zig"),
         .target = target,
     });
 
-    _ = b.addModule("azure_core_testing", .{
+    _ = b.addModule("azure_sdk_core_testing", .{
         .root_source_file = b.path("sdk/core/testing/root.zig"),
         .target = target,
         .imports = &.{
-            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_sdk_core", .module = core_mod },
         },
     });
 
-    _ = b.addModule("azure_core_perf", .{
+    _ = b.addModule("azure_sdk_core_perf", .{
         .root_source_file = b.path("sdk/core/perf/root.zig"),
         .target = target,
     });
@@ -285,25 +249,25 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "azure_core", .module = core_mod },
+                .{ .name = "azure_sdk_core", .module = core_mod },
                 .{ .name = "serde", .module = serde_mod },
             },
         }),
     });
     const run_storage_common_tests = b.addRunArtifact(storage_common_tests);
 
-    const kv_secrets_tests = b.addTest(.{
+    const keyvault_secrets_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("sdk/keyvault/secrets/root.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "azure_core", .module = core_mod },
+                .{ .name = "azure_sdk_core", .module = core_mod },
                 .{ .name = "serde", .module = serde_mod },
             },
         }),
     });
-    const run_kv_secrets_tests = b.addRunArtifact(kv_secrets_tests);
+    const run_keyvault_secrets_tests = b.addRunArtifact(keyvault_secrets_tests);
 
     const tables_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -311,7 +275,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "azure_core", .module = core_mod },
+                .{ .name = "azure_sdk_core", .module = core_mod },
             },
         }),
     });
@@ -320,7 +284,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_core_tests.step);
     test_step.dependOn(&run_storage_common_tests.step);
-    test_step.dependOn(&run_kv_secrets_tests.step);
+    test_step.dependOn(&run_keyvault_secrets_tests.step);
     test_step.dependOn(&run_tables_tests.step);
 
     const package_tool_tests = b.addTest(.{
@@ -419,7 +383,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "azure_core", .module = core_mod },
+                .{ .name = "azure_sdk_core", .module = core_mod },
                 .{ .name = "serde", .module = serde_mod },
             },
         }),
@@ -432,7 +396,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "azure_core", .module = core_mod },
+                .{ .name = "azure_sdk_core", .module = core_mod },
                 .{
                     .name = "azure_rest_container_registry",
                     .module = container_registry_protocol_mod,
@@ -444,6 +408,7 @@ pub fn build(b: *std.Build) void {
 
     // Service SDK tests — core + identity deps
     const service_test_sources_ci = [_][]const u8{
+        "sdk/keyvault/root.zig",
         "sdk/keyvault/keys/root.zig",
         "sdk/keyvault/certificates/root.zig",
         "sdk/keyvault/administration/root.zig",
@@ -462,8 +427,8 @@ pub fn build(b: *std.Build) void {
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
-                    .{ .name = "azure_core", .module = core_mod },
-                    .{ .name = "azure_storage_common", .module = storage_common_mod },
+                    .{ .name = "azure_sdk_core", .module = core_mod },
+                    .{ .name = "azure_sdk_storage_common", .module = storage_common_mod },
                     .{ .name = "serde", .module = serde_mod },
                 },
             }),
@@ -479,16 +444,18 @@ pub fn build(b: *std.Build) void {
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
-                    .{ .name = "azure_core", .module = core_mod },
+                    .{ .name = "azure_sdk_core", .module = core_mod },
                     .{ .name = "uamqp", .module = uamqp_mod },
-                    .{ .name = "azure_messaging_common", .module = messaging_common_mod },
+                    .{ .name = "azure_sdk_messaging_common", .module = messaging_common_mod },
+                    .{ .name = "azure_sdk_storage_blobs", .module = blobs_mod },
+                    .{ .name = "serde", .module = serde_mod },
                 },
             }),
         });
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
 
-    // EventHubs checkpoint store tests — needs core + identity + blobs + eventhubs
+    // EventHubs checkpoint store tests — needs core + blobs
     {
         const t = b.addTest(.{
             .root_module = b.createModule(.{
@@ -496,9 +463,8 @@ pub fn build(b: *std.Build) void {
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
-                    .{ .name = "azure_core", .module = core_mod },
-                    .{ .name = "azure_storage_blobs", .module = blobs_mod },
-                    .{ .name = "azure_messaging_eventhubs", .module = eventhubs_mod },
+                    .{ .name = "azure_sdk_core", .module = core_mod },
+                    .{ .name = "azure_sdk_storage_blobs", .module = blobs_mod },
                     .{ .name = "serde", .module = serde_mod },
                 },
             }),
@@ -526,9 +492,9 @@ pub fn build(b: *std.Build) void {
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
-                    .{ .name = "azure_core", .module = core_mod },
+                    .{ .name = "azure_sdk_core", .module = core_mod },
                     .{ .name = "uamqp", .module = uamqp_mod },
-                    .{ .name = "azure_messaging_common", .module = messaging_common_mod },
+                    .{ .name = "azure_sdk_messaging_common", .module = messaging_common_mod },
                     .{ .name = "serde", .module = serde_mod },
                 },
             }),
@@ -544,7 +510,7 @@ pub fn build(b: *std.Build) void {
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
-                    .{ .name = "azure_core", .module = core_mod },
+                    .{ .name = "azure_sdk_core", .module = core_mod },
                     .{ .name = "serde", .module = serde_mod },
                 },
             }),
@@ -560,7 +526,7 @@ pub fn build(b: *std.Build) void {
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
-                    .{ .name = "azure_core", .module = core_mod },
+                    .{ .name = "azure_sdk_core", .module = core_mod },
                     .{ .name = "serde", .module = serde_mod },
                 },
             }),
@@ -576,8 +542,8 @@ pub fn build(b: *std.Build) void {
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
-                    .{ .name = "azure_core", .module = core_mod },
-                    .{ .name = "azure_kusto_common", .module = kusto_common_mod },
+                    .{ .name = "azure_sdk_core", .module = core_mod },
+                    .{ .name = "azure_sdk_kusto_common", .module = kusto_common_mod },
                     .{ .name = "serde", .module = serde_mod },
                 },
             }),
@@ -593,12 +559,12 @@ pub fn build(b: *std.Build) void {
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
-                    .{ .name = "azure_core", .module = core_mod },
-                    .{ .name = "azure_kusto_common", .module = kusto_common_mod },
-                    .{ .name = "azure_kusto_data", .module = kusto_data_mod },
-                    .{ .name = "azure_storage_blobs", .module = blobs_mod },
-                    .{ .name = "azure_storage_common", .module = storage_common_mod },
-                    .{ .name = "azure_storage_queues", .module = queues_mod },
+                    .{ .name = "azure_sdk_core", .module = core_mod },
+                    .{ .name = "azure_sdk_kusto_common", .module = kusto_common_mod },
+                    .{ .name = "azure_sdk_kusto_data", .module = kusto_data_mod },
+                    .{ .name = "azure_sdk_storage_blobs", .module = blobs_mod },
+                    .{ .name = "azure_sdk_storage_common", .module = storage_common_mod },
+                    .{ .name = "azure_sdk_storage_queues", .module = queues_mod },
                     .{ .name = "serde", .module = serde_mod },
                 },
             }),
@@ -637,7 +603,7 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
 
-    // Testing framework tests — needs azure_core
+    // Testing framework tests — needs azure_sdk_core
     {
         const t = b.addTest(.{
             .root_module = b.createModule(.{
@@ -645,7 +611,7 @@ pub fn build(b: *std.Build) void {
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
-                    .{ .name = "azure_core", .module = core_mod },
+                    .{ .name = "azure_sdk_core", .module = core_mod },
                 },
             }),
         });
@@ -661,7 +627,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "azure_core", .module = core_mod },
+                .{ .name = "azure_sdk_core", .module = core_mod },
             },
         }),
     });
@@ -684,10 +650,10 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "azure_core", .module = core_mod },
-                .{ .name = "azure_kusto_common", .module = kusto_common_mod },
-                .{ .name = "azure_kusto_data", .module = kusto_data_mod },
-                .{ .name = "azure_kusto_ingest", .module = kusto_ingest_mod },
+                .{ .name = "azure_sdk_core", .module = core_mod },
+                .{ .name = "azure_sdk_kusto_common", .module = kusto_common_mod },
+                .{ .name = "azure_sdk_kusto_data", .module = kusto_data_mod },
+                .{ .name = "azure_sdk_kusto_ingest", .module = kusto_ingest_mod },
             },
         }),
     });
@@ -708,10 +674,10 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "azure_core", .module = core_mod },
-                .{ .name = "azure_kusto_common", .module = kusto_common_mod },
-                .{ .name = "azure_kusto_data", .module = kusto_data_mod },
-                .{ .name = "azure_kusto_ingest", .module = kusto_ingest_mod },
+                .{ .name = "azure_sdk_core", .module = core_mod },
+                .{ .name = "azure_sdk_kusto_common", .module = kusto_common_mod },
+                .{ .name = "azure_sdk_kusto_data", .module = kusto_data_mod },
+                .{ .name = "azure_sdk_kusto_ingest", .module = kusto_ingest_mod },
             },
         }),
     });
@@ -727,7 +693,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "azure_core", .module = core_mod },
+            .{ .name = "azure_sdk_core", .module = core_mod },
             .{
                 .name = "azure_sdk_container_registry",
                 .module = container_registry_sdk_mod,
@@ -767,7 +733,7 @@ pub fn build(b: *std.Build) void {
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
-                    .{ .name = "azure_core", .module = core_mod },
+                    .{ .name = "azure_sdk_core", .module = core_mod },
                     .{
                         .name = "azure_sdk_container_registry",
                         .module = container_registry_sdk_mod,
@@ -789,7 +755,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "azure_core", .module = core_mod },
+                .{ .name = "azure_sdk_core", .module = core_mod },
                 .{
                     .name = "azure_sdk_container_registry",
                     .module = container_registry_sdk_mod,
