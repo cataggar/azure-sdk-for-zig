@@ -4,6 +4,21 @@
     .fingerprint = 0x96c2d79909d9671,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
+        .azure_sdk_core_tracing = .{
+            .path = "sdk/core/tracing",
+        },
+        .azure_sdk_core_perf = .{
+            .path = "sdk/core/perf",
+        },
+        .azure_sdk_core_amqp = .{
+            .path = "sdk/core/amqp",
+        },
+        .azure_sdk_core = .{
+            .path = "sdk/core",
+        },
+        .azure_sdk_core_testing = .{
+            .path = "sdk/core/testing",
+        },
         .aggregate_export_fixture = .{
             .path = "eng/fixtures/aggregate_export",
         },

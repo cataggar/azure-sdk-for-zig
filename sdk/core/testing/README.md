@@ -8,4 +8,8 @@ transport support.
 - Initial version: `0.1.0`
 - Internal dependency: `azure_sdk_core`
 
-This module is currently built by the root workspace.
+Run its independent tests from this directory:
+
+```bash
+zig build test --summary all
+```

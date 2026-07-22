@@ -8,5 +8,8 @@ Tracing abstractions for the Azure SDK for Zig, including `Span`, `Tracer`, and
 - Initial version: `0.1.0`
 - Internal dependencies: none
 
-This module is currently built by the root workspace and will become an
-independent package before `azure_sdk_core`.
+Run its independent tests from this directory:
+
+```bash
+zig build test --summary all
+```

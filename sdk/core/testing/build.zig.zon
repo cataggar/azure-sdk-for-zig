@@ -1,0 +1,19 @@
+.{
+    .name = .azure_sdk_core_testing,
+    .version = "0.1.0",
+    .fingerprint = 0x217f045012345678,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .azure_sdk_core = .{
+            .path = "..",
+        },
+    },
+    .paths = .{
+        ".gitignore",
+        "build.zig",
+        "build.zig.zon",
+        "root.zig",
+        "README.md",
+        "LICENSE.txt",
+    },
+}

@@ -4,9 +4,7 @@ Core HTTP, authentication, error, paging, long-running-operation, URL, crypto,
 and utility infrastructure for the Azure SDK for Zig.
 
 The canonical package/module name is `azure_sdk_core`, released from
-`sdk/core`. During the migration this source is still composed by the root
-workspace; the canonical import rename and package-local build land in the
-next dependency-layer PRs.
+`sdk/core`. Identity remains part of this package.
 
 ## Core surface
 
@@ -51,19 +49,16 @@ Identity remains part of `azure_sdk_core` and is available through
 
 ## Related packages
 
-- [Tracing](tracing/README.md)
-- [Testing](testing/README.md)
-- [Performance](perf/README.md)
-- [AMQP](amqp/README.md)
+- [Tracing](https://github.com/cataggar/azure-sdk-for-zig/tree/main/sdk/core/tracing)
+- [Testing](https://github.com/cataggar/azure-sdk-for-zig/tree/main/sdk/core/testing)
+- [Performance](https://github.com/cataggar/azure-sdk-for-zig/tree/main/sdk/core/perf)
+- [AMQP](https://github.com/cataggar/azure-sdk-for-zig/tree/main/sdk/core/amqp)
 
 ## Development
-
-Until extraction completes, run Core tests through the workspace:
 
 ```bash
 zig build test --summary all
 ```
 
-The independent package will depend on `serde` and
-`azure_sdk_core_tracing`. See the
-[package model](../../doc/package-branch-model.md).
+The package depends on `serde` and `azure_sdk_core_tracing`. See the
+[package model](https://github.com/cataggar/azure-sdk-for-zig/blob/main/doc/package-branch-model.md).

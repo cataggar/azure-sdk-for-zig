@@ -7,6 +7,36 @@ pub fn build(b: *std.Build) void {
 
     // -- Dependencies --
 
+    const core_tracing_dep = b.dependency("azure_sdk_core_tracing", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const core_tracing_mod = core_tracing_dep.module("azure_sdk_core_tracing");
+
+    const core_perf_dep = b.dependency("azure_sdk_core_perf", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const core_perf_mod = core_perf_dep.module("azure_sdk_core_perf");
+
+    const core_amqp_dep = b.dependency("azure_sdk_core_amqp", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const core_amqp_mod = core_amqp_dep.module("azure_sdk_core_amqp");
+
+    const core_dep = b.dependency("azure_sdk_core", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const core_mod = core_dep.module("azure_sdk_core");
+
+    const core_testing_dep = b.dependency("azure_sdk_core_testing", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const core_testing_mod = core_testing_dep.module("azure_sdk_core_testing");
+
     const uamqp_dep = b.dependency("uamqp", .{});
     const uamqp_mod = b.createModule(.{
         .root_source_file = uamqp_dep.path("src/zig/uamqp.zig"),
@@ -21,13 +51,11 @@ pub fn build(b: *std.Build) void {
 
     // -- Modules (libraries exposed to consumers) --
 
-    const core_mod = b.addModule("azure_sdk_core", .{
-        .root_source_file = b.path("sdk/core/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "serde", .module = serde_mod },
-        },
-    });
+    exportDependencyModule(b, "azure_sdk_core_tracing", core_tracing_mod);
+    exportDependencyModule(b, "azure_sdk_core_perf", core_perf_mod);
+    exportDependencyModule(b, "azure_sdk_core_amqp", core_amqp_mod);
+    exportDependencyModule(b, "azure_sdk_core", core_mod);
+    exportDependencyModule(b, "azure_sdk_core_testing", core_testing_mod);
 
     const container_registry_protocol_mod = b.addModule("azure_rest_container_registry", .{
         .root_source_file = b.path("rest/container_registry/src/root.zig"),
@@ -174,14 +202,6 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    _ = b.addModule("azure_sdk_core_amqp", .{
-        .root_source_file = b.path("sdk/core/amqp/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "uamqp", .module = uamqp_mod },
-        },
-    });
-
     const messaging_common_mod = b.addModule("azure_sdk_messaging_common", .{
         .root_source_file = b.path("sdk/messaging/common.zig"),
         .target = target,
@@ -210,38 +230,7 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    _ = b.addModule("azure_sdk_core_tracing", .{
-        .root_source_file = b.path("sdk/core/tracing/root.zig"),
-        .target = target,
-    });
-
-    _ = b.addModule("azure_sdk_core_testing", .{
-        .root_source_file = b.path("sdk/core/testing/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "azure_sdk_core", .module = core_mod },
-        },
-    });
-
-    _ = b.addModule("azure_sdk_core_perf", .{
-        .root_source_file = b.path("sdk/core/perf/root.zig"),
-        .target = target,
-    });
-
     // -- Tests --
-
-    const core_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("sdk/core/root.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "serde", .module = serde_mod },
-            },
-        }),
-    });
-
-    const run_core_tests = b.addRunArtifact(core_tests);
 
     const storage_common_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -282,7 +271,6 @@ pub fn build(b: *std.Build) void {
     const run_tables_tests = b.addRunArtifact(tables_tests);
 
     const test_step = b.step("test", "Run all tests");
-    test_step.dependOn(&run_core_tests.step);
     test_step.dependOn(&run_storage_common_tests.step);
     test_step.dependOn(&run_keyvault_secrets_tests.step);
     test_step.dependOn(&run_tables_tests.step);
@@ -572,52 +560,6 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
 
-    // Core infrastructure tests — no deps
-    const core_infra_sources = [_][]const u8{
-        "sdk/core/tracing/root.zig",
-        "sdk/core/perf/root.zig",
-    };
-    for (core_infra_sources) |src| {
-        const t = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path(src),
-                .target = target,
-                .optimize = optimize,
-            }),
-        });
-        test_step.dependOn(&b.addRunArtifact(t).step);
-    }
-
-    // AMQP tests — needs uamqp dep
-    {
-        const t = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("sdk/core/amqp/root.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "uamqp", .module = uamqp_mod },
-                },
-            }),
-        });
-        test_step.dependOn(&b.addRunArtifact(t).step);
-    }
-
-    // Testing framework tests — needs azure_sdk_core
-    {
-        const t = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("sdk/core/testing/root.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "azure_sdk_core", .module = core_mod },
-                },
-            }),
-        });
-        test_step.dependOn(&b.addRunArtifact(t).step);
-    }
-
     // -- Example executable --
 
     const example = b.addExecutable(.{
@@ -802,4 +744,16 @@ pub fn build(b: *std.Build) void {
         "Fill in name/branch/zig_import by parsing each tspconfig.yaml",
     );
     tspconfigs_resolve_step.dependOn(&tspconfigs_resolve_run.step);
+}
+
+fn exportDependencyModule(
+    b: *std.Build,
+    name: []const u8,
+    module: *std.Build.Module,
+) void {
+    b.modules.put(
+        b.graph.arena,
+        b.dupe(name),
+        module,
+    ) catch @panic("OOM");
 }

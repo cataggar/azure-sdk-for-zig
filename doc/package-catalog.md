@@ -10,11 +10,11 @@ dependency order.
 
 | Package | Source documentation | Branch | State |
 | --- | --- | --- | --- |
-| `azure_sdk_core_tracing` | [Core Tracing](../sdk/core/tracing/README.md) | `sdk/core_tracing` | monolithic |
-| `azure_sdk_core_perf` | [Core Performance](../sdk/core/perf/README.md) | `sdk/core_perf` | monolithic |
-| `azure_sdk_core_amqp` | [Core AMQP](../sdk/core/amqp/README.md) | `sdk/core_amqp` | monolithic |
-| `azure_sdk_core` | [Core](../sdk/core/README.md) | `sdk/core` | monolithic |
-| `azure_sdk_core_testing` | [Core Testing](../sdk/core/testing/README.md) | `sdk/core_testing` | monolithic |
+| `azure_sdk_core_tracing` | [Core Tracing](../sdk/core/tracing/README.md) | `sdk/core_tracing` | package |
+| `azure_sdk_core_perf` | [Core Performance](../sdk/core/perf/README.md) | `sdk/core_perf` | package |
+| `azure_sdk_core_amqp` | [Core AMQP](../sdk/core/amqp/README.md) | `sdk/core_amqp` | package |
+| `azure_sdk_core` | [Core](../sdk/core/README.md) | `sdk/core` | package |
+| `azure_sdk_core_testing` | [Core Testing](../sdk/core/testing/README.md) | `sdk/core_testing` | package |
 | `azure_rest_arm_avs` | [ARM AVS REST](../rest/arm_avs/README.md) | `rest/arm_avs` | monolithic |
 | `azure_rest_keyvault_secrets` | [Key Vault Secrets REST](../rest/keyvault_secrets/README.md) | `rest/keyvault_secrets` | monolithic |
 | `azure_rest_container_registry` | [Container Registry REST](../rest/container_registry/README.md) | `rest/container_registry` | package |
