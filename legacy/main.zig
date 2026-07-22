@@ -3,10 +3,10 @@
 //! Run `zig build run-kusto-examples -- <scenario>` after configuring the
 //! environment variables printed by `usage`.
 const std = @import("std");
-const core = @import("azure_core");
-const common = @import("azure_kusto_common");
-const data = @import("azure_kusto_data");
-const ingest = @import("azure_kusto_ingest");
+const core = @import("azure_sdk_core");
+const common = @import("azure_sdk_kusto_common");
+const data = @import("azure_sdk_kusto_data");
+const ingest = @import("azure_sdk_kusto_ingest");
 
 const default_ingest_data =
     \\{"Message":"azure-sdk-for-zig live example"}

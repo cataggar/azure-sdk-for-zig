@@ -4,7 +4,7 @@
 //! environment is present. It is not part of the deterministic default suite.
 const std = @import("std");
 const examples = @import("main.zig");
-const ingest = @import("azure_kusto_ingest");
+const ingest = @import("azure_sdk_kusto_ingest");
 
 test "live Kusto query management and progressive examples" {
     const allocator = std.testing.allocator;
