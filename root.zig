@@ -1,12 +1,17 @@
 ///! Azure Event Hubs client — producer and consumer.
 ///!
-///! Built on top of azure-core-amqp.
+///! Built on top of azure-sdk-core-amqp.
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 const uamqp = @import("uamqp");
-const messaging_common = @import("azure_messaging_common");
+const messaging_common = @import("azure_sdk_messaging_common");
+const checkpoint = @import("checkpoint.zig");
 
 pub const ConnectionStringProperties = messaging_common.ConnectionStringProperties;
+pub const Checkpoint = checkpoint.Checkpoint;
+pub const PartitionOwnership = checkpoint.PartitionOwnership;
+pub const CheckpointStore = checkpoint.CheckpointStore;
+pub const checkpoint_store_blob = @import("checkpoint_store.zig");
 
 // ─────────────────────── Models ───────────────────────
 
@@ -122,27 +127,6 @@ pub const EventPosition = struct {
         }
         return error.InvalidEventPosition;
     }
-};
-
-/// Tracks consumer progress for a partition.
-pub const Checkpoint = struct {
-    fully_qualified_namespace: []const u8,
-    event_hub_name: []const u8,
-    consumer_group: []const u8,
-    partition_id: []const u8,
-    offset: ?i64 = null,
-    sequence_number: ?i64 = null,
-};
-
-/// Tracks partition ownership for load balancing.
-pub const PartitionOwnership = struct {
-    fully_qualified_namespace: []const u8,
-    event_hub_name: []const u8,
-    consumer_group: []const u8,
-    partition_id: []const u8,
-    owner_id: []const u8,
-    last_modified_time: ?i64 = null,
-    etag: ?[]const u8 = null,
 };
 
 // ─────────────────── AMQP Transport ──────────────────
@@ -471,30 +455,6 @@ pub const ConsumerClient = struct {
     }
 };
 
-/// Checkpoint store interface for distributed event processing.
-pub const CheckpointStore = struct {
-    claimOwnershipFn: *const fn (self: *CheckpointStore, allocator: std.mem.Allocator, ownership: []const PartitionOwnership) anyerror![]PartitionOwnership,
-    listOwnershipFn: *const fn (self: *CheckpointStore, allocator: std.mem.Allocator, fqns: []const u8, hub_name: []const u8, consumer_group: []const u8) anyerror![]PartitionOwnership,
-    updateCheckpointFn: *const fn (self: *CheckpointStore, allocator: std.mem.Allocator, checkpoint: Checkpoint) anyerror!void,
-    listCheckpointsFn: *const fn (self: *CheckpointStore, allocator: std.mem.Allocator, fqns: []const u8, hub_name: []const u8, consumer_group: []const u8) anyerror![]Checkpoint,
-
-    pub fn claimOwnership(self: *CheckpointStore, allocator: std.mem.Allocator, ownership: []const PartitionOwnership) ![]PartitionOwnership {
-        return self.claimOwnershipFn(self, allocator, ownership);
-    }
-
-    pub fn listOwnership(self: *CheckpointStore, allocator: std.mem.Allocator, fqns: []const u8, hub_name: []const u8, consumer_group: []const u8) ![]PartitionOwnership {
-        return self.listOwnershipFn(self, allocator, fqns, hub_name, consumer_group);
-    }
-
-    pub fn updateCheckpoint(self: *CheckpointStore, allocator: std.mem.Allocator, checkpoint: Checkpoint) !void {
-        return self.updateCheckpointFn(self, allocator, checkpoint);
-    }
-
-    pub fn listCheckpoints(self: *CheckpointStore, allocator: std.mem.Allocator, fqns: []const u8, hub_name: []const u8, consumer_group: []const u8) ![]Checkpoint {
-        return self.listCheckpointsFn(self, allocator, fqns, hub_name, consumer_group);
-    }
-};
-
 // ─────────────────────── Tests ───────────────────────
 
 test "EventData init" {
@@ -550,7 +510,7 @@ test "EventPosition fromEnqueuedTime" {
 
 test "ProducerClient createBatch" {
     const allocator = std.testing.allocator;
-    const cred_mod = @import("azure_core").identity.client_secret;
+    const cred_mod = @import("azure_sdk_core").identity.client_secret;
     var mock = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -568,7 +528,7 @@ test "ProducerClient createBatch" {
 
 test "ProducerClient sendBatch" {
     const allocator = std.testing.allocator;
-    const cred_mod = @import("azure_core").identity.client_secret;
+    const cred_mod = @import("azure_sdk_core").identity.client_secret;
     var mock_http = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -593,7 +553,7 @@ test "ProducerClient sendBatch" {
 
 test "ProducerClient sendBatch empty returns error" {
     const allocator = std.testing.allocator;
-    const cred_mod = @import("azure_core").identity.client_secret;
+    const cred_mod = @import("azure_sdk_core").identity.client_secret;
     var mock_http = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -614,7 +574,7 @@ test "ProducerClient sendBatch empty returns error" {
 
 test "ProducerClient getEventHubProperties" {
     const allocator = std.testing.allocator;
-    const cred_mod = @import("azure_core").identity.client_secret;
+    const cred_mod = @import("azure_sdk_core").identity.client_secret;
     var mock_http = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
@@ -634,7 +594,7 @@ test "ProducerClient getEventHubProperties" {
 
 test "ConsumerClient receiveEvents" {
     const allocator = std.testing.allocator;
-    const cred_mod = @import("azure_core").identity.client_secret;
+    const cred_mod = @import("azure_sdk_core").identity.client_secret;
     var mock_http = core.http.MockTransport.init(allocator, 200,
         \\{"access_token":"t","expires_in":3600}
     );
