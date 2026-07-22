@@ -5,8 +5,8 @@
 //! ingestion properties such as extent tags or inline mappings.
 const std = @import("std");
 const serde = @import("serde");
-const core = @import("azure_core");
-const kusto_common = @import("azure_kusto_common");
+const core = @import("azure_sdk_core");
+const kusto_common = @import("azure_sdk_kusto_common");
 
 pub const DataFormat = kusto_common.DataFormat;
 pub const ConnectionProperties = kusto_common.ConnectionProperties;

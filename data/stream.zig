@@ -1,7 +1,7 @@
 //! Pull-based, bounded-memory progressive Kusto query streaming.
 const std = @import("std");
-const core = @import("azure_core");
-const kusto_common = @import("azure_kusto_common");
+const core = @import("azure_sdk_core");
+const kusto_common = @import("azure_sdk_kusto_common");
 const result = @import("result.zig");
 
 /// Controls progressive response parsing. `deadline_ms` is a best-effort

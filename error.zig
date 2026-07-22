@@ -1,6 +1,6 @@
 const std = @import("std");
 const serde = @import("serde");
-const http = @import("azure_core").http;
+const http = @import("azure_sdk_core").http;
 
 /// Kusto operation that produced a service failure.
 pub const KustoOperation = enum {

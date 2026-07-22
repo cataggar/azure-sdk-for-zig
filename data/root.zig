@@ -3,9 +3,9 @@
 ///! Provides `KustoClient` for executing KQL queries via `/v2/rest/query`
 ///! and management commands via `/v1/rest/mgmt`.
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 const serde = @import("serde");
-const kusto_common = @import("azure_kusto_common");
+const kusto_common = @import("azure_sdk_kusto_common");
 pub const kql = @import("kql.zig");
 const result = @import("result.zig");
 const stream = @import("stream.zig");
