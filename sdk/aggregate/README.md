@@ -1,17 +1,25 @@
-# azure_sdk aggregate
+# Azure SDK aggregate package
 
-`azure_sdk` is the convenience aggregate over all independently versioned
-Azure SDK for Zig packages.
+Package `azure_sdk` provides one dependency that exports every canonical Azure
+SDK for Zig module. Consumers still import modules by their canonical names,
+for example:
 
-The aggregate is released from `sdk/aggregate`, starts at `0.1.0`, and exposes
-only canonical module names such as `azure_sdk_core` and
-`azure_sdk_storage_blobs`. It does not expose old module aliases.
+```zig
+const core = @import("azure_sdk_core");
+const blobs = @import("azure_sdk_storage_blobs");
+```
 
-Consumers should choose either:
+Choose either this aggregate package or direct dependencies on the individual
+packages an application uses. Do not combine aggregate and direct instances of
+the same package in one build, because that can create duplicate Zig source
+owners.
 
-- direct package dependencies for the smallest dependency graph; or
-- this aggregate for one dependency containing every canonical module.
+The aggregate intentionally exposes no legacy module names. See the
+[package catalog](https://github.com/cataggar/azure-sdk-for-zig/blob/main/doc/package-catalog.md)
+for the complete canonical module list.
 
-Do not mix direct and aggregate instances of the same package in one build.
-The aggregate package-local build is introduced after all implementation
-packages have been extracted.
+## Development
+
+```bash
+zig build test --summary all
+```

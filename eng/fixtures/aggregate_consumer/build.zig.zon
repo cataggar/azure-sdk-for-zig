@@ -1,0 +1,17 @@
+.{
+    .name = .aggregate_consumer_fixture,
+    .version = "0.0.0",
+    .fingerprint = 0x0f793e70e34e35f5,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .azure_sdk = .{
+            .path = "../../../sdk/aggregate",
+        },
+    },
+    .paths = .{
+        ".gitignore",
+        "build.zig",
+        "build.zig.zon",
+        "test",
+    },
+}

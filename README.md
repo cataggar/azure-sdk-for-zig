@@ -528,12 +528,16 @@ The SDK uses only the Zig standard library plus two small Zig packages:
 
 ## Using as a Dependency
 
-Add to your `build.zig.zon`:
+Use a released aggregate package from the `sdk/aggregate` branch. The
+repository root is the non-published integration workspace and does not export
+consumer modules.
+
+Add the aggregate release commit to your `build.zig.zon`:
 
 ```zon
 .dependencies = .{
     .azure_sdk = .{
-        .url = "git+https://github.com/cataggar/azure-sdk-for-zig#<commit>",
+        .url = "git+https://github.com/cataggar/azure-sdk-for-zig#<aggregate-release-commit>",
         .hash = "...",
     },
 },
@@ -542,9 +546,15 @@ Add to your `build.zig.zon`:
 Then in `build.zig`:
 
 ```zig
-const azure = b.dependency("azure_sdk", .{});
+const azure = b.dependency("azure_sdk", .{
+    .target = target,
+    .optimize = optimize,
+});
 exe.root_module.addImport("azure_sdk_core", azure.module("azure_sdk_core"));
-exe.root_module.addImport("azure_identity", azure.module("azure_identity"));
+exe.root_module.addImport(
+    "azure_sdk_kusto_data",
+    azure.module("azure_sdk_kusto_data"),
+);
 ```
 
 ## Background

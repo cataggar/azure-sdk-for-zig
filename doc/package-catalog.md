@@ -4,9 +4,9 @@
 canonical packages start at `0.1.0`; package-scoped release tags use
 `<package>/v<version>`.
 
-`package` means a package-local build exists today. `monolithic` means the
-module is still built from the integration workspace and will be extracted in
-dependency order.
+Every entry has a package-local build and can be versioned independently. The
+root `azure_sdk_workspace` package is integration-only and is not part of this
+release catalog.
 
 | Package | Source documentation | Branch | State |
 | --- | --- | --- | --- |
@@ -35,4 +35,4 @@ dependency order.
 | `azure_sdk_kusto_common` | [Kusto Common](../sdk/kusto/common/README.md) | `sdk/kusto_common` | package |
 | `azure_sdk_kusto_data` | [Kusto Data](../sdk/kusto/data/README.md) | `sdk/kusto_data` | package |
 | `azure_sdk_kusto_ingest` | [Kusto Ingest](../sdk/kusto/ingest/README.md) | `sdk/kusto_ingest` | package |
-| `azure_sdk` | [Aggregate](../sdk/aggregate/README.md) | `sdk/aggregate` | monolithic |
+| `azure_sdk` | [Aggregate](../sdk/aggregate/README.md) | `sdk/aggregate` | package |

@@ -1,0 +1,17 @@
+.{
+    .name = .direct_consumer_fixture,
+    .version = "0.0.0",
+    .fingerprint = 0x4b9baa28abcfb85d,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .azure_sdk_kusto_ingest = .{
+            .path = "../../../sdk/kusto/ingest",
+        },
+    },
+    .paths = .{
+        ".gitignore",
+        "build.zig",
+        "build.zig.zon",
+        "test",
+    },
+}
