@@ -1,0 +1,124 @@
+.{
+    .name = .azure_sdk,
+    .version = "0.1.0",
+    .fingerprint = 0x27c178e4deac8d1f,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .azure_sdk_core_tracing = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#b3ffebcddc9cfe2b0b09c16c06d90decb17143ac",
+            .hash = "azure_sdk_core_tracing-0.1.0-eFY0EgYxAAAZI0RyJjaO1xyymzdfvyxBaVn-jc_vUrx7",
+        },
+        .azure_sdk_core_perf = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#374831f07145f16e6b9c26c37e83f4c4bcc21d75",
+            .hash = "azure_sdk_core_perf-0.1.0-eFY0EvEWAACm-Z1CfY0ZDViD9L9JdTOzfq-IjCiTzLJq",
+        },
+        .azure_sdk_core_amqp = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#4864e9abb798bd9d8ec3fbfb6db0c718840411b6",
+            .hash = "azure_sdk_core_amqp-0.1.0-eFY0EvUYAACvLMxPXTRvRihztcyPdW9lAR2-0ieiFFNB",
+        },
+        .azure_sdk_core = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#5c37f2997b0a9dcc2db91f83baf0a492342621a2",
+            .hash = "azure_sdk_core-0.1.0-eFY0EtlTBQDltjWjN0xVytGGsv4kqwm1JP_PY18iWFb3",
+        },
+        .azure_sdk_core_testing = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#abc6b025b738b029564596777655f91d568f19cb",
+            .hash = "azure_sdk_core_testing-0.1.0-eFY0ElA-AADq9Zwj0pPJBxIO8l7Y3O7QO3xkKT7yeRa-",
+        },
+        .azure_rest_arm_avs = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#a541c4eb3a472caf050739b27d3fa5ecab4ba12e",
+            .hash = "azure_rest_arm_avs-0.1.0-JCvS8N8JBwB4fO6MqfXfCFCjkjOMuuZvcAAWx9LI_2Vx",
+        },
+        .azure_rest_keyvault_secrets = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#96759a0fc9df35ef8b7bbc0fe40d4ba520696290",
+            .hash = "azure_rest_keyvault_secrets-0.1.0-nKlz0DebAABjHwmJGFETijg_ZKP1qLXhZMmUuCUp4Ifu",
+        },
+        .azure_rest_container_registry = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#1d20fd6b51d2822f8ba69b1ef98399c3815b1a06",
+            .hash = "azure_rest_container_registry-0.1.0-k4rjoQrxAQA6F4uP72ZGQ9F_OjPJ6Gluqk1l6kPOXANM",
+        },
+        .azure_sdk_container_registry = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#efcd07089b7692c67bf4b6c6a6afd242addd8b5e",
+            .hash = "azure_sdk_container_registry-0.1.0-tZ2AbQulCABqZq0R1UClIv-_HXRKTo8f94caf20rqHBL",
+        },
+        .azure_sdk_storage_common = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#f631fceb7355cdeb4f2c0ad3ed503b44363d0a36",
+            .hash = "azure_sdk_storage_common-0.1.0-JzoreP9kAAAHmHB4xxMQDJ2Gc4wMxrevGjreIYUMiU9O",
+        },
+        .azure_sdk_storage_blobs = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#086e5564c78272f376a8fb12f7fd78c5783d2e3b",
+            .hash = "azure_sdk_storage_blobs-0.1.0-I5lGdskJAQDYj18B_4H8j8tiAzFxoAyDkPxXfP2w29XP",
+        },
+        .azure_sdk_storage_queues = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#da55495e6950bc89ff076ea20437df1760ba15e5",
+            .hash = "azure_sdk_storage_queues-0.1.0-LKTiC3dzAAApEaKSsE44z3l6J3DJhrJbrJtzYa24kHop",
+        },
+        .azure_sdk_storage_files_shares = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#e20713e837e238b1e53efe0c2991007d57560648",
+            .hash = "azure_sdk_storage_files_shares-0.1.0-MYUFjZg9AAByp2keqZYosWUIMqAJ5iiMplxXAfz2ohrH",
+        },
+        .azure_sdk_storage_files_datalake = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#756265bd4ee366d6410635b55cb27a44867794da",
+            .hash = "azure_sdk_storage_files_datalake-0.1.0-6rvQAWc4AACC-GdhnHDJUeqlde2JZ6-m8CrjH1EbdLWP",
+        },
+        .azure_sdk_keyvault = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#52c3fc22544d0e7d0dda3b131377becb81ef120d",
+            .hash = "azure_sdk_keyvault-0.1.0-Bc-x6VGeAQBk9aiMetxzWB7KCHuxiB_KUOyHJWj2Zw8f",
+        },
+        .azure_sdk_data_tables = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#e9d3e3fdb59b5ebbd11b54822302be4b435c93b7",
+            .hash = "azure_sdk_data_tables-0.1.0-1fB3dHgoAAA6sEEZO9Nl-d9YkDz70KmRL5G1hr98BCyt",
+        },
+        .azure_sdk_data_cosmos = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#762278c711929e75da0bd4f72dc31ca6a81f55db",
+            .hash = "azure_sdk_data_cosmos-0.1.0-RZneU5qaAAAGYGpokUUviZpj9Bu-ipRG_UDlVvexJnPi",
+        },
+        .azure_sdk_data_appconfiguration = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#1dd77b62073f6924d6c85f045c78f31c7829e666",
+            .hash = "azure_sdk_data_appconfiguration-0.1.0-AHB_67VCAABMCO43-Jmj2_q6mr0d5eNYY59983QU-UVg",
+        },
+        .azure_sdk_attestation = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#54241baae61ca254bb86b89ec2efff0c6d621d83",
+            .hash = "azure_sdk_attestation-0.1.0-dWmjYwAmAADKK-rsZL_3eFQnAvG4kwtxSfSJ1Y8lwB2E",
+        },
+        .azure_sdk_messaging_common = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#a7a3856654f14b71404d0bfcda120357011dc286",
+            .hash = "azure_sdk_messaging_common-0.1.0-YklmSnoYAACqhTFKLjL7ZX1jSngsgJRYKAhYkgx4J_RU",
+        },
+        .azure_sdk_eventhubs = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#34e73d95d0f66016e2a43a549ef2d1399f9ab710",
+            .hash = "azure_sdk_eventhubs-0.1.0-Qo1aEgW6AAC06FJ9r-V1gn1Hz9xeIPwdi04P373GQuuI",
+        },
+        .azure_sdk_servicebus = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#e22ab7d40593f3d139afad9c63723753a525a422",
+            .hash = "azure_sdk_servicebus-0.1.0-vWvfs0XKAAByG2kiz7nN9sHCUi1qfeqXp6pcqSlNFEJQ",
+        },
+        .azure_sdk_kusto_common = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#4481c1b13a7644b3736f3ab6ec075799b81dff5b",
+            .hash = "azure_sdk_kusto_common-0.1.0-FtL8oofpAQAJdNzSZTv5liw05HJ2FT5Jz7G1yIX6wsEU",
+        },
+        .azure_sdk_kusto_data = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#4accb1cbdc21095ff3ebb7374c5a0e369d9ace8f",
+            .hash = "azure_sdk_kusto_data-0.1.0-2p_GJ2J5BABz5E1bRen9RCkOuVjUcztMj_7vqt4l2E5J",
+        },
+        .azure_sdk_kusto_ingest = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#cd1c44c895cbd76235a91f99bab24825d99b17d3",
+            .hash = "azure_sdk_kusto_ingest-0.1.0-VpmKi5O_BQA41EOon5SZ0WaDjsuMniPoKM40QIxtzcmj",
+        },
+        .uamqp = .{
+            .url = "git+https://github.com/cataggar/azure-uamqp-zig#1121d1e68dde8d188516083555cc7e1553b0f595",
+            .hash = "uamqp-0.1.0-lXMcafDqAQD3LSUZbUbyfrWhQfGG7OevKFUwhWxvGZDU",
+        },
+        .serde = .{
+            .url = "git+https://github.com/cataggar/serde.zig#7012f58c7ddf490125852e1d22006b552a1693c7",
+            .hash = "serde-1.0.1-1DszT-e9DABp6u1PoDvGFzeGaST2hRp2KGtGn_CkIl0J",
+        },
+    },
+    .paths = .{
+        ".gitignore",
+        "build.zig",
+        "build.zig.zon",
+        "test",
+        "README.md",
+        "LICENSE.txt",
+    },
+}
