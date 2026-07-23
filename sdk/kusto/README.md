@@ -123,3 +123,15 @@ Behavior was compared with the
 and the
 [ingestion client reference](https://learn.microsoft.com/azure/data-explorer/kusto/api/netfx/kusto-ingest-client-reference).
 Zig remains stricter where replay or acceptance is ambiguous.
+
+## Development
+
+Each Kusto package builds independently from its package directory:
+
+```bash
+cd sdk/kusto/common && zig build test --summary all
+cd ../data && zig build test --summary all
+cd ../ingest && zig build test --summary all
+```
+
+Data and Ingest each provide package-owned `examples` and `live-test` steps.

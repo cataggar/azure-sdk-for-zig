@@ -32,7 +32,7 @@ dependency order.
 | `azure_sdk_messaging_common` | [Messaging Common](../sdk/messaging/common/README.md) | `sdk/messaging_common` | package |
 | `azure_sdk_eventhubs` | [Event Hubs](../sdk/messaging/eventhubs/README.md) | `sdk/eventhubs` | package |
 | `azure_sdk_servicebus` | [Service Bus](../sdk/messaging/servicebus/README.md) | `sdk/servicebus` | package |
-| `azure_sdk_kusto_common` | [Kusto Common](../sdk/kusto/common/README.md) | `sdk/kusto_common` | monolithic |
-| `azure_sdk_kusto_data` | [Kusto Data](../sdk/kusto/data/README.md) | `sdk/kusto_data` | monolithic |
-| `azure_sdk_kusto_ingest` | [Kusto Ingest](../sdk/kusto/ingest/README.md) | `sdk/kusto_ingest` | monolithic |
+| `azure_sdk_kusto_common` | [Kusto Common](../sdk/kusto/common/README.md) | `sdk/kusto_common` | package |
+| `azure_sdk_kusto_data` | [Kusto Data](../sdk/kusto/data/README.md) | `sdk/kusto_data` | package |
+| `azure_sdk_kusto_ingest` | [Kusto Ingest](../sdk/kusto/ingest/README.md) | `sdk/kusto_ingest` | package |
 | `azure_sdk` | [Aggregate](../sdk/aggregate/README.md) | `sdk/aggregate` | monolithic |

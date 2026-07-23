@@ -70,8 +70,6 @@ Requires [Zig 0.16.0](https://ziglang.org/download/) or later.
 zig build           # compile SDK + example
 zig build test      # run all tests
 zig build run       # run the example app
-zig build run-kusto-examples -- default-query
-zig build kusto-live-test     # skips unless Kusto is configured
 ```
 
 ## Architecture
@@ -190,34 +188,10 @@ Kusto datasets and non-null ingestion IDs are allocator-owned; call their `deini
 
 ### Executable Kusto examples and live tests
 
-`examples/kusto/main.zig` is one executable runner whose subcommands cover default-credential query, typed parameter query, management, progressive iteration, direct streaming ingestion, queued submission, managed routing/fallback policy, and status polling:
-
-```bash
-export KUSTO_CLUSTER_URL='https://<cluster>.<region>.kusto.windows.net'
-export KUSTO_DATABASE='<database>'
-
-zig build run-kusto-examples -- default-query
-zig build run-kusto-examples -- typed-query
-zig build run-kusto-examples -- management
-zig build run-kusto-examples -- progressive
-```
-
-Ingestion scenarios additionally require `KUSTO_TARGET_TABLE` and `KUSTO_TARGET_MAPPING`. The default NDJSON payload contains one `Message` string field; override it with `KUSTO_INGEST_DATA` when the mapping expects another shape. `KUSTO_STATUS_TIMEOUT_MS` optionally changes the two-minute polling budget.
-
-```bash
-export KUSTO_TARGET_TABLE='<table>'
-export KUSTO_TARGET_MAPPING='<json-ingestion-mapping>'
-
-zig build run-kusto-examples -- streaming
-zig build run-kusto-examples -- queued
-zig build run-kusto-examples -- managed
-zig build run-kusto-examples -- status
-zig build run-kusto-examples -- all
-```
-
-`zig build kusto-live-test` runs the same functions serially and returns successful Zig skips when the query or ingestion environment is absent. It is an explicit step and is not part of deterministic `zig build test`. `DefaultAzureCredential` still requires one usable environment, workload-identity, managed-identity, or Azure CLI source. The managed example deterministically selects Queue with a queued-only extent tag; safely forcing a real service to return the retryable direct rejection needed for live fallback is not possible, so that exact branch remains covered by mock protocol tests.
-
-The examples print only counts and enum outcomes. They do not print credentials, authorization headers, ingestion payloads, service-issued SAS URIs, or raw error bodies.
+Query examples and live tests now ship with
+[`azure_sdk_kusto_data`](sdk/kusto/data/examples/README.md). Ingestion and
+status examples ship with
+[`azure_sdk_kusto_ingest`](sdk/kusto/ingest/examples/README.md).
 
 ### Kusto authentication and connections
 

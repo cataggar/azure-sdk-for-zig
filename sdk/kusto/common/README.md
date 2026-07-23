@@ -8,6 +8,12 @@ and result types.
 - Internal dependency: `azure_sdk_core`
 - External dependency: `serde`
 
-The current file-rooted module moves from `sdk/kusto/common.zig` to this
-directory when the package is extracted. See the
-[Kusto overview](../README.md) for connection and authentication behavior.
+See the
+[Kusto overview](https://github.com/cataggar/azure-sdk-for-zig/tree/main/sdk/kusto)
+for connection and authentication behavior.
+
+## Development
+
+```bash
+zig build test --summary all
+```
