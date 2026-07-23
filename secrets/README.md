@@ -5,5 +5,5 @@ Handwritten Azure Key Vault Secrets client exposing `SecretClient` through
 
 The namespace is part of the versioned
 [`azure_sdk_keyvault`](../README.md) package and is distinct from the generated
-[`azure_rest_keyvault_secrets`](../../../rest/keyvault_secrets/README.md)
+[`azure_rest_keyvault_secrets`](https://github.com/cataggar/azure-sdk-for-zig/tree/main/rest/keyvault_secrets)
 package.

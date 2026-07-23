@@ -14,6 +14,12 @@ One independently versioned Key Vault package with four namespaces:
 - Initial version: `0.1.0`
 - Dependencies: `azure_sdk_core` and `serde`
 
-The handwritten Secrets package is separate from the generated
-[`azure_rest_keyvault_secrets`](../../rest/keyvault_secrets/README.md)
+The handwritten Secrets namespace is separate from the generated
+[`azure_rest_keyvault_secrets`](https://github.com/cataggar/azure-sdk-for-zig/tree/main/rest/keyvault_secrets)
 protocol package.
+
+## Development
+
+```bash
+zig build test --summary all
+```
