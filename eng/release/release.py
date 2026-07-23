@@ -1397,6 +1397,16 @@ class Engine:
                 str(worktree),
                 check=False,
             )
+        if worktree.exists():
+            safe_remove(worktree, self.release_root)
+        git(
+            self.root,
+            "worktree",
+            "prune",
+            "--expire",
+            "now",
+            check=False,
+        )
         if branch:
             git(self.root, "branch", "-D", branch, check=False)
         self._active_worktrees = [
