@@ -48,6 +48,8 @@ fn check(allocator: std.mem.Allocator, io: std.Io) !void {
     if (registry.all.len != 26) return error.UnexpectedPackageCount;
 
     const root_license = try readFile(allocator, io, "LICENSE.txt");
+    const root_readme = try readFile(allocator, io, "README.md");
+    try checkRootReadme(root_readme);
     const catalog = try readFile(allocator, io, "doc/package-catalog.md");
 
     for (registry.all) |entry| {
@@ -68,12 +70,53 @@ fn check(allocator: std.mem.Allocator, io: std.Io) !void {
         if (std.mem.indexOf(u8, catalog, entry.name) == null) {
             return error.PackageMissingFromCatalog;
         }
+        const root_index_link = try std.fmt.allocPrint(
+            allocator,
+            "[`{s}`]({s}/README.md)",
+            .{ entry.name, entry.source_path },
+        );
+        if (std.mem.indexOf(u8, root_readme, root_index_link) == null) {
+            return error.PackageMissingFromRootIndex;
+        }
 
         if (entry.state == .package) {
+            const build_path = try std.fs.path.join(
+                allocator,
+                &.{ entry.source_path, "build.zig" },
+            );
+            _ = try readFile(allocator, io, build_path);
+            const root_source_path = try std.fs.path.join(
+                allocator,
+                &.{ entry.source_path, entry.root_source_file },
+            );
+            _ = try readFile(allocator, io, root_source_path);
             try checkManifest(allocator, io, entry);
         }
     }
     std.debug.print("package registry: {d} packages valid\n", .{registry.all.len});
+}
+
+fn checkRootReadme(readme: []const u8) !void {
+    if (!std.mem.startsWith(u8, readme, "# Azure SDK for Zig\n")) {
+        return error.InvalidRootReadmeTitle;
+    }
+    const expected = [_][]const u8{
+        "## Packages",
+        "## Documentation",
+        "## License",
+    };
+    var heading_index: usize = 0;
+    var lines = std.mem.splitScalar(u8, readme, '\n');
+    while (lines.next()) |line| {
+        if (!std.mem.startsWith(u8, line, "## ")) continue;
+        if (heading_index >= expected.len or
+            !std.mem.eql(u8, line, expected[heading_index]))
+        {
+            return error.InvalidRootReadmeSection;
+        }
+        heading_index += 1;
+    }
+    if (heading_index != expected.len) return error.InvalidRootReadmeSection;
 }
 
 fn list(allocator: std.mem.Allocator, io: std.Io) !void {

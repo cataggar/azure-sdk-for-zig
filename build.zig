@@ -48,6 +48,7 @@ pub fn build(b: *std.Build) void {
     addPackageToolSteps(b, test_step);
     addExample(b, target, optimize, core_mod);
     addCodegenSteps(b);
+    addRepositoryValidationSteps(b);
 }
 
 fn addPackageTests(b: *std.Build) *std.Build.Step {
@@ -115,12 +116,17 @@ fn addPackageToolSteps(b: *std.Build, test_step: *std.Build.Step) void {
     package_check_run.addArg("check");
     package_check_run.setCwd(b.path("."));
     test_step.dependOn(&package_check_run.step);
+    const package_manifest_check = b.addSystemCommand(&.{
+        "python3",
+        "eng/check_package_manifests.py",
+    });
 
     const package_check_step = b.step(
         "package-check",
         "Validate package metadata, documentation, licenses, and manifests",
     );
     package_check_step.dependOn(&package_check_run.step);
+    package_check_step.dependOn(&package_manifest_check.step);
 
     const package_list_run = b.addRunArtifact(package_tool);
     package_list_run.addArg("list");
@@ -209,4 +215,37 @@ fn addCodegenSteps(b: *std.Build) void {
         "Fill in name/branch/zig_import by parsing each tspconfig.yaml",
     );
     tspconfigs_resolve_step.dependOn(&tspconfigs_resolve_run.step);
+}
+
+fn addRepositoryValidationSteps(b: *std.Build) void {
+    const docs_check = b.addSystemCommand(&.{
+        "python3",
+        "eng/check_doc_links.py",
+    });
+    const docs_check_step = b.step(
+        "docs-check",
+        "Validate relative links in tracked Markdown documentation",
+    );
+    docs_check_step.dependOn(&docs_check.step);
+
+    const release_self_test = b.addSystemCommand(&.{
+        "bash",
+        "scripts/package-release.sh",
+        "self-test",
+    });
+    const release_self_test_step = b.step(
+        "release-self-test",
+        "Run the offline generic package release regression suite",
+    );
+    release_self_test_step.dependOn(&release_self_test.step);
+
+    const regeneration_check = b.addSystemCommand(&.{
+        "bash",
+        "scripts/verify-container-registry-regeneration.sh",
+    });
+    const regeneration_check_step = b.step(
+        "regeneration-check",
+        "Verify deterministic Container Registry protocol regeneration",
+    );
+    regeneration_check_step.dependOn(&regeneration_check.step);
 }

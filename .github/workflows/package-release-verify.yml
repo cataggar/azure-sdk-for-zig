@@ -1,0 +1,58 @@
+name: Package release verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Canonical package name from eng/packages.zig
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-release-verify-${{ inputs.package }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      PACKAGE: ${{ inputs.package }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Validate hosted verification support
+        shell: bash
+        run: |
+          case "$PACKAGE" in
+            azure_rest_arm_avs|azure_rest_keyvault_secrets)
+              echo "::error::$PACKAGE requires the external TypeSpec repository and composed emitter; verify it locally."
+              exit 1
+              ;;
+          esac
+
+      - name: Configure release commit identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Validate package metadata
+        run: zig build package-check --summary all
+
+      - name: Verify release stage
+        run: scripts/package-release.sh verify "$PACKAGE"
+
+      - name: Prepare sealed release stage
+        run: scripts/package-release.sh prepare "$PACKAGE"
+
+      - name: Validate prospective publication
+        run: scripts/package-release.sh publish "$PACKAGE" --dry-run
