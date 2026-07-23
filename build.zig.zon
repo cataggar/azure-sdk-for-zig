@@ -1,0 +1,32 @@
+.{
+    .name = .azure_sdk_kusto_data,
+    .version = "0.1.0",
+    .fingerprint = 0xc82123bf27c69fda,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .azure_sdk_core = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#5c37f2997b0a9dcc2db91f83baf0a492342621a2",
+            .hash = "azure_sdk_core-0.1.0-eFY0EtlTBQDltjWjN0xVytGGsv4kqwm1JP_PY18iWFb3",
+        },
+        .azure_sdk_kusto_common = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#4481c1b13a7644b3736f3ab6ec075799b81dff5b",
+            .hash = "azure_sdk_kusto_common-0.1.0-FtL8oofpAQAJdNzSZTv5liw05HJ2FT5Jz7G1yIX6wsEU",
+        },
+        .serde = .{
+            .url = "git+https://github.com/cataggar/serde.zig#7012f58c7ddf490125852e1d22006b552a1693c7",
+            .hash = "serde-1.0.1-1DszT-e9DABp6u1PoDvGFzeGaST2hRp2KGtGn_CkIl0J",
+        },
+    },
+    .paths = .{
+        ".gitignore",
+        "build.zig",
+        "build.zig.zon",
+        "root.zig",
+        "kql.zig",
+        "result.zig",
+        "stream.zig",
+        "examples",
+        "README.md",
+        "LICENSE.txt",
+    },
+}
