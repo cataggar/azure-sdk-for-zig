@@ -43,9 +43,8 @@ zig build test --summary all
 ../../scripts/verify-container-registry-regeneration.sh
 ```
 
-Local development currently uses the repository-relative workspace dependency.
-The canonical package split changes the direct dependency to
-`azure_sdk_core`. Release staging replaces local paths with immutable
-commit/hash pins. See the
+Local development depends directly on the repository's
+`azure_sdk_core` package. Release staging replaces that local path with
+an immutable commit/hash pin. See the
 [package branch model](../../doc/package-branch-model.md) and
 [Container Registry release staging](../../eng/container_registry_release/README.md).
