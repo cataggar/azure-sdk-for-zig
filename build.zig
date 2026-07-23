@@ -169,6 +169,34 @@ pub fn build(b: *std.Build) void {
     attestation_mod.addImport("azure_sdk_core", core_mod);
     attestation_mod.addImport("serde", serde_mod);
 
+    const messaging_common_dep = b.dependency("azure_sdk_messaging_common", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const messaging_common_mod =
+        messaging_common_dep.module("azure_sdk_messaging_common");
+
+    const eventhubs_dep = b.dependency("azure_sdk_eventhubs", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const eventhubs_mod = eventhubs_dep.module("azure_sdk_eventhubs");
+    eventhubs_mod.addImport("azure_sdk_core", core_mod);
+    eventhubs_mod.addImport("azure_sdk_messaging_common", messaging_common_mod);
+    eventhubs_mod.addImport("azure_sdk_storage_blobs", blobs_mod);
+    eventhubs_mod.addImport("uamqp", uamqp_mod);
+    eventhubs_mod.addImport("serde", serde_mod);
+
+    const servicebus_dep = b.dependency("azure_sdk_servicebus", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const servicebus_mod = servicebus_dep.module("azure_sdk_servicebus");
+    servicebus_mod.addImport("azure_sdk_core", core_mod);
+    servicebus_mod.addImport("azure_sdk_messaging_common", messaging_common_mod);
+    servicebus_mod.addImport("uamqp", uamqp_mod);
+    servicebus_mod.addImport("serde", serde_mod);
+
     // -- Modules (libraries exposed to consumers) --
 
     exportDependencyModule(b, "azure_sdk_core_tracing", core_tracing_mod);
@@ -190,6 +218,9 @@ pub fn build(b: *std.Build) void {
     exportDependencyModule(b, "azure_sdk_data_cosmos", data_cosmos_mod);
     exportDependencyModule(b, "azure_sdk_data_appconfiguration", data_appconfiguration_mod);
     exportDependencyModule(b, "azure_sdk_attestation", attestation_mod);
+    exportDependencyModule(b, "azure_sdk_messaging_common", messaging_common_mod);
+    exportDependencyModule(b, "azure_sdk_eventhubs", eventhubs_mod);
+    exportDependencyModule(b, "azure_sdk_servicebus", servicebus_mod);
 
     const kusto_common_mod = b.addModule("azure_sdk_kusto_common", .{
         .root_source_file = b.path("sdk/kusto/common.zig"),
@@ -220,34 +251,6 @@ pub fn build(b: *std.Build) void {
             .{ .name = "azure_sdk_storage_blobs", .module = blobs_mod },
             .{ .name = "azure_sdk_storage_common", .module = storage_common_mod },
             .{ .name = "azure_sdk_storage_queues", .module = queues_mod },
-            .{ .name = "serde", .module = serde_mod },
-        },
-    });
-
-    const messaging_common_mod = b.addModule("azure_sdk_messaging_common", .{
-        .root_source_file = b.path("sdk/messaging/common.zig"),
-        .target = target,
-    });
-
-    _ = b.addModule("azure_sdk_eventhubs", .{
-        .root_source_file = b.path("sdk/messaging/eventhubs/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "azure_sdk_core", .module = core_mod },
-            .{ .name = "uamqp", .module = uamqp_mod },
-            .{ .name = "azure_sdk_messaging_common", .module = messaging_common_mod },
-            .{ .name = "azure_sdk_storage_blobs", .module = blobs_mod },
-            .{ .name = "serde", .module = serde_mod },
-        },
-    });
-
-    _ = b.addModule("azure_sdk_servicebus", .{
-        .root_source_file = b.path("sdk/messaging/servicebus/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "azure_sdk_core", .module = core_mod },
-            .{ .name = "uamqp", .module = uamqp_mod },
-            .{ .name = "azure_sdk_messaging_common", .module = messaging_common_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
@@ -358,72 +361,6 @@ pub fn build(b: *std.Build) void {
         });
         package_tests.setCwd(b.path(package.source_path));
         test_step.dependOn(&package_tests.step);
-    }
-
-    // EventHubs tests — needs core + identity + uamqp + messaging_common
-    {
-        const t = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("sdk/messaging/eventhubs/root.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "azure_sdk_core", .module = core_mod },
-                    .{ .name = "uamqp", .module = uamqp_mod },
-                    .{ .name = "azure_sdk_messaging_common", .module = messaging_common_mod },
-                    .{ .name = "azure_sdk_storage_blobs", .module = blobs_mod },
-                    .{ .name = "serde", .module = serde_mod },
-                },
-            }),
-        });
-        test_step.dependOn(&b.addRunArtifact(t).step);
-    }
-
-    // EventHubs checkpoint store tests — needs core + blobs
-    {
-        const t = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("sdk/messaging/eventhubs/checkpoint_store.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "azure_sdk_core", .module = core_mod },
-                    .{ .name = "azure_sdk_storage_blobs", .module = blobs_mod },
-                    .{ .name = "serde", .module = serde_mod },
-                },
-            }),
-        });
-        test_step.dependOn(&b.addRunArtifact(t).step);
-    }
-
-    // Messaging common tests — no deps
-    {
-        const t = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("sdk/messaging/common.zig"),
-                .target = target,
-                .optimize = optimize,
-            }),
-        });
-        test_step.dependOn(&b.addRunArtifact(t).step);
-    }
-
-    // Service Bus tests — needs core + identity + uamqp + messaging_common
-    {
-        const t = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("sdk/messaging/servicebus/root.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "azure_sdk_core", .module = core_mod },
-                    .{ .name = "uamqp", .module = uamqp_mod },
-                    .{ .name = "azure_sdk_messaging_common", .module = messaging_common_mod },
-                    .{ .name = "serde", .module = serde_mod },
-                },
-            }),
-        });
-        test_step.dependOn(&b.addRunArtifact(t).step);
     }
 
     // Kusto error tests — needs core + serde

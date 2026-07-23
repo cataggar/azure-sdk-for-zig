@@ -9,3 +9,9 @@ Azure Service Bus clients:
 Release branch: `sdk/servicebus`. The package depends on
 `azure_sdk_core`, `azure_sdk_messaging_common`, `uamqp`, and `serde` and starts
 at `0.1.0`.
+
+## Development
+
+```bash
+zig build test --summary all
+```

@@ -8,3 +8,13 @@
 
 Messaging packages start at `0.1.0` and are released in dependency order.
 Event Hubs and Service Bus use the pure Zig `uamqp` package.
+
+## Development
+
+Each Messaging package builds independently from its package directory:
+
+```bash
+cd sdk/messaging/common && zig build test --summary all
+cd ../eventhubs && zig build test --summary all
+cd ../servicebus && zig build test --summary all
+```
