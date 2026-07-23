@@ -230,7 +230,7 @@ for pkg in "${PKGS[@]}"; do
     if ! "$RUN_SH" "$spec_dir" "$out_tmp" \
         --package-name "$package_name" \
         --display-name "$display" \
-        --azure-sdk-core-path ../.. >"$TMPROOT/$pkg.log" 2>&1; then
+        --azure-sdk-core-path ../../sdk/core >"$TMPROOT/$pkg.log" 2>&1; then
         echo "  ERROR: emitter failed; see $TMPROOT/$pkg.log"
         tail -20 "$TMPROOT/$pkg.log" | sed 's/^/    /'
         EXIT_CODE=1

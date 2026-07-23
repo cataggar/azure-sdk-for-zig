@@ -37,9 +37,9 @@ pub const EmitOptions = struct {
     /// from the `js:` field in `codegen/tspconfigs.yaml`
     /// (e.g. `@azure/arm-avs` → `arm-avs`).
     display_name: ?[]const u8 = null,
-    /// Commit SHA of the `azure-sdk-for-zig` main branch that the
-    /// generated `build.zig.zon` should pin `azure_sdk_core` to. May be
-    /// null during local development; in that case the generated
+    /// Commit SHA of the independently published `azure_sdk_core` package
+    /// that the generated `build.zig.zon` should pin. May be null during
+    /// local development; in that case the generated
     /// build.zig.zon references `azure_sdk_core` by a local `path =` entry
     /// pointing relative to the worktree root.
     azure_sdk_core_commit: ?[]const u8 = null,
@@ -47,9 +47,9 @@ pub const EmitOptions = struct {
     /// commit is supplied so release output is complete and reproducible.
     azure_sdk_core_hash: ?[]const u8 = null,
     /// Local path used for the `azure_sdk_core` dependency when
-    /// `azure_sdk_core_commit` is null. Defaults to the sibling-worktree
-    /// layout used by orphan package development.
-    azure_sdk_core_path: []const u8 = "../azure-sdk-for-zig",
+    /// `azure_sdk_core_commit` is null. Defaults to a sibling Core package
+    /// worktree used by orphan package development.
+    azure_sdk_core_path: []const u8 = "../azure-sdk-core",
     /// Run the in-process formatter (`std.zig.Ast.parse` +
     /// `renderAlloc`) on every `.zig` and `.zon` file before writing
     /// it out. Set to `false` to skip — useful when debugging emitter
@@ -2114,7 +2114,7 @@ test "display_name surfaces in root.zig + README, not build.zig" {
         "0.1.0",
         null,
         null,
-        "../azure-sdk-for-zig",
+        "../azure-sdk-core",
     );
     defer alloc.free(zon);
     try testing.expect(std.mem.indexOf(u8, zon, ".name = .azure_rest_arm_avs") != null);
@@ -2139,7 +2139,7 @@ test "REST package metadata supports local and pinned azure_sdk_core dependencie
         "0.1.0",
         null,
         null,
-        "../..",
+        "../../sdk/core",
     );
     defer alloc.free(local_zon);
     try testing.expect(std.mem.indexOf(
@@ -2147,7 +2147,7 @@ test "REST package metadata supports local and pinned azure_sdk_core dependencie
         local_zon,
         ".name = .azure_rest_container_registry",
     ) != null);
-    try testing.expect(std.mem.indexOf(u8, local_zon, ".path = \"../..\"") != null);
+    try testing.expect(std.mem.indexOf(u8, local_zon, ".path = \"../../sdk/core\"") != null);
     try testing.expect(std.mem.indexOf(u8, local_zon, ".azure_sdk_core = .{") != null);
 
     const pinned_zon = try renderBuildZigZon(
@@ -2156,7 +2156,7 @@ test "REST package metadata supports local and pinned azure_sdk_core dependencie
         "0.1.0",
         "0123456789abcdef",
         "azure_sdk_core-0.1.0-example",
-        "../..",
+        "../../sdk/core",
     );
     defer alloc.free(pinned_zon);
     try testing.expect(std.mem.indexOf(
@@ -2178,7 +2178,7 @@ test "REST package metadata supports local and pinned azure_sdk_core dependencie
             "0.1.0",
             "0123456789abcdef",
             null,
-            "../..",
+            "../../sdk/core",
         ),
     );
 }

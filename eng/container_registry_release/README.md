@@ -7,8 +7,9 @@ core required by the REST and hand-written packages.
 
 The canonical import migration now requires the `azure_sdk_core` module, which
 that historical pin does not export. Release preparation is therefore paused
-until the Core package extraction replaces this metadata pin. The release
-self-test remains active and exercises the canonical dependency shape.
+until the independent `sdk/core` release branch is published and replaces this
+metadata pin. The release self-test remains active and exercises the canonical
+dependency shape.
 
 The release is intentionally two-stage:
 

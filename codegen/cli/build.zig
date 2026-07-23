@@ -100,7 +100,7 @@ pub fn build(b: *std.Build) void {
     const azure_sdk_core_commit = b.option(
         []const u8,
         "azure-sdk-core-commit",
-        "azure-sdk-for-zig commit for an independently consumable package",
+        "Commit for the independently published azure_sdk_core package",
     );
     const azure_sdk_core_hash = b.option(
         []const u8,
@@ -126,8 +126,8 @@ pub fn build(b: *std.Build) void {
             b.option(
                 []const u8,
                 "azure-sdk-core-path",
-                "Local azure_sdk dependency path in generated build.zig.zon",
-            ) orelse "../..",
+                "Local azure_sdk_core dependency path in generated build.zig.zon",
+            ) orelse "../../sdk/core",
         });
     }
     const generate_container_registry_step = b.step(

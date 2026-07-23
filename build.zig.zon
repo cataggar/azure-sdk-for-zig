@@ -19,6 +19,18 @@
         .azure_sdk_core_testing = .{
             .path = "sdk/core/testing",
         },
+        .azure_rest_arm_avs = .{
+            .path = "rest/arm_avs",
+        },
+        .azure_rest_keyvault_secrets = .{
+            .path = "rest/keyvault_secrets",
+        },
+        .azure_rest_container_registry = .{
+            .path = "rest/container_registry",
+        },
+        .azure_sdk_container_registry = .{
+            .path = "sdk/container_registry",
+        },
         .aggregate_export_fixture = .{
             .path = "eng/fixtures/aggregate_export",
         },

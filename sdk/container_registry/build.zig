@@ -15,6 +15,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const rest_mod = rest_dep.module("azure_rest_container_registry");
+    // The REST dependency also declares Core. Replace its module import with
+    // this package's direct Core dependency to avoid duplicate source owners.
+    rest_mod.addImport("azure_sdk_core", azure_sdk_core_mod);
 
     const sdk_mod = b.addModule("azure_sdk_container_registry", .{
         .root_source_file = b.path("src/root.zig"),
