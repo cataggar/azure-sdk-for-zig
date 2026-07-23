@@ -7,4 +7,8 @@ Shared Azure Storage authentication and SAS primitives:
 - complete service-issued SAS helpers
 
 Release branch: `sdk/storage_common`. The package depends on
-`azure_sdk_core` and `serde` and starts at `0.1.0`.
+`azure_sdk_core` and starts at `0.1.0`.
+
+```bash
+zig build test --summary all
+```
