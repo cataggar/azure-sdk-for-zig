@@ -723,8 +723,42 @@ fn validateEntry(allocator: std.mem.Allocator, entry: Package) !void {
         return error.PackageModuleMismatch;
     }
     try validatePath(entry.source_path);
+    try validatePath(entry.root_source_file);
     try validateIdentifier(entry.name);
     try validateBranch(entry.branch);
+    if (entry.test_command == null or entry.test_command.?.len == 0) {
+        return error.MissingTestCommand;
+    }
+    if (entry.publish_paths.len == 0) return error.MissingPublishPaths;
+    for (entry.publish_paths, 0..) |publish_path, index| {
+        try validatePath(publish_path);
+        for (entry.publish_paths[index + 1 ..]) |other| {
+            if (std.mem.eql(u8, publish_path, other)) {
+                return error.DuplicatePublishPath;
+            }
+        }
+    }
+    for ([_][]const u8{
+        "build.zig",
+        "build.zig.zon",
+        "README.md",
+        "LICENSE.txt",
+    }) |required_path| {
+        if (!contains(entry.publish_paths, required_path)) {
+            return error.MissingRequiredPublishPath;
+        }
+    }
+    for (entry.legacy_names, 0..) |legacy_name, index| {
+        try validateIdentifier(legacy_name);
+        if (std.mem.eql(u8, legacy_name, entry.name)) {
+            return error.InvalidLegacyName;
+        }
+        for (entry.legacy_names[index + 1 ..]) |other| {
+            if (std.mem.eql(u8, legacy_name, other)) {
+                return error.DuplicateLegacyName;
+            }
+        }
+    }
 
     const version = std.SemanticVersion.parse(entry.version) catch {
         return error.InvalidVersion;
@@ -804,4 +838,11 @@ fn validateBranch(branch: []const u8) !void {
     {
         return error.InvalidBranch;
     }
+}
+
+fn contains(values: []const []const u8, wanted: []const u8) bool {
+    for (values) |value| {
+        if (std.mem.eql(u8, value, wanted)) return true;
+    }
+    return false;
 }

@@ -192,10 +192,9 @@ A REST release does not require an SDK release unless its API or behavior
 changes what the SDK consumes. An SDK release always pins the exact REST
 revision used during testing.
 
-Container Registry's current two-stage commands and regression tests are
-documented in
+Container Registry's REST-before-SDK sequence is documented in
 [`eng/container_registry_release/README.md`](../eng/container_registry_release/README.md).
-The generic release contract is documented in
+All packages use the generic release contract documented in
 [`doc/releasing-packages.md`](releasing-packages.md).
 
 ## Versioning

@@ -91,6 +91,26 @@ test "registry rejects invalid derived identities and versions" {
     );
 }
 
+test "registry requires release metadata" {
+    var missing_test = testPackage("sdk/a", "azure_sdk_a", "sdk/a", &.{});
+    missing_test.test_command = null;
+    try std.testing.expectError(
+        error.MissingTestCommand,
+        registry.validate(std.testing.allocator, (&[_]registry.Package{missing_test})[0..]),
+    );
+
+    var missing_readme = testPackage("sdk/a", "azure_sdk_a", "sdk/a", &.{});
+    missing_readme.publish_paths = &.{
+        "build.zig",
+        "build.zig.zon",
+        "LICENSE.txt",
+    };
+    try std.testing.expectError(
+        error.MissingRequiredPublishPath,
+        registry.validate(std.testing.allocator, (&[_]registry.Package{missing_readme})[0..]),
+    );
+}
+
 fn testPackage(
     source_path: []const u8,
     name: []const u8,
@@ -105,6 +125,12 @@ fn testPackage(
         .module_name = name,
         .branch = branch,
         .dependencies = dependencies,
+        .publish_paths = &.{
+            "build.zig",
+            "build.zig.zon",
+            "README.md",
+            "LICENSE.txt",
+        },
     };
 }
 

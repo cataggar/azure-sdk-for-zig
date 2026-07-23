@@ -15,8 +15,9 @@ zig fmt sdk/ rest/ examples/ codegen/ eng/ build.zig
 zig fmt --check sdk/ rest/ examples/ codegen/ eng/ build.zig
 ```
 
-The root package is the non-published `azure_sdk_workspace`. During the package
-migration it continues to compose all modules and run the complete test suite.
+The root package is the non-published `azure_sdk_workspace`. It orchestrates
+the registry-ordered package suite and consumes public modules through the
+`azure_sdk` aggregate package.
 
 ## Package metadata
 
@@ -30,17 +31,20 @@ zig build package-list
 zig build package-graph
 zig build package-ci-matrix
 zig build package-sync
+zig build docs-check
+zig build regeneration-check
+zig build release-self-test
 ```
 
-`package-check` validates the catalog, package documentation, license copies,
-and manifests for packages already extracted from the workspace.
+`package-check` validates the catalog, root package index, package build and
+test metadata, documentation, license copies, and manifests.
 `package-sync` synchronizes package license copies and the name/version fields
 of independently buildable local manifests.
 
 ## Package-local development
 
-Packages marked `package` by `zig build package-list` can be tested from their
-own directory:
+Every package listed by `zig build package-list` can be tested from its own
+directory:
 
 ```bash
 cd rest/container_registry

@@ -1,45 +1,30 @@
-# Container Registry release staging
+# Container Registry package releases
 
-`metadata.sh` records the immutable common SDK commit and Zig package hash used
-by both independently published ACR packages. The commit is
-`origin/main` immediately after PR #100, which contains the complete shared
-core required by the REST and hand-written packages.
+Container Registry now uses the registry-driven release engine. Release the
+generated REST package before the handwritten SDK package:
 
-The canonical import migration now requires the `azure_sdk_core` module, which
-that historical pin does not export. Release preparation is therefore paused
-until the independent `sdk/core` release branch is published and replaces this
-metadata pin. The release self-test remains active and exercises the canonical
-dependency shape.
+```bash
+scripts/package-release.sh verify azure_rest_container_registry
+scripts/package-release.sh prepare azure_rest_container_registry
+scripts/package-release.sh publish azure_rest_container_registry --dry-run
+scripts/package-release.sh publish azure_rest_container_registry
 
-The release is intentionally two-stage:
+scripts/package-release.sh verify azure_sdk_container_registry
+scripts/package-release.sh prepare azure_sdk_container_registry
+scripts/package-release.sh publish azure_sdk_container_registry --dry-run
+scripts/package-release.sh publish azure_sdk_container_registry
+```
 
-1. `scripts/container-registry-release.sh prepare-rest` regenerates
-   `.release/container_registry/publish/rest` with the common SDK pin and tests
-   a disposable copy independently.
-2. `scripts/container-registry-release.sh publish-rest --dry-run` validates the
-   prospective commit; rerun without `--dry-run` to publish it to
-   `rest/container_registry`.
-3. `scripts/container-registry-release.sh prepare-sdk <rest-commit>` fetches
-   the current remote REST branch tip, requires exact commit equality, validates
-   the archived package root/name/dependencies, computes its Zig package hash,
-   writes both immutable pins into `.release/container_registry/publish/sdk`,
-   and tests a disposable copy, examples, and unconfigured live-test skip.
-4. Use `publish-sdk --dry-run`, then `publish-sdk`, for
-   `sdk/container_registry`.
+The SDK preparation resolves the current `rest/container_registry` branch tip,
+computes its Zig package hash, and rewrites the local REST and Core dependencies
+to immutable Git commit/hash pins. Inspect
+`.release/packages/azure_sdk_container_registry/stage-manifest.json` before
+publication.
 
-Staging copies only tracked files explicitly declared by each package's
-`build.zig.zon`; generation and tests use external disposable caches. Stage
-validation rejects undeclared files, `.zig-cache`, `zig-pkg`, `zig-out`, and
-other publication artifacts. Publication is fail-fast and trap-cleaned:
-missing branches get one initial orphan commit, while existing branches get
-normal descendant commits and fast-forward pushes. Force-push is never used;
-forced removal is limited to trap cleanup of the disposable worktree.
+`scripts/container-registry-release.sh` remains as a compatibility wrapper for
+the old `prepare-rest`, `prepare-sdk`, `publish-rest`, and `publish-sdk`
+commands. Fixed Container Registry pin metadata is obsolete; all identities,
+paths, commands, and direct dependencies come from `eng/packages.zig`.
 
-No REST hash is guessed before the REST release commit exists. `verify` (also
-available as `dry-run`) mirrors both package roots without creating remote refs.
-`self-test` exercises invalid main/mismatched REST commits plus initial and
-subsequent publication dry-runs against an isolated local bare remote.
-
-See the [package branch model](../../doc/package-branch-model.md) for the
-generic policy and [package release workflow](../../doc/releasing-packages.md)
-for the target registry-driven release process.
+See [Releasing packages](../../doc/releasing-packages.md) for stage sealing,
+validation, version, remote, and cleanup behavior.

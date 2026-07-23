@@ -18,7 +18,10 @@ ownership, examples, and compatibility guidance lives beside the package under
 
 - [Core and Identity](../sdk/core/README.md)
 - [Storage](../sdk/storage/README.md)
+- [Container Registry](../sdk/container_registry/README.md)
 - [Key Vault](../sdk/keyvault/README.md)
 - [Data](../sdk/data/README.md)
+- [Attestation](../sdk/attestation/README.md)
 - [Messaging](../sdk/messaging/README.md)
 - [Kusto](../sdk/kusto/README.md)
+- [Aggregate package](../sdk/aggregate/README.md)
