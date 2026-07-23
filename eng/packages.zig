@@ -611,12 +611,22 @@ pub const all = [_]Package{
     },
     .{
         .kind = .aggregate,
+        .state = .package,
         .source_path = "sdk/aggregate",
-        .root_source_file = "src/root.zig",
+        .root_source_file = "test/all_modules.zig",
         .name = "azure_sdk",
         .module_name = "azure_sdk",
         .branch = "sdk/aggregate",
         .dependencies = all_implementation_packages,
+        .external_dependencies = &.{ "uamqp", "serde" },
+        .publish_paths = &.{
+            ".gitignore",
+            "build.zig",
+            "build.zig.zon",
+            "test",
+            "README.md",
+            "LICENSE.txt",
+        },
     },
 };
 

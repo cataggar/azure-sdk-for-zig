@@ -5,274 +5,95 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // -- Dependencies --
-
-    const core_tracing_dep = b.dependency("azure_sdk_core_tracing", .{
+    const aggregate = b.dependency("azure_sdk", .{
         .target = target,
         .optimize = optimize,
     });
-    const core_tracing_mod = core_tracing_dep.module("azure_sdk_core_tracing");
+    const core_mod = aggregate.module("azure_sdk_core");
 
-    const core_perf_dep = b.dependency("azure_sdk_core_perf", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const core_perf_mod = core_perf_dep.module("azure_sdk_core_perf");
-
-    const core_amqp_dep = b.dependency("azure_sdk_core_amqp", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const core_amqp_mod = core_amqp_dep.module("azure_sdk_core_amqp");
-
-    const core_dep = b.dependency("azure_sdk_core", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const core_mod = core_dep.module("azure_sdk_core");
-
-    const core_testing_dep = b.dependency("azure_sdk_core_testing", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const core_testing_mod = core_testing_dep.module("azure_sdk_core_testing");
-
-    const uamqp_dep = b.dependency("uamqp", .{});
-    const uamqp_mod = b.createModule(.{
-        .root_source_file = uamqp_dep.path("src/zig/uamqp.zig"),
-        .target = target,
-    });
-
-    const serde_dep = b.dependency("serde", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const serde_mod = serde_dep.module("serde");
-
-    const arm_avs_dep = b.dependency("azure_rest_arm_avs", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const arm_avs_mod = arm_avs_dep.module("azure_rest_arm_avs");
-    arm_avs_mod.addImport("azure_sdk_core", core_mod);
-    arm_avs_mod.addImport("serde", serde_mod);
-
-    const keyvault_secrets_dep = b.dependency("azure_rest_keyvault_secrets", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const keyvault_secrets_mod = keyvault_secrets_dep.module("azure_rest_keyvault_secrets");
-    keyvault_secrets_mod.addImport("azure_sdk_core", core_mod);
-    keyvault_secrets_mod.addImport("serde", serde_mod);
-
-    const container_registry_protocol_dep = b.dependency("azure_rest_container_registry", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const container_registry_protocol_mod =
-        container_registry_protocol_dep.module("azure_rest_container_registry");
-    container_registry_protocol_mod.addImport("azure_sdk_core", core_mod);
-    container_registry_protocol_mod.addImport("serde", serde_mod);
-
-    const container_registry_sdk_dep = b.dependency("azure_sdk_container_registry", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const container_registry_sdk_mod =
-        container_registry_sdk_dep.module("azure_sdk_container_registry");
-    // Keep the SDK and generated protocol package on the workspace-owned
-    // Core module so the dependency diamond has one source owner.
-    container_registry_sdk_mod.addImport("azure_sdk_core", core_mod);
-    container_registry_sdk_mod.addImport(
-        "azure_rest_container_registry",
-        container_registry_protocol_mod,
+    const test_step = b.step("test", "Run all package and workspace tests");
+    const package_test_tail = addPackageTests(b);
+    const direct_consumer = addFixtureTest(
+        b,
+        "eng/fixtures/direct_package_consumer",
+        package_test_tail,
+    );
+    const aggregate_consumer = addFixtureTest(
+        b,
+        "eng/fixtures/aggregate_consumer",
+        &direct_consumer.step,
     );
 
-    const storage_common_dep = b.dependency("azure_sdk_storage_common", .{
+    const aggregate_export_fixture = b.dependency("aggregate_export_fixture", .{
         .target = target,
         .optimize = optimize,
     });
-    const storage_common_mod = storage_common_dep.module("azure_sdk_storage_common");
-    storage_common_mod.addImport("azure_sdk_core", core_mod);
-
-    const storage_blobs_dep = b.dependency("azure_sdk_storage_blobs", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const blobs_mod = storage_blobs_dep.module("azure_sdk_storage_blobs");
-    blobs_mod.addImport("azure_sdk_core", core_mod);
-    blobs_mod.addImport("azure_sdk_storage_common", storage_common_mod);
-    blobs_mod.addImport("serde", serde_mod);
-
-    const storage_queues_dep = b.dependency("azure_sdk_storage_queues", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const queues_mod = storage_queues_dep.module("azure_sdk_storage_queues");
-    queues_mod.addImport("azure_sdk_core", core_mod);
-    queues_mod.addImport("azure_sdk_storage_common", storage_common_mod);
-    queues_mod.addImport("serde", serde_mod);
-
-    const storage_files_shares_dep = b.dependency("azure_sdk_storage_files_shares", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const storage_files_shares_mod =
-        storage_files_shares_dep.module("azure_sdk_storage_files_shares");
-    storage_files_shares_mod.addImport("azure_sdk_core", core_mod);
-
-    const storage_files_datalake_dep = b.dependency("azure_sdk_storage_files_datalake", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const storage_files_datalake_mod =
-        storage_files_datalake_dep.module("azure_sdk_storage_files_datalake");
-    storage_files_datalake_mod.addImport("azure_sdk_core", core_mod);
-
-    const keyvault_dep = b.dependency("azure_sdk_keyvault", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const keyvault_mod = keyvault_dep.module("azure_sdk_keyvault");
-    keyvault_mod.addImport("azure_sdk_core", core_mod);
-    keyvault_mod.addImport("serde", serde_mod);
-
-    const data_tables_dep = b.dependency("azure_sdk_data_tables", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const data_tables_mod = data_tables_dep.module("azure_sdk_data_tables");
-    data_tables_mod.addImport("azure_sdk_core", core_mod);
-
-    const data_cosmos_dep = b.dependency("azure_sdk_data_cosmos", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const data_cosmos_mod = data_cosmos_dep.module("azure_sdk_data_cosmos");
-    data_cosmos_mod.addImport("azure_sdk_core", core_mod);
-    data_cosmos_mod.addImport("serde", serde_mod);
-
-    const data_appconfiguration_dep = b.dependency("azure_sdk_data_appconfiguration", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const data_appconfiguration_mod =
-        data_appconfiguration_dep.module("azure_sdk_data_appconfiguration");
-    data_appconfiguration_mod.addImport("azure_sdk_core", core_mod);
-    data_appconfiguration_mod.addImport("serde", serde_mod);
-
-    const attestation_dep = b.dependency("azure_sdk_attestation", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const attestation_mod = attestation_dep.module("azure_sdk_attestation");
-    attestation_mod.addImport("azure_sdk_core", core_mod);
-    attestation_mod.addImport("serde", serde_mod);
-
-    const messaging_common_dep = b.dependency("azure_sdk_messaging_common", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const messaging_common_mod =
-        messaging_common_dep.module("azure_sdk_messaging_common");
-
-    const eventhubs_dep = b.dependency("azure_sdk_eventhubs", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const eventhubs_mod = eventhubs_dep.module("azure_sdk_eventhubs");
-    eventhubs_mod.addImport("azure_sdk_core", core_mod);
-    eventhubs_mod.addImport("azure_sdk_messaging_common", messaging_common_mod);
-    eventhubs_mod.addImport("azure_sdk_storage_blobs", blobs_mod);
-    eventhubs_mod.addImport("uamqp", uamqp_mod);
-    eventhubs_mod.addImport("serde", serde_mod);
-
-    const servicebus_dep = b.dependency("azure_sdk_servicebus", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const servicebus_mod = servicebus_dep.module("azure_sdk_servicebus");
-    servicebus_mod.addImport("azure_sdk_core", core_mod);
-    servicebus_mod.addImport("azure_sdk_messaging_common", messaging_common_mod);
-    servicebus_mod.addImport("uamqp", uamqp_mod);
-    servicebus_mod.addImport("serde", serde_mod);
-
-    const kusto_common_dep = b.dependency("azure_sdk_kusto_common", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const kusto_common_mod = kusto_common_dep.module("azure_sdk_kusto_common");
-    kusto_common_mod.addImport("azure_sdk_core", core_mod);
-    kusto_common_mod.addImport("serde", serde_mod);
-
-    const kusto_data_dep = b.dependency("azure_sdk_kusto_data", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const kusto_data_mod = kusto_data_dep.module("azure_sdk_kusto_data");
-    kusto_data_mod.addImport("azure_sdk_core", core_mod);
-    kusto_data_mod.addImport("azure_sdk_kusto_common", kusto_common_mod);
-    kusto_data_mod.addImport("serde", serde_mod);
-
-    const kusto_ingest_dep = b.dependency("azure_sdk_kusto_ingest", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const kusto_ingest_mod = kusto_ingest_dep.module("azure_sdk_kusto_ingest");
-    kusto_ingest_mod.addImport("azure_sdk_core", core_mod);
-    kusto_ingest_mod.addImport("azure_sdk_kusto_common", kusto_common_mod);
-    kusto_ingest_mod.addImport("azure_sdk_kusto_data", kusto_data_mod);
-    kusto_ingest_mod.addImport("azure_sdk_storage_common", storage_common_mod);
-    kusto_ingest_mod.addImport("azure_sdk_storage_blobs", blobs_mod);
-    kusto_ingest_mod.addImport("azure_sdk_storage_queues", queues_mod);
-    kusto_ingest_mod.addImport("serde", serde_mod);
-
-    // -- Modules (libraries exposed to consumers) --
-
-    exportDependencyModule(b, "azure_sdk_core_tracing", core_tracing_mod);
-    exportDependencyModule(b, "azure_sdk_core_perf", core_perf_mod);
-    exportDependencyModule(b, "azure_sdk_core_amqp", core_amqp_mod);
-    exportDependencyModule(b, "azure_sdk_core", core_mod);
-    exportDependencyModule(b, "azure_sdk_core_testing", core_testing_mod);
-    exportDependencyModule(b, "azure_rest_arm_avs", arm_avs_mod);
-    exportDependencyModule(b, "azure_rest_keyvault_secrets", keyvault_secrets_mod);
-    exportDependencyModule(b, "azure_rest_container_registry", container_registry_protocol_mod);
-    exportDependencyModule(b, "azure_sdk_container_registry", container_registry_sdk_mod);
-    exportDependencyModule(b, "azure_sdk_storage_common", storage_common_mod);
-    exportDependencyModule(b, "azure_sdk_storage_blobs", blobs_mod);
-    exportDependencyModule(b, "azure_sdk_storage_queues", queues_mod);
-    exportDependencyModule(b, "azure_sdk_storage_files_shares", storage_files_shares_mod);
-    exportDependencyModule(b, "azure_sdk_storage_files_datalake", storage_files_datalake_mod);
-    exportDependencyModule(b, "azure_sdk_keyvault", keyvault_mod);
-    exportDependencyModule(b, "azure_sdk_data_tables", data_tables_mod);
-    exportDependencyModule(b, "azure_sdk_data_cosmos", data_cosmos_mod);
-    exportDependencyModule(b, "azure_sdk_data_appconfiguration", data_appconfiguration_mod);
-    exportDependencyModule(b, "azure_sdk_attestation", attestation_mod);
-    exportDependencyModule(b, "azure_sdk_messaging_common", messaging_common_mod);
-    exportDependencyModule(b, "azure_sdk_eventhubs", eventhubs_mod);
-    exportDependencyModule(b, "azure_sdk_servicebus", servicebus_mod);
-    exportDependencyModule(b, "azure_sdk_kusto_common", kusto_common_mod);
-    exportDependencyModule(b, "azure_sdk_kusto_data", kusto_data_mod);
-    exportDependencyModule(b, "azure_sdk_kusto_ingest", kusto_ingest_mod);
-
-    // -- Tests --
-
-    const storage_common_tests = b.addTest(.{
+    const aggregate_export_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("sdk/storage/common/root.zig"),
+            .root_source_file = b.path("eng/fixtures/aggregate_export_consumer.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "azure_sdk_core", .module = core_mod },
-                .{ .name = "serde", .module = serde_mod },
+                .{
+                    .name = "fixture_module",
+                    .module = aggregate_export_fixture.module("fixture_module"),
+                },
             },
         }),
     });
-    const run_storage_common_tests = b.addRunArtifact(storage_common_tests);
+    const run_aggregate_export_tests = b.addRunArtifact(aggregate_export_tests);
+    run_aggregate_export_tests.step.dependOn(&aggregate_consumer.step);
+    test_step.dependOn(&run_aggregate_export_tests.step);
 
-    const test_step = b.step("test", "Run all tests");
-    test_step.dependOn(&run_storage_common_tests.step);
+    addPackageToolSteps(b, test_step);
+    addExample(b, target, optimize, core_mod);
+    addCodegenSteps(b);
+}
 
+fn addPackageTests(b: *std.Build) *std.Build.Step {
+    const order = package_registry.topologicalOrder(
+        b.allocator,
+        &package_registry.all,
+    ) catch @panic("invalid package registry");
+    defer b.allocator.free(order);
+
+    var previous: ?*std.Build.Step = null;
+    for (order) |index| {
+        const package = package_registry.all[index];
+        if (package.state != .package or package.test_command == null) continue;
+
+        const package_tests = b.addSystemCommand(&.{
+            b.graph.zig_exe,
+            "build",
+            "test",
+            "--summary",
+            "all",
+        });
+        package_tests.setCwd(b.path(package.source_path));
+        if (previous) |step| package_tests.step.dependOn(step);
+        previous = &package_tests.step;
+    }
+    return previous orelse @panic("package registry has no tests");
+}
+
+fn addFixtureTest(
+    b: *std.Build,
+    path: []const u8,
+    dependency: *std.Build.Step,
+) *std.Build.Step.Run {
+    const fixture_tests = b.addSystemCommand(&.{
+        b.graph.zig_exe,
+        "build",
+        "test",
+        "--summary",
+        "all",
+    });
+    fixture_tests.setCwd(b.path(path));
+    fixture_tests.step.dependOn(dependency);
+    return fixture_tests;
+}
+
+fn addPackageToolSteps(b: *std.Build, test_step: *std.Build.Step) void {
     const package_tool_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("eng/package_tool_test.zig"),
@@ -294,6 +115,7 @@ pub fn build(b: *std.Build) void {
     package_check_run.addArg("check");
     package_check_run.setCwd(b.path("."));
     test_step.dependOn(&package_check_run.step);
+
     const package_check_step = b.step(
         "package-check",
         "Validate package metadata, documentation, licenses, and manifests",
@@ -330,41 +152,14 @@ pub fn build(b: *std.Build) void {
         "Synchronize package licenses and local manifest identities",
     );
     package_sync_step.dependOn(&package_sync_run.step);
+}
 
-    const aggregate_export_fixture = b.dependency("aggregate_export_fixture", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const aggregate_export_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("eng/fixtures/aggregate_export_consumer.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{
-                    .name = "fixture_module",
-                    .module = aggregate_export_fixture.module("fixture_module"),
-                },
-            },
-        }),
-    });
-    test_step.dependOn(&b.addRunArtifact(aggregate_export_tests).step);
-
-    for (package_registry.all) |package| {
-        if (package.state != .package) continue;
-        const package_tests = b.addSystemCommand(&.{
-            b.graph.zig_exe,
-            "build",
-            "test",
-            "--summary",
-            "all",
-        });
-        package_tests.setCwd(b.path(package.source_path));
-        test_step.dependOn(&package_tests.step);
-    }
-
-    // -- Example executable --
-
+fn addExample(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    core_mod: *std.Build.Module,
+) void {
     const example = b.addExecutable(.{
         .name = "azure_example",
         .root_module = b.createModule(.{
@@ -376,104 +171,16 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-
     b.installArtifact(example);
 
     const run_example = b.addRunArtifact(example);
     run_example.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        run_example.addArgs(args);
-    }
-
+    if (b.args) |args| run_example.addArgs(args);
     const run_step = b.step("run", "Run the example");
     run_step.dependOn(&run_example.step);
+}
 
-    const acr_example_support_mod = b.createModule(.{
-        .root_source_file = b.path("sdk/container_registry/examples/support.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "azure_sdk_core", .module = core_mod },
-            .{
-                .name = "azure_sdk_container_registry",
-                .module = container_registry_sdk_mod,
-            },
-        },
-    });
-    const acr_examples_step = b.step(
-        "container-registry-examples",
-        "Compile all Container Registry examples",
-    );
-    const acr_example_sources = [_]struct {
-        name: []const u8,
-        source: []const u8,
-    }{
-        .{
-            .name = "acr-list-repositories-tags",
-            .source = "sdk/container_registry/examples/list_repositories_tags.zig",
-        },
-        .{
-            .name = "acr-anonymous-read",
-            .source = "sdk/container_registry/examples/anonymous_read.zig",
-        },
-        .{
-            .name = "acr-oci-push-pull",
-            .source = "sdk/container_registry/examples/oci_push_pull.zig",
-        },
-        .{
-            .name = "acr-delete-artifact",
-            .source = "sdk/container_registry/examples/delete_artifact.zig",
-        },
-    };
-    for (acr_example_sources) |acr_example| {
-        const executable = b.addExecutable(.{
-            .name = acr_example.name,
-            .root_module = b.createModule(.{
-                .root_source_file = b.path(acr_example.source),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "azure_sdk_core", .module = core_mod },
-                    .{
-                        .name = "azure_sdk_container_registry",
-                        .module = container_registry_sdk_mod,
-                    },
-                    .{
-                        .name = "acr_example_support",
-                        .module = acr_example_support_mod,
-                    },
-                },
-            }),
-        });
-        acr_examples_step.dependOn(&executable.step);
-        test_step.dependOn(&executable.step);
-    }
-
-    const acr_live_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("sdk/container_registry/live_tests/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "azure_sdk_core", .module = core_mod },
-                .{
-                    .name = "azure_sdk_container_registry",
-                    .module = container_registry_sdk_mod,
-                },
-            },
-        }),
-    });
-    const acr_live_test_step = b.step(
-        "container-registry-live-test",
-        "Run destructive opt-in Container Registry live tests; unconfigured tests skip",
-    );
-    acr_live_test_step.dependOn(&b.addRunArtifact(acr_live_tests).step);
-
-    // -- tspconfigs tool --
-    //
-    // Builds and exposes two steps that manage `codegen/tspconfigs.yaml`:
-    //   * tspconfigs-update  — reconcile entries against ../azure-rest-api-specs
-    //   * tspconfigs-resolve — fill in name/branch/zig_import from each tspconfig.yaml
+fn addCodegenSteps(b: *std.Build) void {
     const tspconfigs_exe = b.addExecutable(.{
         .name = "tspconfigs",
         .root_module = b.createModule(.{
@@ -502,16 +209,4 @@ pub fn build(b: *std.Build) void {
         "Fill in name/branch/zig_import by parsing each tspconfig.yaml",
     );
     tspconfigs_resolve_step.dependOn(&tspconfigs_resolve_run.step);
-}
-
-fn exportDependencyModule(
-    b: *std.Build,
-    name: []const u8,
-    module: *std.Build.Module,
-) void {
-    b.modules.put(
-        b.graph.arena,
-        b.dupe(name),
-        module,
-    ) catch @panic("OOM");
 }

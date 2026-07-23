@@ -1,0 +1,99 @@
+.{
+    .name = .azure_sdk,
+    .version = "0.1.0",
+    .fingerprint = 0x27c178e4deac8d1f,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .azure_sdk_core_tracing = .{
+            .path = "../../sdk/core/tracing",
+        },
+        .azure_sdk_core_perf = .{
+            .path = "../../sdk/core/perf",
+        },
+        .azure_sdk_core_amqp = .{
+            .path = "../../sdk/core/amqp",
+        },
+        .azure_sdk_core = .{
+            .path = "../../sdk/core",
+        },
+        .azure_sdk_core_testing = .{
+            .path = "../../sdk/core/testing",
+        },
+        .azure_rest_arm_avs = .{
+            .path = "../../rest/arm_avs",
+        },
+        .azure_rest_keyvault_secrets = .{
+            .path = "../../rest/keyvault_secrets",
+        },
+        .azure_rest_container_registry = .{
+            .path = "../../rest/container_registry",
+        },
+        .azure_sdk_container_registry = .{
+            .path = "../../sdk/container_registry",
+        },
+        .azure_sdk_storage_common = .{
+            .path = "../../sdk/storage/common",
+        },
+        .azure_sdk_storage_blobs = .{
+            .path = "../../sdk/storage/blobs",
+        },
+        .azure_sdk_storage_queues = .{
+            .path = "../../sdk/storage/queues",
+        },
+        .azure_sdk_storage_files_shares = .{
+            .path = "../../sdk/storage/files/shares",
+        },
+        .azure_sdk_storage_files_datalake = .{
+            .path = "../../sdk/storage/files/datalake",
+        },
+        .azure_sdk_keyvault = .{
+            .path = "../../sdk/keyvault",
+        },
+        .azure_sdk_data_tables = .{
+            .path = "../../sdk/data/tables",
+        },
+        .azure_sdk_data_cosmos = .{
+            .path = "../../sdk/data/cosmos",
+        },
+        .azure_sdk_data_appconfiguration = .{
+            .path = "../../sdk/data/appconfiguration",
+        },
+        .azure_sdk_attestation = .{
+            .path = "../../sdk/attestation",
+        },
+        .azure_sdk_messaging_common = .{
+            .path = "../../sdk/messaging/common",
+        },
+        .azure_sdk_eventhubs = .{
+            .path = "../../sdk/messaging/eventhubs",
+        },
+        .azure_sdk_servicebus = .{
+            .path = "../../sdk/messaging/servicebus",
+        },
+        .azure_sdk_kusto_common = .{
+            .path = "../../sdk/kusto/common",
+        },
+        .azure_sdk_kusto_data = .{
+            .path = "../../sdk/kusto/data",
+        },
+        .azure_sdk_kusto_ingest = .{
+            .path = "../../sdk/kusto/ingest",
+        },
+        .uamqp = .{
+            .url = "git+https://github.com/cataggar/azure-uamqp-zig#1121d1e68dde8d188516083555cc7e1553b0f595",
+            .hash = "uamqp-0.1.0-lXMcafDqAQD3LSUZbUbyfrWhQfGG7OevKFUwhWxvGZDU",
+        },
+        .serde = .{
+            .url = "git+https://github.com/cataggar/serde.zig#7012f58c7ddf490125852e1d22006b552a1693c7",
+            .hash = "serde-1.0.1-1DszT-e9DABp6u1PoDvGFzeGaST2hRp2KGtGn_CkIl0J",
+        },
+    },
+    .paths = .{
+        ".gitignore",
+        "build.zig",
+        "build.zig.zon",
+        "test",
+        "README.md",
+        "LICENSE.txt",
+    },
+}

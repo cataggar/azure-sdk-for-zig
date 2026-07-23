@@ -4,6 +4,9 @@ const registry = @import("packages.zig");
 test "registry contains a valid twenty-six-package dependency graph" {
     try std.testing.expectEqual(@as(usize, 26), registry.all.len);
     try registry.validate(std.testing.allocator, &registry.all);
+    for (registry.all) |entry| {
+        try std.testing.expectEqual(registry.MigrationState.package, entry.state);
+    }
 }
 
 test "topological order places dependencies before dependents" {
