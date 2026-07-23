@@ -1,0 +1,32 @@
+.{
+    .name = .azure_sdk_servicebus,
+    .version = "0.1.0",
+    .fingerprint = 0xe97d9ecab3df6bbd,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .azure_sdk_core = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#5c37f2997b0a9dcc2db91f83baf0a492342621a2",
+            .hash = "azure_sdk_core-0.1.0-eFY0EtlTBQDltjWjN0xVytGGsv4kqwm1JP_PY18iWFb3",
+        },
+        .azure_sdk_messaging_common = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#a7a3856654f14b71404d0bfcda120357011dc286",
+            .hash = "azure_sdk_messaging_common-0.1.0-YklmSnoYAACqhTFKLjL7ZX1jSngsgJRYKAhYkgx4J_RU",
+        },
+        .uamqp = .{
+            .url = "git+https://github.com/cataggar/azure-uamqp-zig#1121d1e68dde8d188516083555cc7e1553b0f595",
+            .hash = "uamqp-0.1.0-lXMcafDqAQD3LSUZbUbyfrWhQfGG7OevKFUwhWxvGZDU",
+        },
+        .serde = .{
+            .url = "git+https://github.com/cataggar/serde.zig#7012f58c7ddf490125852e1d22006b552a1693c7",
+            .hash = "serde-1.0.1-1DszT-e9DABp6u1PoDvGFzeGaST2hRp2KGtGn_CkIl0J",
+        },
+    },
+    .paths = .{
+        ".gitignore",
+        "build.zig",
+        "build.zig.zon",
+        "root.zig",
+        "README.md",
+        "LICENSE.txt",
+    },
+}
