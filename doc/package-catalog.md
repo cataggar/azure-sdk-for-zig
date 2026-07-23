@@ -15,8 +15,8 @@ dependency order.
 | `azure_sdk_core_amqp` | [Core AMQP](../sdk/core/amqp/README.md) | `sdk/core_amqp` | package |
 | `azure_sdk_core` | [Core](../sdk/core/README.md) | `sdk/core` | package |
 | `azure_sdk_core_testing` | [Core Testing](../sdk/core/testing/README.md) | `sdk/core_testing` | package |
-| `azure_rest_arm_avs` | [ARM AVS REST](../rest/arm_avs/README.md) | `rest/arm_avs` | monolithic |
-| `azure_rest_keyvault_secrets` | [Key Vault Secrets REST](../rest/keyvault_secrets/README.md) | `rest/keyvault_secrets` | monolithic |
+| `azure_rest_arm_avs` | [ARM AVS REST](../rest/arm_avs/README.md) | `rest/arm_avs` | package |
+| `azure_rest_keyvault_secrets` | [Key Vault Secrets REST](../rest/keyvault_secrets/README.md) | `rest/keyvault_secrets` | package |
 | `azure_rest_container_registry` | [Container Registry REST](../rest/container_registry/README.md) | `rest/container_registry` | package |
 | `azure_sdk_container_registry` | [Container Registry SDK](../sdk/container_registry/README.md) | `sdk/container_registry` | package |
 | `azure_sdk_storage_common` | [Storage Common](../sdk/storage/common/README.md) | `sdk/storage_common` | monolithic |

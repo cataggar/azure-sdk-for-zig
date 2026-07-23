@@ -296,7 +296,7 @@ path = Path(sys.argv[1])
 mode, sdk_url, sdk_commit, sdk_hash, rest_commit, rest_hash = sys.argv[2:]
 text = path.read_text()
 sdk_old = '''        .azure_sdk_core = .{
-            .path = "../..",
+            .path = "../../sdk/core",
         },'''
 sdk_new = f'''        .azure_sdk_core = .{{
             .url = "{sdk_url}#{sdk_commit}",

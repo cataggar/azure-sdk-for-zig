@@ -58,7 +58,7 @@ pub fn main(init: std.process.Init) !void {
         .display_name = "container-registry",
         .azure_sdk_core_commit = azure_sdk_core_commit,
         .azure_sdk_core_hash = azure_sdk_core_hash,
-        .azure_sdk_core_path = azure_sdk_core_path orelse "../..",
+        .azure_sdk_core_path = azure_sdk_core_path orelse "../../sdk/core",
     });
     const zon = try output.readFileAlloc(
         io,
@@ -159,10 +159,9 @@ const generated_readme =
     \\../../scripts/verify-container-registry-regeneration.sh
     \\```
     \\
-    \\Local development currently uses the repository-relative workspace dependency.
-    \\The canonical package split changes the direct dependency to
-    \\`azure_sdk_core`. Release staging replaces local paths with immutable
-    \\commit/hash pins. See the
+    \\Local development depends directly on the repository's
+    \\`azure_sdk_core` package. Release staging replaces that local path with
+    \\an immutable commit/hash pin. See the
     \\[package branch model](../../doc/package-branch-model.md) and
     \\[Container Registry release staging](../../eng/container_registry_release/README.md).
     \\

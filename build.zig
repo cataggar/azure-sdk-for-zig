@@ -49,6 +49,45 @@ pub fn build(b: *std.Build) void {
     });
     const serde_mod = serde_dep.module("serde");
 
+    const arm_avs_dep = b.dependency("azure_rest_arm_avs", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const arm_avs_mod = arm_avs_dep.module("azure_rest_arm_avs");
+    arm_avs_mod.addImport("azure_sdk_core", core_mod);
+    arm_avs_mod.addImport("serde", serde_mod);
+
+    const keyvault_secrets_dep = b.dependency("azure_rest_keyvault_secrets", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const keyvault_secrets_mod = keyvault_secrets_dep.module("azure_rest_keyvault_secrets");
+    keyvault_secrets_mod.addImport("azure_sdk_core", core_mod);
+    keyvault_secrets_mod.addImport("serde", serde_mod);
+
+    const container_registry_protocol_dep = b.dependency("azure_rest_container_registry", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const container_registry_protocol_mod =
+        container_registry_protocol_dep.module("azure_rest_container_registry");
+    container_registry_protocol_mod.addImport("azure_sdk_core", core_mod);
+    container_registry_protocol_mod.addImport("serde", serde_mod);
+
+    const container_registry_sdk_dep = b.dependency("azure_sdk_container_registry", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const container_registry_sdk_mod =
+        container_registry_sdk_dep.module("azure_sdk_container_registry");
+    // Keep the SDK and generated protocol package on the workspace-owned
+    // Core module so the dependency diamond has one source owner.
+    container_registry_sdk_mod.addImport("azure_sdk_core", core_mod);
+    container_registry_sdk_mod.addImport(
+        "azure_rest_container_registry",
+        container_registry_protocol_mod,
+    );
+
     // -- Modules (libraries exposed to consumers) --
 
     exportDependencyModule(b, "azure_sdk_core_tracing", core_tracing_mod);
@@ -56,27 +95,10 @@ pub fn build(b: *std.Build) void {
     exportDependencyModule(b, "azure_sdk_core_amqp", core_amqp_mod);
     exportDependencyModule(b, "azure_sdk_core", core_mod);
     exportDependencyModule(b, "azure_sdk_core_testing", core_testing_mod);
-
-    const container_registry_protocol_mod = b.addModule("azure_rest_container_registry", .{
-        .root_source_file = b.path("rest/container_registry/src/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "azure_sdk_core", .module = core_mod },
-            .{ .name = "serde", .module = serde_mod },
-        },
-    });
-
-    const container_registry_sdk_mod = b.addModule("azure_sdk_container_registry", .{
-        .root_source_file = b.path("sdk/container_registry/src/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "azure_sdk_core", .module = core_mod },
-            .{
-                .name = "azure_rest_container_registry",
-                .module = container_registry_protocol_mod,
-            },
-        },
-    });
+    exportDependencyModule(b, "azure_rest_arm_avs", arm_avs_mod);
+    exportDependencyModule(b, "azure_rest_keyvault_secrets", keyvault_secrets_mod);
+    exportDependencyModule(b, "azure_rest_container_registry", container_registry_protocol_mod);
+    exportDependencyModule(b, "azure_sdk_container_registry", container_registry_sdk_mod);
 
     const storage_common_mod = b.addModule("azure_sdk_storage_common", .{
         .root_source_file = b.path("sdk/storage/common/root.zig"),
@@ -364,35 +386,6 @@ pub fn build(b: *std.Build) void {
         package_tests.setCwd(b.path(package.source_path));
         test_step.dependOn(&package_tests.step);
     }
-
-    const container_registry_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("rest/container_registry/src/root.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "azure_sdk_core", .module = core_mod },
-                .{ .name = "serde", .module = serde_mod },
-            },
-        }),
-    });
-    test_step.dependOn(&b.addRunArtifact(container_registry_tests).step);
-
-    const container_registry_sdk_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("sdk/container_registry/src/root.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "azure_sdk_core", .module = core_mod },
-                .{
-                    .name = "azure_rest_container_registry",
-                    .module = container_registry_protocol_mod,
-                },
-            },
-        }),
-    });
-    test_step.dependOn(&b.addRunArtifact(container_registry_sdk_tests).step);
 
     // Service SDK tests — core + identity deps
     const service_test_sources_ci = [_][]const u8{

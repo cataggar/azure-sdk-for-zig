@@ -240,7 +240,7 @@ pub fn main(init: std.process.Init) !u8 {
         .display_name = display_buf,
         .azure_sdk_core_commit = commit_buf,
         .azure_sdk_core_hash = hash_buf,
-        .azure_sdk_core_path = sdk_path_buf orelse "../azure-sdk-for-zig",
+        .azure_sdk_core_path = sdk_path_buf orelse "../azure-sdk-core",
         .run_zig_fmt = run_fmt,
     });
 

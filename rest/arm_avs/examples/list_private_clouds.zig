@@ -21,7 +21,10 @@ pub fn main(init: std.process.Init) !void {
     var dotenv = core.dotenv.loadFromFileOrEmpty(gpa, init.io, ".env");
     defer dotenv.deinit();
 
-    const subscription_id = try resolveSubscriptionId(init, &dotenv);
+    var args = try init.minimal.args.iterateAllocator(gpa);
+    defer args.deinit();
+    _ = args.next();
+    const subscription_id = try resolveSubscriptionId(init, &dotenv, args.next());
 
     var cli_cred = identity.AzureCliCredential.init(gpa, init.io);
 
@@ -73,10 +76,12 @@ pub fn main(init: std.process.Init) !void {
 
 /// Look up subscription id from (in order): argv[1], $AZURE_SUBSCRIPTION_ID,
 /// or AZURE_SUBSCRIPTION_ID in a `.env` file in the cwd.
-fn resolveSubscriptionId(init: std.process.Init, dotenv: *const core.dotenv.DotEnv) ![]const u8 {
-    var args = init.minimal.args.iterate();
-    _ = args.next(); // argv[0]
-    if (args.next()) |arg1| return arg1;
+fn resolveSubscriptionId(
+    init: std.process.Init,
+    dotenv: *const core.dotenv.DotEnv,
+    arg: ?[]const u8,
+) ![]const u8 {
+    if (arg) |value| return value;
     if (init.environ_map.get("AZURE_SUBSCRIPTION_ID")) |v| return v;
     if (dotenv.get("AZURE_SUBSCRIPTION_ID")) |v| return v;
     return error.MissingAzureSubscriptionId;

@@ -38,6 +38,7 @@ pub fn build(b: *std.Build) void {
     });
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(t).step);
+    const examples_step = b.step("examples", "Compile all ARM AVS examples");
 
     const list_private_clouds = b.addExecutable(.{
         .name = "list-private-clouds",
@@ -58,6 +59,7 @@ pub fn build(b: *std.Build) void {
         "List Microsoft.AVS private clouds in a subscription",
     );
     list_private_clouds_step.dependOn(&run_list_private_clouds.step);
+    examples_step.dependOn(&list_private_clouds.step);
     test_step.dependOn(&list_private_clouds.step);
 
     const list_clusters = b.addExecutable(.{
@@ -79,5 +81,6 @@ pub fn build(b: *std.Build) void {
         "List clusters in a private cloud",
     );
     list_clusters_step.dependOn(&run_list_clusters.step);
+    examples_step.dependOn(&list_clusters.step);
     test_step.dependOn(&list_clusters.step);
 }
