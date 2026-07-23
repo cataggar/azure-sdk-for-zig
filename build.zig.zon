@@ -31,6 +31,21 @@
         .azure_sdk_container_registry = .{
             .path = "sdk/container_registry",
         },
+        .azure_sdk_storage_common = .{
+            .path = "sdk/storage/common",
+        },
+        .azure_sdk_storage_blobs = .{
+            .path = "sdk/storage/blobs",
+        },
+        .azure_sdk_storage_queues = .{
+            .path = "sdk/storage/queues",
+        },
+        .azure_sdk_storage_files_shares = .{
+            .path = "sdk/storage/files/shares",
+        },
+        .azure_sdk_storage_files_datalake = .{
+            .path = "sdk/storage/files/datalake",
+        },
         .aggregate_export_fixture = .{
             .path = "eng/fixtures/aggregate_export",
         },

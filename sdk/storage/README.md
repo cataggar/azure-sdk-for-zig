@@ -40,11 +40,12 @@ Outcomes are `.accepted`, `.rejected` after a received non-2xx status, or
 
 ## Development
 
-Storage modules are currently tested through the root workspace:
+Each Storage package builds independently from its package directory:
 
 ```bash
-zig build test --summary all
+cd sdk/storage/common && zig build test --summary all
+cd ../blobs && zig build test --summary all
+cd ../queues && zig build test --summary all
+cd ../files/shares && zig build test --summary all
+cd ../datalake && zig build test --summary all
 ```
-
-Package-local builds are introduced in dependency order, beginning with
-Storage Common.
