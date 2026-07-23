@@ -6,7 +6,7 @@
 //! catch-all `unrecognized` variant.
 
 const std = @import("std");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 
 /// The intended executor of the operation; as in Resource Based Access Control (RBAC) and audit logs UX. Default value is "user,system"
 pub const Origin = union(enum) {

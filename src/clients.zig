@@ -2,10 +2,23 @@
 
 const std = @import("std");
 const serde = @import("serde");
-const core = @import("azure_core");
+const core = @import("azure_sdk_core");
 const models = @import("models.zig");
 const enums = @import("enums.zig");
 
+// Keep raw-body ownership behind one helper so the generated shape can
+// adopt the core streaming response API without changing status/header logic.
+fn bufferRawResponseBody(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
+    return allocator.dupe(u8, body);
+}
+
+fn responseStatusExpected(status: u16, expected: []const u16) bool {
+    if (expected.len == 0) return status >= 200 and status < 300;
+    for (expected) |value| {
+        if (status == value) return true;
+    }
+    return false;
+}
 const default_endpoint = "https://management.azure.com";
 const default_api_version = "2025-09-01";
 const auth_scopes: []const []const u8 = &.{"https://management.azure.com/.default"};
@@ -17,13 +30,19 @@ pub const AVSClient = struct {
     pipeline: core.pipeline.HttpPipeline,
     subscription_id: []const u8,
     allocator: std.mem.Allocator,
-    auth_policy: *core.pipeline.BearerTokenAuthPolicy,
+    auth_policy: ?*core.pipeline.BearerTokenAuthPolicy,
     policy_ptrs: []*core.pipeline.HttpPolicy,
 
     pub const InitOptions = struct {
         subscription_id: []const u8,
         credential: *core.credentials.TokenCredential,
         transport: *core.http.HttpTransport,
+        endpoint: []const u8 = default_endpoint,
+        api_version: []const u8 = default_api_version,
+    };
+
+    pub const PipelineOptions = struct {
+        subscription_id: []const u8,
         endpoint: []const u8 = default_endpoint,
         api_version: []const u8 = default_api_version,
     };
@@ -54,11 +73,28 @@ pub const AVSClient = struct {
             .subscription_id = options.subscription_id,
         };
     }
+    pub fn initWithPipeline(
+        allocator: std.mem.Allocator,
+        pipeline: core.pipeline.HttpPipeline,
+        options: PipelineOptions,
+    ) AVSClient {
+        return .{
+            .allocator = allocator,
+            .endpoint = options.endpoint,
+            .api_version = options.api_version,
+            .auth_policy = null,
+            .policy_ptrs = &.{},
+            .pipeline = pipeline,
+            .subscription_id = options.subscription_id,
+        };
+    }
 
     pub fn deinit(self: *@This()) void {
-        self.auth_policy.deinit();
-        self.allocator.destroy(self.auth_policy);
-        self.allocator.free(self.policy_ptrs);
+        if (self.auth_policy) |auth_policy| {
+            auth_policy.deinit();
+            self.allocator.destroy(auth_policy);
+            self.allocator.free(self.policy_ptrs);
+        }
     }
 
     pub fn operations(self: *@This()) Operations {
@@ -284,7 +320,17 @@ pub const Operations = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// List the operations for the provider
     pub fn list(self: *@This(), alloc: std.mem.Allocator) !core.pager.PipelinePager(models.Operation) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/providers/Microsoft.AVS/operations?api-version={s}", .{ self.endpoint, self.api_version });
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/providers/Microsoft.AVS/operations", .{self.endpoint});
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.Operation).init(
             self.pipeline,
@@ -303,7 +349,23 @@ pub const Addons = struct {
     subscription_id: []const u8,
     /// List Addon resources by PrivateCloud
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.Addon) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/addons?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/addons", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.Addon).init(
             self.pipeline,
@@ -315,7 +377,25 @@ pub const Addons = struct {
     }
     /// Get a Addon
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, addon_name: []const u8) !models.Addon {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/addons/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, addon_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, addon_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/addons/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -324,7 +404,7 @@ pub const Addons = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("Addons.get", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -332,7 +412,25 @@ pub const Addons = struct {
     }
     /// Create a Addon
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, addon_name: []const u8, addon: models.Addon) !core.lro.TypedPoller(models.Addon) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/addons/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, addon_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, addon_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/addons/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PUT, url);
         defer req.deinit();
@@ -345,7 +443,7 @@ pub const Addons = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 201 })) {
             core.pager.logHttpError("Addons.createOrUpdate", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -353,7 +451,25 @@ pub const Addons = struct {
     }
     /// Delete a Addon
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, addon_name: []const u8) !core.lro.TypedPoller(void) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/addons/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, addon_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, addon_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/addons/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
         defer req.deinit();
@@ -361,7 +477,7 @@ pub const Addons = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 202, 204 })) {
             core.pager.logHttpError("Addons.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -376,7 +492,23 @@ pub const Authorizations = struct {
     subscription_id: []const u8,
     /// List ExpressRouteAuthorization resources by PrivateCloud
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.ExpressRouteAuthorization) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/authorizations?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/authorizations", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.ExpressRouteAuthorization).init(
             self.pipeline,
@@ -388,7 +520,25 @@ pub const Authorizations = struct {
     }
     /// Get a ExpressRouteAuthorization
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, authorization_name: []const u8) !models.ExpressRouteAuthorization {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/authorizations/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, authorization_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, authorization_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/authorizations/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -397,7 +547,7 @@ pub const Authorizations = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("Authorizations.get", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -405,7 +555,25 @@ pub const Authorizations = struct {
     }
     /// Create a ExpressRouteAuthorization
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, authorization_name: []const u8, authorization: models.ExpressRouteAuthorization) !core.lro.TypedPoller(models.ExpressRouteAuthorization) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/authorizations/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, authorization_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, authorization_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/authorizations/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PUT, url);
         defer req.deinit();
@@ -418,7 +586,7 @@ pub const Authorizations = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 201 })) {
             core.pager.logHttpError("Authorizations.createOrUpdate", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -426,7 +594,25 @@ pub const Authorizations = struct {
     }
     /// Delete a ExpressRouteAuthorization
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, authorization_name: []const u8) !core.lro.TypedPoller(void) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/authorizations/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, authorization_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, authorization_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/authorizations/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
         defer req.deinit();
@@ -434,7 +620,7 @@ pub const Authorizations = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 202, 204 })) {
             core.pager.logHttpError("Authorizations.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -449,7 +635,23 @@ pub const CloudLinks = struct {
     subscription_id: []const u8,
     /// List CloudLink resources by PrivateCloud
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.CloudLink) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/cloudLinks?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/cloudLinks", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.CloudLink).init(
             self.pipeline,
@@ -461,7 +663,25 @@ pub const CloudLinks = struct {
     }
     /// Get a CloudLink
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cloud_link_name: []const u8) !models.CloudLink {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/cloudLinks/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cloud_link_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, cloud_link_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/cloudLinks/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -470,7 +690,7 @@ pub const CloudLinks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("CloudLinks.get", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -478,7 +698,25 @@ pub const CloudLinks = struct {
     }
     /// Create a CloudLink
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cloud_link_name: []const u8, cloud_link: models.CloudLink) !core.lro.TypedPoller(models.CloudLink) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/cloudLinks/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cloud_link_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, cloud_link_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/cloudLinks/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PUT, url);
         defer req.deinit();
@@ -491,7 +729,7 @@ pub const CloudLinks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 201 })) {
             core.pager.logHttpError("CloudLinks.createOrUpdate", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -499,7 +737,25 @@ pub const CloudLinks = struct {
     }
     /// Delete a CloudLink
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cloud_link_name: []const u8) !core.lro.TypedPoller(void) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/cloudLinks/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cloud_link_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, cloud_link_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/cloudLinks/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
         defer req.deinit();
@@ -507,7 +763,7 @@ pub const CloudLinks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 202, 204 })) {
             core.pager.logHttpError("CloudLinks.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -522,7 +778,23 @@ pub const Clusters = struct {
     subscription_id: []const u8,
     /// List Cluster resources by PrivateCloud
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.Cluster) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.Cluster).init(
             self.pipeline,
@@ -534,7 +806,25 @@ pub const Clusters = struct {
     }
     /// Get a Cluster
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8) !models.Cluster {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cluster_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, cluster_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -543,7 +833,7 @@ pub const Clusters = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("Clusters.get", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -551,7 +841,25 @@ pub const Clusters = struct {
     }
     /// Create a Cluster
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, cluster: models.Cluster) !core.lro.TypedPoller(models.Cluster) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cluster_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, cluster_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PUT, url);
         defer req.deinit();
@@ -564,7 +872,7 @@ pub const Clusters = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 201 })) {
             core.pager.logHttpError("Clusters.createOrUpdate", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -572,7 +880,25 @@ pub const Clusters = struct {
     }
     /// Update a Cluster
     pub fn update(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, cluster_update: models.ClusterUpdate) !core.lro.TypedPoller(models.Cluster) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cluster_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, cluster_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PATCH, url);
         defer req.deinit();
@@ -585,7 +911,7 @@ pub const Clusters = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 201 })) {
             core.pager.logHttpError("Clusters.update", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -593,7 +919,25 @@ pub const Clusters = struct {
     }
     /// Delete a Cluster
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8) !core.lro.TypedPoller(void) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cluster_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, cluster_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
         defer req.deinit();
@@ -601,7 +945,7 @@ pub const Clusters = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 202, 204 })) {
             core.pager.logHttpError("Clusters.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -609,7 +953,25 @@ pub const Clusters = struct {
     }
     /// List hosts by zone in a cluster
     pub fn listZones(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8) !models.ClusterZoneList {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/listZones?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cluster_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, cluster_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/listZones", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .POST, url);
         defer req.deinit();
@@ -618,7 +980,7 @@ pub const Clusters = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("Clusters.listZones", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -633,7 +995,25 @@ pub const Datastores = struct {
     subscription_id: []const u8,
     /// List Datastore resources by Cluster
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8) !core.pager.PipelinePager(models.Datastore) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/datastores?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cluster_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, cluster_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/datastores", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.Datastore).init(
             self.pipeline,
@@ -645,7 +1025,27 @@ pub const Datastores = struct {
     }
     /// Get a Datastore
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, datastore_name: []const u8) !models.Datastore {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/datastores/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cluster_name, datastore_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, cluster_name);
+        defer alloc.free(encoded_path_3);
+        const encoded_path_4 = try core.url.encodePathSegment(alloc, datastore_name);
+        defer alloc.free(encoded_path_4);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/datastores/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3, encoded_path_4 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -654,7 +1054,7 @@ pub const Datastores = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("Datastores.get", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -662,7 +1062,27 @@ pub const Datastores = struct {
     }
     /// Create a Datastore
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, datastore_name: []const u8, datastore: models.Datastore) !core.lro.TypedPoller(models.Datastore) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/datastores/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cluster_name, datastore_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, cluster_name);
+        defer alloc.free(encoded_path_3);
+        const encoded_path_4 = try core.url.encodePathSegment(alloc, datastore_name);
+        defer alloc.free(encoded_path_4);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/datastores/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3, encoded_path_4 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PUT, url);
         defer req.deinit();
@@ -675,7 +1095,7 @@ pub const Datastores = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 201 })) {
             core.pager.logHttpError("Datastores.createOrUpdate", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -683,7 +1103,27 @@ pub const Datastores = struct {
     }
     /// Delete a Datastore
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, datastore_name: []const u8) !core.lro.TypedPoller(void) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/datastores/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cluster_name, datastore_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, cluster_name);
+        defer alloc.free(encoded_path_3);
+        const encoded_path_4 = try core.url.encodePathSegment(alloc, datastore_name);
+        defer alloc.free(encoded_path_4);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/datastores/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3, encoded_path_4 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
         defer req.deinit();
@@ -691,7 +1131,7 @@ pub const Datastores = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 202, 204 })) {
             core.pager.logHttpError("Datastores.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -706,7 +1146,23 @@ pub const GlobalReachConnections = struct {
     subscription_id: []const u8,
     /// List GlobalReachConnection resources by PrivateCloud
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.GlobalReachConnection) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/globalReachConnections?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/globalReachConnections", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.GlobalReachConnection).init(
             self.pipeline,
@@ -718,7 +1174,25 @@ pub const GlobalReachConnections = struct {
     }
     /// Get a GlobalReachConnection
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, global_reach_connection_name: []const u8) !models.GlobalReachConnection {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/globalReachConnections/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, global_reach_connection_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, global_reach_connection_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/globalReachConnections/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -727,7 +1201,7 @@ pub const GlobalReachConnections = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("GlobalReachConnections.get", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -735,7 +1209,25 @@ pub const GlobalReachConnections = struct {
     }
     /// Create a GlobalReachConnection
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, global_reach_connection_name: []const u8, global_reach_connection: models.GlobalReachConnection) !core.lro.TypedPoller(models.GlobalReachConnection) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/globalReachConnections/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, global_reach_connection_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, global_reach_connection_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/globalReachConnections/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PUT, url);
         defer req.deinit();
@@ -748,7 +1240,7 @@ pub const GlobalReachConnections = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 201 })) {
             core.pager.logHttpError("GlobalReachConnections.createOrUpdate", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -756,7 +1248,25 @@ pub const GlobalReachConnections = struct {
     }
     /// Delete a GlobalReachConnection
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, global_reach_connection_name: []const u8) !core.lro.TypedPoller(void) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/globalReachConnections/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, global_reach_connection_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, global_reach_connection_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/globalReachConnections/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
         defer req.deinit();
@@ -764,7 +1274,7 @@ pub const GlobalReachConnections = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 202, 204 })) {
             core.pager.logHttpError("GlobalReachConnections.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -779,7 +1289,23 @@ pub const HcxEnterpriseSites = struct {
     subscription_id: []const u8,
     /// List HcxEnterpriseSite resources by PrivateCloud
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.HcxEnterpriseSite) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/hcxEnterpriseSites?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/hcxEnterpriseSites", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.HcxEnterpriseSite).init(
             self.pipeline,
@@ -791,7 +1317,25 @@ pub const HcxEnterpriseSites = struct {
     }
     /// Get a HcxEnterpriseSite
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, hcx_enterprise_site_name: []const u8) !models.HcxEnterpriseSite {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/hcxEnterpriseSites/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, hcx_enterprise_site_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, hcx_enterprise_site_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/hcxEnterpriseSites/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -800,7 +1344,7 @@ pub const HcxEnterpriseSites = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("HcxEnterpriseSites.get", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -808,7 +1352,25 @@ pub const HcxEnterpriseSites = struct {
     }
     /// Create a HcxEnterpriseSite
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, hcx_enterprise_site_name: []const u8, hcx_enterprise_site: models.HcxEnterpriseSite) !models.HcxEnterpriseSite {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/hcxEnterpriseSites/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, hcx_enterprise_site_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, hcx_enterprise_site_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/hcxEnterpriseSites/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PUT, url);
         defer req.deinit();
@@ -821,7 +1383,7 @@ pub const HcxEnterpriseSites = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 201 })) {
             core.pager.logHttpError("HcxEnterpriseSites.createOrUpdate", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -829,7 +1391,25 @@ pub const HcxEnterpriseSites = struct {
     }
     /// Delete a HcxEnterpriseSite
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, hcx_enterprise_site_name: []const u8) !void {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/hcxEnterpriseSites/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, hcx_enterprise_site_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, hcx_enterprise_site_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/hcxEnterpriseSites/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
         defer req.deinit();
@@ -837,7 +1417,7 @@ pub const HcxEnterpriseSites = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 204 })) {
             core.pager.logHttpError("HcxEnterpriseSites.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -852,7 +1432,25 @@ pub const Hosts = struct {
     subscription_id: []const u8,
     /// List Host resources by Cluster
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8) !core.pager.PipelinePager(models.Host) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/hosts?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cluster_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, cluster_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/hosts", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.Host).init(
             self.pipeline,
@@ -864,7 +1462,27 @@ pub const Hosts = struct {
     }
     /// Get a Host
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, host_id: []const u8) !models.Host {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/hosts/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cluster_name, host_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, cluster_name);
+        defer alloc.free(encoded_path_3);
+        const encoded_path_4 = try core.url.encodePathSegment(alloc, host_id);
+        defer alloc.free(encoded_path_4);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/hosts/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3, encoded_path_4 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -873,7 +1491,7 @@ pub const Hosts = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("Hosts.get", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -888,7 +1506,23 @@ pub const IscsiPaths = struct {
     subscription_id: []const u8,
     /// List IscsiPath resources by PrivateCloud
     pub fn listByPrivateCloud(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.IscsiPath) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/iscsiPaths?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/iscsiPaths", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.IscsiPath).init(
             self.pipeline,
@@ -900,7 +1534,23 @@ pub const IscsiPaths = struct {
     }
     /// Get a IscsiPath
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !models.IscsiPath {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/iscsiPaths/default?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/iscsiPaths/default", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -909,7 +1559,7 @@ pub const IscsiPaths = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("IscsiPaths.get", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -917,7 +1567,23 @@ pub const IscsiPaths = struct {
     }
     /// Create a IscsiPath
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, resource: models.IscsiPath) !core.lro.TypedPoller(models.IscsiPath) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/iscsiPaths/default?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/iscsiPaths/default", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PUT, url);
         defer req.deinit();
@@ -930,7 +1596,7 @@ pub const IscsiPaths = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 201 })) {
             core.pager.logHttpError("IscsiPaths.createOrUpdate", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -938,7 +1604,23 @@ pub const IscsiPaths = struct {
     }
     /// Delete a IscsiPath
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/iscsiPaths/default?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/iscsiPaths/default", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
         defer req.deinit();
@@ -946,7 +1628,7 @@ pub const IscsiPaths = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 202, 204 })) {
             core.pager.logHttpError("IscsiPaths.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -961,7 +1643,23 @@ pub const Licenses = struct {
     subscription_id: []const u8,
     /// List License resources by PrivateCloud
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.License) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/licenses?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/licenses", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.License).init(
             self.pipeline,
@@ -973,7 +1671,25 @@ pub const Licenses = struct {
     }
     /// Get a License
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, license_name: enums.LicenseName) !models.License {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/licenses/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, license_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, license_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/licenses/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -982,7 +1698,7 @@ pub const Licenses = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("Licenses.get", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -990,7 +1706,25 @@ pub const Licenses = struct {
     }
     /// Create a License
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, license_name: enums.LicenseName, resource: models.License) !core.lro.TypedPoller(models.License) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/licenses/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, license_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, license_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/licenses/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PUT, url);
         defer req.deinit();
@@ -1003,7 +1737,7 @@ pub const Licenses = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 201 })) {
             core.pager.logHttpError("Licenses.createOrUpdate", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1011,7 +1745,25 @@ pub const Licenses = struct {
     }
     /// Delete a License
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, license_name: enums.LicenseName) !core.lro.TypedPoller(void) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/licenses/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, license_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, license_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/licenses/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
         defer req.deinit();
@@ -1019,7 +1771,7 @@ pub const Licenses = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 202, 204 })) {
             core.pager.logHttpError("Licenses.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1027,7 +1779,25 @@ pub const Licenses = struct {
     }
     /// Just like ArmResourceActionSync, but with no request body.
     pub fn getProperties(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, license_name: enums.LicenseName) !models.LicenseProperties {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/licenses/{s}/getProperties?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, license_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, license_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/licenses/{s}/getProperties", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .POST, url);
         defer req.deinit();
@@ -1036,7 +1806,7 @@ pub const Licenses = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("Licenses.getProperties", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1051,20 +1821,38 @@ pub const Locations = struct {
     subscription_id: []const u8,
     /// Return trial status for subscription by region
     pub fn checkTrialAvailability(self: *@This(), alloc: std.mem.Allocator, location: []const u8, sku: ?models.Sku) !models.Trial {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/providers/Microsoft.AVS/locations/{s}/checkTrialAvailability?api-version={s}", .{ self.endpoint, self.subscription_id, location, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, location);
+        defer alloc.free(encoded_path_1);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/providers/Microsoft.AVS/locations/{s}/checkTrialAvailability", .{ self.endpoint, encoded_path_0, encoded_path_1 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .POST, url);
         defer req.deinit();
-        try req.setHeader("Content-Type", "application/json");
+        if (sku != null) try req.setHeader("Content-Type", "application/json");
         try req.setHeader("Accept", "application/json");
-        const body_json = try serde.json.toSlice(alloc, sku);
-        defer alloc.free(body_json);
-        req.body = body_json;
+        var body_json: ?[]u8 = null;
+        defer if (body_json) |bytes| alloc.free(bytes);
+        if (sku) |body| {
+            const bytes = try serde.json.toSlice(alloc, body);
+            body_json = bytes;
+            req.body = bytes;
+        }
 
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("Locations.checkTrialAvailability", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1072,7 +1860,21 @@ pub const Locations = struct {
     }
     /// Return quota for subscription by region
     pub fn checkQuotaAvailability(self: *@This(), alloc: std.mem.Allocator, location: []const u8) !models.Quota {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/providers/Microsoft.AVS/locations/{s}/checkQuotaAvailability?api-version={s}", .{ self.endpoint, self.subscription_id, location, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, location);
+        defer alloc.free(encoded_path_1);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/providers/Microsoft.AVS/locations/{s}/checkQuotaAvailability", .{ self.endpoint, encoded_path_0, encoded_path_1 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .POST, url);
         defer req.deinit();
@@ -1081,7 +1883,7 @@ pub const Locations = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("Locations.checkQuotaAvailability", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1096,28 +1898,49 @@ pub const Maintenances = struct {
     subscription_id: []const u8,
     /// List Maintenance resources by subscription ID
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, state_name: ?enums.MaintenanceStateName, status: ?enums.MaintenanceStatusFilter, from: ?[]const u8, to: ?[]const u8) !core.pager.PipelinePager(models.Maintenance) {
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/maintenances", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
         var url_buf: std.ArrayList(u8) = .empty;
         defer url_buf.deinit(alloc);
-        try url_buf.print(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/maintenances?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
         if (state_name) |v| {
+            const sep: []const u8 = if (has_query) "&" else "?";
             const enc = try core.url.percentEncode(alloc, v.toWire());
             defer alloc.free(enc);
-            try url_buf.print(alloc, "&stateName={s}", .{enc});
+            try url_buf.print(alloc, "{s}stateName={s}", .{ sep, enc });
+            has_query = true;
         }
         if (status) |v| {
+            const sep: []const u8 = if (has_query) "&" else "?";
             const enc = try core.url.percentEncode(alloc, v.toWire());
             defer alloc.free(enc);
-            try url_buf.print(alloc, "&status={s}", .{enc});
+            try url_buf.print(alloc, "{s}status={s}", .{ sep, enc });
+            has_query = true;
         }
         if (from) |v| {
+            const sep: []const u8 = if (has_query) "&" else "?";
             const enc = try core.url.percentEncode(alloc, v);
             defer alloc.free(enc);
-            try url_buf.print(alloc, "&from={s}", .{enc});
+            try url_buf.print(alloc, "{s}from={s}", .{ sep, enc });
+            has_query = true;
         }
         if (to) |v| {
+            const sep: []const u8 = if (has_query) "&" else "?";
             const enc = try core.url.percentEncode(alloc, v);
             defer alloc.free(enc);
-            try url_buf.print(alloc, "&to={s}", .{enc});
+            try url_buf.print(alloc, "{s}to={s}", .{ sep, enc });
+            has_query = true;
         }
         const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
@@ -1131,7 +1954,25 @@ pub const Maintenances = struct {
     }
     /// Get a Maintenance
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, maintenance_name: []const u8) !models.Maintenance {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/maintenances/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, maintenance_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, maintenance_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/maintenances/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -1140,7 +1981,7 @@ pub const Maintenances = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("Maintenances.get", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1148,7 +1989,25 @@ pub const Maintenances = struct {
     }
     /// Reschedule a maintenance
     pub fn reschedule(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, maintenance_name: []const u8, body: models.MaintenanceReschedule) !models.Maintenance {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/maintenances/{s}/reschedule?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, maintenance_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, maintenance_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/maintenances/{s}/reschedule", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .POST, url);
         defer req.deinit();
@@ -1161,7 +2020,7 @@ pub const Maintenances = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("Maintenances.reschedule", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1169,7 +2028,25 @@ pub const Maintenances = struct {
     }
     /// Schedule a maintenance
     pub fn schedule(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, maintenance_name: []const u8, body: models.MaintenanceSchedule) !models.Maintenance {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/maintenances/{s}/schedule?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, maintenance_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, maintenance_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/maintenances/{s}/schedule", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .POST, url);
         defer req.deinit();
@@ -1182,7 +2059,7 @@ pub const Maintenances = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("Maintenances.schedule", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1190,7 +2067,25 @@ pub const Maintenances = struct {
     }
     /// Initiate maintenance readiness checks
     pub fn initiateChecks(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, maintenance_name: []const u8) !models.Maintenance {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/maintenances/{s}/initiateChecks?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, maintenance_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, maintenance_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/maintenances/{s}/initiateChecks", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .POST, url);
         defer req.deinit();
@@ -1199,7 +2094,7 @@ pub const Maintenances = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("Maintenances.initiateChecks", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1214,7 +2109,25 @@ pub const PlacementPolicies = struct {
     subscription_id: []const u8,
     /// List PlacementPolicy resources by Cluster
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8) !core.pager.PipelinePager(models.PlacementPolicy) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/placementPolicies?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cluster_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, cluster_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/placementPolicies", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.PlacementPolicy).init(
             self.pipeline,
@@ -1226,7 +2139,27 @@ pub const PlacementPolicies = struct {
     }
     /// Get a PlacementPolicy
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, placement_policy_name: []const u8) !models.PlacementPolicy {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/placementPolicies/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cluster_name, placement_policy_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, cluster_name);
+        defer alloc.free(encoded_path_3);
+        const encoded_path_4 = try core.url.encodePathSegment(alloc, placement_policy_name);
+        defer alloc.free(encoded_path_4);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/placementPolicies/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3, encoded_path_4 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -1235,7 +2168,7 @@ pub const PlacementPolicies = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("PlacementPolicies.get", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1243,7 +2176,27 @@ pub const PlacementPolicies = struct {
     }
     /// Create a PlacementPolicy
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, placement_policy_name: []const u8, placement_policy: models.PlacementPolicy) !core.lro.TypedPoller(models.PlacementPolicy) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/placementPolicies/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cluster_name, placement_policy_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, cluster_name);
+        defer alloc.free(encoded_path_3);
+        const encoded_path_4 = try core.url.encodePathSegment(alloc, placement_policy_name);
+        defer alloc.free(encoded_path_4);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/placementPolicies/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3, encoded_path_4 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PUT, url);
         defer req.deinit();
@@ -1256,7 +2209,7 @@ pub const PlacementPolicies = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 201 })) {
             core.pager.logHttpError("PlacementPolicies.createOrUpdate", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1264,7 +2217,27 @@ pub const PlacementPolicies = struct {
     }
     /// Update a PlacementPolicy
     pub fn update(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, placement_policy_name: []const u8, placement_policy_update: models.PlacementPolicyUpdate) !core.lro.TypedPoller(models.PlacementPolicy) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/placementPolicies/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cluster_name, placement_policy_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, cluster_name);
+        defer alloc.free(encoded_path_3);
+        const encoded_path_4 = try core.url.encodePathSegment(alloc, placement_policy_name);
+        defer alloc.free(encoded_path_4);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/placementPolicies/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3, encoded_path_4 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PATCH, url);
         defer req.deinit();
@@ -1277,7 +2250,7 @@ pub const PlacementPolicies = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 202 })) {
             core.pager.logHttpError("PlacementPolicies.update", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1285,7 +2258,27 @@ pub const PlacementPolicies = struct {
     }
     /// Delete a PlacementPolicy
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, placement_policy_name: []const u8) !core.lro.TypedPoller(void) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/placementPolicies/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cluster_name, placement_policy_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, cluster_name);
+        defer alloc.free(encoded_path_3);
+        const encoded_path_4 = try core.url.encodePathSegment(alloc, placement_policy_name);
+        defer alloc.free(encoded_path_4);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/placementPolicies/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3, encoded_path_4 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
         defer req.deinit();
@@ -1293,7 +2286,7 @@ pub const PlacementPolicies = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 202, 204 })) {
             core.pager.logHttpError("PlacementPolicies.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1308,7 +2301,21 @@ pub const PrivateClouds = struct {
     subscription_id: []const u8,
     /// List PrivateCloud resources by resource group
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8) !core.pager.PipelinePager(models.PrivateCloud) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds", .{ self.endpoint, encoded_path_0, encoded_path_1 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.PrivateCloud).init(
             self.pipeline,
@@ -1320,7 +2327,19 @@ pub const PrivateClouds = struct {
     }
     /// List PrivateCloud resources by subscription ID
     pub fn listInSubscription(self: *@This(), alloc: std.mem.Allocator) !core.pager.PipelinePager(models.PrivateCloud) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/providers/Microsoft.AVS/privateClouds?api-version={s}", .{ self.endpoint, self.subscription_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/providers/Microsoft.AVS/privateClouds", .{ self.endpoint, encoded_path_0 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.PrivateCloud).init(
             self.pipeline,
@@ -1332,7 +2351,23 @@ pub const PrivateClouds = struct {
     }
     /// Get a PrivateCloud
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !models.PrivateCloud {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -1341,7 +2376,7 @@ pub const PrivateClouds = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("PrivateClouds.get", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1349,7 +2384,23 @@ pub const PrivateClouds = struct {
     }
     /// Create a PrivateCloud
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, private_cloud: models.PrivateCloud) !core.lro.TypedPoller(models.PrivateCloud) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PUT, url);
         defer req.deinit();
@@ -1362,7 +2413,7 @@ pub const PrivateClouds = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 201 })) {
             core.pager.logHttpError("PrivateClouds.createOrUpdate", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1370,7 +2421,23 @@ pub const PrivateClouds = struct {
     }
     /// Update a PrivateCloud
     pub fn update(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, private_cloud_update: models.PrivateCloudUpdate) !core.lro.TypedPoller(models.PrivateCloud) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PATCH, url);
         defer req.deinit();
@@ -1383,7 +2450,7 @@ pub const PrivateClouds = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 201 })) {
             core.pager.logHttpError("PrivateClouds.update", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1391,7 +2458,23 @@ pub const PrivateClouds = struct {
     }
     /// Delete a PrivateCloud
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
         defer req.deinit();
@@ -1399,7 +2482,7 @@ pub const PrivateClouds = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 202, 204 })) {
             core.pager.logHttpError("PrivateClouds.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1407,7 +2490,23 @@ pub const PrivateClouds = struct {
     }
     /// Rotate the vCenter password
     pub fn rotateVcenterPassword(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/rotateVcenterPassword?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/rotateVcenterPassword", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .POST, url);
         defer req.deinit();
@@ -1415,7 +2514,7 @@ pub const PrivateClouds = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 202, 204 })) {
             core.pager.logHttpError("PrivateClouds.rotateVcenterPassword", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1423,7 +2522,23 @@ pub const PrivateClouds = struct {
     }
     /// Rotate the NSX-T Manager password
     pub fn rotateNsxtPassword(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/rotateNsxtPassword?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/rotateNsxtPassword", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .POST, url);
         defer req.deinit();
@@ -1431,7 +2546,7 @@ pub const PrivateClouds = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 202, 204 })) {
             core.pager.logHttpError("PrivateClouds.rotateNsxtPassword", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1439,7 +2554,23 @@ pub const PrivateClouds = struct {
     }
     /// List the admin credentials for the private cloud
     pub fn listAdminCredentials(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !models.AdminCredentials {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/listAdminCredentials?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/listAdminCredentials", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .POST, url);
         defer req.deinit();
@@ -1448,7 +2579,7 @@ pub const PrivateClouds = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("PrivateClouds.listAdminCredentials", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1456,7 +2587,23 @@ pub const PrivateClouds = struct {
     }
     /// Get the license for the private cloud
     pub fn getVcfLicense(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !models.VcfLicense {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/getVcfLicense?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/getVcfLicense", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .POST, url);
         defer req.deinit();
@@ -1465,7 +2612,7 @@ pub const PrivateClouds = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("PrivateClouds.getVcfLicense", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1480,7 +2627,23 @@ pub const ProvisionedNetworks = struct {
     subscription_id: []const u8,
     /// List ProvisionedNetwork resources by PrivateCloud
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.ProvisionedNetwork) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/provisionedNetworks?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/provisionedNetworks", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.ProvisionedNetwork).init(
             self.pipeline,
@@ -1492,7 +2655,25 @@ pub const ProvisionedNetworks = struct {
     }
     /// Get a ProvisionedNetwork
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, provisioned_network_name: []const u8) !models.ProvisionedNetwork {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/provisionedNetworks/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, provisioned_network_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, provisioned_network_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/provisionedNetworks/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -1501,7 +2682,7 @@ pub const ProvisionedNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("ProvisionedNetworks.get", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1516,7 +2697,23 @@ pub const PureStoragePolicies = struct {
     subscription_id: []const u8,
     /// List PureStoragePolicy resources by PrivateCloud
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.PureStoragePolicy) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/pureStoragePolicies?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/pureStoragePolicies", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.PureStoragePolicy).init(
             self.pipeline,
@@ -1528,7 +2725,25 @@ pub const PureStoragePolicies = struct {
     }
     /// Get a PureStoragePolicy
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, storage_policy_name: []const u8) !models.PureStoragePolicy {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/pureStoragePolicies/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, storage_policy_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, storage_policy_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/pureStoragePolicies/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -1537,7 +2752,7 @@ pub const PureStoragePolicies = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("PureStoragePolicies.get", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1545,7 +2760,25 @@ pub const PureStoragePolicies = struct {
     }
     /// Create a PureStoragePolicy
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, storage_policy_name: []const u8, resource: models.PureStoragePolicy) !core.lro.TypedPoller(models.PureStoragePolicy) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/pureStoragePolicies/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, storage_policy_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, storage_policy_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/pureStoragePolicies/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PUT, url);
         defer req.deinit();
@@ -1558,7 +2791,7 @@ pub const PureStoragePolicies = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 201 })) {
             core.pager.logHttpError("PureStoragePolicies.createOrUpdate", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1566,7 +2799,25 @@ pub const PureStoragePolicies = struct {
     }
     /// Delete a PureStoragePolicy
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, storage_policy_name: []const u8) !core.lro.TypedPoller(void) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/pureStoragePolicies/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, storage_policy_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, storage_policy_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/pureStoragePolicies/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
         defer req.deinit();
@@ -1574,7 +2825,7 @@ pub const PureStoragePolicies = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 202, 204 })) {
             core.pager.logHttpError("PureStoragePolicies.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1589,7 +2840,25 @@ pub const ScriptCmdlets = struct {
     subscription_id: []const u8,
     /// List ScriptCmdlet resources by ScriptPackage
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, script_package_name: []const u8) !core.pager.PipelinePager(models.ScriptCmdlet) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/scriptPackages/{s}/scriptCmdlets?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, script_package_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, script_package_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/scriptPackages/{s}/scriptCmdlets", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.ScriptCmdlet).init(
             self.pipeline,
@@ -1601,7 +2870,27 @@ pub const ScriptCmdlets = struct {
     }
     /// Get a ScriptCmdlet
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, script_package_name: []const u8, script_cmdlet_name: []const u8) !models.ScriptCmdlet {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/scriptPackages/{s}/scriptCmdlets/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, script_package_name, script_cmdlet_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, script_package_name);
+        defer alloc.free(encoded_path_3);
+        const encoded_path_4 = try core.url.encodePathSegment(alloc, script_cmdlet_name);
+        defer alloc.free(encoded_path_4);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/scriptPackages/{s}/scriptCmdlets/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3, encoded_path_4 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -1610,7 +2899,7 @@ pub const ScriptCmdlets = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("ScriptCmdlets.get", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1625,7 +2914,23 @@ pub const ScriptExecutions = struct {
     subscription_id: []const u8,
     /// List ScriptExecution resources by PrivateCloud
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.ScriptExecution) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/scriptExecutions?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/scriptExecutions", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.ScriptExecution).init(
             self.pipeline,
@@ -1637,7 +2942,25 @@ pub const ScriptExecutions = struct {
     }
     /// Get a ScriptExecution
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, script_execution_name: []const u8) !models.ScriptExecution {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/scriptExecutions/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, script_execution_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, script_execution_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/scriptExecutions/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -1646,7 +2969,7 @@ pub const ScriptExecutions = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("ScriptExecutions.get", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1654,7 +2977,25 @@ pub const ScriptExecutions = struct {
     }
     /// Create a ScriptExecution
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, script_execution_name: []const u8, script_execution: models.ScriptExecution) !core.lro.TypedPoller(models.ScriptExecution) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/scriptExecutions/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, script_execution_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, script_execution_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/scriptExecutions/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PUT, url);
         defer req.deinit();
@@ -1667,7 +3008,7 @@ pub const ScriptExecutions = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 201 })) {
             core.pager.logHttpError("ScriptExecutions.createOrUpdate", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1675,7 +3016,25 @@ pub const ScriptExecutions = struct {
     }
     /// Delete a ScriptExecution
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, script_execution_name: []const u8) !core.lro.TypedPoller(void) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/scriptExecutions/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, script_execution_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, script_execution_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/scriptExecutions/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
         defer req.deinit();
@@ -1683,7 +3042,7 @@ pub const ScriptExecutions = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 202, 204 })) {
             core.pager.logHttpError("ScriptExecutions.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1691,20 +3050,42 @@ pub const ScriptExecutions = struct {
     }
     /// Return the logs for a script execution resource
     pub fn getExecutionLogs(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, script_execution_name: []const u8, script_output_stream_type: ?[]const enums.ScriptOutputStreamType) !models.ScriptExecution {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/scriptExecutions/{s}/getExecutionLogs?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, script_execution_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, script_execution_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/scriptExecutions/{s}/getExecutionLogs", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .POST, url);
         defer req.deinit();
-        try req.setHeader("Content-Type", "application/json");
+        if (script_output_stream_type != null) try req.setHeader("Content-Type", "application/json");
         try req.setHeader("Accept", "application/json");
-        const body_json = try serde.json.toSlice(alloc, script_output_stream_type);
-        defer alloc.free(body_json);
-        req.body = body_json;
+        var body_json: ?[]u8 = null;
+        defer if (body_json) |bytes| alloc.free(bytes);
+        if (script_output_stream_type) |body| {
+            const bytes = try serde.json.toSlice(alloc, body);
+            body_json = bytes;
+            req.body = bytes;
+        }
 
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("ScriptExecutions.getExecutionLogs", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1719,7 +3100,23 @@ pub const ScriptPackages = struct {
     subscription_id: []const u8,
     /// List ScriptPackage resources by PrivateCloud
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.ScriptPackage) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/scriptPackages?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/scriptPackages", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.ScriptPackage).init(
             self.pipeline,
@@ -1731,7 +3128,25 @@ pub const ScriptPackages = struct {
     }
     /// Get a ScriptPackage
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, script_package_name: []const u8) !models.ScriptPackage {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/scriptPackages/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, script_package_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, script_package_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/scriptPackages/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -1740,7 +3155,7 @@ pub const ScriptPackages = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("ScriptPackages.get", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1755,7 +3170,23 @@ pub const ServiceComponents = struct {
     subscription_id: []const u8,
     /// Return service component availability
     pub fn checkAvailability(self: *@This(), alloc: std.mem.Allocator, location: []const u8, service_component_name: []const u8) !core.lro.TypedPoller(void) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/providers/Microsoft.AVS/locations/{s}/serviceComponents/{s}/checkAvailability?api-version={s}", .{ self.endpoint, self.subscription_id, location, service_component_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, location);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, service_component_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/providers/Microsoft.AVS/locations/{s}/serviceComponents/{s}/checkAvailability", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .POST, url);
         defer req.deinit();
@@ -1763,7 +3194,7 @@ pub const ServiceComponents = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{202})) {
             core.pager.logHttpError("ServiceComponents.checkAvailability", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1778,7 +3209,19 @@ pub const Skus = struct {
     subscription_id: []const u8,
     /// A list of SKUs.
     pub fn list(self: *@This(), alloc: std.mem.Allocator) !core.pager.PipelinePager(models.ResourceSku) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/providers/Microsoft.AVS/skus?api-version={s}", .{ self.endpoint, self.subscription_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/providers/Microsoft.AVS/skus", .{ self.endpoint, encoded_path_0 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.ResourceSku).init(
             self.pipeline,
@@ -1797,7 +3240,25 @@ pub const VirtualMachines = struct {
     subscription_id: []const u8,
     /// List VirtualMachine resources by Cluster
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8) !core.pager.PipelinePager(models.VirtualMachine) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/virtualMachines?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cluster_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, cluster_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/virtualMachines", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.VirtualMachine).init(
             self.pipeline,
@@ -1809,7 +3270,27 @@ pub const VirtualMachines = struct {
     }
     /// Get a VirtualMachine
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, virtual_machine_id: []const u8) !models.VirtualMachine {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/virtualMachines/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cluster_name, virtual_machine_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, cluster_name);
+        defer alloc.free(encoded_path_3);
+        const encoded_path_4 = try core.url.encodePathSegment(alloc, virtual_machine_id);
+        defer alloc.free(encoded_path_4);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/virtualMachines/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3, encoded_path_4 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -1818,7 +3299,7 @@ pub const VirtualMachines = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("VirtualMachines.get", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1826,7 +3307,27 @@ pub const VirtualMachines = struct {
     }
     /// Enable or disable DRS-driven VM movement restriction
     pub fn restrictMovement(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, virtual_machine_id: []const u8, restrict_movement: models.VirtualMachineRestrictMovement) !core.lro.TypedPoller(void) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/virtualMachines/{s}/restrictMovement?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, cluster_name, virtual_machine_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, cluster_name);
+        defer alloc.free(encoded_path_3);
+        const encoded_path_4 = try core.url.encodePathSegment(alloc, virtual_machine_id);
+        defer alloc.free(encoded_path_4);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/clusters/{s}/virtualMachines/{s}/restrictMovement", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3, encoded_path_4 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .POST, url);
         defer req.deinit();
@@ -1838,7 +3339,7 @@ pub const VirtualMachines = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{202})) {
             core.pager.logHttpError("VirtualMachines.restrictMovement", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1853,7 +3354,23 @@ pub const WorkloadNetworks = struct {
     subscription_id: []const u8,
     /// Get a WorkloadNetwork
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !models.WorkloadNetwork {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -1862,7 +3379,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("WorkloadNetworks.get", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1870,7 +3387,23 @@ pub const WorkloadNetworks = struct {
     }
     /// List WorkloadNetwork resources by PrivateCloud
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetwork) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.WorkloadNetwork).init(
             self.pipeline,
@@ -1882,7 +3415,23 @@ pub const WorkloadNetworks = struct {
     }
     /// List WorkloadNetworkDhcp resources by WorkloadNetwork
     pub fn listDhcp(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetworkDhcp) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dhcpConfigurations?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dhcpConfigurations", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.WorkloadNetworkDhcp).init(
             self.pipeline,
@@ -1894,7 +3443,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Get a WorkloadNetworkDhcp
     pub fn getDhcp(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, dhcp_id: []const u8, private_cloud_name: []const u8) !models.WorkloadNetworkDhcp {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dhcpConfigurations/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, dhcp_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, dhcp_id);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dhcpConfigurations/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_3, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -1903,7 +3470,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("WorkloadNetworks.getDhcp", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1911,7 +3478,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Create a WorkloadNetworkDhcp
     pub fn createDhcp(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, dhcp_id: []const u8, workload_network_dhcp: models.WorkloadNetworkDhcp) !core.lro.TypedPoller(models.WorkloadNetworkDhcp) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dhcpConfigurations/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, dhcp_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, dhcp_id);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dhcpConfigurations/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PUT, url);
         defer req.deinit();
@@ -1924,7 +3509,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 201 })) {
             core.pager.logHttpError("WorkloadNetworks.createDhcp", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1932,7 +3517,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Update a WorkloadNetworkDhcp
     pub fn updateDhcp(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, dhcp_id: []const u8, workload_network_dhcp: models.WorkloadNetworkDhcp) !core.lro.TypedPoller(models.WorkloadNetworkDhcp) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dhcpConfigurations/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, dhcp_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, dhcp_id);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dhcpConfigurations/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PATCH, url);
         defer req.deinit();
@@ -1945,7 +3548,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 202 })) {
             core.pager.logHttpError("WorkloadNetworks.updateDhcp", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1953,7 +3556,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Delete a WorkloadNetworkDhcp
     pub fn deleteDhcp(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, dhcp_id: []const u8) !core.lro.TypedPoller(void) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dhcpConfigurations/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, dhcp_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, dhcp_id);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dhcpConfigurations/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
         defer req.deinit();
@@ -1961,7 +3582,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 202, 204 })) {
             core.pager.logHttpError("WorkloadNetworks.deleteDhcp", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1969,7 +3590,23 @@ pub const WorkloadNetworks = struct {
     }
     /// List WorkloadNetworkDnsService resources by WorkloadNetwork
     pub fn listDnsServices(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetworkDnsService) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dnsServices?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dnsServices", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.WorkloadNetworkDnsService).init(
             self.pipeline,
@@ -1981,7 +3618,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Get a WorkloadNetworkDnsService
     pub fn getDnsService(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, dns_service_id: []const u8) !models.WorkloadNetworkDnsService {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dnsServices/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, dns_service_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, dns_service_id);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dnsServices/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -1990,7 +3645,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("WorkloadNetworks.getDnsService", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -1998,7 +3653,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Create a WorkloadNetworkDnsService
     pub fn createDnsService(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, dns_service_id: []const u8, workload_network_dns_service: models.WorkloadNetworkDnsService) !core.lro.TypedPoller(models.WorkloadNetworkDnsService) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dnsServices/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, dns_service_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, dns_service_id);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dnsServices/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PUT, url);
         defer req.deinit();
@@ -2011,7 +3684,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 201 })) {
             core.pager.logHttpError("WorkloadNetworks.createDnsService", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -2019,7 +3692,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Update a WorkloadNetworkDnsService
     pub fn updateDnsService(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, dns_service_id: []const u8, workload_network_dns_service: models.WorkloadNetworkDnsService) !core.lro.TypedPoller(models.WorkloadNetworkDnsService) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dnsServices/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, dns_service_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, dns_service_id);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dnsServices/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PATCH, url);
         defer req.deinit();
@@ -2032,7 +3723,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 202 })) {
             core.pager.logHttpError("WorkloadNetworks.updateDnsService", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -2040,7 +3731,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Delete a WorkloadNetworkDnsService
     pub fn deleteDnsService(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, dns_service_id: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dnsServices/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, dns_service_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, dns_service_id);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dnsServices/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_3, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
         defer req.deinit();
@@ -2048,7 +3757,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 202, 204 })) {
             core.pager.logHttpError("WorkloadNetworks.deleteDnsService", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -2056,7 +3765,23 @@ pub const WorkloadNetworks = struct {
     }
     /// List WorkloadNetworkDnsZone resources by WorkloadNetwork
     pub fn listDnsZones(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetworkDnsZone) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dnsZones?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dnsZones", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.WorkloadNetworkDnsZone).init(
             self.pipeline,
@@ -2068,7 +3793,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Get a WorkloadNetworkDnsZone
     pub fn getDnsZone(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, dns_zone_id: []const u8) !models.WorkloadNetworkDnsZone {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dnsZones/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, dns_zone_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, dns_zone_id);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dnsZones/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -2077,7 +3820,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("WorkloadNetworks.getDnsZone", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -2085,7 +3828,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Create a WorkloadNetworkDnsZone
     pub fn createDnsZone(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, dns_zone_id: []const u8, workload_network_dns_zone: models.WorkloadNetworkDnsZone) !core.lro.TypedPoller(models.WorkloadNetworkDnsZone) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dnsZones/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, dns_zone_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, dns_zone_id);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dnsZones/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PUT, url);
         defer req.deinit();
@@ -2098,7 +3859,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 201 })) {
             core.pager.logHttpError("WorkloadNetworks.createDnsZone", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -2106,7 +3867,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Update a WorkloadNetworkDnsZone
     pub fn updateDnsZone(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, dns_zone_id: []const u8, workload_network_dns_zone: models.WorkloadNetworkDnsZone) !core.lro.TypedPoller(models.WorkloadNetworkDnsZone) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dnsZones/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, dns_zone_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, dns_zone_id);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dnsZones/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PATCH, url);
         defer req.deinit();
@@ -2119,7 +3898,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 202 })) {
             core.pager.logHttpError("WorkloadNetworks.updateDnsZone", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -2127,7 +3906,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Delete a WorkloadNetworkDnsZone
     pub fn deleteDnsZone(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, dns_zone_id: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dnsZones/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, dns_zone_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, dns_zone_id);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/dnsZones/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_3, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
         defer req.deinit();
@@ -2135,7 +3932,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 202, 204 })) {
             core.pager.logHttpError("WorkloadNetworks.deleteDnsZone", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -2143,7 +3940,23 @@ pub const WorkloadNetworks = struct {
     }
     /// List WorkloadNetworkGateway resources by WorkloadNetwork
     pub fn listGateways(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetworkGateway) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/gateways?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/gateways", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.WorkloadNetworkGateway).init(
             self.pipeline,
@@ -2155,7 +3968,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Get a WorkloadNetworkGateway
     pub fn getGateway(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, gateway_id: []const u8) !models.WorkloadNetworkGateway {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/gateways/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, gateway_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, gateway_id);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/gateways/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -2164,7 +3995,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("WorkloadNetworks.getGateway", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -2172,7 +4003,23 @@ pub const WorkloadNetworks = struct {
     }
     /// List WorkloadNetworkPortMirroring resources by WorkloadNetwork
     pub fn listPortMirroring(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetworkPortMirroring) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/portMirroringProfiles?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/portMirroringProfiles", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.WorkloadNetworkPortMirroring).init(
             self.pipeline,
@@ -2184,7 +4031,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Get a WorkloadNetworkPortMirroring
     pub fn getPortMirroring(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, port_mirroring_id: []const u8) !models.WorkloadNetworkPortMirroring {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/portMirroringProfiles/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, port_mirroring_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, port_mirroring_id);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/portMirroringProfiles/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -2193,7 +4058,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("WorkloadNetworks.getPortMirroring", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -2201,7 +4066,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Create a WorkloadNetworkPortMirroring
     pub fn createPortMirroring(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, port_mirroring_id: []const u8, workload_network_port_mirroring: models.WorkloadNetworkPortMirroring) !core.lro.TypedPoller(models.WorkloadNetworkPortMirroring) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/portMirroringProfiles/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, port_mirroring_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, port_mirroring_id);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/portMirroringProfiles/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PUT, url);
         defer req.deinit();
@@ -2214,7 +4097,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 201 })) {
             core.pager.logHttpError("WorkloadNetworks.createPortMirroring", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -2222,7 +4105,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Update a WorkloadNetworkPortMirroring
     pub fn updatePortMirroring(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, port_mirroring_id: []const u8, workload_network_port_mirroring: models.WorkloadNetworkPortMirroring) !core.lro.TypedPoller(models.WorkloadNetworkPortMirroring) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/portMirroringProfiles/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, port_mirroring_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, port_mirroring_id);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/portMirroringProfiles/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PATCH, url);
         defer req.deinit();
@@ -2235,7 +4136,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 202 })) {
             core.pager.logHttpError("WorkloadNetworks.updatePortMirroring", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -2243,7 +4144,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Delete a WorkloadNetworkPortMirroring
     pub fn deletePortMirroring(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, port_mirroring_id: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/portMirroringProfiles/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, port_mirroring_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, port_mirroring_id);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/portMirroringProfiles/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_3, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
         defer req.deinit();
@@ -2251,7 +4170,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 202, 204 })) {
             core.pager.logHttpError("WorkloadNetworks.deletePortMirroring", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -2259,7 +4178,23 @@ pub const WorkloadNetworks = struct {
     }
     /// List WorkloadNetworkPublicIP resources by WorkloadNetwork
     pub fn listPublicIPs(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetworkPublicIP) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/publicIPs?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/publicIPs", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.WorkloadNetworkPublicIP).init(
             self.pipeline,
@@ -2271,7 +4206,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Get a WorkloadNetworkPublicIP
     pub fn getPublicIP(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, public_ip_id: []const u8) !models.WorkloadNetworkPublicIP {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/publicIPs/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, public_ip_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, public_ip_id);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/publicIPs/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -2280,7 +4233,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("WorkloadNetworks.getPublicIP", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -2288,7 +4241,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Create a WorkloadNetworkPublicIP
     pub fn createPublicIP(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, public_ip_id: []const u8, workload_network_public_ip: models.WorkloadNetworkPublicIP) !core.lro.TypedPoller(models.WorkloadNetworkPublicIP) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/publicIPs/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, public_ip_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, public_ip_id);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/publicIPs/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PUT, url);
         defer req.deinit();
@@ -2301,7 +4272,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 201 })) {
             core.pager.logHttpError("WorkloadNetworks.createPublicIP", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -2309,7 +4280,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Delete a WorkloadNetworkPublicIP
     pub fn deletePublicIP(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, public_ip_id: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/publicIPs/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, public_ip_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, public_ip_id);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/publicIPs/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_3, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
         defer req.deinit();
@@ -2317,7 +4306,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 202, 204 })) {
             core.pager.logHttpError("WorkloadNetworks.deletePublicIP", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -2325,7 +4314,23 @@ pub const WorkloadNetworks = struct {
     }
     /// List WorkloadNetworkSegment resources by WorkloadNetwork
     pub fn listSegments(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetworkSegment) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/segments?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/segments", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.WorkloadNetworkSegment).init(
             self.pipeline,
@@ -2337,7 +4342,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Get a WorkloadNetworkSegment
     pub fn getSegment(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, segment_id: []const u8) !models.WorkloadNetworkSegment {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/segments/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, segment_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, segment_id);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/segments/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -2346,7 +4369,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("WorkloadNetworks.getSegment", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -2354,7 +4377,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Create a WorkloadNetworkSegment
     pub fn createSegments(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, segment_id: []const u8, workload_network_segment: models.WorkloadNetworkSegment) !core.lro.TypedPoller(models.WorkloadNetworkSegment) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/segments/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, segment_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, segment_id);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/segments/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PUT, url);
         defer req.deinit();
@@ -2367,7 +4408,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 201 })) {
             core.pager.logHttpError("WorkloadNetworks.createSegments", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -2375,7 +4416,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Update a WorkloadNetworkSegment
     pub fn updateSegments(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, segment_id: []const u8, workload_network_segment: models.WorkloadNetworkSegment) !core.lro.TypedPoller(models.WorkloadNetworkSegment) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/segments/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, segment_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, segment_id);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/segments/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PATCH, url);
         defer req.deinit();
@@ -2388,7 +4447,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 202 })) {
             core.pager.logHttpError("WorkloadNetworks.updateSegments", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -2396,7 +4455,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Delete a WorkloadNetworkSegment
     pub fn deleteSegment(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, segment_id: []const u8) !core.lro.TypedPoller(void) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/segments/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, segment_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, segment_id);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/segments/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
         defer req.deinit();
@@ -2404,7 +4481,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 202, 204 })) {
             core.pager.logHttpError("WorkloadNetworks.deleteSegment", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -2412,7 +4489,23 @@ pub const WorkloadNetworks = struct {
     }
     /// List WorkloadNetworkVirtualMachine resources by WorkloadNetwork
     pub fn listVirtualMachines(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetworkVirtualMachine) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/virtualMachines?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/virtualMachines", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.WorkloadNetworkVirtualMachine).init(
             self.pipeline,
@@ -2424,7 +4517,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Get a WorkloadNetworkVirtualMachine
     pub fn getVirtualMachine(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, virtual_machine_id: []const u8) !models.WorkloadNetworkVirtualMachine {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/virtualMachines/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, virtual_machine_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, virtual_machine_id);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/virtualMachines/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -2433,7 +4544,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("WorkloadNetworks.getVirtualMachine", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -2441,7 +4552,23 @@ pub const WorkloadNetworks = struct {
     }
     /// List WorkloadNetworkVMGroup resources by WorkloadNetwork
     pub fn listVMGroups(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetworkVMGroup) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/vmGroups?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/vmGroups", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         return core.pager.PipelinePager(models.WorkloadNetworkVMGroup).init(
             self.pipeline,
@@ -2453,7 +4580,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Get a WorkloadNetworkVMGroup
     pub fn getVMGroup(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, vm_group_id: []const u8) !models.WorkloadNetworkVMGroup {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/vmGroups/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, vm_group_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, vm_group_id);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/vmGroups/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .GET, url);
         defer req.deinit();
@@ -2462,7 +4607,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{200})) {
             core.pager.logHttpError("WorkloadNetworks.getVMGroup", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -2470,7 +4615,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Create a WorkloadNetworkVMGroup
     pub fn createVMGroup(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, vm_group_id: []const u8, workload_network_vm_group: models.WorkloadNetworkVMGroup) !core.lro.TypedPoller(models.WorkloadNetworkVMGroup) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/vmGroups/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, vm_group_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, vm_group_id);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/vmGroups/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PUT, url);
         defer req.deinit();
@@ -2483,7 +4646,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 201 })) {
             core.pager.logHttpError("WorkloadNetworks.createVMGroup", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -2491,7 +4654,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Update a WorkloadNetworkVMGroup
     pub fn updateVMGroup(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, vm_group_id: []const u8, workload_network_vm_group: models.WorkloadNetworkVMGroup) !core.lro.TypedPoller(models.WorkloadNetworkVMGroup) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/vmGroups/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, vm_group_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, vm_group_id);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/vmGroups/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_2, encoded_path_3 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .PATCH, url);
         defer req.deinit();
@@ -2504,7 +4685,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 202 })) {
             core.pager.logHttpError("WorkloadNetworks.updateVMGroup", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
@@ -2512,7 +4693,25 @@ pub const WorkloadNetworks = struct {
     }
     /// Delete a WorkloadNetworkVMGroup
     pub fn deleteVMGroup(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, vm_group_id: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
-        const url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/vmGroups/{s}?api-version={s}", .{ self.endpoint, self.subscription_id, resource_group_name, private_cloud_name, vm_group_id, self.api_version });
+        const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
+        defer alloc.free(encoded_path_0);
+        const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
+        defer alloc.free(encoded_path_1);
+        const encoded_path_2 = try core.url.encodePathSegment(alloc, vm_group_id);
+        defer alloc.free(encoded_path_2);
+        const encoded_path_3 = try core.url.encodePathSegment(alloc, private_cloud_name);
+        defer alloc.free(encoded_path_3);
+        const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/resourceGroups/{s}/providers/Microsoft.AVS/privateClouds/{s}/workloadNetworks/default/vmGroups/{s}", .{ self.endpoint, encoded_path_0, encoded_path_1, encoded_path_3, encoded_path_2 });
+        defer alloc.free(base_url);
+        var url_buf: std.ArrayList(u8) = .empty;
+        defer url_buf.deinit(alloc);
+        try url_buf.appendSlice(alloc, base_url);
+        var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
+        const encoded_query_0 = try core.url.percentEncode(alloc, self.api_version);
+        defer alloc.free(encoded_query_0);
+        try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
+        has_query = true;
+        const url = try url_buf.toOwnedSlice(alloc);
         defer alloc.free(url);
         var req = core.http.Request.init(alloc, .DELETE, url);
         defer req.deinit();
@@ -2520,7 +4719,7 @@ pub const WorkloadNetworks = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!resp.isSuccess()) {
+        if (!responseStatusExpected(resp.status_code, &.{ 200, 202, 204 })) {
             core.pager.logHttpError("WorkloadNetworks.deleteVMGroup", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }

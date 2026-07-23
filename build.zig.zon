@@ -1,12 +1,12 @@
 .{
-    .name = .arm_avs,
+    .name = .azure_rest_arm_avs,
     .version = "0.1.0",
-    .fingerprint = 0xfdf7c70c584a90c6,
+    .fingerprint = 0xa125d6aff0d22b24,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
-        .azure_sdk = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig#f02d62e09a17e722f5828caa8acc290d94b654bf",
-            .hash = "azure_sdk-0.1.0--PMlNZAHCQB-Zo8vjfyyjg8eio5OWTWdcAe7LRgU_pyT",
+        .azure_sdk_core = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#5c37f2997b0a9dcc2db91f83baf0a492342621a2",
+            .hash = "azure_sdk_core-0.1.0-eFY0EtlTBQDltjWjN0xVytGGsv4kqwm1JP_PY18iWFb3",
         },
         .serde = .{
             .url = "git+https://github.com/cataggar/serde.zig#7012f58c7ddf490125852e1d22006b552a1693c7",
@@ -14,9 +14,12 @@
         },
     },
     .paths = .{
+        ".gitignore",
         "build.zig",
         "build.zig.zon",
         "src",
+        "examples",
         "README.md",
+        "LICENSE.txt",
     },
 }
