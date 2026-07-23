@@ -35,4 +35,3 @@ release catalog.
 | `azure_sdk_kusto_common` | [Kusto Common](../sdk/kusto/common/README.md) | `sdk/kusto_common` | package |
 | `azure_sdk_kusto_data` | [Kusto Data](../sdk/kusto/data/README.md) | `sdk/kusto_data` | package |
 | `azure_sdk_kusto_ingest` | [Kusto Ingest](../sdk/kusto/ingest/README.md) | `sdk/kusto_ingest` | package |
-| `azure_sdk` | [Aggregate](../sdk/aggregate/README.md) | `sdk/aggregate` | package |

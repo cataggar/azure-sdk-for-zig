@@ -5,11 +5,11 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const aggregate = b.dependency("azure_sdk", .{
+    const core_dependency = b.dependency("azure_sdk_core", .{
         .target = target,
         .optimize = optimize,
     });
-    const core_mod = aggregate.module("azure_sdk_core");
+    const core_mod = core_dependency.module("azure_sdk_core");
 
     const test_step = b.step("test", "Run all package and workspace tests");
     const package_test_tail = addPackageTests(b);
@@ -18,32 +18,7 @@ pub fn build(b: *std.Build) void {
         "eng/fixtures/direct_package_consumer",
         package_test_tail,
     );
-    const aggregate_consumer = addFixtureTest(
-        b,
-        "eng/fixtures/aggregate_consumer",
-        &direct_consumer.step,
-    );
-
-    const aggregate_export_fixture = b.dependency("aggregate_export_fixture", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const aggregate_export_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("eng/fixtures/aggregate_export_consumer.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{
-                    .name = "fixture_module",
-                    .module = aggregate_export_fixture.module("fixture_module"),
-                },
-            },
-        }),
-    });
-    const run_aggregate_export_tests = b.addRunArtifact(aggregate_export_tests);
-    run_aggregate_export_tests.step.dependOn(&aggregate_consumer.step);
-    test_step.dependOn(&run_aggregate_export_tests.step);
+    test_step.dependOn(&direct_consumer.step);
 
     addPackageToolSteps(b, test_step);
     addExample(b, target, optimize, core_mod);

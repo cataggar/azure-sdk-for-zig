@@ -24,4 +24,3 @@ ownership, examples, and compatibility guidance lives beside the package under
 - [Attestation](../sdk/attestation/README.md)
 - [Messaging](../sdk/messaging/README.md)
 - [Kusto](../sdk/kusto/README.md)
-- [Aggregate package](../sdk/aggregate/README.md)

@@ -45,7 +45,7 @@ fn usage() void {
 
 fn check(allocator: std.mem.Allocator, io: std.Io) !void {
     try registry.validate(allocator, &registry.all);
-    if (registry.all.len != 26) return error.UnexpectedPackageCount;
+    if (registry.all.len != 25) return error.UnexpectedPackageCount;
 
     const root_license = try readFile(allocator, io, "LICENSE.txt");
     const root_readme = try readFile(allocator, io, "README.md");

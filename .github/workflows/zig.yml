@@ -30,7 +30,7 @@ jobs:
       - name: Format check
         run: zig fmt --check sdk/ rest/ examples/ codegen/ eng/ build.zig
 
-      - name: Build aggregate-backed workspace
+      - name: Build workspace
         run: zig build
 
       - name: Test registry-ordered package suite
@@ -39,11 +39,6 @@ jobs:
       - name: Validate package registry
         if: matrix.os == 'ubuntu-latest'
         run: zig build package-check --summary all
-
-      - name: Test aggregate-only consumer
-        if: matrix.os == 'ubuntu-latest'
-        working-directory: eng/fixtures/aggregate_consumer
-        run: zig build test --summary all
 
       - name: Test TypeSpec emitter
         if: matrix.os == 'ubuntu-latest'

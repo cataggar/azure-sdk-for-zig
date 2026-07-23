@@ -40,18 +40,11 @@ The canonical import rename lands before package extraction.
 
 ## Consumer choices
 
-Consumers may:
-
-- depend directly on only the canonical packages they use; or
-- depend on the `azure_sdk` aggregate and import the same canonical module
-  names.
-
-Do not mix direct and aggregate instances of the same package in one build.
-The aggregate does not expose any old module names.
+Consumers depend directly on only the canonical packages they use and import
+their canonical module names.
 
 ## Dependency migration
 
 Generated REST and handwritten SDK packages depend on
-`azure_sdk_core`, not the aggregate. Family and integration packages declare
-their direct internal dependencies explicitly; see the
-[package catalog](package-catalog.md).
+`azure_sdk_core`. Family and integration packages declare their direct internal
+dependencies explicitly; see the [package catalog](package-catalog.md).

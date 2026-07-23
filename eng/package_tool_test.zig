@@ -1,8 +1,8 @@
 const std = @import("std");
 const registry = @import("packages.zig");
 
-test "registry contains a valid twenty-six-package dependency graph" {
-    try std.testing.expectEqual(@as(usize, 26), registry.all.len);
+test "registry contains a valid twenty-five-package dependency graph" {
+    try std.testing.expectEqual(@as(usize, 25), registry.all.len);
     try registry.validate(std.testing.allocator, &registry.all);
     for (registry.all) |entry| {
         try std.testing.expectEqual(registry.MigrationState.package, entry.state);
@@ -20,10 +20,6 @@ test "topological order places dependencies before dependents" {
             try std.testing.expect(position(order, dependency_index).? < entry_position);
         }
     }
-    try std.testing.expectEqual(
-        registry.find(&registry.all, "azure_sdk").?,
-        order[order.len - 1],
-    );
 }
 
 test "package tags are package scoped" {

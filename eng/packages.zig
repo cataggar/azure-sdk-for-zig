@@ -3,7 +3,6 @@ const std = @import("std");
 pub const Kind = enum {
     rest,
     sdk,
-    aggregate,
 };
 
 pub const MigrationState = enum {
@@ -30,34 +29,6 @@ pub const Package = struct {
     examples_command: ?[]const u8 = null,
     live_test_command: ?[]const u8 = null,
     regeneration_command: ?[]const u8 = null,
-};
-
-const all_implementation_packages = &.{
-    "azure_sdk_core_tracing",
-    "azure_sdk_core_perf",
-    "azure_sdk_core_amqp",
-    "azure_sdk_core",
-    "azure_sdk_core_testing",
-    "azure_rest_arm_avs",
-    "azure_rest_keyvault_secrets",
-    "azure_rest_container_registry",
-    "azure_sdk_container_registry",
-    "azure_sdk_storage_common",
-    "azure_sdk_storage_blobs",
-    "azure_sdk_storage_queues",
-    "azure_sdk_storage_files_shares",
-    "azure_sdk_storage_files_datalake",
-    "azure_sdk_keyvault",
-    "azure_sdk_data_tables",
-    "azure_sdk_data_cosmos",
-    "azure_sdk_data_appconfiguration",
-    "azure_sdk_attestation",
-    "azure_sdk_messaging_common",
-    "azure_sdk_eventhubs",
-    "azure_sdk_servicebus",
-    "azure_sdk_kusto_common",
-    "azure_sdk_kusto_data",
-    "azure_sdk_kusto_ingest",
 };
 
 pub const all = [_]Package{
@@ -609,25 +580,6 @@ pub const all = [_]Package{
         .examples_command = "zig build examples",
         .live_test_command = "zig build live-test",
     },
-    .{
-        .kind = .aggregate,
-        .state = .package,
-        .source_path = "sdk/aggregate",
-        .root_source_file = "test/all_modules.zig",
-        .name = "azure_sdk",
-        .module_name = "azure_sdk",
-        .branch = "sdk/aggregate",
-        .dependencies = all_implementation_packages,
-        .external_dependencies = &.{ "uamqp", "serde" },
-        .publish_paths = &.{
-            ".gitignore",
-            "build.zig",
-            "build.zig.zon",
-            "test",
-            "README.md",
-            "LICENSE.txt",
-        },
-    },
 };
 
 pub fn find(entries: []const Package, name: []const u8) ?usize {
@@ -765,22 +717,11 @@ fn validateEntry(allocator: std.mem.Allocator, entry: Package) !void {
     };
     if (version.pre != null or version.build != null) return error.InvalidVersion;
 
-    if (entry.kind == .aggregate) {
-        if (!std.mem.eql(u8, entry.source_path, "sdk/aggregate") or
-            !std.mem.eql(u8, entry.name, "azure_sdk") or
-            !std.mem.eql(u8, entry.branch, "sdk/aggregate"))
-        {
-            return error.InvalidAggregateIdentity;
-        }
-        return;
-    }
-
     if (entry.identity_override) return;
 
     const prefix = switch (entry.kind) {
         .sdk => "sdk/",
         .rest => "rest/",
-        .aggregate => unreachable,
     };
     if (!std.mem.startsWith(u8, entry.source_path, prefix)) {
         return error.InvalidSourcePath;
