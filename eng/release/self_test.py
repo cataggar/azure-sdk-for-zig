@@ -271,8 +271,13 @@ def expect_failure(
 
 def assert_cleanup(engine: Engine) -> None:
     worktrees = git(engine.root, "worktree", "list", "--porcelain")
-    if "/work/" in worktrees or "publication-worktree" in worktrees:
-        raise ReleaseError("self-test: disposable worktree was not removed")
+    release_root = engine.release_root.resolve()
+    for line in worktrees.splitlines():
+        if not line.startswith("worktree "):
+            continue
+        worktree = Path(line.removeprefix("worktree ")).resolve()
+        if worktree == release_root or release_root in worktree.parents:
+            raise ReleaseError("self-test: disposable worktree was not removed")
     if git(engine.root, "branch", "--list", "package-release-*"):
         raise ReleaseError("self-test: temporary publication branch was not removed")
     for work in engine.release_root.glob("*/work"):
