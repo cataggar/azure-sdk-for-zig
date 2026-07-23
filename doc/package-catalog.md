@@ -29,9 +29,9 @@ dependency order.
 | `azure_sdk_data_cosmos` | [Cosmos](../sdk/data/cosmos/README.md) | `sdk/data_cosmos` | package |
 | `azure_sdk_data_appconfiguration` | [App Configuration](../sdk/data/appconfiguration/README.md) | `sdk/data_appconfiguration` | package |
 | `azure_sdk_attestation` | [Attestation](../sdk/attestation/README.md) | `sdk/attestation` | package |
-| `azure_sdk_messaging_common` | [Messaging Common](../sdk/messaging/common/README.md) | `sdk/messaging_common` | monolithic |
-| `azure_sdk_eventhubs` | [Event Hubs](../sdk/messaging/eventhubs/README.md) | `sdk/eventhubs` | monolithic |
-| `azure_sdk_servicebus` | [Service Bus](../sdk/messaging/servicebus/README.md) | `sdk/servicebus` | monolithic |
+| `azure_sdk_messaging_common` | [Messaging Common](../sdk/messaging/common/README.md) | `sdk/messaging_common` | package |
+| `azure_sdk_eventhubs` | [Event Hubs](../sdk/messaging/eventhubs/README.md) | `sdk/eventhubs` | package |
+| `azure_sdk_servicebus` | [Service Bus](../sdk/messaging/servicebus/README.md) | `sdk/servicebus` | package |
 | `azure_sdk_kusto_common` | [Kusto Common](../sdk/kusto/common/README.md) | `sdk/kusto_common` | monolithic |
 | `azure_sdk_kusto_data` | [Kusto Data](../sdk/kusto/data/README.md) | `sdk/kusto_data` | monolithic |
 | `azure_sdk_kusto_ingest` | [Kusto Ingest](../sdk/kusto/ingest/README.md) | `sdk/kusto_ingest` | monolithic |

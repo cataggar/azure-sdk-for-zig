@@ -61,6 +61,15 @@
         .azure_sdk_attestation = .{
             .path = "sdk/attestation",
         },
+        .azure_sdk_messaging_common = .{
+            .path = "sdk/messaging/common",
+        },
+        .azure_sdk_eventhubs = .{
+            .path = "sdk/messaging/eventhubs",
+        },
+        .azure_sdk_servicebus = .{
+            .path = "sdk/messaging/servicebus",
+        },
         .aggregate_export_fixture = .{
             .path = "eng/fixtures/aggregate_export",
         },
