@@ -7,7 +7,7 @@ orphan branch). This project depends on that package and on
 git URLs in `build.zig.zon` — there is no local checkout required.
 
 ```bash
-git clone -b examples/arm_avs https://github.com/cataggar/azure-sdk-for-zig arm-avs-examples
+git clone -b example/arm_avs https://github.com/cataggar/azure-sdk-for-zig arm-avs-examples
 cd arm-avs-examples
 az login
 ```
