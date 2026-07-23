@@ -6,7 +6,10 @@ canonical packages start at `0.1.0`; package-scoped release tags use
 
 Every entry has a package-local build and can be versioned independently. The
 root `azure_sdk_workspace` package is integration-only and is not part of this
-release catalog.
+release catalog. The root README presents only service-facing SDKs; this
+catalog includes every independently versioned SDK and REST package.
+
+## SDK Packages
 
 | Package | Source documentation | Branch | State |
 | --- | --- | --- | --- |
@@ -15,9 +18,6 @@ release catalog.
 | `azure_sdk_core_amqp` | [Core AMQP](../sdk/core/amqp/README.md) | `sdk/core_amqp` | package |
 | `azure_sdk_core` | [Core](../sdk/core/README.md) | `sdk/core` | package |
 | `azure_sdk_core_testing` | [Core Testing](../sdk/core/testing/README.md) | `sdk/core_testing` | package |
-| `azure_rest_arm_avs` | [ARM AVS REST](../rest/arm_avs/README.md) | `rest/arm_avs` | package |
-| `azure_rest_keyvault_secrets` | [Key Vault Secrets REST](../rest/keyvault_secrets/README.md) | `rest/keyvault_secrets` | package |
-| `azure_rest_container_registry` | [Container Registry REST](../rest/container_registry/README.md) | `rest/container_registry` | package |
 | `azure_sdk_container_registry` | [Container Registry SDK](../sdk/container_registry/README.md) | `sdk/container_registry` | package |
 | `azure_sdk_storage_common` | [Storage Common](../sdk/storage/common/README.md) | `sdk/storage_common` | package |
 | `azure_sdk_storage_blobs` | [Storage Blobs](../sdk/storage/blobs/README.md) | `sdk/storage_blobs` | package |
@@ -35,3 +35,11 @@ release catalog.
 | `azure_sdk_kusto_common` | [Kusto Common](../sdk/kusto/common/README.md) | `sdk/kusto_common` | package |
 | `azure_sdk_kusto_data` | [Kusto Data](../sdk/kusto/data/README.md) | `sdk/kusto_data` | package |
 | `azure_sdk_kusto_ingest` | [Kusto Ingest](../sdk/kusto/ingest/README.md) | `sdk/kusto_ingest` | package |
+
+## REST Packages
+
+| Package | Source documentation | Branch | State |
+| --- | --- | --- | --- |
+| `azure_rest_arm_avs` | [ARM AVS REST](../rest/arm_avs/README.md) | `rest/arm_avs` | package |
+| `azure_rest_keyvault_secrets` | [Key Vault Secrets REST](../rest/keyvault_secrets/README.md) | `rest/keyvault_secrets` | package |
+| `azure_rest_container_registry` | [Container Registry REST](../rest/container_registry/README.md) | `rest/container_registry` | package |

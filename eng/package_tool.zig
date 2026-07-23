@@ -70,14 +70,6 @@ fn check(allocator: std.mem.Allocator, io: std.Io) !void {
         if (std.mem.indexOf(u8, catalog, entry.name) == null) {
             return error.PackageMissingFromCatalog;
         }
-        const root_index_link = try std.fmt.allocPrint(
-            allocator,
-            "[`{s}`]({s}/README.md)",
-            .{ entry.name, entry.source_path },
-        );
-        if (std.mem.indexOf(u8, root_readme, root_index_link) == null) {
-            return error.PackageMissingFromRootIndex;
-        }
 
         if (entry.state == .package) {
             const build_path = try std.fs.path.join(
@@ -101,7 +93,7 @@ fn checkRootReadme(readme: []const u8) !void {
         return error.InvalidRootReadmeTitle;
     }
     const expected = [_][]const u8{
-        "## Packages",
+        "## SDK Packages",
         "## Documentation",
         "## License",
     };

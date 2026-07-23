@@ -5,20 +5,11 @@
 
 Azure service clients implemented in pure Zig without C dependencies.
 
-## Packages
+## SDK Packages
 
 | Package | Documentation |
 | --- | --- |
-| [`azure_sdk_core_tracing`](sdk/core/tracing/README.md) | Core tracing |
-| [`azure_sdk_core_perf`](sdk/core/perf/README.md) | Core performance helpers |
-| [`azure_sdk_core_amqp`](sdk/core/amqp/README.md) | AMQP core integration |
-| [`azure_sdk_core`](sdk/core/README.md) | HTTP pipeline, identity, and shared primitives |
-| [`azure_sdk_core_testing`](sdk/core/testing/README.md) | Core test support |
-| [`azure_rest_arm_avs`](rest/arm_avs/README.md) | ARM AVS generated protocol |
-| [`azure_rest_keyvault_secrets`](rest/keyvault_secrets/README.md) | Key Vault Secrets generated protocol |
-| [`azure_rest_container_registry`](rest/container_registry/README.md) | Container Registry generated protocol |
 | [`azure_sdk_container_registry`](sdk/container_registry/README.md) | Container Registry client |
-| [`azure_sdk_storage_common`](sdk/storage/common/README.md) | Storage shared primitives |
 | [`azure_sdk_storage_blobs`](sdk/storage/blobs/README.md) | Blob Storage |
 | [`azure_sdk_storage_queues`](sdk/storage/queues/README.md) | Queue Storage |
 | [`azure_sdk_storage_files_shares`](sdk/storage/files/shares/README.md) | Azure Files shares |
@@ -28,10 +19,8 @@ Azure service clients implemented in pure Zig without C dependencies.
 | [`azure_sdk_data_cosmos`](sdk/data/cosmos/README.md) | Cosmos DB |
 | [`azure_sdk_data_appconfiguration`](sdk/data/appconfiguration/README.md) | App Configuration |
 | [`azure_sdk_attestation`](sdk/attestation/README.md) | Attestation |
-| [`azure_sdk_messaging_common`](sdk/messaging/common/README.md) | Messaging shared primitives |
 | [`azure_sdk_eventhubs`](sdk/messaging/eventhubs/README.md) | Event Hubs and Blob checkpoint store |
 | [`azure_sdk_servicebus`](sdk/messaging/servicebus/README.md) | Service Bus |
-| [`azure_sdk_kusto_common`](sdk/kusto/common/README.md) | Kusto shared primitives |
 | [`azure_sdk_kusto_data`](sdk/kusto/data/README.md) | Kusto queries and management |
 | [`azure_sdk_kusto_ingest`](sdk/kusto/ingest/README.md) | Kusto ingestion |
 
