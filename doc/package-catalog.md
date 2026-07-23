@@ -19,11 +19,11 @@ dependency order.
 | `azure_rest_keyvault_secrets` | [Key Vault Secrets REST](../rest/keyvault_secrets/README.md) | `rest/keyvault_secrets` | package |
 | `azure_rest_container_registry` | [Container Registry REST](../rest/container_registry/README.md) | `rest/container_registry` | package |
 | `azure_sdk_container_registry` | [Container Registry SDK](../sdk/container_registry/README.md) | `sdk/container_registry` | package |
-| `azure_sdk_storage_common` | [Storage Common](../sdk/storage/common/README.md) | `sdk/storage_common` | monolithic |
-| `azure_sdk_storage_blobs` | [Storage Blobs](../sdk/storage/blobs/README.md) | `sdk/storage_blobs` | monolithic |
-| `azure_sdk_storage_queues` | [Storage Queues](../sdk/storage/queues/README.md) | `sdk/storage_queues` | monolithic |
-| `azure_sdk_storage_files_shares` | [Files Shares](../sdk/storage/files/shares/README.md) | `sdk/storage_files_shares` | monolithic |
-| `azure_sdk_storage_files_datalake` | [Data Lake](../sdk/storage/files/datalake/README.md) | `sdk/storage_files_datalake` | monolithic |
+| `azure_sdk_storage_common` | [Storage Common](../sdk/storage/common/README.md) | `sdk/storage_common` | package |
+| `azure_sdk_storage_blobs` | [Storage Blobs](../sdk/storage/blobs/README.md) | `sdk/storage_blobs` | package |
+| `azure_sdk_storage_queues` | [Storage Queues](../sdk/storage/queues/README.md) | `sdk/storage_queues` | package |
+| `azure_sdk_storage_files_shares` | [Files Shares](../sdk/storage/files/shares/README.md) | `sdk/storage_files_shares` | package |
+| `azure_sdk_storage_files_datalake` | [Data Lake](../sdk/storage/files/datalake/README.md) | `sdk/storage_files_datalake` | package |
 | `azure_sdk_keyvault` | [Key Vault](../sdk/keyvault/README.md) | `sdk/keyvault` | monolithic |
 | `azure_sdk_data_tables` | [Data Tables](../sdk/data/tables/README.md) | `sdk/data_tables` | monolithic |
 | `azure_sdk_data_cosmos` | [Cosmos](../sdk/data/cosmos/README.md) | `sdk/data_cosmos` | monolithic |

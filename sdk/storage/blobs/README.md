@@ -8,3 +8,9 @@ Release branch: `sdk/storage_blobs`. The package depends on
 `0.1.0`.
 
 See the [Storage overview](../README.md) for complete-SAS transfer behavior.
+
+```bash
+zig build test --summary all
+zig build examples
+zig build complete-sas-upload -- <blob-sas-url> <file>
+```

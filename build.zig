@@ -88,6 +88,47 @@ pub fn build(b: *std.Build) void {
         container_registry_protocol_mod,
     );
 
+    const storage_common_dep = b.dependency("azure_sdk_storage_common", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const storage_common_mod = storage_common_dep.module("azure_sdk_storage_common");
+    storage_common_mod.addImport("azure_sdk_core", core_mod);
+
+    const storage_blobs_dep = b.dependency("azure_sdk_storage_blobs", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const blobs_mod = storage_blobs_dep.module("azure_sdk_storage_blobs");
+    blobs_mod.addImport("azure_sdk_core", core_mod);
+    blobs_mod.addImport("azure_sdk_storage_common", storage_common_mod);
+    blobs_mod.addImport("serde", serde_mod);
+
+    const storage_queues_dep = b.dependency("azure_sdk_storage_queues", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const queues_mod = storage_queues_dep.module("azure_sdk_storage_queues");
+    queues_mod.addImport("azure_sdk_core", core_mod);
+    queues_mod.addImport("azure_sdk_storage_common", storage_common_mod);
+    queues_mod.addImport("serde", serde_mod);
+
+    const storage_files_shares_dep = b.dependency("azure_sdk_storage_files_shares", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const storage_files_shares_mod =
+        storage_files_shares_dep.module("azure_sdk_storage_files_shares");
+    storage_files_shares_mod.addImport("azure_sdk_core", core_mod);
+
+    const storage_files_datalake_dep = b.dependency("azure_sdk_storage_files_datalake", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const storage_files_datalake_mod =
+        storage_files_datalake_dep.module("azure_sdk_storage_files_datalake");
+    storage_files_datalake_mod.addImport("azure_sdk_core", core_mod);
+
     // -- Modules (libraries exposed to consumers) --
 
     exportDependencyModule(b, "azure_sdk_core_tracing", core_tracing_mod);
@@ -99,25 +140,11 @@ pub fn build(b: *std.Build) void {
     exportDependencyModule(b, "azure_rest_keyvault_secrets", keyvault_secrets_mod);
     exportDependencyModule(b, "azure_rest_container_registry", container_registry_protocol_mod);
     exportDependencyModule(b, "azure_sdk_container_registry", container_registry_sdk_mod);
-
-    const storage_common_mod = b.addModule("azure_sdk_storage_common", .{
-        .root_source_file = b.path("sdk/storage/common/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "azure_sdk_core", .module = core_mod },
-            .{ .name = "serde", .module = serde_mod },
-        },
-    });
-
-    const blobs_mod = b.addModule("azure_sdk_storage_blobs", .{
-        .root_source_file = b.path("sdk/storage/blobs/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "azure_sdk_core", .module = core_mod },
-            .{ .name = "azure_sdk_storage_common", .module = storage_common_mod },
-            .{ .name = "serde", .module = serde_mod },
-        },
-    });
+    exportDependencyModule(b, "azure_sdk_storage_common", storage_common_mod);
+    exportDependencyModule(b, "azure_sdk_storage_blobs", blobs_mod);
+    exportDependencyModule(b, "azure_sdk_storage_queues", queues_mod);
+    exportDependencyModule(b, "azure_sdk_storage_files_shares", storage_files_shares_mod);
+    exportDependencyModule(b, "azure_sdk_storage_files_datalake", storage_files_datalake_mod);
 
     _ = b.addModule("azure_sdk_keyvault", .{
         .root_source_file = b.path("sdk/keyvault/root.zig"),
@@ -138,34 +165,6 @@ pub fn build(b: *std.Build) void {
 
     _ = b.addModule("azure_sdk_data_cosmos", .{
         .root_source_file = b.path("sdk/data/cosmos/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "azure_sdk_core", .module = core_mod },
-            .{ .name = "serde", .module = serde_mod },
-        },
-    });
-
-    const queues_mod = b.addModule("azure_sdk_storage_queues", .{
-        .root_source_file = b.path("sdk/storage/queues/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "azure_sdk_core", .module = core_mod },
-            .{ .name = "azure_sdk_storage_common", .module = storage_common_mod },
-            .{ .name = "serde", .module = serde_mod },
-        },
-    });
-
-    _ = b.addModule("azure_sdk_storage_files_shares", .{
-        .root_source_file = b.path("sdk/storage/files/shares/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "azure_sdk_core", .module = core_mod },
-            .{ .name = "serde", .module = serde_mod },
-        },
-    });
-
-    _ = b.addModule("azure_sdk_storage_files_datalake", .{
-        .root_source_file = b.path("sdk/storage/files/datalake/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_sdk_core", .module = core_mod },
@@ -393,10 +392,6 @@ pub fn build(b: *std.Build) void {
         "sdk/keyvault/keys/root.zig",
         "sdk/keyvault/certificates/root.zig",
         "sdk/keyvault/administration/root.zig",
-        "sdk/storage/blobs/root.zig",
-        "sdk/storage/queues/root.zig",
-        "sdk/storage/files/shares/root.zig",
-        "sdk/storage/files/datalake/root.zig",
         "sdk/data/appconfiguration/root.zig",
         "sdk/data/cosmos/root.zig",
         "sdk/attestation/root.zig",
