@@ -1,0 +1,20 @@
+.{
+    .name = .azure_sdk_core_amqp,
+    .version = "0.1.0",
+    .fingerprint = 0x32edc0d712345678,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .uamqp = .{
+            .url = "git+https://github.com/cataggar/azure-uamqp-zig#1121d1e68dde8d188516083555cc7e1553b0f595",
+            .hash = "uamqp-0.1.0-lXMcafDqAQD3LSUZbUbyfrWhQfGG7OevKFUwhWxvGZDU",
+        },
+    },
+    .paths = .{
+        ".gitignore",
+        "build.zig",
+        "build.zig.zon",
+        "root.zig",
+        "README.md",
+        "LICENSE.txt",
+    },
+}
