@@ -129,6 +129,46 @@ pub fn build(b: *std.Build) void {
         storage_files_datalake_dep.module("azure_sdk_storage_files_datalake");
     storage_files_datalake_mod.addImport("azure_sdk_core", core_mod);
 
+    const keyvault_dep = b.dependency("azure_sdk_keyvault", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const keyvault_mod = keyvault_dep.module("azure_sdk_keyvault");
+    keyvault_mod.addImport("azure_sdk_core", core_mod);
+    keyvault_mod.addImport("serde", serde_mod);
+
+    const data_tables_dep = b.dependency("azure_sdk_data_tables", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const data_tables_mod = data_tables_dep.module("azure_sdk_data_tables");
+    data_tables_mod.addImport("azure_sdk_core", core_mod);
+
+    const data_cosmos_dep = b.dependency("azure_sdk_data_cosmos", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const data_cosmos_mod = data_cosmos_dep.module("azure_sdk_data_cosmos");
+    data_cosmos_mod.addImport("azure_sdk_core", core_mod);
+    data_cosmos_mod.addImport("serde", serde_mod);
+
+    const data_appconfiguration_dep = b.dependency("azure_sdk_data_appconfiguration", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const data_appconfiguration_mod =
+        data_appconfiguration_dep.module("azure_sdk_data_appconfiguration");
+    data_appconfiguration_mod.addImport("azure_sdk_core", core_mod);
+    data_appconfiguration_mod.addImport("serde", serde_mod);
+
+    const attestation_dep = b.dependency("azure_sdk_attestation", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const attestation_mod = attestation_dep.module("azure_sdk_attestation");
+    attestation_mod.addImport("azure_sdk_core", core_mod);
+    attestation_mod.addImport("serde", serde_mod);
+
     // -- Modules (libraries exposed to consumers) --
 
     exportDependencyModule(b, "azure_sdk_core_tracing", core_tracing_mod);
@@ -145,50 +185,11 @@ pub fn build(b: *std.Build) void {
     exportDependencyModule(b, "azure_sdk_storage_queues", queues_mod);
     exportDependencyModule(b, "azure_sdk_storage_files_shares", storage_files_shares_mod);
     exportDependencyModule(b, "azure_sdk_storage_files_datalake", storage_files_datalake_mod);
-
-    _ = b.addModule("azure_sdk_keyvault", .{
-        .root_source_file = b.path("sdk/keyvault/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "azure_sdk_core", .module = core_mod },
-            .{ .name = "serde", .module = serde_mod },
-        },
-    });
-
-    _ = b.addModule("azure_sdk_data_tables", .{
-        .root_source_file = b.path("sdk/data/tables/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "azure_sdk_core", .module = core_mod },
-        },
-    });
-
-    _ = b.addModule("azure_sdk_data_cosmos", .{
-        .root_source_file = b.path("sdk/data/cosmos/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "azure_sdk_core", .module = core_mod },
-            .{ .name = "serde", .module = serde_mod },
-        },
-    });
-
-    _ = b.addModule("azure_sdk_data_appconfiguration", .{
-        .root_source_file = b.path("sdk/data/appconfiguration/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "azure_sdk_core", .module = core_mod },
-            .{ .name = "serde", .module = serde_mod },
-        },
-    });
-
-    _ = b.addModule("azure_sdk_attestation", .{
-        .root_source_file = b.path("sdk/attestation/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "azure_sdk_core", .module = core_mod },
-            .{ .name = "serde", .module = serde_mod },
-        },
-    });
+    exportDependencyModule(b, "azure_sdk_keyvault", keyvault_mod);
+    exportDependencyModule(b, "azure_sdk_data_tables", data_tables_mod);
+    exportDependencyModule(b, "azure_sdk_data_cosmos", data_cosmos_mod);
+    exportDependencyModule(b, "azure_sdk_data_appconfiguration", data_appconfiguration_mod);
+    exportDependencyModule(b, "azure_sdk_attestation", attestation_mod);
 
     const kusto_common_mod = b.addModule("azure_sdk_kusto_common", .{
         .root_source_file = b.path("sdk/kusto/common.zig"),
@@ -266,35 +267,8 @@ pub fn build(b: *std.Build) void {
     });
     const run_storage_common_tests = b.addRunArtifact(storage_common_tests);
 
-    const keyvault_secrets_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("sdk/keyvault/secrets/root.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "azure_sdk_core", .module = core_mod },
-                .{ .name = "serde", .module = serde_mod },
-            },
-        }),
-    });
-    const run_keyvault_secrets_tests = b.addRunArtifact(keyvault_secrets_tests);
-
-    const tables_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("sdk/data/tables/root.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "azure_sdk_core", .module = core_mod },
-            },
-        }),
-    });
-    const run_tables_tests = b.addRunArtifact(tables_tests);
-
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_storage_common_tests.step);
-    test_step.dependOn(&run_keyvault_secrets_tests.step);
-    test_step.dependOn(&run_tables_tests.step);
 
     const package_tool_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -384,32 +358,6 @@ pub fn build(b: *std.Build) void {
         });
         package_tests.setCwd(b.path(package.source_path));
         test_step.dependOn(&package_tests.step);
-    }
-
-    // Service SDK tests — core + identity deps
-    const service_test_sources_ci = [_][]const u8{
-        "sdk/keyvault/root.zig",
-        "sdk/keyvault/keys/root.zig",
-        "sdk/keyvault/certificates/root.zig",
-        "sdk/keyvault/administration/root.zig",
-        "sdk/data/appconfiguration/root.zig",
-        "sdk/data/cosmos/root.zig",
-        "sdk/attestation/root.zig",
-    };
-    for (service_test_sources_ci) |src| {
-        const t = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path(src),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "azure_sdk_core", .module = core_mod },
-                    .{ .name = "azure_sdk_storage_common", .module = storage_common_mod },
-                    .{ .name = "serde", .module = serde_mod },
-                },
-            }),
-        });
-        test_step.dependOn(&b.addRunArtifact(t).step);
     }
 
     // EventHubs tests — needs core + identity + uamqp + messaging_common
