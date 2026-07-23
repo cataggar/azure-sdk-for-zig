@@ -24,11 +24,11 @@ dependency order.
 | `azure_sdk_storage_queues` | [Storage Queues](../sdk/storage/queues/README.md) | `sdk/storage_queues` | package |
 | `azure_sdk_storage_files_shares` | [Files Shares](../sdk/storage/files/shares/README.md) | `sdk/storage_files_shares` | package |
 | `azure_sdk_storage_files_datalake` | [Data Lake](../sdk/storage/files/datalake/README.md) | `sdk/storage_files_datalake` | package |
-| `azure_sdk_keyvault` | [Key Vault](../sdk/keyvault/README.md) | `sdk/keyvault` | monolithic |
-| `azure_sdk_data_tables` | [Data Tables](../sdk/data/tables/README.md) | `sdk/data_tables` | monolithic |
-| `azure_sdk_data_cosmos` | [Cosmos](../sdk/data/cosmos/README.md) | `sdk/data_cosmos` | monolithic |
-| `azure_sdk_data_appconfiguration` | [App Configuration](../sdk/data/appconfiguration/README.md) | `sdk/data_appconfiguration` | monolithic |
-| `azure_sdk_attestation` | [Attestation](../sdk/attestation/README.md) | `sdk/attestation` | monolithic |
+| `azure_sdk_keyvault` | [Key Vault](../sdk/keyvault/README.md) | `sdk/keyvault` | package |
+| `azure_sdk_data_tables` | [Data Tables](../sdk/data/tables/README.md) | `sdk/data_tables` | package |
+| `azure_sdk_data_cosmos` | [Cosmos](../sdk/data/cosmos/README.md) | `sdk/data_cosmos` | package |
+| `azure_sdk_data_appconfiguration` | [App Configuration](../sdk/data/appconfiguration/README.md) | `sdk/data_appconfiguration` | package |
+| `azure_sdk_attestation` | [Attestation](../sdk/attestation/README.md) | `sdk/attestation` | package |
 | `azure_sdk_messaging_common` | [Messaging Common](../sdk/messaging/common/README.md) | `sdk/messaging_common` | monolithic |
 | `azure_sdk_eventhubs` | [Event Hubs](../sdk/messaging/eventhubs/README.md) | `sdk/eventhubs` | monolithic |
 | `azure_sdk_servicebus` | [Service Bus](../sdk/messaging/servicebus/README.md) | `sdk/servicebus` | monolithic |
