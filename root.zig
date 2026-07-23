@@ -1,4 +1,4 @@
-///! Shared utilities for Azure messaging services (Event Hubs, Service Bus).
+//! Shared utilities for Azure messaging services (Event Hubs, Service Bus).
 const std = @import("std");
 
 /// Parsed connection string properties for Azure messaging services.
