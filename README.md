@@ -304,8 +304,9 @@ values.
 ## Independent release preparation
 
 The checked-in package keeps local path dependencies for monorepo development.
-Run `scripts/container-registry-release.sh verify` for deterministic local
-release-layout staging. Publish REST first, then run
-`scripts/container-registry-release.sh prepare-sdk <rest-commit>` so Zig
-computes and applies the immutable REST package hash. Exact commands and the pinned common SDK revision are documented in
+Run `scripts/package-release.sh verify azure_sdk_container_registry` for
+deterministic local release validation. Publish the generated REST package
+first, then prepare the SDK package so the generic engine resolves and applies
+the immutable REST and Core package commits and hashes. Exact commands are
+documented in
 [Container Registry release staging](../../eng/container_registry_release/README.md).
