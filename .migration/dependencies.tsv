@@ -1,0 +1,2 @@
+azure_sdk_core	git+https://github.com/cataggar/azure-sdk-for-zig.git#5c37f2997b0a9dcc2db91f83baf0a492342621a2	azure_sdk_core-0.1.0-eFY0EtlTBQDltjWjN0xVytGGsv4kqwm1JP_PY18iWFb3
+azure_rest_arm_avs	git+https://github.com/cataggar/azure-sdk-for-zig.git#fe7662a3416f599794c10d038854262bf22a664a	azure_rest_arm_avs-0.1.0-JCvS8N8JBwB4fO6MqfXfCFCjkjOMuuZvcAAWx9LI_2Vx

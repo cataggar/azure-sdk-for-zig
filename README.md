@@ -1,9 +1,9 @@
-# arm-avs examples
+# azure_rest_arm_avs examples
 
-Standalone, runnable examples that exercise the generated **`arm_avs`**
+Standalone, runnable examples that exercise the generated **`azure_rest_arm_avs`**
 client (published on the [`rest/arm_avs`](https://github.com/cataggar/azure-sdk-for-zig/tree/rest/arm_avs)
 orphan branch). This project depends on that package and on
-`azure_core` / `azure_identity` from the SDK `main` branch via pinned
+`azure_sdk_core` from the SDK `main` branch via pinned
 git URLs in `build.zig.zon` — there is no local checkout required.
 
 ```bash
@@ -12,7 +12,7 @@ cd arm-avs-examples
 az login
 ```
 
-Auth uses [`AzureCliCredential`](https://github.com/cataggar/azure-sdk-for-zig/blob/main/sdk/identity/azure_cli.zig),
+Auth uses [`AzureCliCredential`](https://github.com/cataggar/azure-sdk-for-zig/blob/main/sdk/core/identity/azure_cli.zig),
 which shells out to `az account get-access-token`, so run `az login`
 first.
 
