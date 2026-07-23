@@ -1,7 +1,7 @@
-///! Shared types for Azure Kusto (Data Explorer) client libraries.
-///!
-///! Provides `KustoConnectionStringBuilder` for connection configuration
-///! and common types used by both the data and ingest clients.
+//! Shared types for Azure Kusto (Data Explorer) client libraries.
+//!
+//! Provides `KustoConnectionStringBuilder` for connection configuration
+//! and common types used by both the data and ingest clients.
 const std = @import("std");
 const core = @import("azure_sdk_core");
 const serde = @import("serde");
