@@ -70,6 +70,15 @@
         .azure_sdk_servicebus = .{
             .path = "sdk/messaging/servicebus",
         },
+        .azure_sdk_kusto_common = .{
+            .path = "sdk/kusto/common",
+        },
+        .azure_sdk_kusto_data = .{
+            .path = "sdk/kusto/data",
+        },
+        .azure_sdk_kusto_ingest = .{
+            .path = "sdk/kusto/ingest",
+        },
         .aggregate_export_fixture = .{
             .path = "eng/fixtures/aggregate_export",
         },

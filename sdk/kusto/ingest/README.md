@@ -148,3 +148,14 @@ deliberately recompresses. Existing Blob URIs are queued as-is.
 One-shot readers may omit a raw size and use bounded block streaming. They
 remain single-consumption sources: rejected, incomplete, or ambiguous Blob
 uploads are not reopened.
+
+## Examples and development
+
+See [`examples/README.md`](examples/README.md) for streaming, queued, managed,
+and status-tracking examples.
+
+```bash
+zig build test --summary all
+zig build examples
+zig build live-test
+```

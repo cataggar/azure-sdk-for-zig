@@ -197,6 +197,36 @@ pub fn build(b: *std.Build) void {
     servicebus_mod.addImport("uamqp", uamqp_mod);
     servicebus_mod.addImport("serde", serde_mod);
 
+    const kusto_common_dep = b.dependency("azure_sdk_kusto_common", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const kusto_common_mod = kusto_common_dep.module("azure_sdk_kusto_common");
+    kusto_common_mod.addImport("azure_sdk_core", core_mod);
+    kusto_common_mod.addImport("serde", serde_mod);
+
+    const kusto_data_dep = b.dependency("azure_sdk_kusto_data", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const kusto_data_mod = kusto_data_dep.module("azure_sdk_kusto_data");
+    kusto_data_mod.addImport("azure_sdk_core", core_mod);
+    kusto_data_mod.addImport("azure_sdk_kusto_common", kusto_common_mod);
+    kusto_data_mod.addImport("serde", serde_mod);
+
+    const kusto_ingest_dep = b.dependency("azure_sdk_kusto_ingest", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const kusto_ingest_mod = kusto_ingest_dep.module("azure_sdk_kusto_ingest");
+    kusto_ingest_mod.addImport("azure_sdk_core", core_mod);
+    kusto_ingest_mod.addImport("azure_sdk_kusto_common", kusto_common_mod);
+    kusto_ingest_mod.addImport("azure_sdk_kusto_data", kusto_data_mod);
+    kusto_ingest_mod.addImport("azure_sdk_storage_common", storage_common_mod);
+    kusto_ingest_mod.addImport("azure_sdk_storage_blobs", blobs_mod);
+    kusto_ingest_mod.addImport("azure_sdk_storage_queues", queues_mod);
+    kusto_ingest_mod.addImport("serde", serde_mod);
+
     // -- Modules (libraries exposed to consumers) --
 
     exportDependencyModule(b, "azure_sdk_core_tracing", core_tracing_mod);
@@ -221,39 +251,9 @@ pub fn build(b: *std.Build) void {
     exportDependencyModule(b, "azure_sdk_messaging_common", messaging_common_mod);
     exportDependencyModule(b, "azure_sdk_eventhubs", eventhubs_mod);
     exportDependencyModule(b, "azure_sdk_servicebus", servicebus_mod);
-
-    const kusto_common_mod = b.addModule("azure_sdk_kusto_common", .{
-        .root_source_file = b.path("sdk/kusto/common.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "azure_sdk_core", .module = core_mod },
-            .{ .name = "serde", .module = serde_mod },
-        },
-    });
-
-    const kusto_data_mod = b.addModule("azure_sdk_kusto_data", .{
-        .root_source_file = b.path("sdk/kusto/data/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "azure_sdk_core", .module = core_mod },
-            .{ .name = "azure_sdk_kusto_common", .module = kusto_common_mod },
-            .{ .name = "serde", .module = serde_mod },
-        },
-    });
-
-    const kusto_ingest_mod = b.addModule("azure_sdk_kusto_ingest", .{
-        .root_source_file = b.path("sdk/kusto/ingest/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "azure_sdk_core", .module = core_mod },
-            .{ .name = "azure_sdk_kusto_common", .module = kusto_common_mod },
-            .{ .name = "azure_sdk_kusto_data", .module = kusto_data_mod },
-            .{ .name = "azure_sdk_storage_blobs", .module = blobs_mod },
-            .{ .name = "azure_sdk_storage_common", .module = storage_common_mod },
-            .{ .name = "azure_sdk_storage_queues", .module = queues_mod },
-            .{ .name = "serde", .module = serde_mod },
-        },
-    });
+    exportDependencyModule(b, "azure_sdk_kusto_common", kusto_common_mod);
+    exportDependencyModule(b, "azure_sdk_kusto_data", kusto_data_mod);
+    exportDependencyModule(b, "azure_sdk_kusto_ingest", kusto_ingest_mod);
 
     // -- Tests --
 
@@ -363,76 +363,6 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&package_tests.step);
     }
 
-    // Kusto error tests — needs core + serde
-    {
-        const t = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("sdk/kusto/error.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "azure_sdk_core", .module = core_mod },
-                    .{ .name = "serde", .module = serde_mod },
-                },
-            }),
-        });
-        test_step.dependOn(&b.addRunArtifact(t).step);
-    }
-
-    // Kusto common tests — needs core + identity
-    {
-        const t = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("sdk/kusto/common.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "azure_sdk_core", .module = core_mod },
-                    .{ .name = "serde", .module = serde_mod },
-                },
-            }),
-        });
-        test_step.dependOn(&b.addRunArtifact(t).step);
-    }
-
-    // Kusto data tests — needs core + identity + kusto_common
-    {
-        const t = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("sdk/kusto/data/root.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "azure_sdk_core", .module = core_mod },
-                    .{ .name = "azure_sdk_kusto_common", .module = kusto_common_mod },
-                    .{ .name = "serde", .module = serde_mod },
-                },
-            }),
-        });
-        test_step.dependOn(&b.addRunArtifact(t).step);
-    }
-
-    // Kusto ingest tests — needs core + Kusto + complete-SAS storage clients
-    {
-        const t = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("sdk/kusto/ingest/root.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "azure_sdk_core", .module = core_mod },
-                    .{ .name = "azure_sdk_kusto_common", .module = kusto_common_mod },
-                    .{ .name = "azure_sdk_kusto_data", .module = kusto_data_mod },
-                    .{ .name = "azure_sdk_storage_blobs", .module = blobs_mod },
-                    .{ .name = "azure_sdk_storage_common", .module = storage_common_mod },
-                    .{ .name = "azure_sdk_storage_queues", .module = queues_mod },
-                    .{ .name = "serde", .module = serde_mod },
-                },
-            }),
-        });
-        test_step.dependOn(&b.addRunArtifact(t).step);
-    }
-
     // -- Example executable --
 
     const example = b.addExecutable(.{
@@ -457,51 +387,6 @@ pub fn build(b: *std.Build) void {
 
     const run_step = b.step("run", "Run the example");
     run_step.dependOn(&run_example.step);
-
-    const kusto_example = b.addExecutable(.{
-        .name = "azure_kusto_examples",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("examples/kusto/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "azure_sdk_core", .module = core_mod },
-                .{ .name = "azure_sdk_kusto_common", .module = kusto_common_mod },
-                .{ .name = "azure_sdk_kusto_data", .module = kusto_data_mod },
-                .{ .name = "azure_sdk_kusto_ingest", .module = kusto_ingest_mod },
-            },
-        }),
-    });
-    b.installArtifact(kusto_example);
-
-    const run_kusto_example = b.addRunArtifact(kusto_example);
-    run_kusto_example.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run_kusto_example.addArgs(args);
-    const run_kusto_step = b.step(
-        "run-kusto-examples",
-        "Run an opt-in Kusto example",
-    );
-    run_kusto_step.dependOn(&run_kusto_example.step);
-
-    const kusto_live_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("examples/kusto/live_test.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "azure_sdk_core", .module = core_mod },
-                .{ .name = "azure_sdk_kusto_common", .module = kusto_common_mod },
-                .{ .name = "azure_sdk_kusto_data", .module = kusto_data_mod },
-                .{ .name = "azure_sdk_kusto_ingest", .module = kusto_ingest_mod },
-            },
-        }),
-    });
-    const run_kusto_live_tests = b.addRunArtifact(kusto_live_tests);
-    const kusto_live_test_step = b.step(
-        "kusto-live-test",
-        "Run opt-in Kusto live tests; unconfigured tests skip",
-    );
-    kusto_live_test_step.dependOn(&run_kusto_live_tests.step);
 
     const acr_example_support_mod = b.createModule(.{
         .root_source_file = b.path("sdk/container_registry/examples/support.zig"),

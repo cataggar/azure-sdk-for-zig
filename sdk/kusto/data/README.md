@@ -129,3 +129,14 @@ const decoder = try table.rowDecoder(Row);
 var row = try decoder.rowAs(&table.rows[0], allocator);
 defer Decoder.deinitRow(&row, allocator);
 ```
+
+## Examples and development
+
+See [`examples/README.md`](examples/README.md) for query, management, and
+progressive-query examples.
+
+```bash
+zig build test --summary all
+zig build examples
+zig build live-test
+```
