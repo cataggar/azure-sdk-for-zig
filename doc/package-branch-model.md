@@ -57,6 +57,16 @@ Closely related APIs may share one versioned package and use namespaces.
 `administration`; `azure_sdk_eventhubs` exposes
 `checkpoint_store_blob`.
 
+### Standalone example branches
+
+Standalone example projects use `example/<name>`, where `<name>` is a
+snake-cased project identifier. These branches are independently cloneable
+artifacts, not entries in the SDK or REST package release catalog. Current
+examples include `example/arm_avs` and `example/arm_avs_wasi`.
+
+The singular branch namespace does not change the `examples/` directories in
+the integration workspace or within individual packages.
+
 ## Ownership Boundary
 
 ### `rest/<service>`
