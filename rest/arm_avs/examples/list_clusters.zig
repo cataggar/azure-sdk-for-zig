@@ -20,8 +20,11 @@ pub fn main(init: std.process.Init) !void {
     var dotenv = core.dotenv.loadFromFileOrEmpty(gpa, init.io, ".env");
     defer dotenv.deinit();
 
+    var args = try init.minimal.args.iterateAllocator(gpa);
+    defer args.deinit();
+    _ = args.next();
     const subscription_id, const resource_group, const private_cloud_name =
-        try resolveArgs(init, &dotenv);
+        try resolveArgs(init, &dotenv, args.next(), args.next(), args.next());
 
     var cli_cred = identity.AzureCliCredential.init(gpa, init.io);
 
@@ -75,13 +78,13 @@ const Args = struct { []const u8, []const u8, []const u8 };
 
 /// Look up subscription id, resource group, and private cloud name from
 /// (in order): argv, env vars, then `.env` in the cwd.
-fn resolveArgs(init: std.process.Init, dotenv: *const core.dotenv.DotEnv) !Args {
-    var args = init.minimal.args.iterate();
-    _ = args.next(); // argv[0]
-    const arg1 = args.next();
-    const arg2 = args.next();
-    const arg3 = args.next();
-
+fn resolveArgs(
+    init: std.process.Init,
+    dotenv: *const core.dotenv.DotEnv,
+    arg1: ?[]const u8,
+    arg2: ?[]const u8,
+    arg3: ?[]const u8,
+) !Args {
     const sub = arg1 orelse
         init.environ_map.get("AZURE_SUBSCRIPTION_ID") orelse
         dotenv.get("AZURE_SUBSCRIPTION_ID") orelse
