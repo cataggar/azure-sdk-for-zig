@@ -43,9 +43,6 @@ Shared packages follow the same rule:
 | `sdk/storage/blobs` | `sdk/storage_blobs` | `azure_sdk_storage_blobs` |
 | `sdk/kusto/data` | `sdk/kusto_data` | `azure_sdk_kusto_data` |
 
-The aggregate is the only exception: source `sdk/aggregate`, branch
-`sdk/aggregate`, package `azure_sdk`.
-
 Zig package names are limited to 32 characters. Public service packages may
 therefore use a shorter cross-language service identity while retaining their
 domain-oriented source path:

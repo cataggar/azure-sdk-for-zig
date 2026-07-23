@@ -34,7 +34,6 @@ Azure service clients implemented in pure Zig without C dependencies.
 | [`azure_sdk_kusto_common`](sdk/kusto/common/README.md) | Kusto shared primitives |
 | [`azure_sdk_kusto_data`](sdk/kusto/data/README.md) | Kusto queries and management |
 | [`azure_sdk_kusto_ingest`](sdk/kusto/ingest/README.md) | Kusto ingestion |
-| [`azure_sdk`](sdk/aggregate/README.md) | Aggregate package exporting every canonical module |
 
 See the [package catalog](doc/package-catalog.md) for versions, release
 branches, and the complete dependency graph.

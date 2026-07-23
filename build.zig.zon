@@ -4,11 +4,8 @@
     .fingerprint = 0x96c2d79909d9671,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
-        .azure_sdk = .{
-            .path = "sdk/aggregate",
-        },
-        .aggregate_export_fixture = .{
-            .path = "eng/fixtures/aggregate_export",
+        .azure_sdk_core = .{
+            .path = "sdk/core",
         },
     },
     .paths = .{

@@ -16,8 +16,8 @@ zig fmt --check sdk/ rest/ examples/ codegen/ eng/ build.zig
 ```
 
 The root package is the non-published `azure_sdk_workspace`. It orchestrates
-the registry-ordered package suite and consumes public modules through the
-`azure_sdk` aggregate package.
+the registry-ordered package suite and consumes public modules through direct
+package dependencies.
 
 ## Package metadata
 
