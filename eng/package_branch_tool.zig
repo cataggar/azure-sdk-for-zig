@@ -218,14 +218,14 @@ fn renderCi(
         allocator,
         with_test,
         "@EXAMPLES_COMMAND@",
-        package.examples_command orelse ":",
+        package.examples_command orelse "echo \"No examples configured\"",
     );
     const rendered = try std.mem.replaceOwned(
         u8,
         allocator,
         with_examples,
         "@LIVE_TEST_COMMAND@",
-        package.live_test_command orelse ":",
+        package.live_test_command orelse "echo \"No live tests configured\"",
     );
     const parent_path = std.fs.path.dirname(output) orelse ".";
     const file_name = std.fs.path.basename(output);
