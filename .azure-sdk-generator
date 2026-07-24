@@ -1,0 +1,3 @@
+generator_commit=f1800352133632917301db03a2283ea91d9e7d85
+fixture=codegen/fixtures/container_registry.json
+command=(cd codegen/cli && zig build -Dcontainer-registry-output=<package-output> -Dazure-sdk-core-commit=5c37f2997b0a9dcc2db91f83baf0a492342621a2 -Dazure-sdk-core-hash=azure_sdk_core-0.1.0-eFY0EtlTBQDltjWjN0xVytGGsv4kqwm1JP_PY18iWFb3 generate-container-registry-package)
