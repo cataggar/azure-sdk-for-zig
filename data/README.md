@@ -134,8 +134,9 @@ defer Decoder.deinitRow(&row, allocator);
 
 ## Examples and development
 
-See the [Data examples](../../../examples/kusto/data/README.md) for query,
-management, and progressive-query scenarios.
+See the
+[Data examples](https://github.com/cataggar/azure-sdk-for-zig/tree/example/kusto/data)
+for query, management, and progressive-query scenarios.
 
 ```bash
 zig build test --summary all

@@ -152,8 +152,9 @@ uploads are not reopened.
 
 ## Examples and development
 
-See the [Ingest examples](../../../examples/kusto/ingest/README.md) for
-streaming, queued, managed, and status-tracking scenarios.
+See the
+[Ingest examples](https://github.com/cataggar/azure-sdk-for-zig/tree/example/kusto/ingest)
+for streaming, queued, managed, and status-tracking scenarios.
 
 ```bash
 zig build test --summary all
