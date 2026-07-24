@@ -1,8 +1,30 @@
 # Kusto examples and live tests
 
-Kusto examples now ship with their independently versioned owning packages:
+This standalone project exercises the consolidated
+[`azure_sdk_kusto`](../../sdk/kusto/README.md) package.
 
-- [Kusto Data query and management examples](../../sdk/kusto/data/examples/README.md)
-- [Kusto Ingest and status examples](../../sdk/kusto/ingest/examples/README.md)
+- [Data query and management scenarios](data/README.md)
+- [Ingest and status scenarios](ingest/README.md)
+- [Pre-split historical source](legacy/README.md)
 
-Both packages provide `examples`, `run-example`, and `live-test` build steps.
+Compile and test the project:
+
+```bash
+zig build test --summary all
+zig build examples
+zig build live-test
+```
+
+Run one family or every scenario:
+
+```bash
+zig build run-example -- data default-query
+zig build run-example -- data progressive
+zig build run-example -- ingest streaming
+zig build run-example -- ingest status
+zig build run-example -- all
+```
+
+The reset publishes this project on `example/kusto`. The example branch pins
+immutable Core and Kusto package commits; these Main-side paths exist only
+while the history-preserving candidates are prepared.

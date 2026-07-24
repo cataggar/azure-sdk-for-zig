@@ -9,14 +9,14 @@ export KUSTO_TARGET_TABLE='<table>'
 export KUSTO_TARGET_MAPPING='<json-ingestion-mapping>'
 ```
 
-Run ingestion and status scenarios from `sdk/kusto/ingest`:
+Run ingestion and status scenarios from `example/kusto`:
 
 ```bash
-zig build run-example -- streaming
-zig build run-example -- queued
-zig build run-example -- managed
-zig build run-example -- status
-zig build run-example -- all
+zig build run-example -- ingest streaming
+zig build run-example -- ingest queued
+zig build run-example -- ingest managed
+zig build run-example -- ingest status
+zig build run-example -- ingest all
 ```
 
 `KUSTO_INGEST_DATA` overrides the default NDJSON payload.
