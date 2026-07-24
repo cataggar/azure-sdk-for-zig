@@ -28,7 +28,7 @@ jobs:
           version: 0.16.0
 
       - name: Format check
-        run: zig fmt --check sdk/core/ examples/ codegen/ eng/ build.zig
+        run: zig fmt --check sdk/core/ codegen/ eng/ build.zig
 
       - name: Build workspace
         run: zig build

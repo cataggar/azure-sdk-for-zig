@@ -11,7 +11,7 @@ zig build
 zig build test --summary all
 zig build package-check --summary all
 zig build package-history-check --summary all
-zig fmt --check sdk/core/ examples/ codegen/ eng/ build.zig
+zig fmt --check sdk/core/ codegen/ eng/ build.zig
 ```
 
 Root package tests intentionally run only the five Main-owned Core packages.

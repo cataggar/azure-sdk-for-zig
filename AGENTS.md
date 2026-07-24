@@ -7,8 +7,8 @@ zig build
 zig build test --summary all
 zig build package-check --summary all
 zig build package-history-check --summary all
-zig fmt sdk/core/ examples/ codegen/ eng/ build.zig
-zig fmt --check sdk/core/ examples/ codegen/ eng/ build.zig
+zig fmt sdk/core/ codegen/ eng/ build.zig
+zig fmt --check sdk/core/ codegen/ eng/ build.zig
 ```
 
 ## Source ownership
@@ -22,10 +22,9 @@ zig fmt --check sdk/core/ examples/ codegen/ eng/ build.zig
 
 ## Repository structure
 
-- `sdk/core/` — Main-owned framework and credentials
+- `sdk/core/` — Main-owned framework, credentials, and Core examples
 - `eng/` — package registry, validation, history, and release tooling
 - `codegen/` — TypeSpec and fixture-based package generation
-- `examples/` — Main-owned examples
 
 Branch-owned source is available from the package branches documented in
 `doc/package-catalog.md`.

@@ -4,12 +4,13 @@ Examples are owned by the package or package family they demonstrate. They use
 environment variables rather than embedded endpoints or credentials and avoid
 printing authorization headers, service-issued SAS URIs, or payloads.
 
+- [Core example](../sdk/core/examples/hello.zig)
 - [Kusto examples and live tests](https://github.com/cataggar/azure-sdk-for-zig/tree/example/kusto)
 - [Container Registry examples](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/container_registry#examples)
 - [ARM AVS generated examples](https://github.com/cataggar/azure-sdk-for-zig/tree/example/arm_avs)
 
 The current workspace example commands are documented in
-[`doc/development.md`](../doc/development.md).
+[`development.md`](development.md).
 
 The package reset moved the staged Kusto project to the standalone
 [`example/kusto`](https://github.com/cataggar/azure-sdk-for-zig/tree/example/kusto)
