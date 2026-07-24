@@ -1,7 +1,8 @@
 # Kusto examples and live tests
 
 This standalone project exercises the consolidated
-[`azure_sdk_kusto`](../../sdk/kusto/README.md) package.
+[`azure_sdk_kusto`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/kusto)
+package.
 
 - [Data query and management scenarios](data/README.md)
 - [Ingest and status scenarios](ingest/README.md)
