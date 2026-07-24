@@ -98,14 +98,16 @@ pub fn validateCurrentTrees(allocator: std.mem.Allocator, io: std.Io) !void {
         var walker = try directory.walk(allocator);
         defer walker.deinit();
         while (try walker.next(io)) |item| {
-            if (isIgnoredBuildPath(item.path)) continue;
+            const item_path = try normalizedPath(allocator, item.path);
+            defer allocator.free(item_path);
+            if (isIgnoredBuildPath(item_path)) continue;
             if (item.kind == .directory) continue;
             if (item.kind == .sym_link) return error.ExampleHistoryTreeContainsSymlink;
 
             const source = try std.fmt.allocPrint(
                 allocator,
                 "{s}/{s}",
-                .{ entry.current_source_path, item.path },
+                .{ entry.current_source_path, item_path },
             );
             defer allocator.free(source);
             var matches: usize = 0;
@@ -137,6 +139,14 @@ pub fn validateCurrentTrees(allocator: std.mem.Allocator, io: std.Io) !void {
             }
         }
     }
+}
+
+fn normalizedPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    const normalized = try allocator.dupe(u8, path);
+    for (normalized) |*char| {
+        if (char.* == '\\') char.* = '/';
+    }
+    return normalized;
 }
 
 fn rejectDuplicateSource(mapping: PathMapping, others: []const PathMapping) !void {
@@ -211,4 +221,10 @@ test "Kusto example history separates current and historical paths" {
         "legacy/main.zig",
         kusto.historical_mappings[2].destination,
     );
+}
+
+test "current example paths normalize Windows separators" {
+    const normalized = try normalizedPath(std.testing.allocator, "data\\main.zig");
+    defer std.testing.allocator.free(normalized);
+    try std.testing.expectEqualStrings("data/main.zig", normalized);
 }

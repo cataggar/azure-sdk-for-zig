@@ -25,7 +25,7 @@ jobs:
           version: 0.16.0
       - name: Check formatting
         shell: bash
-        run: zig fmt --check .
+        run: git ls-files -z -- '*.zig' 'build.zig.zon' | xargs -0 zig fmt --check
       - name: Run example tests
         shell: bash
         run: zig build test --summary all
