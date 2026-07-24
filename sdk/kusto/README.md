@@ -131,9 +131,8 @@ Zig remains stricter where replay or acceptance is ambiguous.
 Build the package and all namespace tests from its root:
 
 ```bash
-cd sdk/kusto
 zig build test --summary all
 ```
 
 Runnable Data and Ingest scenarios live in the
-[standalone Kusto example project](../../examples/kusto/README.md).
+[standalone Kusto example project](https://github.com/cataggar/azure-sdk-for-zig/tree/example/kusto).

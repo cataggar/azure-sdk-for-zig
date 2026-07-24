@@ -1,0 +1,34 @@
+name: Example CI
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  package-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+    name: package-test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Check formatting
+        shell: bash
+        run: zig fmt --check .
+      - name: Run example tests
+        shell: bash
+        run: zig build test --summary all
+      - name: Run live tests
+        shell: bash
+        run: zig build live-test --summary all

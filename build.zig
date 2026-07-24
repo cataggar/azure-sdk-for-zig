@@ -147,6 +147,15 @@ fn addPackageToolSteps(b: *std.Build, test_step: *std.Build.Step) void {
     });
     test_step.dependOn(&b.addRunArtifact(branch_tool_tests).step);
 
+    const candidate_manifest_tool_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("eng/candidate_manifest_tool.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(candidate_manifest_tool_tests).step);
+
     const package_sync_run = b.addRunArtifact(package_tool);
     package_sync_run.addArg("sync-local");
     package_sync_run.setCwd(b.path("."));

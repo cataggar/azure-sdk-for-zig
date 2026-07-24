@@ -22,6 +22,10 @@ pub fn main(init: std.process.Init) !u8 {
         try printPublishPaths(init.io, package);
         return 0;
     }
+    if (std.mem.eql(u8, args[1], "dependency-metadata") and args.len == 3) {
+        try printDependencyMetadata(init.io, package);
+        return 0;
+    }
     if (std.mem.eql(u8, args[1], "validate-tree") and args.len == 4) {
         _ = try validateTree(allocator, init.io, package, args[3]);
         return 0;
@@ -55,7 +59,7 @@ pub fn main(init: std.process.Init) !u8 {
 fn usage() void {
     std.debug.print(
         "usage: package-branch-tool <metadata|validate-tree|tag|dependencies|" ++
-            "publish-paths|render-ci|check-version> PACKAGE " ++
+            "dependency-metadata|publish-paths|render-ci|check-version> PACKAGE " ++
             "[PATH|VERSION [PREVIOUS...]]\n",
         .{},
     );
@@ -176,6 +180,22 @@ fn printPublishPaths(io: std.Io, package: registry.Package) !void {
     for (package.publish_paths) |path| {
         try writer.writeAll(path);
         try writer.writeByte('\n');
+    }
+}
+
+fn printDependencyMetadata(io: std.Io, package: registry.Package) !void {
+    var buffer: [4096]u8 = undefined;
+    var stdout_file = std.Io.File.stdout();
+    var stdout = stdout_file.writer(io, &buffer);
+    const writer = &stdout.interface;
+    defer writer.flush() catch {};
+
+    for (package.dependencies) |name| {
+        const dependency = registry.all[registry.find(&registry.all, name).?];
+        try writer.print(
+            "{s}\t{s}\t{s}\n",
+            .{ name, @tagName(dependency.ownership), dependency.branch },
+        );
     }
 }
 

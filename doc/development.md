@@ -49,19 +49,24 @@ Inspect reviewed mappings:
 scripts/package-history-reset.sh analyze
 ```
 
-Build and verify a disposable candidate:
+Seal one source commit, then build and verify candidates in dependency order:
 
 ```bash
+scripts/package-history-reset.sh seal-inputs \
+  --reset-id package-reset-YYYY-MM-DD
+
 PACKAGE_HISTORY_FILTER_REPO=/path/to/pinned/git-filter-repo \
   scripts/package-history-reset.sh build-candidates \
-  --package azure_sdk_storage_blobs
+  --package azure_sdk_storage_common
 
 scripts/package-history-reset.sh verify-candidates \
-  --package azure_sdk_storage_blobs
+  --package azure_sdk_storage_common
 ```
 
 Candidate output is written under `.release/package-reset` by default and is
-not source code to commit to `main`.
+not source code to commit to `main`. After every candidate is finalized and
+reviewed, `publish-candidates` pushes the set atomically under
+`migration/<reset-id>/...`; it does not change production package refs.
 
 ## Generated package work
 
