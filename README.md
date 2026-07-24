@@ -12,3 +12,5 @@ Release branch: `sdk/storage_common`. The package depends on
 ```bash
 zig build test --summary all
 ```
+
+<!-- Temporary Phase 5 package-branch pull-request verification. -->
