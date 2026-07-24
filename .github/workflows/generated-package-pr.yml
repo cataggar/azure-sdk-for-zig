@@ -128,5 +128,6 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --base "$TARGET_BRANCH" \
             --head "$branch" \
+            --draft \
             --title "Regenerate Container Registry package" \
-            --body "Generated from main at \`$(git -C generator rev-parse HEAD)\`."
+            --body "Generated from main at \`$(git -C generator rev-parse HEAD)\`. Mark this draft ready for review to trigger the required package-branch checks."
