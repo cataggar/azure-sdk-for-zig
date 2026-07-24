@@ -29,3 +29,5 @@ zig build run-example -- all
 The reset publishes this project on `example/kusto`. The example branch pins
 immutable Core and Kusto package commits; these Main-side paths exist only
 while the history-preserving candidates are prepared.
+
+<!-- Temporary Phase 5 example-branch pull-request verification. -->
