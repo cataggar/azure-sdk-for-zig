@@ -1,0 +1,4 @@
+azure_sdk_core	git+https://github.com/cataggar/azure-sdk-for-zig.git#5c37f2997b0a9dcc2db91f83baf0a492342621a2	azure_sdk_core-0.1.0-eFY0EtlTBQDltjWjN0xVytGGsv4kqwm1JP_PY18iWFb3
+azure_sdk_storage_common	git+https://github.com/cataggar/azure-sdk-for-zig.git#93be9fdd48cefa1f30023c5b852f89193671988c	azure_sdk_storage_common-0.1.0-JzoreP9kAAAHmHB4xxMQDJ2Gc4wMxrevGjreIYUMiU9O
+azure_sdk_storage_blobs	git+https://github.com/cataggar/azure-sdk-for-zig.git#4f1e3c0e3ed14df68956af442cd401ac2974b362	azure_sdk_storage_blobs-0.1.0-I5lGdgoKAQCviVvGY2BIs_0Guj5BQj1OpWy_m3VLkKpH
+azure_sdk_storage_queues	git+https://github.com/cataggar/azure-sdk-for-zig.git#fa33ee1b6a02f6dc3f6064e3563d292fd3320f2d	azure_sdk_storage_queues-0.1.0-LKTiC7hzAACesUmmsuRTQOhm4jz_vbwPWdE2d0pGCE6X
