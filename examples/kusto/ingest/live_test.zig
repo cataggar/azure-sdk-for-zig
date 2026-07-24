@@ -1,7 +1,7 @@
 //! Explicit opt-in Kusto Ingest live tests.
 const std = @import("std");
 const examples = @import("main.zig");
-const ingest = @import("azure_sdk_kusto_ingest");
+const ingest = @import("azure_sdk_kusto").ingest;
 
 test "live Kusto ingestion and status examples" {
     const allocator = std.testing.allocator;

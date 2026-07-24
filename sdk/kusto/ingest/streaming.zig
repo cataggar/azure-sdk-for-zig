@@ -6,7 +6,7 @@
 const std = @import("std");
 const serde = @import("serde");
 const core = @import("azure_sdk_core");
-const kusto_common = @import("azure_sdk_kusto_common");
+const kusto_common = @import("kusto_common_internal");
 
 pub const DataFormat = kusto_common.DataFormat;
 pub const ConnectionProperties = kusto_common.ConnectionProperties;

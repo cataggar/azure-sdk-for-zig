@@ -5,7 +5,7 @@
 const std = @import("std");
 const core = @import("azure_sdk_core");
 const serde = @import("serde");
-const kusto_common = @import("azure_sdk_kusto_common");
+const kusto_common = @import("kusto_common_internal");
 pub const kql = @import("kql.zig");
 const result = @import("result.zig");
 const stream = @import("stream.zig");

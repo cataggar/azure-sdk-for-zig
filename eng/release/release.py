@@ -407,7 +407,6 @@ class BranchState:
     commit: str | None
     previous_name: str | None
     previous_version: str | None
-    legacy_transition: bool
 
 
 class Engine:
@@ -438,6 +437,14 @@ class Engine:
 
     def package_root(self, package: Package) -> Path:
         return self.root / package.source_path
+
+    @staticmethod
+    def _require_main_owned(package: Package) -> None:
+        if package.ownership != "main_owned":
+            raise ReleaseError(
+                f"{package.name}: branch-owned packages must be released from "
+                "their package branch"
+            )
 
     def _validate_source_workspace(
         self,
@@ -759,6 +766,7 @@ class Engine:
 
     def verify(self, name: str, *, run_commands: bool = True) -> None:
         package = self.package(name)
+        self._require_main_owned(package)
         _, source_commit, _ = self.source_provenance()
         self._validate_source_workspace(
             package,
@@ -829,7 +837,7 @@ class Engine:
                 raise ReleaseError(
                     f"{package.name}: first canonical release must be 0.1.0"
                 )
-            return BranchState(None, None, None, False)
+            return BranchState(None, None, None)
 
         repository, commit = fetched
         tip_manifest = self._show_manifest(repository, commit)
@@ -840,18 +848,12 @@ class Engine:
                 f"{package.name}: release branch tip has malformed version"
             ) from error
 
-        legacy = tip_manifest.name in package.legacy_names
-        if legacy:
-            if target_version != (0, 1, 0):
-                raise ReleaseError(
-                    f"{package.name}: legacy transition must establish canonical 0.1.0"
-                )
-        elif tip_manifest.name != package.name:
+        if tip_manifest.name != package.name:
             raise ReleaseError(
                 f"{package.name}: release branch contains unexpected package "
                 f"{tip_manifest.name}"
             )
-        elif target_version <= previous_version:
+        if target_version <= previous_version:
             raise ReleaseError(
                 f"{package.name}: version {package.version} is not greater than "
                 f"{tip_manifest.version}"
@@ -886,7 +888,6 @@ class Engine:
             commit,
             tip_manifest.name,
             tip_manifest.version,
-            legacy,
         )
 
     def _dependency_archive(
@@ -1077,6 +1078,7 @@ class Engine:
 
     def prepare(self, name: str, *, run_commands: bool = True) -> dict[str, object]:
         package = self.package(name)
+        self._require_main_owned(package)
         source_ref, source_commit, remote_main_commit = self.source_provenance()
         self._validate_source_workspace(
             package,
@@ -1165,7 +1167,6 @@ class Engine:
                     "expected_tip": branch_state.commit,
                     "previous_name": branch_state.previous_name,
                     "previous_version": branch_state.previous_version,
-                    "legacy_transition": branch_state.legacy_transition,
                 },
                 "dependencies": dependency_records,
                 "declared_paths": list(package.publish_paths),
@@ -1249,7 +1250,6 @@ class Engine:
             or branch_state.commit != branch_seal.get("expected_tip")
             or branch_state.previous_name != branch_seal.get("previous_name")
             or branch_state.previous_version != branch_seal.get("previous_version")
-            or branch_state.legacy_transition != branch_seal.get("legacy_transition")
         ):
             raise ReleaseError(f"{package.name}: release branch moved after prepare")
 
@@ -1415,6 +1415,7 @@ class Engine:
 
     def publish(self, name: str, *, dry_run: bool) -> str:
         package = self.package(name)
+        self._require_main_owned(package)
         seal = self._load_seal(package)
         work = self._clean_work(package)
         worktree = work / "publication-worktree"

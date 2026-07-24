@@ -51,7 +51,7 @@ component into a single wasm executable.
 | `tcgc-component/`                 | JS wrapper componentized by `jco` into `tcgc.wasm`.    |
 | `cli/`                            | Zig WASI emitter — `codegen-cli.wasm`, composed with `tcgc.wasm` and driven by `cli/scripts/run.sh`. |
 | `tspconfigs/`                     | Zig tool that manages `tspconfigs.yaml` (`zig build tspconfigs-update` / `-resolve`). |
-| `scripts/sync.sh`                 | Resyncs `rest/<pkg>/` from the canonical spec; overwrites only `src/models.zig` by default. |
+| `scripts/sync.sh`                 | Resyncs a generated REST package in a monorepo path or external package worktree; overwrites only emitter-owned files by default. |
 | `fixtures/`                       | Checked-in code models and deterministic package generators used by emitter tests. |
 
 `fixtures/container_registry.json` is the checked-in wire contract for
@@ -79,18 +79,17 @@ generator determinism.
 
 ## Branch model
 
-Each generated package can be published from its own **orphan branch** named
-`rest/<service>`:
+Each generated package is developed and released from its package branch:
 
 ```
 rest/<service>
 ```
 
 - Generated packages use the module name `azure_rest_<service>`.
-  `keyvault_secrets` and `arm_avs` are declared migrations to
-  `azure_rest_keyvault_secrets` and `azure_rest_arm_avs`.
 - Canonical generated packages reference `azure_sdk_core` through an exact
   release commit and Zig package hash in `build.zig.zon`.
+- Generator changes are submitted as pull requests whose base is the package
+  branch, not `main`.
 
 See [`../doc/package-branch-model.md`](../doc/package-branch-model.md) for the
 long-term generated REST and hand-written SDK branch, package, dependency, and
@@ -154,6 +153,20 @@ codegen/scripts/sync.sh arm_avs         # one package
 codegen/scripts/sync.sh --force <pkg>   # overwrite operator-owned files when onboarding
 ```
 
+To update a package-branch worktree outside the monorepo:
+
+```bash
+codegen/scripts/sync.sh \
+  --output-root /path/to/package-worktree \
+  --azure-sdk-core-commit <release-commit> \
+  --azure-sdk-core-hash <zig-package-hash> \
+  keyvault_secrets
+```
+
+External output requires an explicit Core worktree path or immutable
+commit/hash pin so the generated manifest cannot accidentally contain a
+monorepo-relative dependency.
+
 Default behaviour copies `src/models.zig` only and reports every
 other emitter-managed file that drifted as `SKIP <file>
 (operator-managed)`. `--force` overwrites them too — use that flag
@@ -170,6 +183,15 @@ source file is owned by
 `fixtures/generate_container_registry_package.zig`. Use the dedicated
 `generate-container-registry-package` step above rather than `sync.sh`;
 do not patch its generated files manually.
+
+The generator accepts `-Dcontainer-registry-output`, and deterministic
+verification can compare separate package worktrees:
+
+```bash
+scripts/verify-container-registry-regeneration.sh \
+  --rest-package-root /path/to/rest-container-registry \
+  --sdk-package-root /path/to/sdk-container-registry
+```
 
 ## References
 

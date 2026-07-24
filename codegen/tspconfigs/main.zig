@@ -14,6 +14,8 @@
 //!              zig  — js with any leading "@scope/" namespace stripped
 //!                     and '-' replaced by '_'
 //!                     (e.g. "ai_agents", "ai_document_intelligence")
+//!   list     Print resolved entries as zig-name, spec-directory, and
+//!            display-name tab-separated fields.
 //!
 //! Working directory is expected to be the repository root. The build steps
 //! in build.zig set this via setCwd.
@@ -36,7 +38,7 @@ pub fn main(init: std.process.Init) !u8 {
 
     const args = try init.minimal.args.toSlice(alloc);
     if (args.len < 2) {
-        std.debug.print("usage: tspconfigs <update|resolve>\n", .{});
+        std.debug.print("usage: tspconfigs <update|resolve|list>\n", .{});
         return 2;
     }
     const cmd = args[1];
@@ -45,11 +47,49 @@ pub fn main(init: std.process.Init) !u8 {
         try cmdUpdate(alloc, io);
     } else if (std.mem.eql(u8, cmd, "resolve")) {
         try cmdResolve(alloc, io);
+    } else if (std.mem.eql(u8, cmd, "list")) {
+        try cmdList(alloc, io);
     } else {
         std.debug.print("unknown command: {s}\n", .{cmd});
         return 2;
     }
+
     return 0;
+}
+
+fn cmdList(alloc: std.mem.Allocator, io: std.Io) !void {
+    var existing = try loadYaml(alloc, io, OUT_YAML);
+    var entries: std.ArrayList(Entry) = .empty;
+    var iterator = existing.iterator();
+    while (iterator.next()) |item| {
+        if (item.value_ptr.zig.len != 0) try entries.append(alloc, item.value_ptr.*);
+    }
+    std.mem.sort(Entry, entries.items, {}, struct {
+        fn lessThan(_: void, a: Entry, b: Entry) bool {
+            return std.mem.lessThan(u8, a.zig, b.zig);
+        }
+    }.lessThan);
+
+    var buffer: [4096]u8 = undefined;
+    var stdout_file = std.Io.File.stdout();
+    var stdout = stdout_file.writer(io, &buffer);
+    const writer = &stdout.interface;
+    defer writer.flush() catch {};
+    for (entries.items) |entry| {
+        const spec_dir = std.fs.path.dirname(entry.path) orelse ".";
+        var display = entry.js;
+        if (display.len == 0) {
+            display = entry.zig;
+        } else if (display[0] == '@') {
+            if (std.mem.indexOfScalar(u8, display, '/')) |slash| {
+                display = display[slash + 1 ..];
+            }
+        }
+        try writer.print(
+            "{s}\t{s}\t{s}\n",
+            .{ entry.zig, spec_dir, display },
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ The canonical import rename lands before package extraction.
 
 ## Module mapping
 
-| Current module/package | Canonical module/package |
+| Current module/package | Canonical package, module, or import |
 | --- | --- |
 | `azure_core` | `azure_sdk_core` |
 | `azure_core_amqp` | `azure_sdk_core_amqp` |
@@ -34,14 +34,21 @@ The canonical import rename lands before package extraction.
 | `azure_messaging_eventhubs` | `azure_sdk_eventhubs` |
 | `azure_messaging_eventhubs_checkpointstore_blob` | `azure_sdk_eventhubs` namespace `checkpoint_store_blob` |
 | `azure_messaging_servicebus` | `azure_sdk_servicebus` |
-| `azure_kusto_common` | `azure_sdk_kusto_common` |
-| `azure_kusto_data` | `azure_sdk_kusto_data` |
-| `azure_kusto_ingest` | `azure_sdk_kusto_ingest` |
+| `azure_kusto_common` | `@import("azure_sdk_kusto").common` |
+| `azure_kusto_data` | `@import("azure_sdk_kusto").data` |
+| `azure_kusto_ingest` | `@import("azure_sdk_kusto").ingest` |
+| `azure_sdk_kusto_common` | `@import("azure_sdk_kusto").common` |
+| `azure_sdk_kusto_data` | `@import("azure_sdk_kusto").data` |
+| `azure_sdk_kusto_ingest` | `@import("azure_sdk_kusto").ingest` |
 
 ## Consumer choices
 
 Consumers depend directly on only the canonical packages they use and import
 their canonical module names.
+
+Kusto consumers take the single `azure_sdk_kusto` package and module, then
+select its `common`, `data`, or `ingest` public namespace. No forwarding
+packages or import aliases are provided for the former Kusto identities.
 
 ## Dependency migration
 

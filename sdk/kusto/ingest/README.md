@@ -1,12 +1,13 @@
-# azure_sdk_kusto_ingest
+# Kusto Ingest namespace
 
 Kusto direct streaming, managed routing, queued ingestion, resource discovery,
 and queued status tracking.
 
-- Release branch: `sdk/kusto_ingest`
-- Initial version: `0.1.0`
-- Dependencies: `azure_sdk_core`, `azure_sdk_kusto_common`,
-  `azure_sdk_kusto_data`, Storage Common, Blobs, Queues, and `serde`
+Import it from the consolidated package:
+
+```zig
+const ingest = @import("azure_sdk_kusto").ingest;
+```
 
 ## Direct streaming ingestion
 
@@ -16,7 +17,7 @@ URI. Files/readers stream through `HttpPipeline.open`; they are not loaded
 entirely into memory. Direct ingestion is limited to 4 MiB uncompressed.
 
 ```zig
-const ingest = @import("azure_sdk_kusto_ingest");
+const ingest = @import("azure_sdk_kusto").ingest;
 var client = ingest.StreamingIngestClient.initWithConnection(connection);
 var result = try client.ingestFromFileResult(
     allocator,
@@ -151,11 +152,9 @@ uploads are not reopened.
 
 ## Examples and development
 
-See [`examples/README.md`](examples/README.md) for streaming, queued, managed,
-and status-tracking examples.
+See the [Ingest examples](../../../examples/kusto/ingest/README.md) for
+streaming, queued, managed, and status-tracking scenarios.
 
 ```bash
 zig build test --summary all
-zig build examples
-zig build live-test
 ```

@@ -1,5 +1,6 @@
 const std = @import("std");
 const registry = @import("packages.zig");
+const zon_manifest = @import("zon_manifest.zig");
 
 const max_file_size = 16 * 1024 * 1024;
 
@@ -45,7 +46,7 @@ fn usage() void {
 
 fn check(allocator: std.mem.Allocator, io: std.Io) !void {
     try registry.validate(allocator, &registry.all);
-    if (registry.all.len != 25) return error.UnexpectedPackageCount;
+    if (registry.all.len != 23) return error.UnexpectedPackageCount;
 
     const root_license = try readFile(allocator, io, "LICENSE.txt");
     const root_readme = try readFile(allocator, io, "README.md");
@@ -53,37 +54,38 @@ fn check(allocator: std.mem.Allocator, io: std.Io) !void {
     const catalog = try readFile(allocator, io, "doc/package-catalog.md");
 
     for (registry.all) |entry| {
+        if (std.mem.indexOf(u8, catalog, entry.name) == null) {
+            return error.PackageMissingFromCatalog;
+        }
+        if (entry.ownership != .main_owned) continue;
+        const workspace_path = entry.workspace_path orelse
+            return error.MissingWorkspacePath;
         const readme_path = try std.fs.path.join(
             allocator,
-            &.{ entry.source_path, "README.md" },
+            &.{ workspace_path, "README.md" },
         );
         _ = try readFile(allocator, io, readme_path);
 
         const license_path = try std.fs.path.join(
             allocator,
-            &.{ entry.source_path, "LICENSE.txt" },
+            &.{ workspace_path, "LICENSE.txt" },
         );
         const package_license = try readFile(allocator, io, license_path);
         if (!std.mem.eql(u8, root_license, package_license)) {
             return error.PackageLicenseMismatch;
         }
-        if (std.mem.indexOf(u8, catalog, entry.name) == null) {
-            return error.PackageMissingFromCatalog;
-        }
 
-        if (entry.state == .package) {
-            const build_path = try std.fs.path.join(
-                allocator,
-                &.{ entry.source_path, "build.zig" },
-            );
-            _ = try readFile(allocator, io, build_path);
-            const root_source_path = try std.fs.path.join(
-                allocator,
-                &.{ entry.source_path, entry.root_source_file },
-            );
-            _ = try readFile(allocator, io, root_source_path);
-            try checkManifest(allocator, io, entry);
-        }
+        const build_path = try std.fs.path.join(
+            allocator,
+            &.{ workspace_path, "build.zig" },
+        );
+        _ = try readFile(allocator, io, build_path);
+        const root_source_path = try std.fs.path.join(
+            allocator,
+            &.{ workspace_path, entry.root_source_file },
+        );
+        _ = try readFile(allocator, io, root_source_path);
+        try checkManifest(allocator, io, entry);
     }
     std.debug.print("package registry: {d} packages valid\n", .{registry.all.len});
 }
@@ -121,9 +123,10 @@ fn list(allocator: std.mem.Allocator, io: std.Io) !void {
     const order = try registry.topologicalOrder(allocator, &registry.all);
     for (order) |index| {
         const entry = registry.all[index];
+        const workspace_path = entry.workspace_path orelse "-";
         try writer.print(
             "{s}\t{s}\t{s}\t{s}\n",
-            .{ entry.name, entry.source_path, entry.branch, @tagName(entry.state) },
+            .{ entry.name, workspace_path, entry.branch, @tagName(entry.ownership) },
         );
     }
 }
@@ -156,12 +159,14 @@ fn ciMatrix(io: std.Io) !void {
     try writer.writeAll("{\"include\":[");
     var first = true;
     for (registry.all) |entry| {
-        if (entry.state != .package) continue;
+        if (entry.ownership != .main_owned) continue;
+        const workspace_path = entry.workspace_path orelse
+            return error.MissingWorkspacePath;
         if (!first) try writer.writeByte(',');
         first = false;
         try writer.print(
             "{{\"package\":\"{s}\",\"path\":\"{s}\"}}",
-            .{ entry.name, entry.source_path },
+            .{ entry.name, workspace_path },
         );
     }
     try writer.writeAll("]}\n");
@@ -170,18 +175,19 @@ fn ciMatrix(io: std.Io) !void {
 fn syncLocal(allocator: std.mem.Allocator, io: std.Io) !void {
     const root_license = try readFile(allocator, io, "LICENSE.txt");
     for (registry.all) |entry| {
+        if (entry.ownership != .main_owned) continue;
+        const workspace_path = entry.workspace_path orelse
+            return error.MissingWorkspacePath;
         const license_path = try std.fs.path.join(
             allocator,
-            &.{ entry.source_path, "LICENSE.txt" },
+            &.{ workspace_path, "LICENSE.txt" },
         );
         try std.Io.Dir.writeFile(
             .cwd(),
             io,
             .{ .sub_path = license_path, .data = root_license },
         );
-        if (entry.state == .package) {
-            try syncManifest(allocator, io, entry);
-        }
+        try syncManifest(allocator, io, entry);
     }
 }
 
@@ -190,28 +196,75 @@ fn checkManifest(
     io: std.Io,
     entry: registry.Package,
 ) !void {
+    const workspace_path = entry.workspace_path orelse
+        return error.MissingWorkspacePath;
     const manifest_path = try std.fs.path.join(
         allocator,
-        &.{ entry.source_path, "build.zig.zon" },
+        &.{ workspace_path, "build.zig.zon" },
     );
     const manifest = try readFile(allocator, io, manifest_path);
-
-    const name_line = try std.fmt.allocPrint(allocator, ".name = .{s},", .{entry.name});
-    if (std.mem.indexOf(u8, manifest, name_line) == null) {
-        return error.ManifestNameMismatch;
-    }
-    const version_line = try std.fmt.allocPrint(
-        allocator,
-        ".version = \"{s}\",",
-        .{entry.version},
-    );
-    if (std.mem.indexOf(u8, manifest, version_line) == null) {
+    const parsed = try zon_manifest.parse(allocator, manifest);
+    if (!std.mem.eql(u8, parsed.name, entry.name)) return error.ManifestNameMismatch;
+    if (!std.mem.eql(u8, parsed.version, entry.version)) {
         return error.ManifestVersionMismatch;
     }
-    for (entry.publish_paths) |publish_path| {
-        const quoted_path = try std.fmt.allocPrint(allocator, "\"{s}\"", .{publish_path});
-        if (std.mem.indexOf(u8, manifest, quoted_path) == null) {
-            return error.ManifestPathMismatch;
+    try expectExactSet(entry.publish_paths, parsed.paths, error.ManifestPathMismatch);
+
+    const expected_dependency_count =
+        entry.dependencies.len + entry.external_dependencies.len;
+    if (parsed.dependencies.len != expected_dependency_count) {
+        return error.ManifestDependencyMismatch;
+    }
+    for (entry.dependencies) |dependency_name| {
+        const dependency = zon_manifest.findDependency(parsed, dependency_name) orelse
+            return error.ManifestDependencyMismatch;
+        if (dependency.path == null or dependency.url != null or dependency.hash != null) {
+            return error.InvalidLocalDependency;
+        }
+        const dependency_entry = registry.all[
+            registry.find(&registry.all, dependency_name).?
+        ];
+        if (dependency_entry.ownership != .main_owned) {
+            return error.MainDependsOnBranchOwned;
+        }
+        const dependency_workspace = dependency_entry.workspace_path orelse
+            return error.MissingWorkspacePath;
+        if (std.fs.path.isAbsolute(dependency.path.?)) {
+            return error.InvalidLocalDependency;
+        }
+        const actual = try std.fs.path.resolve(
+            allocator,
+            &.{ workspace_path, dependency.path.? },
+        );
+        const expected = try std.fs.path.resolve(allocator, &.{dependency_workspace});
+        if (!std.mem.eql(u8, actual, expected)) return error.InvalidLocalDependency;
+    }
+    for (entry.external_dependencies) |dependency_name| {
+        const dependency = zon_manifest.findDependency(parsed, dependency_name) orelse
+            return error.ManifestDependencyMismatch;
+        if (dependency.path != null or dependency.url == null or dependency.hash == null) {
+            return error.InvalidExternalDependency;
+        }
+    }
+}
+
+fn expectExactSet(
+    expected: []const []const u8,
+    actual: []const []const u8,
+    mismatch: anyerror,
+) !void {
+    if (expected.len != actual.len) return mismatch;
+    for (expected, 0..) |value, index| {
+        var found = false;
+        for (actual) |candidate| {
+            if (std.mem.eql(u8, value, candidate)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return mismatch;
+        for (expected[index + 1 ..]) |other| {
+            if (std.mem.eql(u8, value, other)) return mismatch;
         }
     }
 }
@@ -221,9 +274,11 @@ fn syncManifest(
     io: std.Io,
     entry: registry.Package,
 ) !void {
+    const workspace_path = entry.workspace_path orelse
+        return error.MissingWorkspacePath;
     const manifest_path = try std.fs.path.join(
         allocator,
-        &.{ entry.source_path, "build.zig.zon" },
+        &.{ workspace_path, "build.zig.zon" },
     );
     const manifest = try readFile(allocator, io, manifest_path);
 

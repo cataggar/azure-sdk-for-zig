@@ -1,0 +1,128 @@
+name: Update generated package
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: Package branch to update
+        required: true
+        default: rest/container_registry
+      generator_commit:
+        description: Generator commit or ref from main
+        required: true
+        default: main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out generator
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.generator_commit }}
+          path: generator
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Validate trusted inputs
+        env:
+          TARGET_BRANCH: ${{ inputs.target_branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_BRANCH" == "rest/container_registry" ]]
+          git -C generator fetch --quiet --no-tags origin main
+          git -C generator merge-base --is-ancestor HEAD FETCH_HEAD
+
+      - name: Check out package branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_branch }}
+          path: package
+          persist-credentials: false
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Check out SDK validation dependency
+        uses: actions/checkout@v4
+        with:
+          ref: sdk/container_registry
+          path: sdk-package
+          persist-credentials: false
+
+      - name: Regenerate package
+        shell: bash
+        run: |
+          set -euo pipefail
+          dependency="$(
+            cd generator
+            zig run eng/package_branch_tool.zig -- \
+              dependencies azure_rest_container_registry ../package
+          )"
+          core_url="$(cut -f2 <<<"$dependency")"
+          core_hash="$(cut -f3 <<<"$dependency")"
+          core_commit="${core_url##*#}"
+          output="$RUNNER_TEMP/container_registry"
+          (
+            cd generator/codegen/cli
+            zig build \
+              -Dcontainer-registry-output="$output" \
+              -Dazure-sdk-core-commit="$core_commit" \
+              -Dazure-sdk-core-hash="$core_hash" \
+              generate-container-registry-package
+          )
+          find package -mindepth 1 -maxdepth 1 \
+            ! -name .git ! -name .github -exec rm -rf {} +
+          cp -a "$output"/. package/
+          (
+            cd generator
+            zig run eng/package_branch_tool.zig -- \
+              render-ci azure_rest_container_registry \
+              ../package/.github/workflows/package-ci.yml
+          )
+          {
+            echo "generator_commit=$(git -C generator rev-parse HEAD)"
+            echo "fixture=codegen/fixtures/container_registry.json"
+            echo "command=zig build generate-container-registry-package"
+          } > package/.azure-sdk-generator
+          (
+            cd generator
+            zig run eng/package_branch_tool.zig -- \
+              validate-tree azure_rest_container_registry ../package
+          )
+          generator/scripts/verify-container-registry-regeneration.sh \
+            --rest-package-root "$GITHUB_WORKSPACE/package" \
+            --sdk-package-root "$GITHUB_WORKSPACE/sdk-package"
+          (cd package && zig fmt --check . && zig build test --summary all)
+
+      - name: Open package-branch pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_BRANCH: ${{ inputs.target_branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="generated/container-registry-${GITHUB_RUN_ID}"
+          git -C package config user.name "github-actions[bot]"
+          git -C package config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C package switch -c "$branch"
+          git -C package add --all
+          if git -C package diff --cached --quiet; then
+            echo "Generated package is already current."
+            exit 0
+          fi
+          git -C package commit -m "Regenerate Container Registry package"
+          gh auth setup-git
+          git -C package push origin "HEAD:refs/heads/$branch"
+          gh pr create \
+            --repo "$GITHUB_REPOSITORY" \
+            --base "$TARGET_BRANCH" \
+            --head "$branch" \
+            --title "Regenerate Container Registry package" \
+            --body "Generated from main at \`$(git -C generator rev-parse HEAD)\`."

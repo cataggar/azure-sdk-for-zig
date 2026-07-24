@@ -3,82 +3,84 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GENERIC="$ROOT/scripts/package-release.sh"
+BRANCH_RELEASE="$ROOT/scripts/package-branch-release.sh"
 REST_PACKAGE="azure_rest_container_registry"
 SDK_PACKAGE="azure_sdk_container_registry"
-STAGE_ROOT="${PACKAGE_RELEASE_ROOT:-$ROOT/.release/packages}"
 
 usage() {
   cat <<'EOF'
 Container Registry compatibility wrapper
 
 Preferred commands:
-  scripts/package-release.sh verify azure_rest_container_registry
-  scripts/package-release.sh prepare azure_rest_container_registry
-  scripts/package-release.sh publish azure_rest_container_registry --dry-run
-  scripts/package-release.sh publish azure_rest_container_registry
-  scripts/package-release.sh verify azure_sdk_container_registry
-  scripts/package-release.sh prepare azure_sdk_container_registry
-  scripts/package-release.sh publish azure_sdk_container_registry --dry-run
-  scripts/package-release.sh publish azure_sdk_container_registry
+  scripts/package-branch-release.sh verify azure_rest_container_registry
+  scripts/package-branch-release.sh publish azure_rest_container_registry
+  scripts/package-branch-release.sh publish azure_rest_container_registry --execute
+  scripts/package-branch-release.sh verify azure_sdk_container_registry
+  scripts/package-branch-release.sh publish azure_sdk_container_registry
+  scripts/package-branch-release.sh publish azure_sdk_container_registry --execute
 
 Legacy aliases retained:
   verify | dry-run
-  prepare-rest
-  prepare-sdk [rest-commit [rest-hash]]
+  prepare-rest | prepare-sdk (rejected; branch packages have no prepare stage)
   publish-rest [--dry-run] [--remote <remote>]
   publish-sdk [--dry-run] [--remote <remote>]
   self-test
 EOF
 }
 
-check_requested_rest_pin() {
-  local requested_commit="${1:-}"
-  local requested_hash="${2:-}"
-  [[ -z "$requested_commit" ]] && return
-  python3 - \
-    "$STAGE_ROOT/$SDK_PACKAGE/stage-manifest.json" \
-    "$requested_commit" "$requested_hash" <<'PY'
-import json
-from pathlib import Path
-import sys
-
-manifest = json.loads(Path(sys.argv[1]).read_text())
-pin = next(
-    dependency
-    for dependency in manifest["dependencies"]
-    if dependency["name"] == "azure_rest_container_registry"
-)
-if pin["commit"] != sys.argv[2]:
-    raise SystemExit(
-        f"requested REST commit {sys.argv[2]} differs from resolved {pin['commit']}"
-    )
-if sys.argv[3] and pin["hash"] != sys.argv[3]:
-    raise SystemExit(
-        f"requested REST hash {sys.argv[3]} differs from resolved {pin['hash']}"
-    )
-PY
+publish_compat() {
+  local package="$1"
+  shift
+  local dry_run=false
+  local execute=false
+  local forwarded=()
+  while (($#)); do
+    case "$1" in
+      --dry-run)
+        dry_run=true
+        ;;
+      --execute)
+        execute=true
+        ;;
+      *)
+        forwarded+=("$1")
+        ;;
+    esac
+    shift
+  done
+  if $dry_run && $execute; then
+    echo "--dry-run cannot be combined with --execute" >&2
+    exit 2
+  fi
+  if ! $dry_run; then
+    execute=true
+  fi
+  if $execute; then
+    forwarded+=("--execute")
+  fi
+  if ((${#forwarded[@]})); then
+    exec "$BRANCH_RELEASE" publish "$package" "${forwarded[@]}"
+  fi
+  exec "$BRANCH_RELEASE" publish "$package"
 }
 
 command="${1:-}"
 case "$command" in
   verify|dry-run)
-    "$GENERIC" verify "$REST_PACKAGE"
-    "$GENERIC" verify "$SDK_PACKAGE"
+    "$BRANCH_RELEASE" verify "$REST_PACKAGE"
+    "$BRANCH_RELEASE" verify "$SDK_PACKAGE"
     ;;
-  prepare-rest)
-    "$GENERIC" prepare "$REST_PACKAGE"
-    ;;
-  prepare-sdk)
-    "$GENERIC" prepare "$SDK_PACKAGE"
-    check_requested_rest_pin "${2:-}" "${3:-}"
+  prepare-rest|prepare-sdk)
+    echo "Container Registry packages are branch-owned and have no prepare stage." >&2
+    exit 2
     ;;
   publish-rest)
     shift
-    exec "$GENERIC" publish "$REST_PACKAGE" "$@"
+    publish_compat "$REST_PACKAGE" "$@"
     ;;
   publish-sdk)
     shift
-    exec "$GENERIC" publish "$SDK_PACKAGE" "$@"
+    publish_compat "$SDK_PACKAGE" "$@"
     ;;
   self-test)
     exec "$GENERIC" self-test

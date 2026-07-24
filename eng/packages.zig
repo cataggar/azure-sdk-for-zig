@@ -5,23 +5,23 @@ pub const Kind = enum {
     sdk,
 };
 
-pub const MigrationState = enum {
-    monolithic,
-    package,
+pub const SourceOwnership = enum {
+    main_owned,
+    branch_owned,
 };
 
 pub const Package = struct {
     kind: Kind,
-    state: MigrationState = .monolithic,
-    source_path: []const u8,
+    ownership: SourceOwnership = .branch_owned,
+    workspace_path: ?[]const u8 = null,
+    historical_source_path: []const u8,
     root_source_file: []const u8,
-    current_root_source_file: ?[]const u8 = null,
     name: []const u8,
     module_name: []const u8,
     branch: []const u8,
     identity_override: bool = false,
     version: []const u8 = "0.1.0",
-    legacy_names: []const []const u8 = &.{},
+    historical_names: []const []const u8 = &.{},
     dependencies: []const []const u8 = &.{},
     external_dependencies: []const []const u8 = &.{},
     publish_paths: []const []const u8 = &.{},
@@ -34,8 +34,9 @@ pub const Package = struct {
 pub const all = [_]Package{
     .{
         .kind = .sdk,
-        .state = .package,
-        .source_path = "sdk/core/tracing",
+        .ownership = .main_owned,
+        .workspace_path = "sdk/core/tracing",
+        .historical_source_path = "sdk/core/tracing",
         .root_source_file = "root.zig",
         .name = "azure_sdk_core_tracing",
         .module_name = "azure_sdk_core_tracing",
@@ -51,8 +52,9 @@ pub const all = [_]Package{
     },
     .{
         .kind = .sdk,
-        .state = .package,
-        .source_path = "sdk/core/perf",
+        .ownership = .main_owned,
+        .workspace_path = "sdk/core/perf",
+        .historical_source_path = "sdk/core/perf",
         .root_source_file = "root.zig",
         .name = "azure_sdk_core_perf",
         .module_name = "azure_sdk_core_perf",
@@ -68,8 +70,9 @@ pub const all = [_]Package{
     },
     .{
         .kind = .sdk,
-        .state = .package,
-        .source_path = "sdk/core/amqp",
+        .ownership = .main_owned,
+        .workspace_path = "sdk/core/amqp",
+        .historical_source_path = "sdk/core/amqp",
         .root_source_file = "root.zig",
         .name = "azure_sdk_core_amqp",
         .module_name = "azure_sdk_core_amqp",
@@ -86,8 +89,9 @@ pub const all = [_]Package{
     },
     .{
         .kind = .sdk,
-        .state = .package,
-        .source_path = "sdk/core",
+        .ownership = .main_owned,
+        .workspace_path = "sdk/core",
+        .historical_source_path = "sdk/core",
         .root_source_file = "root.zig",
         .name = "azure_sdk_core",
         .module_name = "azure_sdk_core",
@@ -123,8 +127,9 @@ pub const all = [_]Package{
     },
     .{
         .kind = .sdk,
-        .state = .package,
-        .source_path = "sdk/core/testing",
+        .ownership = .main_owned,
+        .workspace_path = "sdk/core/testing",
+        .historical_source_path = "sdk/core/testing",
         .root_source_file = "root.zig",
         .name = "azure_sdk_core_testing",
         .module_name = "azure_sdk_core_testing",
@@ -141,13 +146,12 @@ pub const all = [_]Package{
     },
     .{
         .kind = .rest,
-        .state = .package,
-        .source_path = "rest/arm_avs",
+        .historical_source_path = "rest/arm_avs",
         .root_source_file = "src/root.zig",
         .name = "azure_rest_arm_avs",
         .module_name = "azure_rest_arm_avs",
         .branch = "rest/arm_avs",
-        .legacy_names = &.{"arm_avs"},
+        .historical_names = &.{"arm_avs"},
         .dependencies = &.{"azure_sdk_core"},
         .external_dependencies = &.{"serde"},
         .publish_paths = &.{
@@ -164,13 +168,12 @@ pub const all = [_]Package{
     },
     .{
         .kind = .rest,
-        .state = .package,
-        .source_path = "rest/keyvault_secrets",
+        .historical_source_path = "rest/keyvault_secrets",
         .root_source_file = "src/root.zig",
         .name = "azure_rest_keyvault_secrets",
         .module_name = "azure_rest_keyvault_secrets",
         .branch = "rest/keyvault_secrets",
-        .legacy_names = &.{"keyvault_secrets"},
+        .historical_names = &.{"keyvault_secrets"},
         .dependencies = &.{"azure_sdk_core"},
         .external_dependencies = &.{"serde"},
         .publish_paths = &.{
@@ -185,8 +188,7 @@ pub const all = [_]Package{
     },
     .{
         .kind = .rest,
-        .state = .package,
-        .source_path = "rest/container_registry",
+        .historical_source_path = "rest/container_registry",
         .root_source_file = "src/root.zig",
         .name = "azure_rest_container_registry",
         .module_name = "azure_rest_container_registry",
@@ -205,8 +207,7 @@ pub const all = [_]Package{
     },
     .{
         .kind = .sdk,
-        .state = .package,
-        .source_path = "sdk/container_registry",
+        .historical_source_path = "sdk/container_registry",
         .root_source_file = "src/root.zig",
         .name = "azure_sdk_container_registry",
         .module_name = "azure_sdk_container_registry",
@@ -230,8 +231,7 @@ pub const all = [_]Package{
     },
     .{
         .kind = .sdk,
-        .state = .package,
-        .source_path = "sdk/storage/common",
+        .historical_source_path = "sdk/storage/common",
         .root_source_file = "root.zig",
         .name = "azure_sdk_storage_common",
         .module_name = "azure_sdk_storage_common",
@@ -249,8 +249,7 @@ pub const all = [_]Package{
     },
     .{
         .kind = .sdk,
-        .state = .package,
-        .source_path = "sdk/storage/blobs",
+        .historical_source_path = "sdk/storage/blobs",
         .root_source_file = "root.zig",
         .name = "azure_sdk_storage_blobs",
         .module_name = "azure_sdk_storage_blobs",
@@ -274,8 +273,7 @@ pub const all = [_]Package{
     },
     .{
         .kind = .sdk,
-        .state = .package,
-        .source_path = "sdk/storage/queues",
+        .historical_source_path = "sdk/storage/queues",
         .root_source_file = "root.zig",
         .name = "azure_sdk_storage_queues",
         .module_name = "azure_sdk_storage_queues",
@@ -299,8 +297,7 @@ pub const all = [_]Package{
     },
     .{
         .kind = .sdk,
-        .state = .package,
-        .source_path = "sdk/storage/files/shares",
+        .historical_source_path = "sdk/storage/files/shares",
         .root_source_file = "root.zig",
         .name = "azure_sdk_storage_files_shares",
         .module_name = "azure_sdk_storage_files_shares",
@@ -317,8 +314,7 @@ pub const all = [_]Package{
     },
     .{
         .kind = .sdk,
-        .state = .package,
-        .source_path = "sdk/storage/files/datalake",
+        .historical_source_path = "sdk/storage/files/datalake",
         .root_source_file = "root.zig",
         .name = "azure_sdk_storage_files_datalake",
         .module_name = "azure_sdk_storage_files_datalake",
@@ -335,8 +331,7 @@ pub const all = [_]Package{
     },
     .{
         .kind = .sdk,
-        .state = .package,
-        .source_path = "sdk/keyvault",
+        .historical_source_path = "sdk/keyvault",
         .root_source_file = "root.zig",
         .name = "azure_sdk_keyvault",
         .module_name = "azure_sdk_keyvault",
@@ -358,8 +353,7 @@ pub const all = [_]Package{
     },
     .{
         .kind = .sdk,
-        .state = .package,
-        .source_path = "sdk/data/tables",
+        .historical_source_path = "sdk/data/tables",
         .root_source_file = "root.zig",
         .name = "azure_sdk_data_tables",
         .module_name = "azure_sdk_data_tables",
@@ -376,8 +370,7 @@ pub const all = [_]Package{
     },
     .{
         .kind = .sdk,
-        .state = .package,
-        .source_path = "sdk/data/cosmos",
+        .historical_source_path = "sdk/data/cosmos",
         .root_source_file = "root.zig",
         .name = "azure_sdk_data_cosmos",
         .module_name = "azure_sdk_data_cosmos",
@@ -395,8 +388,7 @@ pub const all = [_]Package{
     },
     .{
         .kind = .sdk,
-        .state = .package,
-        .source_path = "sdk/data/appconfiguration",
+        .historical_source_path = "sdk/data/appconfiguration",
         .root_source_file = "root.zig",
         .name = "azure_sdk_data_appconfiguration",
         .module_name = "azure_sdk_data_appconfiguration",
@@ -414,8 +406,7 @@ pub const all = [_]Package{
     },
     .{
         .kind = .sdk,
-        .state = .package,
-        .source_path = "sdk/attestation",
+        .historical_source_path = "sdk/attestation",
         .root_source_file = "root.zig",
         .name = "azure_sdk_attestation",
         .module_name = "azure_sdk_attestation",
@@ -433,8 +424,7 @@ pub const all = [_]Package{
     },
     .{
         .kind = .sdk,
-        .state = .package,
-        .source_path = "sdk/messaging/common",
+        .historical_source_path = "sdk/messaging/common",
         .root_source_file = "root.zig",
         .name = "azure_sdk_messaging_common",
         .module_name = "azure_sdk_messaging_common",
@@ -450,8 +440,7 @@ pub const all = [_]Package{
     },
     .{
         .kind = .sdk,
-        .state = .package,
-        .source_path = "sdk/messaging/eventhubs",
+        .historical_source_path = "sdk/messaging/eventhubs",
         .root_source_file = "root.zig",
         .name = "azure_sdk_eventhubs",
         .module_name = "azure_sdk_eventhubs",
@@ -477,8 +466,7 @@ pub const all = [_]Package{
     },
     .{
         .kind = .sdk,
-        .state = .package,
-        .source_path = "sdk/messaging/servicebus",
+        .historical_source_path = "sdk/messaging/servicebus",
         .root_source_file = "root.zig",
         .name = "azure_sdk_servicebus",
         .module_name = "azure_sdk_servicebus",
@@ -500,64 +488,13 @@ pub const all = [_]Package{
     },
     .{
         .kind = .sdk,
-        .state = .package,
-        .source_path = "sdk/kusto/common",
+        .historical_source_path = "sdk/kusto",
         .root_source_file = "root.zig",
-        .name = "azure_sdk_kusto_common",
-        .module_name = "azure_sdk_kusto_common",
-        .branch = "sdk/kusto_common",
-        .dependencies = &.{"azure_sdk_core"},
-        .external_dependencies = &.{"serde"},
-        .publish_paths = &.{
-            ".gitignore",
-            "build.zig",
-            "build.zig.zon",
-            "root.zig",
-            "error.zig",
-            "README.md",
-            "LICENSE.txt",
-        },
-    },
-    .{
-        .kind = .sdk,
-        .state = .package,
-        .source_path = "sdk/kusto/data",
-        .root_source_file = "root.zig",
-        .name = "azure_sdk_kusto_data",
-        .module_name = "azure_sdk_kusto_data",
-        .branch = "sdk/kusto_data",
+        .name = "azure_sdk_kusto",
+        .module_name = "azure_sdk_kusto",
+        .branch = "sdk/kusto",
         .dependencies = &.{
             "azure_sdk_core",
-            "azure_sdk_kusto_common",
-        },
-        .external_dependencies = &.{"serde"},
-        .publish_paths = &.{
-            ".gitignore",
-            "build.zig",
-            "build.zig.zon",
-            "root.zig",
-            "kql.zig",
-            "result.zig",
-            "stream.zig",
-            "examples",
-            "README.md",
-            "LICENSE.txt",
-        },
-        .examples_command = "zig build examples",
-        .live_test_command = "zig build live-test",
-    },
-    .{
-        .kind = .sdk,
-        .state = .package,
-        .source_path = "sdk/kusto/ingest",
-        .root_source_file = "root.zig",
-        .name = "azure_sdk_kusto_ingest",
-        .module_name = "azure_sdk_kusto_ingest",
-        .branch = "sdk/kusto_ingest",
-        .dependencies = &.{
-            "azure_sdk_core",
-            "azure_sdk_kusto_common",
-            "azure_sdk_kusto_data",
             "azure_sdk_storage_common",
             "azure_sdk_storage_blobs",
             "azure_sdk_storage_queues",
@@ -568,17 +505,12 @@ pub const all = [_]Package{
             "build.zig",
             "build.zig.zon",
             "root.zig",
-            "streaming.zig",
-            "managed.zig",
-            "queued.zig",
-            "resources.zig",
-            "status.zig",
-            "examples",
+            "common",
+            "data",
+            "ingest",
             "README.md",
             "LICENSE.txt",
         },
-        .examples_command = "zig build examples",
-        .live_test_command = "zig build live-test",
     },
 };
 
@@ -601,7 +533,9 @@ pub fn validate(allocator: std.mem.Allocator, entries: []const Package) !void {
         for (entries[index + 1 ..]) |other| {
             if (std.mem.eql(u8, entry.name, other.name)) return error.DuplicatePackageName;
             if (std.mem.eql(u8, entry.module_name, other.module_name)) return error.DuplicateModuleName;
-            if (std.mem.eql(u8, entry.source_path, other.source_path)) return error.DuplicateSourcePath;
+            if (std.mem.eql(u8, entry.historical_source_path, other.historical_source_path)) {
+                return error.DuplicateSourcePath;
+            }
             if (std.mem.eql(u8, entry.branch, other.branch)) return error.DuplicateBranch;
         }
         for (entry.dependencies) |dependency| {
@@ -674,7 +608,20 @@ fn validateEntry(allocator: std.mem.Allocator, entry: Package) !void {
     if (!std.mem.eql(u8, entry.name, entry.module_name)) {
         return error.PackageModuleMismatch;
     }
-    try validatePath(entry.source_path);
+    try validatePath(entry.historical_source_path);
+    if (entry.workspace_path) |workspace_path| try validatePath(workspace_path);
+    switch (entry.ownership) {
+        .main_owned => {
+            const workspace_path = entry.workspace_path orelse
+                return error.MissingWorkspacePath;
+            if (!std.mem.eql(u8, workspace_path, entry.historical_source_path)) {
+                return error.WorkspaceHistoryPathMismatch;
+            }
+        },
+        .branch_owned => {
+            if (entry.workspace_path != null) return error.UnexpectedWorkspacePath;
+        },
+    }
     try validatePath(entry.root_source_file);
     try validateIdentifier(entry.name);
     try validateBranch(entry.branch);
@@ -700,14 +647,14 @@ fn validateEntry(allocator: std.mem.Allocator, entry: Package) !void {
             return error.MissingRequiredPublishPath;
         }
     }
-    for (entry.legacy_names, 0..) |legacy_name, index| {
-        try validateIdentifier(legacy_name);
-        if (std.mem.eql(u8, legacy_name, entry.name)) {
-            return error.InvalidLegacyName;
+    for (entry.historical_names, 0..) |historical_name, index| {
+        try validateIdentifier(historical_name);
+        if (std.mem.eql(u8, historical_name, entry.name)) {
+            return error.InvalidHistoricalName;
         }
-        for (entry.legacy_names[index + 1 ..]) |other| {
-            if (std.mem.eql(u8, legacy_name, other)) {
-                return error.DuplicateLegacyName;
+        for (entry.historical_names[index + 1 ..]) |other| {
+            if (std.mem.eql(u8, historical_name, other)) {
+                return error.DuplicateHistoricalName;
             }
         }
     }
@@ -723,10 +670,10 @@ fn validateEntry(allocator: std.mem.Allocator, entry: Package) !void {
         .sdk => "sdk/",
         .rest => "rest/",
     };
-    if (!std.mem.startsWith(u8, entry.source_path, prefix)) {
+    if (!std.mem.startsWith(u8, entry.historical_source_path, prefix)) {
         return error.InvalidSourcePath;
     }
-    const suffix = entry.source_path[prefix.len..];
+    const suffix = entry.historical_source_path[prefix.len..];
     const identifier = try allocator.dupe(u8, suffix);
     defer allocator.free(identifier);
     std.mem.replaceScalar(u8, identifier, '/', '_');

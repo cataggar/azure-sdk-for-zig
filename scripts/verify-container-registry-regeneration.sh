@@ -2,6 +2,27 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REST_PACKAGE_ROOT="$ROOT/rest/container_registry"
+SDK_PACKAGE_ROOT="$ROOT/sdk/container_registry"
+
+while (($#)); do
+  case "$1" in
+    --rest-package-root)
+      REST_PACKAGE_ROOT="$2"
+      shift 2
+      ;;
+    --sdk-package-root)
+      SDK_PACKAGE_ROOT="$2"
+      shift 2
+      ;;
+    *)
+      echo "usage: verify-container-registry-regeneration.sh " \
+        "[--rest-package-root PATH] [--sdk-package-root PATH]" >&2
+      exit 2
+      ;;
+  esac
+done
+
 SCRATCH="$ROOT/.release/container_registry/regeneration"
 CODEGEN_ZIG_PKG="$ROOT/codegen/cli/zig-pkg"
 ZIG_PKG_EXISTED=0
@@ -27,19 +48,20 @@ snapshot_tree() {
   local path="$1"
   local output="$2"
   (
-    cd "$ROOT"
-    git ls-files --cached --others --exclude-standard -z -- "$path" |
-      python3 -c '
-import hashlib
-from pathlib import Path
-import sys
-
-paths = sorted(filter(None, sys.stdin.buffer.read().split(b"\0")))
-for raw in paths:
-    path = Path(raw.decode())
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    print(f"{digest}  {path.as_posix()}")
-'
+    cd "$path"
+    find . -type f \
+      ! -path './.git/*' \
+      ! -path './.github/*' \
+      ! -path './.azure-sdk-generator' \
+      ! -path '*/.zig-cache/*' \
+      ! -path '*/zig-cache/*' \
+      ! -path '*/zig-out/*' \
+      ! -path '*/zig-pkg/*' \
+      -print |
+      LC_ALL=C sort |
+      while IFS= read -r file; do
+        shasum -a 256 "${file#./}"
+      done
   ) >"$output"
 }
 
@@ -47,36 +69,43 @@ snapshot_status() {
   local output="$1"
   (
     cd "$ROOT"
-    git status --porcelain=v1 --untracked-files=all |
-      python3 -c '
-import sys
-
-allowed = ("rest/container_registry/", "codegen/fixtures/container_registry.json")
-for line in sys.stdin:
-    path = line[3:].strip()
-    if " -> " in path:
-        path = path.split(" -> ", 1)[1]
-    if path.startswith(allowed[0]) or path == allowed[1]:
-        continue
-    print(line, end="")
-'
+    git status --porcelain=v1 --untracked-files=all
   ) >"$output"
 }
 
-snapshot_tree "rest/container_registry" "$SCRATCH/rest.before"
-snapshot_tree "sdk/container_registry" "$SCRATCH/sdk.before"
+snapshot_tree "$REST_PACKAGE_ROOT" "$SCRATCH/rest.before"
+snapshot_tree "$SDK_PACKAGE_ROOT" "$SCRATCH/sdk.before"
 snapshot_status "$SCRATCH/status.before"
+
+codegen_args=(
+  -Dcontainer-registry-output="$SCRATCH/generated-rest"
+)
+if [[ "$REST_PACKAGE_ROOT" != "$ROOT/rest/container_registry" ]]; then
+  dependency="$(
+    cd "$ROOT"
+    zig run eng/package_branch_tool.zig -- \
+      dependencies azure_rest_container_registry "$REST_PACKAGE_ROOT"
+  )"
+  core_url="$(cut -f2 <<<"$dependency")"
+  core_hash="$(cut -f3 <<<"$dependency")"
+  core_commit="${core_url##*#}"
+  codegen_args+=(
+    -Dazure-sdk-core-commit="$core_commit"
+    -Dazure-sdk-core-hash="$core_hash"
+  )
+fi
 
 (
   cd "$ROOT/codegen/cli"
   zig build \
     --cache-dir "$SCRATCH/codegen-cache" \
     --global-cache-dir "$SCRATCH/global-cache" \
+    "${codegen_args[@]}" \
     generate-container-registry-package
 )
 
-snapshot_tree "rest/container_registry" "$SCRATCH/rest.after"
-snapshot_tree "sdk/container_registry" "$SCRATCH/sdk.after"
+snapshot_tree "$SCRATCH/generated-rest" "$SCRATCH/rest.after"
+snapshot_tree "$SDK_PACKAGE_ROOT" "$SCRATCH/sdk.after"
 snapshot_status "$SCRATCH/status.after"
 
 if ! cmp -s "$SCRATCH/sdk.before" "$SCRATCH/sdk.after"; then
@@ -92,21 +121,20 @@ fi
 if ! cmp -s "$SCRATCH/rest.before" "$SCRATCH/rest.after"; then
   echo "ERROR: rest/container_registry is not deterministic; inspect generator drift." >&2
   diff -u "$SCRATCH/rest.before" "$SCRATCH/rest.after" || true
-  (cd "$ROOT" && git --no-pager diff -- rest/container_registry) || true
   exit 1
 fi
 
-python3 - "$ROOT/rest/container_registry" <<'PY'
-from pathlib import Path
-import sys
-
-root = Path(sys.argv[1])
-zon = (root / "build.zig.zon").read_text()
-build = (root / "build.zig").read_text()
-if ".name = .azure_rest_container_registry," not in zon:
-    raise SystemExit("ERROR: regenerated REST package name drifted")
-if 'addModule("azure_rest_container_registry"' not in build:
-    raise SystemExit("ERROR: regenerated REST module name drifted")
-PY
+grep -Fq ".name = .azure_rest_container_registry," \
+  "$SCRATCH/generated-rest/build.zig.zon" ||
+  {
+    echo "ERROR: regenerated REST package name drifted" >&2
+    exit 1
+  }
+grep -Fq 'addModule("azure_rest_container_registry"' \
+  "$SCRATCH/generated-rest/build.zig" ||
+  {
+    echo "ERROR: regenerated REST module name drifted" >&2
+    exit 1
+  }
 
 echo "ACR regeneration is deterministic and isolated to generator-owned REST outputs."

@@ -3,10 +3,10 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const ingest_mod = b.dependency("azure_sdk_kusto_ingest", .{
+    const core_mod = b.dependency("azure_sdk_core", .{
         .target = target,
         .optimize = optimize,
-    }).module("azure_sdk_kusto_ingest");
+    }).module("azure_sdk_core");
 
     const tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -14,7 +14,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "azure_sdk_kusto_ingest", .module = ingest_mod },
+                .{ .name = "azure_sdk_core", .module = core_mod },
             },
         }),
     });

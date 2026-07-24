@@ -14,6 +14,9 @@
 #                                            #   (build.zig, .gitignore, …).
 #                                            #   Use when onboarding a fresh
 #                                            #   package.
+#   codegen/scripts/sync.sh --output-root DIR <pkg>
+#                                            # sync one package in an external
+#                                            # package-branch worktree.
 #
 # By default the helper only overwrites `src/models.zig`. Every other
 # emitter-managed file (`src/clients.zig`, `src/enums.zig`,
@@ -38,26 +41,46 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 REST_DIR="$ROOT/rest"
-TSPCFG="$ROOT/codegen/tspconfigs.yaml"
 RUN_SH="$ROOT/codegen/cli/scripts/run.sh"
 SPEC_ROOT="$ROOT/../azure-rest-api-specs"
 
 # ── arg parsing ────────────────────────────────────────────────────
 FORCE=0
+OUTPUT_ROOT=""
+AZURE_SDK_CORE_PATH=""
+AZURE_SDK_CORE_COMMIT=""
+AZURE_SDK_CORE_HASH=""
 PKGS=()
-for arg in "$@"; do
-    case "$arg" in
+while (($#)); do
+    case "$1" in
         --force) FORCE=1 ;;
+        --output-root)
+            OUTPUT_ROOT="$2"
+            shift
+            ;;
+        --azure-sdk-core-path)
+            AZURE_SDK_CORE_PATH="$2"
+            shift
+            ;;
+        --azure-sdk-core-commit)
+            AZURE_SDK_CORE_COMMIT="$2"
+            shift
+            ;;
+        --azure-sdk-core-hash)
+            AZURE_SDK_CORE_HASH="$2"
+            shift
+            ;;
         --help|-h)
             grep -E '^# ?' "${BASH_SOURCE[0]}" | sed -E 's/^# ?//' | sed -n '2,/^set -euo/p'
             exit 0
             ;;
         --*)
-            echo "sync.sh: unknown flag: $arg" >&2
+            echo "sync.sh: unknown flag: $1" >&2
             exit 2
             ;;
-        *) PKGS+=("$arg") ;;
+        *) PKGS+=("$1") ;;
     esac
+    shift
 done
 
 if [[ ${#PKGS[@]} -eq 0 ]]; then
@@ -73,67 +96,33 @@ if [[ ${#PKGS[@]} -eq 0 ]]; then
     fi
 fi
 
+if [[ -n "$OUTPUT_ROOT" && ${#PKGS[@]} -ne 1 ]]; then
+    echo "sync.sh: --output-root requires exactly one package" >&2
+    exit 2
+fi
+if [[ -n "$AZURE_SDK_CORE_PATH" &&
+    ( -n "$AZURE_SDK_CORE_COMMIT" || -n "$AZURE_SDK_CORE_HASH" ) ]]; then
+    echo "sync.sh: use a core path or an immutable core pin, not both" >&2
+    exit 2
+fi
+if [[ -n "$AZURE_SDK_CORE_COMMIT" || -n "$AZURE_SDK_CORE_HASH" ]]; then
+    if [[ -z "$AZURE_SDK_CORE_COMMIT" || -z "$AZURE_SDK_CORE_HASH" ]]; then
+        echo "sync.sh: core commit and hash must be supplied together" >&2
+        exit 2
+    fi
+fi
+if [[ -n "$OUTPUT_ROOT" && -z "$AZURE_SDK_CORE_PATH" &&
+    -z "$AZURE_SDK_CORE_COMMIT" ]]; then
+    echo "sync.sh: external output requires an explicit core path or immutable pin" >&2
+    exit 2
+fi
+if [[ -n "$OUTPUT_ROOT" ]]; then
+    OUTPUT_ROOT="$(cd "$(dirname "$OUTPUT_ROOT")" && pwd)/$(basename "$OUTPUT_ROOT")"
+fi
+
 # ── resolve zig package name → spec dir via tspconfigs.yaml ────────
 # Output format: "<zig_name>\t<spec_dir>" one per line.
-SPEC_INDEX="$(python3 - "$TSPCFG" <<'PY'
-import os, re, sys
-
-path = sys.argv[1]
-with open(path, "r") as fh:
-    text = fh.read()
-
-# Minimal parser for the tspconfigs.yaml shape:
-#   "specification/.../tspconfig.yaml":
-#     js: "..."
-#     zig: "..."
-spec = None
-js = zig = None
-out = []
-
-def display_from_js(js_value: str, zig_value: str) -> str:
-    """Strip a leading @scope/ from `js` to get the dash-cased label
-    (e.g. `@azure/arm-avs` → `arm-avs`). Falls back to the snake-cased
-    `zig` value when `js` is empty (data-plane Foundry packages, etc.)
-    so the emitter still gets a non-empty display name.
-    """
-    if not js_value:
-        return zig_value
-    if js_value.startswith("@"):
-        slash = js_value.find("/")
-        if slash >= 0:
-            return js_value[slash + 1:]
-    return js_value
-
-def flush():
-    if spec and zig:
-        spec_dir = os.path.dirname(spec)
-        display = display_from_js(js or "", zig)
-        out.append(f"{zig}\t{spec_dir}\t{display}")
-
-for raw in text.splitlines():
-    line = raw.rstrip()
-    if not line:
-        continue
-    if not line.startswith(" "):
-        flush()
-        m = re.match(r'^"(.*)":\s*$', line)
-        spec = m.group(1) if m else None
-        js = zig = None
-        continue
-    m = re.match(r'\s+(\w+):\s*"(.*)"\s*$', line)
-    if not m:
-        continue
-    k, v = m.group(1), m.group(2)
-    if k == "js":
-        js = v
-    elif k == "zig":
-        zig = v if v else None
-
-flush()
-
-print("\n".join(out))
-PY
-)"
+SPEC_INDEX="$(cd "$ROOT" && zig run codegen/tspconfigs/main.zig -- list)"
 
 lookup_spec_dir() {
     local pkg="$1"
@@ -197,9 +186,9 @@ EXIT_CODE=0
 for pkg in "${PKGS[@]}"; do
     echo "── $pkg ──────────────────────────────────────"
 
-    pkg_dir="$REST_DIR/$pkg"
+    pkg_dir="${OUTPUT_ROOT:-$REST_DIR/$pkg}"
     if [[ ! -d "$pkg_dir" ]]; then
-        echo "  ERROR: rest/$pkg/ does not exist (use --force to onboard a new package, after creating the dir)"
+        echo "  ERROR: package output does not exist: $pkg_dir"
         EXIT_CODE=1
         continue
     fi
@@ -227,10 +216,21 @@ for pkg in "${PKGS[@]}"; do
     echo "  display: $display"
     echo "  package: $package_name"
     echo "  regen: $out_tmp"
+    core_args=()
+    if [[ -n "$AZURE_SDK_CORE_COMMIT" ]]; then
+        core_args=(
+            --azure-sdk-core-commit "$AZURE_SDK_CORE_COMMIT"
+            --azure-sdk-core-hash "$AZURE_SDK_CORE_HASH"
+        )
+    else
+        core_args=(
+            --azure-sdk-core-path "${AZURE_SDK_CORE_PATH:-../../sdk/core}"
+        )
+    fi
     if ! "$RUN_SH" "$spec_dir" "$out_tmp" \
         --package-name "$package_name" \
         --display-name "$display" \
-        --azure-sdk-core-path ../../sdk/core >"$TMPROOT/$pkg.log" 2>&1; then
+        "${core_args[@]}" >"$TMPROOT/$pkg.log" 2>&1; then
         echo "  ERROR: emitter failed; see $TMPROOT/$pkg.log"
         tail -20 "$TMPROOT/$pkg.log" | sed 's/^/    /'
         EXIT_CODE=1

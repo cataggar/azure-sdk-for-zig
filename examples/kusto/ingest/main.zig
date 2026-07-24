@@ -1,8 +1,9 @@
 //! Opt-in ingestion and status examples for Azure Data Explorer (Kusto).
 const std = @import("std");
 const core = @import("azure_sdk_core");
-const common = @import("azure_sdk_kusto_common");
-const ingest = @import("azure_sdk_kusto_ingest");
+const kusto = @import("azure_sdk_kusto");
+const common = kusto.common;
+const ingest = kusto.ingest;
 
 const default_ingest_data =
     \\{"Message":"azure-sdk-for-zig live example"}
@@ -213,6 +214,10 @@ pub fn main(init: std.process.Init) !void {
         usage();
         return error.UnexpectedKustoIngestExampleArgument;
     }
+    try run(init, scenario_text);
+}
+
+pub fn run(init: std.process.Init, scenario_text: []const u8) !void {
     const scenario = parseScenario(scenario_text) orelse {
         usage();
         return error.UnknownKustoIngestExampleScenario;

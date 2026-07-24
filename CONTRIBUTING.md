@@ -1,99 +1,52 @@
-# Contributing to Azure SDK for Zig
+# Contributing
 
-## Prerequisites
+Thanks for contributing to the Azure SDK for Zig.
 
-- [Zig 0.15.2](https://ziglang.org/download/) or later
+## Choose the correct base branch
 
-## Building and Testing
+- Core-family changes target `main`.
+- Non-Core SDK and REST changes target the package branch listed in
+  [`doc/package-catalog.md`](doc/package-catalog.md).
+- Generated package changes also target their package branch.
+
+Do not add branch-owned package source back to `main`.
+
+## Validation
+
+For Main-owned changes:
 
 ```bash
-zig build                     # compile SDK + example
-zig build test --summary all  # run all tests
-zig build run                 # run the example app
+zig build test --summary all
+zig build package-check --summary all
+zig build package-history-check --summary all
 ```
 
-## Code Style
+For package-branch changes:
 
-- Run `zig fmt sdk/ build.zig` before committing — CI enforces this
-- Follow Zig naming conventions: `camelCase` for functions/variables, `PascalCase` for types
-- Add `///` doc comments to all public declarations
-- Keep files focused: one client or module per file
-
-## Module Structure
-
-```
-sdk/
-├── core/               # Foundation: HTTP, pipeline, credentials, utilities
-│   ├── http/           # Transport, pipeline, policies, decompression
-│   ├── credentials/    # TokenCredential interface, caching
-│   ├── cloud.zig       # Sovereign cloud configurations
-│   ├── pager.zig       # Generic pagination (Pager, PipelinePager)
-│   ├── lro.zig         # Long-running operation poller
-│   ├── testing/        # Test framework (recording/playback)
-│   └── ...             # URL, UUID, DateTime, Base64, XML, errors
-├── identity/           # Credential implementations
-├── storage/            # Blob, Queue, Files, DataLake, Common
-├── keyvault/           # Secrets, Keys, Certificates, Administration
-├── data/               # Tables, App Configuration
-├── messaging/          # Event Hubs
-├── attestation/        # Attestation
-└── examples/           # Example applications
+```bash
+zig fmt --check .
+zig build test --summary all
 ```
 
-## Adding a New Service SDK
+The package branch must report:
 
-1. Create `sdk/<service>/<subservice>/root.zig`
-2. Import `azure_sdk_core` for HTTP pipeline, credentials, errors
-3. Define models (request/response structs)
-4. Implement the client struct with CRUD operations
-5. Add tests using `MockTransport` or `SequenceMockTransport`
-6. Register the module in `build.zig` (add `b.addModule(...)` and test step)
-7. For paginated list operations, use `PipelinePager(T)` from `azure_sdk_core.pager`
-
-## Interface Pattern
-
-The SDK uses function-pointer structs for interfaces (like `std.mem.Allocator`):
-
-```zig
-pub const MyInterface = struct {
-    doWorkFn: *const fn (self: *MyInterface, ...) anyerror!Result,
-
-    pub fn doWork(self: *MyInterface, ...) !Result {
-        return self.doWorkFn(self, ...);
-    }
-};
-
-pub const MyImpl = struct {
-    interface: MyInterface,
-    // ... fields ...
-
-    pub fn init(...) MyImpl {
-        return .{ .interface = .{ .doWorkFn = &doWorkImpl }, ... };
-    }
-
-    pub fn asInterface(self: *MyImpl) *MyInterface {
-        return &self.interface;
-    }
-
-    fn doWorkImpl(iface: *MyInterface, ...) anyerror!Result {
-        const self: *MyImpl = @fieldParentPtr("interface", iface);
-        // ... implementation ...
-    }
-};
+```text
+package-test (ubuntu-latest)
+package-test (windows-latest)
+package-test (macos-latest)
 ```
 
-## Testing
+## Package metadata
 
-- All tests use `std.testing.allocator` to detect memory leaks
-- Use `MockTransport` for single-response tests
-- Use `SequenceMockTransport` for multi-step flows (retry, pagination)
-- Use `PlaybackTransport` for recorded HTTP exchange replay
-- Use `RecordingTransport` to capture live HTTP exchanges
+Update `eng/packages.zig` on `main` for catalog metadata. Main-owned packages
+must have a `workspace_path`; branch-owned packages must not. Historical paths
+belong in `historical_source_path` and `eng/package_history_map.zig`.
 
-## Pull Request Process
+Branch-owned manifests use immutable URL/hash pins for every internal
+dependency. Core workspace manifests use local paths only to other Main-owned
+Core packages.
 
-1. Fork and create a feature branch
-2. Make changes, add tests
-3. Run `zig fmt sdk/ build.zig`
-4. Run `zig build test --summary all` — all tests must pass
-5. Submit PR against the `zig` branch
+## Pull requests
+
+Keep changes focused, include tests for behavior changes, and preserve public
+API compatibility unless the change explicitly justifies a break.

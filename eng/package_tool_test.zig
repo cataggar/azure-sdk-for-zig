@@ -1,12 +1,25 @@
 const std = @import("std");
 const registry = @import("packages.zig");
 
-test "registry contains a valid twenty-five-package dependency graph" {
-    try std.testing.expectEqual(@as(usize, 25), registry.all.len);
+test {
+    _ = @import("zon_manifest.zig");
+    _ = @import("package_history_map.zig");
+    _ = @import("example_history_map.zig");
+}
+
+test "registry contains a valid twenty-three-package dependency graph" {
+    try std.testing.expectEqual(@as(usize, 23), registry.all.len);
     try registry.validate(std.testing.allocator, &registry.all);
+    var main_owned: usize = 0;
+    var branch_owned: usize = 0;
     for (registry.all) |entry| {
-        try std.testing.expectEqual(registry.MigrationState.package, entry.state);
+        switch (entry.ownership) {
+            .main_owned => main_owned += 1,
+            .branch_owned => branch_owned += 1,
+        }
     }
+    try std.testing.expectEqual(@as(usize, 5), main_owned);
+    try std.testing.expectEqual(@as(usize, 18), branch_owned);
 }
 
 test "topological order places dependencies before dependents" {
@@ -107,15 +120,46 @@ test "registry requires release metadata" {
     );
 }
 
+test "registry enforces ownership path rules" {
+    var main_owned = testPackage("sdk/a", "azure_sdk_a", "sdk/a", &.{});
+    main_owned.ownership = .main_owned;
+    try std.testing.expectError(
+        error.MissingWorkspacePath,
+        registry.validate(
+            std.testing.allocator,
+            (&[_]registry.Package{main_owned})[0..],
+        ),
+    );
+
+    var branch_owned = testPackage("sdk/a", "azure_sdk_a", "sdk/a", &.{});
+    branch_owned.workspace_path = "sdk/a";
+    try std.testing.expectError(
+        error.UnexpectedWorkspacePath,
+        registry.validate(
+            std.testing.allocator,
+            (&[_]registry.Package{branch_owned})[0..],
+        ),
+    );
+
+    main_owned.workspace_path = "sdk/other";
+    try std.testing.expectError(
+        error.WorkspaceHistoryPathMismatch,
+        registry.validate(
+            std.testing.allocator,
+            (&[_]registry.Package{main_owned})[0..],
+        ),
+    );
+}
+
 fn testPackage(
-    source_path: []const u8,
+    historical_source_path: []const u8,
     name: []const u8,
     branch: []const u8,
     dependencies: []const []const u8,
 ) registry.Package {
     return .{
         .kind = .sdk,
-        .source_path = source_path,
+        .historical_source_path = historical_source_path,
         .root_source_file = "root.zig",
         .name = name,
         .module_name = name,

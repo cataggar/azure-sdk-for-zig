@@ -1,74 +1,66 @@
-# AGENTS.md — AI Agent Guidelines
+# AI Agent Guidelines
 
-This document provides guidance for AI agents (Copilot, etc.) working on this repository.
-
-## Build & Test Commands
+## Build and test commands
 
 ```bash
-zig build                     # compile SDK + example
-zig build test --summary all  # run all tests (must pass before committing)
-zig fmt sdk/ examples/ build.zig        # format code (CI enforces this)
-zig fmt --check sdk/ examples/ build.zig # check formatting without modifying
+zig build
+zig build test --summary all
+zig build package-check --summary all
+zig build package-history-check --summary all
+zig fmt sdk/ examples/ codegen/ eng/ build.zig
+zig fmt --check sdk/ examples/ codegen/ eng/ build.zig
 ```
 
-## Repository Structure
+## Source ownership
 
-- `sdk/core/` — Core framework (HTTP pipeline, credentials, pager, LRO, utilities)
-- `sdk/identity/` — Credential implementations (CLI, client secret, managed identity, etc.)
-- `sdk/storage/` — Azure Storage clients (blobs, queues, files)
-- `sdk/keyvault/` — Azure Key Vault clients (secrets, keys, certificates)
-- `sdk/data/` — Data services (Tables, App Configuration)
-- `sdk/messaging/` — Messaging services (Event Hubs)
-- `sdk/attestation/` — Azure Attestation
-- `build.zig` — Build configuration (modules, tests, dependencies)
-- `build.zig.zon` — Package dependencies
+- `main` owns only `sdk/core`, `sdk/core/tracing`, `sdk/core/perf`,
+  `sdk/core/amqp`, and `sdk/core/testing`.
+- All other registered packages are branch-owned and have no
+  `workspace_path` in `eng/packages.zig`.
+- Branch-owned changes target their package branch, not `main`.
+- Do not restore branch-owned package source to `main`.
 
-## Naming Conventions
+## Repository structure
 
-- **Types/structs**: `PascalCase` (e.g., `SecretClient`, `BlobProperties`)
-- **Functions/methods**: `camelCase` (e.g., `getSecret`, `listBlobs`)
-- **Constants**: `snake_case` (e.g., `azure_public`, `user_agent_prefix`)
-- **Files**: `snake_case.zig` (e.g., `client_secret.zig`, `azure_cli.zig`)
-- **Modules in build.zig**: `snake_case` with `azure_` prefix (e.g., `azure_sdk_core`, `azure_identity`)
+- `sdk/core/` — Main-owned framework and credentials
+- `eng/` — package registry, validation, history, and release tooling
+- `codegen/` — TypeSpec and fixture-based package generation
+- `examples/` — Main-owned examples
 
-## Key Patterns
+Branch-owned source is available from the package branches documented in
+`doc/package-catalog.md`.
 
-### Interface Pattern
-Use function-pointer structs with `@fieldParentPtr` for runtime polymorphism.
-See: `TokenCredential`, `HttpTransport`, `HttpPolicy`, `Pager`.
+## Naming conventions
 
-### Service Client Pattern
-Each service client:
-1. Stores `pipeline: core.pipeline.HttpPipeline` by value
-2. Takes `credential` and `transport` in `init()`
-3. Builds URLs with `buildUrl()` or `std.fmt.allocPrint()`
-4. Uses `pipeline.send(&req)` for HTTP calls
-5. Returns parsed domain objects (not raw responses)
+- Types and structs: `PascalCase`
+- Functions and methods: `camelCase`
+- Constants: `snake_case`
+- Files: `snake_case.zig`
+- Build modules: `snake_case` with an `azure_` prefix
 
-### Pagination Pattern
-List operations return `PipelinePager(T)` with a service-specific parse function.
-See: `SecretClient.listSecrets()`, `KeyClient.listKeys()`.
+## Key patterns
 
-### Error Handling
-- Return `anyerror` from interface fn pointers
-- Return specific errors from service operations (e.g., `error.SecretNotFound`)
-- Use `core.errors.errorFromResponse(resp)` for Azure error JSON parsing
+- Runtime interfaces use function-pointer structs with `@fieldParentPtr`.
+- Service clients store `core.pipeline.HttpPipeline` by value.
+- List operations return `PipelinePager(T)`.
+- Azure failures use `core.errors.errorFromResponse`.
+- Prefer Zig over Python for repository tooling when practical.
 
-## What NOT to Do
+## Package rules
 
-- Do not add C dependencies — the SDK must remain pure Zig
-- Do not modify test infrastructure without running the full test suite
-- Do not hardcode credentials or secrets in source files
-- Do not break existing public API signatures without justification
-- Do not skip `zig fmt` — CI will reject unformatted code
+- Main-owned manifests may use local paths only to Main-owned packages.
+- Branch-owned manifests pin internal dependencies by full commit URL and Zig
+  package hash.
+- Package branch CI uses the three fixed `package-test (<os>)` contexts.
+- Branch-owned releases create a lightweight tag at the reviewed branch tip;
+  they do not rewrite the branch.
+- History reconstruction must use `eng/package_history_map.zig`; do not infer
+  ancestry from copied licenses, manifests, build files, or `.gitignore`.
 
-## Dependencies
+## Do not
 
-Only two external Zig packages (keep it minimal):
-
-| Package | Purpose |
-|---------|---------|
-| [serde.zig](https://github.com/cataggar/serde.zig) | Typed JSON + XML (de)serialization |
-| [azure-uamqp-zig](https://github.com/cataggar/azure-uamqp-zig) | AMQP 1.0 for Event Hubs |
-
-Everything else comes from `std` (HTTP, TLS, crypto, base64).
+- Add C dependencies; the SDK must remain pure Zig.
+- Hardcode credentials or secrets.
+- Break public API signatures without justification.
+- Skip `zig fmt`.
+- Modify remote package refs outside the sealed reset/cutover workflow.

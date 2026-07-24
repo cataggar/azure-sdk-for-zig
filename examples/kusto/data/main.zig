@@ -1,8 +1,9 @@
 //! Opt-in query and management examples for Azure Data Explorer (Kusto).
 const std = @import("std");
 const core = @import("azure_sdk_core");
-const common = @import("azure_sdk_kusto_common");
-const data = @import("azure_sdk_kusto_data");
+const kusto = @import("azure_sdk_kusto");
+const common = kusto.common;
+const data = kusto.data;
 
 pub const Scenario = enum {
     default_query,
@@ -181,6 +182,10 @@ pub fn main(init: std.process.Init) !void {
         usage();
         return error.UnexpectedKustoDataExampleArgument;
     }
+    try run(init, scenario_text);
+}
+
+pub fn run(init: std.process.Init, scenario_text: []const u8) !void {
     const scenario = parseScenario(scenario_text) orelse {
         usage();
         return error.UnknownKustoDataExampleScenario;

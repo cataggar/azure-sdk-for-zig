@@ -33,21 +33,21 @@ jobs:
       - name: Build workspace
         run: zig build
 
-      - name: Test registry-ordered package suite
+      - name: Test main-owned package suite
         run: zig build test --summary all
 
       - name: Validate package registry
         if: matrix.os == 'ubuntu-latest'
         run: zig build package-check --summary all
 
+      - name: Validate package history mappings
+        if: matrix.os == 'ubuntu-latest'
+        run: zig build package-history-check --summary all
+
       - name: Test TypeSpec emitter
         if: matrix.os == 'ubuntu-latest'
         working-directory: codegen/cli
         run: zig build test --summary all
-
-      - name: Verify deterministic Container Registry regeneration
-        if: matrix.os == 'ubuntu-latest'
-        run: zig build regeneration-check --summary all
 
       - name: Validate documentation links
         if: matrix.os == 'ubuntu-latest'

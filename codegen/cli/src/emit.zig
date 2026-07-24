@@ -1965,7 +1965,7 @@ fn renderBuildZigZon(
         const hash = azure_sdk_core_hash orelse return error.MissingAzureSdkCoreHash;
         break :blk try std.fmt.allocPrint(allocator,
             \\        .azure_sdk_core = .{{
-            \\            .url = "git+https://github.com/cataggar/azure-sdk-for-zig#{s}",
+            \\            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#{s}",
             \\            .hash = "{s}",
             \\        }},
             \\

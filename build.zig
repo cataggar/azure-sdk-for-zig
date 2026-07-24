@@ -36,7 +36,9 @@ fn addPackageTests(b: *std.Build) *std.Build.Step {
     var previous: ?*std.Build.Step = null;
     for (order) |index| {
         const package = package_registry.all[index];
-        if (package.state != .package or package.test_command == null) continue;
+        if (package.ownership != .main_owned or package.test_command == null) continue;
+        const workspace_path = package.workspace_path orelse
+            @panic("main-owned package is missing workspace_path");
 
         const package_tests = b.addSystemCommand(&.{
             b.graph.zig_exe,
@@ -45,7 +47,7 @@ fn addPackageTests(b: *std.Build) *std.Build.Step {
             "--summary",
             "all",
         });
-        package_tests.setCwd(b.path(package.source_path));
+        package_tests.setCwd(b.path(workspace_path));
         if (previous) |step| package_tests.step.dependOn(step);
         previous = &package_tests.step;
     }
@@ -91,17 +93,11 @@ fn addPackageToolSteps(b: *std.Build, test_step: *std.Build.Step) void {
     package_check_run.addArg("check");
     package_check_run.setCwd(b.path("."));
     test_step.dependOn(&package_check_run.step);
-    const package_manifest_check = b.addSystemCommand(&.{
-        "python3",
-        "eng/check_package_manifests.py",
-    });
-
     const package_check_step = b.step(
         "package-check",
         "Validate package metadata, documentation, licenses, and manifests",
     );
     package_check_step.dependOn(&package_check_run.step);
-    package_check_step.dependOn(&package_manifest_check.step);
 
     const package_list_run = b.addRunArtifact(package_tool);
     package_list_run.addArg("list");
@@ -123,6 +119,33 @@ fn addPackageToolSteps(b: *std.Build, test_step: *std.Build.Step) void {
         "Print the independently buildable package CI matrix",
     );
     package_matrix_step.dependOn(&package_matrix_run.step);
+
+    const history_tool = b.addExecutable(.{
+        .name = "package-history-tool",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("eng/package_history_tool.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    const history_check_run = b.addRunArtifact(history_tool);
+    history_check_run.addArg("check");
+    history_check_run.setCwd(b.path("."));
+    const history_check_step = b.step(
+        "package-history-check",
+        "Validate branch-owned package history mappings",
+    );
+    history_check_step.dependOn(&history_check_run.step);
+    test_step.dependOn(&history_check_run.step);
+
+    const branch_tool_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("eng/package_branch_tool.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(branch_tool_tests).step);
 
     const package_sync_run = b.addRunArtifact(package_tool);
     package_sync_run.addArg("sync-local");
@@ -193,10 +216,16 @@ fn addCodegenSteps(b: *std.Build) void {
 }
 
 fn addRepositoryValidationSteps(b: *std.Build) void {
-    const docs_check = b.addSystemCommand(&.{
-        "python3",
-        "eng/check_doc_links.py",
+    const docs_check_exe = b.addExecutable(.{
+        .name = "check-doc-links",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("eng/check_doc_links.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
     });
+    const docs_check = b.addRunArtifact(docs_check_exe);
+    docs_check.setCwd(b.path("."));
     const docs_check_step = b.step(
         "docs-check",
         "Validate relative links in tracked Markdown documentation",
@@ -213,14 +242,4 @@ fn addRepositoryValidationSteps(b: *std.Build) void {
         "Run the offline generic package release regression suite",
     );
     release_self_test_step.dependOn(&release_self_test.step);
-
-    const regeneration_check = b.addSystemCommand(&.{
-        "bash",
-        "scripts/verify-container-registry-regeneration.sh",
-    });
-    const regeneration_check_step = b.step(
-        "regeneration-check",
-        "Verify deterministic Container Registry protocol regeneration",
-    );
-    regeneration_check_step.dependOn(&regeneration_check.step);
 }

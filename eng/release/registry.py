@@ -15,10 +15,12 @@ class RegistryError(RuntimeError):
 @dataclass(frozen=True)
 class Package:
     name: str
-    source_path: str
+    ownership: str
+    workspace_path: str | None
+    historical_source_path: str
     branch: str
     version: str
-    legacy_names: tuple[str, ...]
+    historical_names: tuple[str, ...]
     dependencies: tuple[str, ...]
     external_dependencies: tuple[str, ...]
     publish_paths: tuple[str, ...]
@@ -26,6 +28,12 @@ class Package:
     examples_command: str | None
     live_test_command: str | None
     regeneration_command: str | None
+
+    @property
+    def source_path(self) -> str:
+        if self.workspace_path is None:
+            raise RegistryError(f"{self.name}: package is not present in this workspace")
+        return self.workspace_path
 
 
 def _matching_brace(text: str, opening: int) -> int:
@@ -79,6 +87,14 @@ def _field_string(block: str, field: str, default: str | None = None) -> str | N
     return bytes(value[1:-1], "utf-8").decode("unicode_escape")
 
 
+def _field_enum(block: str, field: str, default: str) -> str:
+    match = re.search(
+        rf"(?m)^\s*\.{re.escape(field)}\s*=\s*\.([A-Za-z_][A-Za-z0-9_]*)\s*,",
+        block,
+    )
+    return match.group(1) if match else default
+
+
 def _field_array(
     block: str,
     field: str,
@@ -126,16 +142,28 @@ def load(path: Path) -> dict[str, Package]:
         cursor = closing + 1
 
         name = _field_string(block, "name")
-        source_path = _field_string(block, "source_path")
+        historical_source_path = _field_string(block, "historical_source_path")
+        if historical_source_path is None:
+            historical_source_path = _field_string(block, "source_path")
+        workspace_path = _field_string(block, "workspace_path")
+        if workspace_path is None and _field_string(block, "source_path") is not None:
+            workspace_path = historical_source_path
         branch = _field_string(block, "branch")
-        if not name or not source_path or not branch:
-            raise RegistryError("package entry is missing name, source_path, or branch")
+        if not name or not historical_source_path or not branch:
+            raise RegistryError(
+                "package entry is missing name, historical_source_path, or branch"
+            )
         package = Package(
             name=name,
-            source_path=source_path,
+            ownership=_field_enum(block, "ownership", "branch_owned"),
+            workspace_path=workspace_path,
+            historical_source_path=historical_source_path,
             branch=branch,
             version=_field_string(block, "version", "0.1.0") or "",
-            legacy_names=_field_array(block, "legacy_names", constants),
+            historical_names=(
+                _field_array(block, "historical_names", constants)
+                or _field_array(block, "legacy_names", constants)
+            ),
             dependencies=_field_array(block, "dependencies", constants),
             external_dependencies=_field_array(
                 block, "external_dependencies", constants

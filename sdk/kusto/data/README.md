@@ -1,11 +1,13 @@
-# azure_sdk_kusto_data
+# Kusto Data namespace
 
 Kusto query and management APIs, progressive result streaming, typed KQL
 parameters, and typed result rows.
 
-- Release branch: `sdk/kusto_data`
-- Initial version: `0.1.0`
-- Dependencies: `azure_sdk_core`, `azure_sdk_kusto_common`, and `serde`
+Import it from the consolidated package:
+
+```zig
+const data = @import("azure_sdk_kusto").data;
+```
 
 ## Request properties and timeouts
 
@@ -94,7 +96,7 @@ Bindings copy values into `ClientRequestProperties.Parameters`; values are
 never interpolated into KQL.
 
 ```zig
-const data = @import("azure_sdk_kusto_data");
+const data = @import("azure_sdk_kusto").data;
 const Params = struct { account: []const u8, minimum: i64 };
 const Binding = data.kql.QueryParameters(Params);
 
@@ -132,11 +134,9 @@ defer Decoder.deinitRow(&row, allocator);
 
 ## Examples and development
 
-See [`examples/README.md`](examples/README.md) for query, management, and
-progressive-query examples.
+See the [Data examples](../../../examples/kusto/data/README.md) for query,
+management, and progressive-query scenarios.
 
 ```bash
 zig build test --summary all
-zig build examples
-zig build live-test
 ```

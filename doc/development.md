@@ -1,63 +1,90 @@
 # Development
 
-## Requirements
+Use Zig 0.16.0 or later.
 
-- Zig 0.16.0 or later
-- No C runtime dependencies are required by the SDK
+## Main-owned Core work
 
-## Workspace commands
+Core-family changes are developed normally against `main`:
 
 ```bash
 zig build
 zig build test --summary all
-zig build run
-zig fmt sdk/ rest/ examples/ codegen/ eng/ build.zig
-zig fmt --check sdk/ rest/ examples/ codegen/ eng/ build.zig
+zig build package-check --summary all
+zig build package-history-check --summary all
+zig fmt --check sdk/ examples/ codegen/ eng/ build.zig
 ```
 
-The root package is the non-published `azure_sdk_workspace`. It orchestrates
-the registry-ordered package suite and consumes public modules through direct
-package dependencies.
+Root package tests intentionally run only the five Main-owned Core packages.
+The catalog and history checks still cover all 25 registered package
+identities.
 
-## Package metadata
+## Branch-owned package work
 
-`eng/packages.zig` is the authoritative catalog for package names, source
-roots, dependency order, release branches, versions, tests, examples, and
-regeneration commands.
+Fetch the package branch and create a feature branch from it:
 
 ```bash
-zig build package-check
-zig build package-list
-zig build package-graph
-zig build package-ci-matrix
-zig build package-sync
-zig build docs-check
-zig build regeneration-check
-zig build release-self-test
-```
-
-`package-check` validates the catalog, root package index, package build and
-test metadata, documentation, license copies, and manifests.
-`package-sync` synchronizes package license copies and the name/version fields
-of independently buildable local manifests.
-
-## Package-local development
-
-Every package listed by `zig build package-list` can be tested from its own
-directory:
-
-```bash
-cd rest/container_registry
+git fetch origin sdk/storage_blobs
+git switch --create feature/storage-retry FETCH_HEAD
 zig build test --summary all
 ```
 
-The workspace uses relative path dependencies until release staging replaces
-them with immutable Git commits and Zig package hashes.
+Open the pull request with `sdk/storage_blobs` as its base. Do not merge
+branch-owned package source into `main`.
 
-## Live tests
+Validate the published branch from a `main` checkout with:
 
-Live tests are explicit and skip successfully when their required environment
-is absent. See the owning package documentation before enabling them:
+```bash
+scripts/package-branch-release.sh verify azure_sdk_storage_blobs
+```
 
-- [Container Registry](../sdk/container_registry/README.md)
-- [Kusto examples and live tests](../examples/kusto/README.md)
+Package manifests must pin internal dependencies by immutable URL and hash.
+Workspace-local `.path` dependencies are valid only among Main-owned Core
+packages.
+
+## History reconstruction
+
+Inspect reviewed mappings:
+
+```bash
+scripts/package-history-reset.sh analyze
+```
+
+Build and verify a disposable candidate:
+
+```bash
+PACKAGE_HISTORY_FILTER_REPO=/path/to/pinned/git-filter-repo \
+  scripts/package-history-reset.sh build-candidates \
+  --package azure_sdk_storage_blobs
+
+scripts/package-history-reset.sh verify-candidates \
+  --package azure_sdk_storage_blobs
+```
+
+Candidate output is written under `.release/package-reset` by default and is
+not source code to commit to `main`.
+
+## Generated package work
+
+TypeSpec-generated packages can target an external package worktree:
+
+```bash
+codegen/scripts/sync.sh \
+  --output-root /path/to/keyvault-package \
+  --azure-sdk-core-commit <commit> \
+  --azure-sdk-core-hash <hash> \
+  keyvault_secrets
+```
+
+Container Registry determinism can compare independent package worktrees:
+
+```bash
+scripts/verify-container-registry-regeneration.sh \
+  --rest-package-root /path/to/rest-container-registry \
+  --sdk-package-root /path/to/sdk-container-registry
+```
+
+## Before opening a pull request
+
+Run the smallest relevant package test first, then the ownership-appropriate
+checks above. CI enforces formatting and the three fixed package-branch check
+contexts.

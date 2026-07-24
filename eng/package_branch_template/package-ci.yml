@@ -1,0 +1,37 @@
+name: Package CI
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  package-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+    name: package-test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Check formatting
+        shell: bash
+        run: zig fmt --check .
+      - name: Run package tests
+        shell: bash
+        run: @TEST_COMMAND@
+      - name: Build examples
+        shell: bash
+        run: @EXAMPLES_COMMAND@
+      - name: Compile live tests
+        shell: bash
+        run: @LIVE_TEST_COMMAND@

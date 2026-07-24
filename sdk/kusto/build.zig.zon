@@ -1,11 +1,20 @@
 .{
-    .name = .azure_sdk_kusto_common,
+    .name = .azure_sdk_kusto,
     .version = "0.1.0",
-    .fingerprint = 0x4eb24d44a2fcd216,
+    .fingerprint = 0x897430dd7c19e528,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .azure_sdk_core = .{
-            .path = "../../core",
+            .path = "../core",
+        },
+        .azure_sdk_storage_common = .{
+            .path = "../storage/common",
+        },
+        .azure_sdk_storage_blobs = .{
+            .path = "../storage/blobs",
+        },
+        .azure_sdk_storage_queues = .{
+            .path = "../storage/queues",
         },
         .serde = .{
             .url = "git+https://github.com/cataggar/serde.zig#7012f58c7ddf490125852e1d22006b552a1693c7",
@@ -17,7 +26,9 @@
         "build.zig",
         "build.zig.zon",
         "root.zig",
-        "error.zig",
+        "common",
+        "data",
+        "ingest",
         "README.md",
         "LICENSE.txt",
     },

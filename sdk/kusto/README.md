@@ -1,15 +1,16 @@
-# Azure Kusto packages
+# azure_sdk_kusto
 
-Kusto is split into three independently versioned packages:
+Azure Data Explorer (Kusto) Common, Data, and Ingest APIs ship as one
+independently versioned package:
 
-| Package | Purpose |
+| Namespace | Purpose |
 | --- | --- |
-| [`azure_sdk_kusto_common`](common/README.md) | Connections, cloud discovery, shared types, and errors |
-| [`azure_sdk_kusto_data`](data/README.md) | Query, management, progressive results, KQL, and typed rows |
-| [`azure_sdk_kusto_ingest`](ingest/README.md) | Streaming, managed, and queued ingestion |
+| [`common`](common/README.md) | Connections, cloud discovery, shared types, and errors |
+| [`data`](data/README.md) | Query, management, progressive results, KQL, and typed rows |
+| [`ingest`](ingest/README.md) | Streaming, managed, and queued ingestion |
 
-All three packages begin at `0.1.0`. Data depends on Common; Ingest depends on
-Common, Data, and the Storage packages used for complete-SAS queued ingestion.
+The package begins at `0.1.0`. All namespaces release together. Ingest uses
+the Storage packages required for complete-SAS queued ingestion.
 
 ## Feature matrix
 
@@ -34,8 +35,9 @@ cells, and preserve dynamic or unknown cells as raw JSON.
 Create authenticated clients from one owned `KustoConnection`:
 
 ```zig
-const common = @import("azure_sdk_kusto_common");
-const data = @import("azure_sdk_kusto_data");
+const kusto = @import("azure_sdk_kusto");
+const common = kusto.common;
+const data = kusto.data;
 
 var builder = common.KustoConnectionStringBuilder.init(
     "https://mycluster.kusto.windows.net",
@@ -126,12 +128,12 @@ Zig remains stricter where replay or acceptance is ambiguous.
 
 ## Development
 
-Each Kusto package builds independently from its package directory:
+Build the package and all namespace tests from its root:
 
 ```bash
-cd sdk/kusto/common && zig build test --summary all
-cd ../data && zig build test --summary all
-cd ../ingest && zig build test --summary all
+cd sdk/kusto
+zig build test --summary all
 ```
 
-Data and Ingest each provide package-owned `examples` and `live-test` steps.
+Runnable Data and Ingest scenarios live in the
+[standalone Kusto example project](../../examples/kusto/README.md).

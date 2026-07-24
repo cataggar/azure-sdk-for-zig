@@ -70,7 +70,9 @@ def write_registry(
 const Package = struct {{}};
 pub const all = [_]Package{{
     .{{
-        .source_path = "sdk/core/tracing",
+        .ownership = .main_owned,
+        .workspace_path = "sdk/core/tracing",
+        .historical_source_path = "sdk/core/tracing",
         .name = "{TRACING}",
         .branch = "sdk/core_tracing",
         .version = "{tracing_version}",
@@ -85,7 +87,9 @@ pub const all = [_]Package{{
         .test_command = "zig build test --summary all",
     }},
     .{{
-        .source_path = "sdk/core",
+        .ownership = .main_owned,
+        .workspace_path = "sdk/core",
+        .historical_source_path = "sdk/core",
         .name = "{CORE}",
         .branch = "sdk/core",
         .version = "{core_version}",
@@ -101,11 +105,12 @@ pub const all = [_]Package{{
         .test_command = "zig build test --summary all",
     }},
     .{{
-        .source_path = "rest/arm_avs",
+        .ownership = .branch_owned,
+        .historical_source_path = "rest/arm_avs",
         .name = "{ARM}",
         .branch = "rest/arm_avs",
         .version = "0.1.0",
-        .legacy_names = &.{{"arm_avs"}},
+        .historical_names = &.{{"arm_avs"}},
         .publish_paths = &.{{
             ".gitignore",
             "build.zig",
@@ -323,18 +328,6 @@ def update_versions(
         ((TRACING, "tracing"),),
     )
     write_package(source, "rest/arm_avs", ARM, "0.1.0")
-
-
-def push_legacy_branch(source: Path, remote: Path, scratch: Path) -> str:
-    legacy = scratch / "legacy"
-    legacy.mkdir(parents=True)
-    git(legacy, "init", "--quiet")
-    git(legacy, "config", "user.name", "Release self-test")
-    git(legacy, "config", "user.email", "release-self-test@example.invalid")
-    write_package(legacy, ".", "arm_avs", "9.4.0")
-    commit = commit_all(legacy, "legacy package")
-    git(legacy, "push", "--quiet", str(remote), f"{commit}:refs/heads/rest/arm_avs")
-    return commit
 
 
 def run_self_test(repository_root: Path) -> None:
@@ -591,6 +584,11 @@ git --git-dir="{remote}" update-ref refs/heads/hook-side-effect "$main"
 
         engine.verify(TRACING)
         engine.verify(CORE)
+        expect_failure(
+            "branch-owned staged release",
+            lambda: engine.verify(ARM),
+            "branch-owned packages must be released from their package branch",
+        )
         assert_cleanup(engine)
         assert_no_source_artifacts(source)
         if hook_marker.exists():
@@ -903,19 +901,6 @@ git --git-dir="{remote}" update-ref refs/heads/hook-side-effect "$main"
         assert_cleanup(engine)
         git(source, "push", "--quiet", "--delete", str(remote), colliding_tag)
 
-        push_legacy_branch(source, remote, test_root)
-        legacy_engine = Engine(
-            source,
-            remote=publication_remote,
-            release_root=release_root,
-        )
-        legacy_engine.prepare(ARM)
-        legacy_commit = legacy_engine.publish(ARM, dry_run=False)
-        if git(source, "rev-parse", f"{legacy_commit}^") == "":
-            raise ReleaseError("self-test: legacy transition lost branch ancestry")
-        if remote_tag_commit(str(remote), f"{ARM}/v0.1.0", source) != legacy_commit:
-            raise ReleaseError("self-test: legacy canonical tag was not created")
-        assert_cleanup(legacy_engine)
         assert_no_source_artifacts(source)
 
         print(
@@ -925,7 +910,8 @@ git --git-dir="{remote}" update-ref refs/heads/hook-side-effect "$main"
             "disabled checkout/commit/push hooks, remote-main provenance, "
             "exact package-branch leases, isolated command environment, URL "
             "rewrite and single-destination remote checks, disposable Zig "
-            "verification, branch/tag races, legacy transition, cleanup, and "
+            "verification, branch/tag races, branch-owned release rejection, "
+            "cleanup, and "
             "atomic local publication"
         )
     finally:

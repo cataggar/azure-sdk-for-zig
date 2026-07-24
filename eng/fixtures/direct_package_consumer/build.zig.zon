@@ -4,8 +4,8 @@
     .fingerprint = 0x4b9baa28abcfb85d,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
-        .azure_sdk_kusto_ingest = .{
-            .path = "../../../sdk/kusto/ingest",
+        .azure_sdk_core = .{
+            .path = "../../../sdk/core",
         },
     },
     .paths = .{
