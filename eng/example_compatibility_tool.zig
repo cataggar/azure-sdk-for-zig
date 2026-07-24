@@ -19,7 +19,7 @@ const arm_avs = Example{
     .branch = "example/arm_avs",
     .manifest_name = "avs_example",
     .version = "0.1.0",
-    .fingerprint = "0x484b498d32cc9eb4",
+    .fingerprint = "0xb722575032cc9eb4",
     .paths = &.{
         "build.zig",
         "build.zig.zon",
