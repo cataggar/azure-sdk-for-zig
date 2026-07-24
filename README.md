@@ -39,12 +39,13 @@ responses.
 
 ```bash
 zig build test --summary all
-(cd ../../codegen/cli && zig build generate-container-registry-package)
-../../scripts/verify-container-registry-regeneration.sh
+gh workflow run generated-package-pr.yml \
+  -f target_branch=rest/container_registry \
+  -f generator_commit=<main-commit>
 ```
 
-Local development depends directly on the repository's
-`azure_sdk_core` package. Release staging replaces that local path with
-an immutable commit/hash pin. See the
-[package branch model](../../doc/package-branch-model.md) and
-[Container Registry release staging](../../eng/container_registry_release/README.md).
+The package manifest pins `azure_sdk_core` by immutable commit and Zig
+package hash. See the
+[package branch model](https://github.com/cataggar/azure-sdk-for-zig/blob/main/doc/package-branch-model.md)
+and
+[Container Registry release staging](https://github.com/cataggar/azure-sdk-for-zig/blob/main/eng/container_registry_release/README.md).
