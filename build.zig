@@ -185,7 +185,7 @@ fn addExample(
     const example = b.addExecutable(.{
         .name = "azure_example",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("examples/hello.zig"),
+            .root_source_file = b.path("sdk/core/examples/hello.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{

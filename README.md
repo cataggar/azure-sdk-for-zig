@@ -17,6 +17,7 @@ dependencies, and validation commands.
 ## Documentation
 
 - [Development](doc/development.md)
+- [Examples](doc/examples.md)
 - [Package branch model](doc/package-branch-model.md)
 - [Releasing packages](doc/releasing-packages.md)
 - [Package reset record](doc/package-reset-2026-07-24.md)

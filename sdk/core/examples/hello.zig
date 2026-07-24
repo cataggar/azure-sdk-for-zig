@@ -1,3 +1,5 @@
+//! Main-owned Core SDK example.
+
 const std = @import("std");
 const core = @import("azure_sdk_core");
 

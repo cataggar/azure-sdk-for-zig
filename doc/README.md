@@ -1,6 +1,7 @@
 # Documentation
 
 - [Development](development.md)
+- [Examples](examples.md)
 - [Package catalog](package-catalog.md)
 - [Package branch model](package-branch-model.md)
 - [Releasing packages](releasing-packages.md)
