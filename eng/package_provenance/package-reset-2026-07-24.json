@@ -356,6 +356,45 @@
       "summary": "Requires pull requests, conversation resolution, and all three package-test operating-system checks."
     }
   ],
+  "phase5_verification": {
+    "main_cleanup_commit": "bdb0c7975a8ffb60b1e7f9d8260bea42906e8ced",
+    "generated_workflow_fix_commits": [
+      "f65e90e9fd9b83bf2cc791e233a0637c6f7000ed",
+      "f1800352133632917301db03a2283ea91d9e7d85",
+      "f9794a7de603a56724bca903d635d3b0c456e931"
+    ],
+    "main_ci_run": 30116230119,
+    "generated_package_run": 30116248154,
+    "generated_package_check_run": 30116321507,
+    "pull_request_proofs": {
+      "example": 115,
+      "sdk": 116,
+      "rest": 119
+    },
+    "production_validation": {
+      "packages": 18,
+      "package_tests": 463,
+      "examples": 3
+    },
+    "history_validation": {
+      "artifact_digests": 357,
+      "candidate_repositories": 21,
+      "mapping_histories": 27,
+      "kusto_history_records": 13
+    },
+    "rollback_verification": {
+      "evidence_sha256": "a86bc87ff49f2b4818857fe63910d298a0705fa44818b401ff020b916dc08cd0",
+      "rollback_refs": 120,
+      "reapplied_operations": 47,
+      "post_reset_refs": 115
+    },
+    "migration_refs": {
+      "deleted": 21,
+      "remaining": 0,
+      "archive_refs_retained": 44,
+      "deletion": "atomic exact-lease push"
+    }
+  },
   "validation": {
     "archive_refs": 44,
     "production_operations": 47,

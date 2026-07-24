@@ -72,11 +72,40 @@ Before using the bundle, verify its checksum, then inspect it with
 current object IDs from the provenance JSON. The recorded rollback rehearsal
 successfully restored and reapplied all 47 production ref operations.
 
-The 21 `migration/package-reset-2026-07-24-global-r3/...` refs are temporary
-observation-period evidence. Archive refs and the external recovery bundle are
-retained after those migration refs are removed.
+After the approved observation period, all 21
+`migration/package-reset-2026-07-24-global-r3/...` refs were deleted in one
+atomic exact-lease push. All 44 archive refs and the external recovery bundle
+remain.
 
 Permanent rulesets protect the five Core release branches, branch-owned
 packages, package version tags, and standalone examples. Package and example
 branches require pull requests, conversation resolution, and the Ubuntu,
 Windows, and macOS `package-test` checks.
+
+## Final verification
+
+Phase 5 completed the production and recovery proof:
+
+- all 18 branch-owned packages passed remote branch/tag validation, immutable
+  dependency hash checks, and 463 package tests;
+- all three standalone examples passed clean-clone formatting, build, test,
+  and live-test-safe validation;
+- temporary PRs
+  [#115](https://github.com/cataggar/azure-sdk-for-zig/pull/115),
+  [#116](https://github.com/cataggar/azure-sdk-for-zig/pull/116), and
+  [#119](https://github.com/cataggar/azure-sdk-for-zig/pull/119) proved the
+  example, SDK, and generated REST branch workflows and all three required
+  check contexts;
+- 357 candidate artifact digests, 21 candidate repositories, all nonzero
+  commit-map objects, 27 mapping histories, and 13 representative Kusto
+  history records were revalidated;
+- a fresh bundle restore and disposable bare-remote rehearsal restored 120
+  rollback refs, then reapplied all 47 production operations to 115 exact
+  post-reset refs.
+
+The final Main workflow run was
+[`30116230119`](https://github.com/cataggar/azure-sdk-for-zig/actions/runs/30116230119).
+The generated-package proof used run
+[`30116248154`](https://github.com/cataggar/azure-sdk-for-zig/actions/runs/30116248154)
+and trusted package checks run
+[`30116321507`](https://github.com/cataggar/azure-sdk-for-zig/actions/runs/30116321507).

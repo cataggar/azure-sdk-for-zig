@@ -80,6 +80,10 @@ The step emits the package/module name `azure_rest_container_registry`,
 including its generated contract tests. Main does not contain a generated
 package tree; output always targets an external package worktree.
 
+The `Update generated package` workflow opens its pull request with GitHub's
+workflow token. Close and reopen that PR as an operator so GitHub emits the
+trusted pull-request event that starts the three required package checks.
+
 ## Branch model
 
 Each generated package is developed and released from its package branch:
