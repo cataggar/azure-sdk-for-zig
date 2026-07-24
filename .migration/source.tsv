@@ -1,0 +1,7 @@
+target-kind	example
+target-name	kusto
+reset-id	package-reset-2026-07-24-global-r3
+sealed-main	2f34b8ce949a23245187664a04765b0029d87d9b
+source-commit	2f34b8ce949a23245187664a04765b0029d87d9b
+sealed-inputs-sha256	582b41780e560cb2e1470a5c9b352914583757f81de6202930b493cb15812932
+history-map-sha256	b407a02cd51c9397efe2623415fa73623349ef9f4a7bfd1abf0c2fb7e8eac234
