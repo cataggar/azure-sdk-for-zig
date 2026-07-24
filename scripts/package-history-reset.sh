@@ -997,9 +997,9 @@ publish_candidates() {
   require_sealed_source "$remote" "$source_commit"
   require_sealed_output "$output" "$source_commit" "$remote"
 
-  local publisher="$output/publisher.git"
+  local publisher="$output/publisher"
   rm -rf "$publisher"
-  git init --bare --quiet "$publisher"
+  git init --quiet "$publisher"
   local -a leases=()
   local -a refspecs=()
   local candidate_refs="$output/candidate-refs.tsv"
