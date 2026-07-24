@@ -399,6 +399,7 @@ finalize_candidate() {
 
   git -C "$repository" switch --quiet package-history-candidate
   mkdir -p "$repository/.github/workflows" "$repository/.migration"
+  cp "$ROOT/eng/package_branch_template/gitattributes" "$repository/.gitattributes"
   if [[ "$kind" == package ]]; then
     write_package_pins "$name" "$output" "$remote" "$pins_file"
     branch_tool render-ci \
@@ -618,6 +619,8 @@ verify_candidate() {
   )"
   git -C "$repository" archive "$filtered_commit" | tar -x -C "$expected_baseline"
   manifest_tool pin "$expected_baseline" "$expected_pins"
+  cp "$ROOT/eng/package_branch_template/gitattributes" \
+    "$expected_baseline/.gitattributes"
   mkdir -p \
     "$expected_baseline/.github/workflows" \
     "$expected_baseline/.migration"
