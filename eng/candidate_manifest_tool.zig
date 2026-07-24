@@ -133,34 +133,47 @@ fn renderPinned(
         \\    .version = "{s}",
         \\    .fingerprint = {s},
         \\    .minimum_zig_version = "{s}",
-        \\    .dependencies = .{{
-        \\
     , .{
         manifest.name,
         manifest.version,
         manifest.fingerprint,
         manifest.minimum_zig_version,
     });
-    for (manifest.dependencies) |dependency| {
-        const pin = findPin(pins, dependency.name);
-        const url = if (pin) |value|
-            value.url
-        else
-            dependency.url orelse return error.MissingPin;
-        const hash = if (pin) |value|
-            value.hash
-        else
-            dependency.hash orelse return error.MissingPin;
-        try writer.print(
-            \\        .{s} = .{{
-            \\            .url = "{s}",
-            \\            .hash = "{s}",
-            \\        }},
+    try writer.writeByte('\n');
+    if (manifest.dependencies.len == 0) {
+        try writer.writeAll(
+            \\    .dependencies = .{},
             \\
-        , .{ dependency.name, url, hash });
+        );
+    } else {
+        try writer.writeAll(
+            \\    .dependencies = .{
+            \\
+        );
+        for (manifest.dependencies) |dependency| {
+            const pin = findPin(pins, dependency.name);
+            const url = if (pin) |value|
+                value.url
+            else
+                dependency.url orelse return error.MissingPin;
+            const hash = if (pin) |value|
+                value.hash
+            else
+                dependency.hash orelse return error.MissingPin;
+            try writer.print(
+                \\        .{s} = .{{
+                \\            .url = "{s}",
+                \\            .hash = "{s}",
+                \\        }},
+                \\
+            , .{ dependency.name, url, hash });
+        }
+        try writer.writeAll(
+            \\    },
+            \\
+        );
     }
     try writer.writeAll(
-        \\    },
         \\    .paths = .{
         \\
     );
@@ -249,4 +262,31 @@ test "render pins local dependencies and preserves external dependencies" {
     );
     const serde = zon_manifest.findDependency(reparsed, "serde").?;
     try std.testing.expectEqualStrings("serde-1.0.0-example", serde.hash.?);
+}
+
+test "render uses canonical syntax for empty dependencies" {
+    const manifest_text =
+        \\.{
+        \\    .name = .empty_dependencies,
+        \\    .version = "0.1.0",
+        \\    .fingerprint = 0x1234,
+        \\    .minimum_zig_version = "0.16.0",
+        \\    .dependencies = .{},
+        \\    .paths = .{
+        \\        "root.zig",
+        \\    },
+        \\}
+    ;
+    const manifest = try zon_manifest.parse(std.testing.allocator, manifest_text);
+    defer std.testing.allocator.free(manifest.dependencies);
+    defer std.testing.allocator.free(manifest.paths);
+
+    const rendered = try renderPinned(std.testing.allocator, manifest, &.{});
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expect(
+        std.mem.indexOf(u8, rendered, ".dependencies = .{},") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, rendered, ".dependencies = .{\n    },") == null,
+    );
 }
