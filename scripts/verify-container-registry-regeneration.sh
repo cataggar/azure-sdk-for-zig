@@ -58,6 +58,8 @@ snapshot_tree() {
     find . -type f \
       ! -path './.git/*' \
       ! -path './.github/*' \
+      ! -path './.gitattributes' \
+      ! -path './.migration/*' \
       ! -path './.azure-sdk-generator' \
       ! -path '*/.zig-cache/*' \
       ! -path '*/zig-cache/*' \
