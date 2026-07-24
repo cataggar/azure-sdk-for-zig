@@ -78,6 +78,17 @@ github_repository() {
   printf '%s\n' "${url%.git}"
 }
 
+sealed_value() {
+  local output="$1"
+  local key="$2"
+  awk -F '\t' -v key="$key" '$1 == key { print $2 }' \
+    "$output/sealed-inputs.tsv"
+}
+
+sealed_inputs_digest() {
+  shasum -a 256 "$1/sealed-inputs.tsv" | awk '{ print $1 }'
+}
+
 require_filter_repo() {
   if ! command -v "$FILTER_REPO" >/dev/null 2>&1 && [[ ! -x "$FILTER_REPO" ]]; then
     echo "git-filter-repo is required; expected version $EXPECTED_FILTER_REPO_VERSION" >&2
@@ -297,25 +308,78 @@ write_example_pins() {
   branch_owned_pin azure_sdk_kusto "$output" >>"$pins_file"
 }
 
+write_migration_source() {
+  local kind="$1"
+  local name="$2"
+  local source_commit="$3"
+  local path_map_digest="$4"
+  local output="$5"
+  local destination="$6"
+  {
+    printf 'target-kind\t%s\n' "$kind"
+    printf 'target-name\t%s\n' "$name"
+    printf 'reset-id\t%s\n' "$(cat "$output/reset-id")"
+    printf 'sealed-main\t%s\n' "$source_commit"
+    printf 'sealed-inputs-sha256\t%s\n' "$(sealed_inputs_digest "$output")"
+    printf 'history-map-sha256\t%s\n' "$path_map_digest"
+  } >"$destination"
+}
+
+write_baseline_message() {
+  local kind="$1"
+  local source_commit="$2"
+  local path_map_digest="$3"
+  local output="$4"
+  local destination="$5"
+  {
+    printf 'Establish branch-owned %s baseline\n\n' "$kind"
+    printf 'Sealed-Main: %s\n' "$source_commit"
+    printf 'History-Map-SHA256: %s\n' "$path_map_digest"
+    printf 'Reset-ID: %s\n' "$(cat "$output/reset-id")"
+    printf 'Sealed-Inputs-SHA256: %s\n\n' "$(sealed_inputs_digest "$output")"
+    printf 'Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>\n'
+  } >"$destination"
+}
+
 commit_baseline() {
   local repository="$1"
   local source_commit="$2"
   local kind="$3"
   local path_map_digest="$4"
-  local source_date
+  local output="$5"
+  local source_date message_file
   source_date="$(git -C "$ROOT" show -s --format=%aI "$source_commit")"
+  message_file="$(mktemp "${TMPDIR:-/tmp}/package-history-message.XXXXXX")"
+  trap 'rm -f "$message_file"' RETURN
+  write_baseline_message \
+    "$kind" \
+    "$source_commit" \
+    "$path_map_digest" \
+    "$output" \
+    "$message_file"
   git -C "$repository" add --all
-  GIT_AUTHOR_NAME="Azure SDK Migration" \
-    GIT_AUTHOR_EMAIL="azure-sdk-migration@users.noreply.github.com" \
-    GIT_AUTHOR_DATE="$source_date" \
-    GIT_COMMITTER_NAME="Azure SDK Migration" \
-    GIT_COMMITTER_EMAIL="azure-sdk-migration@users.noreply.github.com" \
-    GIT_COMMITTER_DATE="$source_date" \
-    git -C "$repository" commit --quiet --no-gpg-sign \
-      -m "Establish branch-owned $kind baseline" \
-      -m "Sealed-Main: $source_commit" \
-      -m "History-Map-SHA256: $path_map_digest" \
-      -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
+  local parent tree commit
+  parent="$(git -C "$repository" rev-parse HEAD)"
+  tree="$(git -C "$repository" write-tree)"
+  commit="$(
+    GIT_AUTHOR_NAME="Azure SDK Migration" \
+      GIT_AUTHOR_EMAIL="azure-sdk-migration@users.noreply.github.com" \
+      GIT_AUTHOR_DATE="$source_date" \
+      GIT_COMMITTER_NAME="Azure SDK Migration" \
+      GIT_COMMITTER_EMAIL="azure-sdk-migration@users.noreply.github.com" \
+      GIT_COMMITTER_DATE="$source_date" \
+      git -C "$repository" commit-tree \
+        "$tree" \
+        -p "$parent" \
+        -F "$message_file"
+  )"
+  git -C "$repository" update-ref \
+    refs/heads/package-history-candidate \
+    "$commit" \
+    "$parent"
+  git -C "$repository" reset --hard --quiet "$commit"
+  rm -f "$message_file"
+  trap - RETURN
 }
 
 finalize_candidate() {
@@ -348,17 +412,19 @@ finalize_candidate() {
   fi
   manifest_tool pin "$repository" "$pins_file"
   cp "$pins_file" "$repository/.migration/dependencies.tsv"
-  {
-    printf 'target-kind\t%s\n' "$kind"
-    printf 'target-name\t%s\n' "$name"
-    printf 'sealed-main\t%s\n' "$source_commit"
-    printf 'history-map-sha256\t%s\n' "$path_map_digest"
-  } >"$repository/.migration/source.tsv"
+  write_migration_source \
+    "$kind" \
+    "$name" \
+    "$source_commit" \
+    "$path_map_digest" \
+    "$output" \
+    "$repository/.migration/source.tsv"
   commit_baseline \
     "$repository" \
     "$source_commit" \
     "$kind" \
-    "$path_map_digest"
+    "$path_map_digest" \
+    "$output"
 
   local candidate_commit
   candidate_commit="$(git -C "$repository" rev-parse HEAD)"
@@ -465,6 +531,8 @@ verify_candidate() {
   commit="$(cat "$candidate_dir/candidate-commit")"
   filtered_commit="$(cat "$candidate_dir/filtered-commit")"
   [[ "$(git -C "$repository" rev-parse refs/heads/package-history-candidate)" == "$commit" ]]
+  [[ "$(git -C "$repository" rev-parse HEAD)" == "$commit" ]]
+  [[ -z "$(git -C "$repository" status --porcelain=v1 --untracked-files=all)" ]]
   git -C "$repository" fsck --no-progress >/dev/null
   git -C "$repository" cat-file -e "$commit^{tree}"
   git -C "$repository" cat-file -e "$filtered_commit^{tree}"
@@ -519,13 +587,13 @@ verify_candidate() {
   actual_hash="$(zig fetch --global-cache-dir "$verify_cache" "$verify_archive")"
   [[ "$actual_hash" == "$(cat "$candidate_dir/package-hash")" ]]
   current_root="$(target_current_root "$kind" "$name")"
-  local expected_tree actual_tree
-  expected_tree="$(mktemp -d "${TMPDIR:-/tmp}/package-history-expected.XXXXXX")"
-  actual_tree="$(mktemp -d "${TMPDIR:-/tmp}/package-history-actual.XXXXXX")"
+  local source_tree filtered_tree
+  source_tree="$(mktemp -d "${TMPDIR:-/tmp}/package-history-source.XXXXXX")"
+  filtered_tree="$(mktemp -d "${TMPDIR:-/tmp}/package-history-filtered.XXXXXX")"
   git -C "$ROOT" archive "$source_commit" "$current_root" |
-    tar -x -C "$expected_tree"
-  git -C "$repository" archive "$filtered_commit" | tar -x -C "$actual_tree"
-  diff -qr "$expected_tree/$current_root" "$actual_tree" >/dev/null
+    tar -x -C "$source_tree"
+  git -C "$repository" archive "$filtered_commit" | tar -x -C "$filtered_tree"
+  diff -qr "$source_tree/$current_root" "$filtered_tree" >/dev/null
 
   local expected_pins
   expected_pins="$(mktemp "${TMPDIR:-/tmp}/package-history-pins.XXXXXX")"
@@ -537,14 +605,78 @@ verify_candidate() {
     manifest_tool validate "$repository"
   fi
   cmp -s "$expected_pins" "$repository/.migration/dependencies.tsv"
-  rm -f "$expected_pins"
   cmp -s \
     "$candidate_dir/dependency-pins.tsv" \
     "$repository/.migration/dependencies.tsv"
-  [[ -s "$repository/.migration/source.tsv" ]]
-  [[ -s "$repository/.github/workflows/package-ci.yml" ]]
 
-  rm -rf "$expected_tree" "$actual_tree"
+  local expected_baseline actual_baseline path_map_digest
+  expected_baseline="$(
+    mktemp -d "${TMPDIR:-/tmp}/package-history-expected-baseline.XXXXXX"
+  )"
+  actual_baseline="$(
+    mktemp -d "${TMPDIR:-/tmp}/package-history-actual-baseline.XXXXXX"
+  )"
+  git -C "$repository" archive "$filtered_commit" | tar -x -C "$expected_baseline"
+  manifest_tool pin "$expected_baseline" "$expected_pins"
+  mkdir -p \
+    "$expected_baseline/.github/workflows" \
+    "$expected_baseline/.migration"
+  if [[ "$kind" == package ]]; then
+    branch_tool render-ci \
+      "$name" \
+      "$expected_baseline/.github/workflows/package-ci.yml"
+  else
+    cp \
+      "$ROOT/eng/package_branch_template/example-ci.yml" \
+      "$expected_baseline/.github/workflows/package-ci.yml"
+  fi
+  cp "$expected_pins" "$expected_baseline/.migration/dependencies.tsv"
+  path_map_digest="$(
+    shasum -a 256 "$candidate_dir/path-map.tsv" |
+      awk '{ print $1 }'
+  )"
+  write_migration_source \
+    "$kind" \
+    "$name" \
+    "$source_commit" \
+    "$path_map_digest" \
+    "$output" \
+    "$expected_baseline/.migration/source.tsv"
+  git -C "$repository" archive "$commit" | tar -x -C "$actual_baseline"
+  diff -qr "$expected_baseline" "$actual_baseline" >/dev/null || {
+    echo "$kind $name: final baseline tree is not reproducible" >&2
+    exit 1
+  }
+
+  [[ "$(git -C "$repository" rev-parse "$commit^")" == "$filtered_commit" ]]
+  local source_date message_file expected_commit
+  source_date="$(git -C "$ROOT" show -s --format=%aI "$source_commit")"
+  message_file="$(mktemp "${TMPDIR:-/tmp}/package-history-message.XXXXXX")"
+  write_baseline_message \
+    "$kind" \
+    "$source_commit" \
+    "$path_map_digest" \
+    "$output" \
+    "$message_file"
+  expected_commit="$(
+    GIT_AUTHOR_NAME="Azure SDK Migration" \
+      GIT_AUTHOR_EMAIL="azure-sdk-migration@users.noreply.github.com" \
+      GIT_AUTHOR_DATE="$source_date" \
+      GIT_COMMITTER_NAME="Azure SDK Migration" \
+      GIT_COMMITTER_EMAIL="azure-sdk-migration@users.noreply.github.com" \
+      GIT_COMMITTER_DATE="$source_date" \
+      git -C "$repository" commit-tree \
+        "$(git -C "$repository" rev-parse "$commit^{tree}")" \
+        -p "$filtered_commit" \
+        -F "$message_file"
+  )"
+  [[ "$expected_commit" == "$commit" ]] || {
+    echo "$kind $name: final baseline commit is not deterministic" >&2
+    exit 1
+  }
+
+  rm -rf "$source_tree" "$filtered_tree" "$expected_baseline" "$actual_baseline"
+  rm -f "$expected_pins" "$message_file"
   rm -f "$verify_archive"
   rm -rf "$verify_cache"
   rm -f "$current_map" "$current_history"
@@ -716,24 +848,86 @@ require_sealed_output() {
     echo "candidate source does not match sealed inputs" >&2
     exit 1
   }
+  [[ "$(cat "$output/reset-id")" == "$(sealed_value "$output" reset-id)" ]] || {
+    echo "reset ID does not match sealed inputs" >&2
+    exit 1
+  }
+  [[ "$(cat "$output/sealed-source")" == \
+    "$(sealed_value "$output" sealed-main)" ]] || {
+    echo "sealed source file does not match sealed inputs" >&2
+    exit 1
+  }
   [[ "$(cat "$output/remote-url")" == "$(remote_url "$remote")" ]] || {
     echo "publication remote URL changed after sealing" >&2
     exit 1
   }
+  [[ "$(cat "$output/remote-url")" == "$(sealed_value "$output" remote)" ]] || {
+    echo "remote URL file does not match sealed inputs" >&2
+    exit 1
+  }
 
-  local reset_id current_refs
+  local reset_id all_current_refs current_refs current_namespace expected_namespace
   reset_id="$(cat "$output/reset-id")"
+  all_current_refs="$(mktemp "${TMPDIR:-/tmp}/package-history-all-refs.XXXXXX")"
   current_refs="$(mktemp "${TMPDIR:-/tmp}/package-history-refs.XXXXXX")"
-  trap 'rm -f "$current_refs"' RETURN
+  current_namespace="$(
+    mktemp "${TMPDIR:-/tmp}/package-history-namespace.XXXXXX"
+  )"
+  expected_namespace="$(
+    mktemp "${TMPDIR:-/tmp}/package-history-expected-namespace.XXXXXX"
+  )"
+  trap 'rm -f "$all_current_refs" "$current_refs" "$current_namespace" "$expected_namespace"' RETURN
   git -C "$ROOT" ls-remote --heads --tags "$remote" |
-    sort |
-    awk -v prefix="refs/heads/migration/$reset_id/" \
-      'index($2, prefix) != 1' >"$current_refs"
+    sort >"$all_current_refs"
+  awk -v prefix="refs/heads/migration/$reset_id/" \
+    'index($2, prefix) != 1' "$all_current_refs" >"$current_refs"
   cmp -s "$output/refs-before.tsv" "$current_refs" || {
     echo "remote refs changed after sealing" >&2
     exit 1
   }
-  rm -f "$current_refs"
+  awk -v prefix="refs/heads/migration/$reset_id/" \
+    'index($2, prefix) == 1 { print $2 "\t" $1 }' \
+    "$all_current_refs" |
+    sort >"$current_namespace"
+
+  local candidate_manifest=""
+  local candidate_manifest_marker=""
+  local candidate_manifest_pending=false
+  if [[ -s "$output/migration-manifest.tsv" ]]; then
+    candidate_manifest="$output/migration-manifest.tsv"
+    candidate_manifest_marker="$output/migration.complete"
+  elif [[ -s "$output/migration-manifest.pending.tsv" ]]; then
+    candidate_manifest="$output/migration-manifest.pending.tsv"
+    candidate_manifest_marker="$output/migration-manifest.pending.complete"
+    candidate_manifest_pending=true
+  fi
+  if [[ -n "$candidate_manifest" ]]; then
+    [[ -s "$candidate_manifest_marker" &&
+      "$(cat "$candidate_manifest_marker")" == \
+        "$(shasum -a 256 "$candidate_manifest" | awk '{ print $1 }')" ]] || {
+      echo "candidate manifest completion digest does not match" >&2
+      exit 1
+    }
+    awk -F '\t' '$1 == "candidate" { print $4 "\t" $5 }' \
+      "$candidate_manifest" |
+      sort >"$expected_namespace"
+  else
+    : >"$expected_namespace"
+  fi
+  if $candidate_manifest_pending && [[ ! -s "$current_namespace" ]]; then
+    :
+  else
+    cmp -s "$current_namespace" "$expected_namespace" || {
+      echo "migration ref namespace does not match the sealed candidate manifest" >&2
+      exit 1
+    }
+  fi
+
+  rm -f \
+    "$all_current_refs" \
+    "$current_refs" \
+    "$current_namespace" \
+    "$expected_namespace"
   trap - RETURN
 
   local expected
@@ -810,6 +1004,8 @@ publish_candidates() {
   local -a refspecs=()
   local candidate_refs="$output/candidate-refs.tsv"
   : >"$candidate_refs"
+  local present_count=0
+  local absent_count=0
 
   shopt -s nullglob
   local candidate_dirs=("$output"/candidates/*)
@@ -832,41 +1028,71 @@ publish_candidates() {
       echo "candidate belongs to another sealed source: $candidate_dir" >&2
       exit 1
     }
-    local key branch commit destination existing stage_ref
+    local kind name key branch commit destination existing stage_ref
+    kind="$(cat "$candidate_dir/target-kind")"
+    name="$(cat "$candidate_dir/target-name")"
+    verify_candidate "$kind" "$name" "$output" "$remote"
     key="$(basename "$candidate_dir")"
     branch="$(cat "$candidate_dir/branch")"
     commit="$(cat "$candidate_dir/candidate-commit")"
     destination="refs/heads/migration/$reset_id/$branch"
     existing="$(git -C "$ROOT" ls-remote "$remote" "$destination")"
-    [[ -z "$existing" ]] || {
-      echo "candidate ref already exists: $destination" >&2
+    if [[ -z "$existing" ]]; then
+      git -C "$publisher" fetch --quiet \
+        "$candidate_dir/repository" \
+        "$commit"
+      stage_ref="refs/heads/stage/$key"
+      git -C "$publisher" update-ref "$stage_ref" FETCH_HEAD
+      leases+=("--force-with-lease=$destination:")
+      refspecs+=("$stage_ref:$destination")
+      absent_count=$((absent_count + 1))
+    elif [[ "$(printf '%s\n' "$existing" | awk '{ print $1 }')" == "$commit" ]]; then
+      present_count=$((present_count + 1))
+    else
+      echo "candidate ref exists at an unexpected commit: $destination" >&2
       exit 1
-    }
-    git -C "$publisher" fetch --quiet \
-      "$candidate_dir/repository" \
-      "$commit"
-    stage_ref="refs/heads/stage/$key"
-    git -C "$publisher" update-ref "$stage_ref" FETCH_HEAD
-    leases+=("--force-with-lease=$destination:")
-    refspecs+=("$stage_ref:$destination")
+    fi
     printf '%s\t%s\t%s\t%s\n' \
-      "$(cat "$candidate_dir/target-kind")" \
-      "$(cat "$candidate_dir/target-name")" \
+      "$kind" \
+      "$name" \
       "$destination" \
       "$commit" >>"$candidate_refs"
   done
 
-  git -C "$publisher" push --atomic \
-    "${leases[@]}" \
-    "$(remote_url "$remote")" \
-    "${refspecs[@]}"
+  [[ "$present_count" -eq 0 || "$absent_count" -eq 0 ]] || {
+    echo "candidate namespace is only partially published" >&2
+    exit 1
+  }
+
+  local pending_manifest="$output/migration-manifest.pending.tsv"
+  local pending_marker="$output/migration-manifest.pending.complete"
   {
     cat "$output/sealed-inputs.tsv"
     while IFS=$'\t' read -r kind name ref commit; do
       printf 'candidate\t%s\t%s\t%s\t%s\n' \
         "$kind" "$name" "$ref" "$commit"
     done <"$candidate_refs"
-  } >"$output/migration-manifest.tsv"
+  } >"$pending_manifest"
+  printf '%s\n' \
+    "$(shasum -a 256 "$pending_manifest" | awk '{ print $1 }')" \
+    >"$pending_marker"
+
+  if [[ "$absent_count" -gt 0 ]]; then
+    git -C "$publisher" push --atomic \
+      "${leases[@]}" \
+      "$(remote_url "$remote")" \
+      "${refspecs[@]}"
+  fi
+
+  while IFS=$'\t' read -r kind name ref commit; do
+    existing="$(git -C "$ROOT" ls-remote "$remote" "$ref")"
+    [[ "$(printf '%s\n' "$existing" | awk '{ print $1 }')" == "$commit" ]] || {
+      echo "published candidate ref verification failed: $ref" >&2
+      exit 1
+    }
+  done <"$candidate_refs"
+  mv "$pending_manifest" "$output/migration-manifest.tsv"
+  mv "$pending_marker" "$output/migration.complete"
   echo "published ${#candidate_dirs[@]} candidate refs atomically"
 }
 
