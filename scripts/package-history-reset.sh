@@ -35,6 +35,10 @@ manifest_tool() {
   (cd "$ROOT" && zig run eng/candidate_manifest_tool.zig -- "$@")
 }
 
+compatibility_tool() {
+  (cd "$ROOT" && zig run eng/example_compatibility_tool.zig -- "$@")
+}
+
 remote_url() {
   git -C "$ROOT" remote get-url "$1"
 }
@@ -113,12 +117,29 @@ candidate_targets() {
     history_tool paths "$requested_package" >/dev/null
     printf 'package\t%s\n' "$requested_package"
   elif [[ -n "$requested_example" ]]; then
-    history_tool example-paths "$requested_example" >/dev/null
-    printf 'example\t%s\n' "$requested_example"
+    if compatibility_example_exists "$requested_example"; then
+      printf 'compatibility-example\t%s\n' "$requested_example"
+    else
+      history_tool example-paths "$requested_example" >/dev/null
+      printf 'example\t%s\n' "$requested_example"
+    fi
   else
     history_tool list | cut -f1 | awk '{ print "package\t" $0 }'
     history_tool example-list | cut -f1 | awk '{ print "example\t" $0 }'
+    compatibility_example_list |
+      awk '{ print "compatibility-example\t" $0 }'
   fi
+}
+
+compatibility_example_list() {
+  printf '%s\n' arm_avs arm_avs_wasi
+}
+
+compatibility_example_exists() {
+  case "$1" in
+    arm_avs | arm_avs_wasi) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 target_key() {
@@ -147,6 +168,9 @@ target_branch() {
   if [[ "$kind" == package ]]; then
     history_tool list |
       awk -F '\t' -v name="$name" '$1 == name { print $2 }'
+  elif [[ "$kind" == compatibility-example ]]; then
+    compatibility_tool metadata "$name" |
+      awk -F '\t' '$1 == "branch" { print $2 }'
   else
     history_tool example-list |
       awk -F '\t' -v name="$name" '$1 == name { print $2 }'
@@ -256,11 +280,11 @@ branch_owned_pin() {
   local dependency_dir="$output/candidates/$dependency"
   [[ -s "$dependency_dir/candidate-commit" &&
     -s "$dependency_dir/package-hash" &&
-    -s "$dependency_dir/source-commit" ]] || {
+    -s "$dependency_dir/sealed-main" ]] || {
     echo "dependency candidate must be finalized first: $dependency" >&2
     exit 1
   }
-  [[ "$(cat "$dependency_dir/source-commit")" == \
+  [[ "$(cat "$dependency_dir/sealed-main")" == \
     "$(cat "$output/sealed-source")" ]] || {
     echo "dependency candidate belongs to another sealed source: $dependency" >&2
     exit 1
@@ -308,6 +332,23 @@ write_example_pins() {
   branch_owned_pin azure_sdk_kusto "$output" >>"$pins_file"
 }
 
+write_compatibility_example_pins() {
+  local name="$1"
+  local output="$2"
+  local remote="$3"
+  local pins_file="$4"
+  case "$name" in
+    arm_avs | arm_avs_wasi) ;;
+    *)
+      echo "unsupported compatibility example candidate: $name" >&2
+      exit 1
+      ;;
+  esac
+  : >"$pins_file"
+  main_owned_pin azure_sdk_core sdk/core "$output" >>"$pins_file"
+  branch_owned_pin azure_rest_arm_avs "$output" >>"$pins_file"
+}
+
 write_migration_source() {
   local kind="$1"
   local name="$2"
@@ -319,7 +360,8 @@ write_migration_source() {
     printf 'target-kind\t%s\n' "$kind"
     printf 'target-name\t%s\n' "$name"
     printf 'reset-id\t%s\n' "$(cat "$output/reset-id")"
-    printf 'sealed-main\t%s\n' "$source_commit"
+    printf 'sealed-main\t%s\n' "$(cat "$output/sealed-source")"
+    printf 'source-commit\t%s\n' "$source_commit"
     printf 'sealed-inputs-sha256\t%s\n' "$(sealed_inputs_digest "$output")"
     printf 'history-map-sha256\t%s\n' "$path_map_digest"
   } >"$destination"
@@ -333,7 +375,8 @@ write_baseline_message() {
   local destination="$5"
   {
     printf 'Establish branch-owned %s baseline\n\n' "$kind"
-    printf 'Sealed-Main: %s\n' "$source_commit"
+    printf 'Sealed-Main: %s\n' "$(cat "$output/sealed-source")"
+    printf 'Source-Commit: %s\n' "$source_commit"
     printf 'History-Map-SHA256: %s\n' "$path_map_digest"
     printf 'Reset-ID: %s\n' "$(cat "$output/reset-id")"
     printf 'Sealed-Inputs-SHA256: %s\n\n' "$(sealed_inputs_digest "$output")"
@@ -348,7 +391,11 @@ commit_baseline() {
   local path_map_digest="$4"
   local output="$5"
   local source_date message_file
-  source_date="$(git -C "$ROOT" show -s --format=%aI "$source_commit")"
+  if [[ "$kind" == compatibility-example ]]; then
+    source_date="$(git -C "$repository" show -s --format=%aI "$source_commit")"
+  else
+    source_date="$(git -C "$ROOT" show -s --format=%aI "$source_commit")"
+  fi
   message_file="$(mktemp "${TMPDIR:-/tmp}/package-history-message.XXXXXX")"
   trap 'rm -f "$message_file"' RETURN
   write_baseline_message \
@@ -398,12 +445,21 @@ finalize_candidate() {
   )"
 
   git -C "$repository" switch --quiet package-history-candidate
+  if [[ "$kind" == compatibility-example ]]; then
+    compatibility_tool apply "$name" "$repository"
+  fi
   mkdir -p "$repository/.github/workflows" "$repository/.migration"
   cp "$ROOT/eng/package_branch_template/gitattributes" "$repository/.gitattributes"
   if [[ "$kind" == package ]]; then
     write_package_pins "$name" "$output" "$remote" "$pins_file"
     branch_tool render-ci \
       "$name" \
+      "$repository/.github/workflows/package-ci.yml"
+  elif [[ "$kind" == compatibility-example ]]; then
+    write_compatibility_example_pins \
+      "$name" "$output" "$remote" "$pins_file"
+    cp \
+      "$ROOT/eng/package_branch_template/example-ci.yml" \
       "$repository/.github/workflows/package-ci.yml"
   else
     write_example_pins "$name" "$output" "$remote" "$pins_file"
@@ -431,6 +487,9 @@ finalize_candidate() {
   candidate_commit="$(git -C "$repository" rev-parse HEAD)"
   if [[ "$kind" == package ]]; then
     branch_tool validate-tree "$name" "$repository"
+  elif [[ "$kind" == compatibility-example ]]; then
+    compatibility_tool validate "$name" "$repository"
+    manifest_tool validate "$repository"
   else
     manifest_tool validate "$repository"
   fi
@@ -440,7 +499,7 @@ finalize_candidate() {
     "$candidate_dir"
 }
 
-build_candidate() {
+build_filtered_candidate() {
   local kind="$1"
   local name="$2"
   local source_commit="$3"
@@ -476,6 +535,7 @@ build_candidate() {
   printf '%s\n' "$name" > "$candidate_dir/target-name"
   printf '%s\n' "$branch" > "$candidate_dir/branch"
   printf '%s\n' "$source_commit" > "$candidate_dir/source-commit"
+  printf '%s\n' "$source_commit" >"$candidate_dir/sealed-main"
   printf '%s\n' "$filtered_commit" >"$candidate_dir/filtered-commit"
   cp "$repository/.git/filter-repo/commit-map" "$candidate_dir/commit-map.tsv"
   write_mapping_history \
@@ -513,7 +573,7 @@ build_candidate() {
   echo "$kind $name $(cat "$candidate_dir/candidate-commit")"
 }
 
-verify_candidate() {
+verify_filtered_candidate() {
   local kind="$1"
   local name="$2"
   local output="$3"
@@ -524,6 +584,7 @@ verify_candidate() {
   local repository="$candidate_dir/repository"
   [[ -f "$candidate_dir/candidate-commit" &&
     -f "$candidate_dir/filtered-commit" &&
+    -f "$candidate_dir/sealed-main" &&
     -d "$repository/.git" ]] || {
     echo "$kind $name: candidate is missing" >&2
     exit 1
@@ -555,6 +616,8 @@ verify_candidate() {
   recorded_branch="$(cat "$candidate_dir/branch")"
   [[ -n "$expected_branch" && "$recorded_branch" == "$expected_branch" ]]
   source_commit="$(cat "$candidate_dir/source-commit")"
+  [[ "$(cat "$candidate_dir/sealed-main")" == \
+    "$(cat "$output/sealed-source")" ]]
   git -C "$ROOT" cat-file -e "$source_commit^{commit}"
   write_mapping_history \
     "$kind" \
@@ -685,6 +748,300 @@ verify_candidate() {
   rm -f "$current_map" "$current_history"
   trap - RETURN
   echo "$kind $name $commit"
+}
+
+compatibility_source_commit() {
+  local name="$1"
+  local output="$2"
+  local branch commit
+  branch="$(target_branch compatibility-example "$name")"
+  commit="$(
+    awk -v ref="refs/heads/$branch" \
+      '$2 == ref { print $1 }' \
+      "$output/refs-before.tsv"
+  )"
+  [[ -n "$commit" ]] || {
+    echo "sealed ref is missing for compatibility example: $branch" >&2
+    exit 1
+  }
+  printf '%s\n' "$commit"
+}
+
+write_identity_commit_map() {
+  local repository="$1"
+  local source_commit="$2"
+  local destination="$3"
+  {
+    printf 'old\tnew\n'
+    git -C "$repository" rev-list --reverse "$source_commit" |
+      awk '{ print $1 "\t" $1 }'
+  } >"$destination"
+}
+
+write_compatibility_mapping_history() {
+  local repository="$1"
+  local source_commit="$2"
+  local destination="$3"
+  local count
+  count="$(git -C "$repository" rev-list --count "$source_commit")"
+  printf 'branch-root\tbranch-root\t%s\t%s\n' \
+    "$count" "$count" >"$destination"
+}
+
+build_compatibility_candidate() {
+  local name="$1"
+  local sealed_main="$2"
+  local output="$3"
+  local remote="$4"
+  local branch source_commit key candidate_dir repository
+  branch="$(target_branch compatibility-example "$name")"
+  source_commit="$(compatibility_source_commit "$name" "$output")"
+  key="$(target_key compatibility-example "$name")"
+  candidate_dir="$output/candidates/$key"
+  repository="$candidate_dir/repository"
+
+  rm -rf "$candidate_dir"
+  mkdir -p "$candidate_dir"
+  git clone --quiet --no-checkout "$(cat "$output/remote-url")" "$repository"
+  git -C "$repository" switch --quiet --detach "$source_commit"
+  git -C "$repository" branch package-history-candidate
+
+  printf 'branch-root\tbranch-root\n' >"$candidate_dir/path-map.tsv"
+  write_identity_commit_map \
+    "$repository" "$source_commit" "$candidate_dir/commit-map.tsv"
+  write_compatibility_mapping_history \
+    "$repository" "$source_commit" "$candidate_dir/mapping-history.tsv"
+  printf '%s\n' compatibility-example >"$candidate_dir/target-kind"
+  printf '%s\n' "$name" >"$candidate_dir/target-name"
+  printf '%s\n' "$branch" >"$candidate_dir/branch"
+  printf '%s\n' "$source_commit" >"$candidate_dir/source-commit"
+  printf '%s\n' "$sealed_main" >"$candidate_dir/sealed-main"
+  printf '%s\n' "$source_commit" >"$candidate_dir/filtered-commit"
+  write_commit_artifacts \
+    "$repository" \
+    "$source_commit" \
+    "$candidate_dir" \
+    filtered
+
+  finalize_candidate \
+    compatibility-example \
+    "$name" \
+    "$source_commit" \
+    "$output" \
+    "$remote" \
+    "$candidate_dir"
+  echo "compatibility-example $name $(cat "$candidate_dir/candidate-commit")"
+}
+
+verify_compatibility_candidate() {
+  local name="$1"
+  local output="$2"
+  local remote="$3"
+  local key candidate_dir repository
+  key="$(target_key compatibility-example "$name")"
+  candidate_dir="$output/candidates/$key"
+  repository="$candidate_dir/repository"
+  [[ -s "$candidate_dir/candidate-commit" &&
+    -s "$candidate_dir/filtered-commit" &&
+    -s "$candidate_dir/source-commit" &&
+    -s "$candidate_dir/sealed-main" &&
+    -s "$candidate_dir/commit-map.tsv" &&
+    -s "$candidate_dir/path-map.tsv" &&
+    -s "$candidate_dir/mapping-history.tsv" &&
+    -s "$candidate_dir/filtered-tree.sha256" &&
+    -s "$candidate_dir/filtered-package.tar.gz" &&
+    -s "$candidate_dir/final-tree.sha256" &&
+    -s "$candidate_dir/package.tar.gz" &&
+    -s "$candidate_dir/package-hash" &&
+    -d "$repository/.git" ]] || {
+    echo "compatibility-example $name: candidate is missing" >&2
+    exit 1
+  }
+
+  local source_commit expected_source sealed_main commit branch
+  source_commit="$(cat "$candidate_dir/source-commit")"
+  expected_source="$(compatibility_source_commit "$name" "$output")"
+  sealed_main="$(cat "$output/sealed-source")"
+  commit="$(cat "$candidate_dir/candidate-commit")"
+  branch="$(target_branch compatibility-example "$name")"
+  [[ "$source_commit" == "$expected_source" ]]
+  [[ "$(cat "$candidate_dir/sealed-main")" == "$sealed_main" ]]
+  [[ "$(cat "$candidate_dir/filtered-commit")" == "$source_commit" ]]
+  [[ "$(cat "$candidate_dir/target-kind")" == compatibility-example ]]
+  [[ "$(cat "$candidate_dir/target-name")" == "$name" ]]
+  [[ "$(cat "$candidate_dir/branch")" == "$branch" ]]
+  [[ "$(git -C "$repository" rev-parse HEAD)" == "$commit" ]]
+  [[ "$(git -C "$repository" rev-parse refs/heads/package-history-candidate)" == \
+    "$commit" ]]
+  [[ "$(git -C "$repository" rev-parse "$commit^")" == "$source_commit" ]]
+  [[ -z "$(git -C "$repository" status --porcelain=v1 --untracked-files=all)" ]]
+  git -C "$repository" fsck --no-progress >/dev/null
+  git -C "$repository" cat-file -e "$source_commit^{commit}"
+  git -C "$repository" cat-file -e "$commit^{tree}"
+
+  local expected_path_map expected_commit_map expected_history
+  expected_path_map="$(
+    mktemp "${TMPDIR:-/tmp}/package-history-path-map.XXXXXX"
+  )"
+  expected_commit_map="$(
+    mktemp "${TMPDIR:-/tmp}/package-history-commit-map.XXXXXX"
+  )"
+  expected_history="$(
+    mktemp "${TMPDIR:-/tmp}/package-history-counts.XXXXXX"
+  )"
+  trap \
+    'rm -f "$expected_path_map" "$expected_commit_map" "$expected_history"' \
+    RETURN
+  printf 'branch-root\tbranch-root\n' >"$expected_path_map"
+  write_identity_commit_map "$repository" "$source_commit" "$expected_commit_map"
+  write_compatibility_mapping_history \
+    "$repository" "$source_commit" "$expected_history"
+  cmp -s "$candidate_dir/path-map.tsv" "$expected_path_map"
+  cmp -s "$candidate_dir/commit-map.tsv" "$expected_commit_map"
+  cmp -s "$candidate_dir/mapping-history.tsv" "$expected_history"
+
+  local filtered_digest final_digest
+  filtered_digest="$(
+    git -C "$repository" archive "$source_commit" |
+      shasum -a 256 |
+      awk '{ print $1 }'
+  )"
+  final_digest="$(
+    git -C "$repository" archive "$commit" |
+      shasum -a 256 |
+      awk '{ print $1 }'
+  )"
+  [[ "$filtered_digest" == "$(cat "$candidate_dir/filtered-tree.sha256")" ]]
+  [[ "$final_digest" == "$(cat "$candidate_dir/final-tree.sha256")" ]]
+
+  local verify_archive verify_cache actual_hash
+  verify_archive="$(
+    mktemp "${TMPDIR:-/tmp}/package-history-archive.XXXXXX.tar.gz"
+  )"
+  verify_cache="$(
+    mktemp -d "${TMPDIR:-/tmp}/package-history-zig-cache.XXXXXX"
+  )"
+  git -C "$repository" archive --format=tar.gz \
+    --output="$verify_archive" "$commit"
+  cmp -s "$candidate_dir/package.tar.gz" "$verify_archive"
+  actual_hash="$(zig fetch --global-cache-dir "$verify_cache" "$verify_archive")"
+  [[ "$actual_hash" == "$(cat "$candidate_dir/package-hash")" ]]
+
+  local expected_pins expected_baseline actual_baseline
+  expected_pins="$(mktemp "${TMPDIR:-/tmp}/package-history-pins.XXXXXX")"
+  expected_baseline="$(
+    mktemp -d "${TMPDIR:-/tmp}/package-history-expected-baseline.XXXXXX"
+  )"
+  actual_baseline="$(
+    mktemp -d "${TMPDIR:-/tmp}/package-history-actual-baseline.XXXXXX"
+  )"
+  write_compatibility_example_pins \
+    "$name" "$output" "$remote" "$expected_pins"
+  cmp -s "$candidate_dir/dependency-pins.tsv" "$expected_pins"
+  cmp -s \
+    "$repository/.migration/dependencies.tsv" \
+    "$expected_pins"
+  compatibility_tool validate "$name" "$repository"
+  manifest_tool validate "$repository"
+
+  git -C "$repository" archive "$source_commit" | tar -x -C "$expected_baseline"
+  compatibility_tool apply "$name" "$expected_baseline"
+  manifest_tool pin "$expected_baseline" "$expected_pins"
+  cp "$ROOT/eng/package_branch_template/gitattributes" \
+    "$expected_baseline/.gitattributes"
+  mkdir -p \
+    "$expected_baseline/.github/workflows" \
+    "$expected_baseline/.migration"
+  cp \
+    "$ROOT/eng/package_branch_template/example-ci.yml" \
+    "$expected_baseline/.github/workflows/package-ci.yml"
+  cp "$expected_pins" "$expected_baseline/.migration/dependencies.tsv"
+  local path_map_digest
+  path_map_digest="$(
+    shasum -a 256 "$candidate_dir/path-map.tsv" |
+      awk '{ print $1 }'
+  )"
+  write_migration_source \
+    compatibility-example \
+    "$name" \
+    "$source_commit" \
+    "$path_map_digest" \
+    "$output" \
+    "$expected_baseline/.migration/source.tsv"
+  git -C "$repository" archive "$commit" | tar -x -C "$actual_baseline"
+  diff -qr "$expected_baseline" "$actual_baseline" >/dev/null || {
+    echo "compatibility-example $name: baseline tree is not reproducible" >&2
+    exit 1
+  }
+
+  local source_date message_file expected_commit
+  source_date="$(git -C "$repository" show -s --format=%aI "$source_commit")"
+  message_file="$(mktemp "${TMPDIR:-/tmp}/package-history-message.XXXXXX")"
+  write_baseline_message \
+    compatibility-example \
+    "$source_commit" \
+    "$path_map_digest" \
+    "$output" \
+    "$message_file"
+  expected_commit="$(
+    GIT_AUTHOR_NAME="Azure SDK Migration" \
+      GIT_AUTHOR_EMAIL="azure-sdk-migration@users.noreply.github.com" \
+      GIT_AUTHOR_DATE="$source_date" \
+      GIT_COMMITTER_NAME="Azure SDK Migration" \
+      GIT_COMMITTER_EMAIL="azure-sdk-migration@users.noreply.github.com" \
+      GIT_COMMITTER_DATE="$source_date" \
+      git -C "$repository" commit-tree \
+        "$(git -C "$repository" rev-parse "$commit^{tree}")" \
+        -p "$source_commit" \
+        -F "$message_file"
+  )"
+  [[ "$expected_commit" == "$commit" ]] || {
+    echo "compatibility-example $name: baseline commit is not deterministic" >&2
+    exit 1
+  }
+
+  rm -f \
+    "$expected_path_map" \
+    "$expected_commit_map" \
+    "$expected_history" \
+    "$verify_archive" \
+    "$expected_pins" \
+    "$message_file"
+  rm -rf "$verify_cache" "$expected_baseline" "$actual_baseline"
+  trap - RETURN
+  echo "compatibility-example $name $commit"
+}
+
+build_candidate() {
+  local kind="$1"
+  case "$kind" in
+    compatibility-example)
+      build_compatibility_candidate "$2" "$3" "$4" "$5"
+      ;;
+    package | example)
+      build_filtered_candidate "$@"
+      ;;
+    *)
+      echo "unknown candidate kind: $kind" >&2
+      exit 1
+      ;;
+  esac
+}
+
+verify_candidate() {
+  local kind="$1"
+  case "$kind" in
+    compatibility-example)
+      verify_compatibility_candidate "$2" "$3" "$4"
+      ;;
+    package | example)
+      verify_filtered_candidate "$@"
+      ;;
+    *)
+      echo "unknown candidate kind: $kind" >&2
+      exit 1
+      ;;
+  esac
 }
 
 require_sealed_source() {
@@ -1023,11 +1380,12 @@ publish_candidates() {
     [[ -s "$candidate_dir/candidate-commit" &&
       -s "$candidate_dir/branch" &&
       -s "$candidate_dir/source-commit" &&
+      -s "$candidate_dir/sealed-main" &&
       -d "$candidate_dir/repository/.git" ]] || {
       echo "incomplete candidate directory: $candidate_dir" >&2
       exit 1
     }
-    [[ "$(cat "$candidate_dir/source-commit")" == "$source_commit" ]] || {
+    [[ "$(cat "$candidate_dir/sealed-main")" == "$source_commit" ]] || {
       echo "candidate belongs to another sealed source: $candidate_dir" >&2
       exit 1
     }
