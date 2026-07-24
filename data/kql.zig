@@ -5,7 +5,7 @@
 //! is never assembled from runtime parameter values.
 const std = @import("std");
 const serde = @import("serde");
-const kusto_common = @import("azure_sdk_kusto_common");
+const kusto_common = @import("kusto_common_internal");
 
 pub const ClientRequestProperties = kusto_common.ClientRequestProperties;
 

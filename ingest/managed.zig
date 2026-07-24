@@ -6,8 +6,8 @@
 //! followed by the same reader, preserving any internal reader buffering.
 const std = @import("std");
 const core = @import("azure_sdk_core");
-const kusto_common = @import("azure_sdk_kusto_common");
-const data_result = @import("azure_sdk_kusto_data");
+const kusto_common = @import("kusto_common_internal");
+const data_result = @import("kusto_data_internal");
 const streaming = @import("streaming.zig");
 const queued = @import("queued.zig");
 const resources = @import("resources.zig");

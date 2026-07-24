@@ -3,7 +3,7 @@
 ///! Provides experimental direct streaming, queued, and managed ingestion.
 const std = @import("std");
 const core = @import("azure_sdk_core");
-const kusto_common = @import("azure_sdk_kusto_common");
+const kusto_common = @import("kusto_common_internal");
 const streaming = @import("streaming.zig");
 const resources = @import("resources.zig");
 const queued = @import("queued.zig");
