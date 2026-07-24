@@ -5,13 +5,16 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .azure_sdk_core = .{
-            .path = "../../core",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#5c37f2997b0a9dcc2db91f83baf0a492342621a2",
+            .hash = "azure_sdk_core-0.1.0-eFY0EtlTBQDltjWjN0xVytGGsv4kqwm1JP_PY18iWFb3",
         },
         .azure_sdk_messaging_common = .{
-            .path = "../common",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#51c5ec8e181abd59a0f8180fc4c37b9ddc8a2bcb",
+            .hash = "azure_sdk_messaging_common-0.1.0-YklmSnoYAACqhTFKLjL7ZX1jSngsgJRYKAhYkgx4J_RU",
         },
         .azure_sdk_storage_blobs = .{
-            .path = "../../storage/blobs",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#4f1e3c0e3ed14df68956af442cd401ac2974b362",
+            .hash = "azure_sdk_storage_blobs-0.1.0-I5lGdgoKAQCviVvGY2BIs_0Guj5BQj1OpWy_m3VLkKpH",
         },
         .uamqp = .{
             .url = "git+https://github.com/cataggar/azure-uamqp-zig#1121d1e68dde8d188516083555cc7e1553b0f595",
