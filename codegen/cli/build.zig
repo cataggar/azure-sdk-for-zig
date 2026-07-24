@@ -90,12 +90,14 @@ pub fn build(b: *std.Build) void {
     const generate_container_registry = b.addRunArtifact(fixture_generator);
     generate_container_registry.setCwd(b.path("."));
     generate_container_registry.has_side_effects = true;
+    const container_registry_output = b.option(
+        []const u8,
+        "container-registry-output",
+        "Container Registry package output directory",
+    );
     generate_container_registry.addArg(
-        b.option(
-            []const u8,
-            "container-registry-output",
-            "Container Registry package output directory",
-        ) orelse "../../rest/container_registry",
+        container_registry_output orelse
+            "../../.release/container_registry/generated-rest",
     );
     const azure_sdk_core_commit = b.option(
         []const u8,
@@ -107,9 +109,23 @@ pub fn build(b: *std.Build) void {
         "azure-sdk-core-hash",
         "Zig package hash for -Dazure-sdk-core-commit",
     );
+    const azure_sdk_core_path = b.option(
+        []const u8,
+        "azure-sdk-core-path",
+        "Local azure_sdk_core dependency path in generated build.zig.zon",
+    );
     if ((azure_sdk_core_commit == null) != (azure_sdk_core_hash == null)) {
         std.debug.panic(
             "-Dazure-sdk-core-commit and -Dazure-sdk-core-hash must be supplied together",
+            .{},
+        );
+    }
+    if (container_registry_output != null and
+        azure_sdk_core_commit == null and
+        azure_sdk_core_path == null)
+    {
+        std.debug.panic(
+            "an explicit output requires -Dazure-sdk-core-path or an immutable Core commit/hash pin",
             .{},
         );
     }
@@ -123,16 +139,12 @@ pub fn build(b: *std.Build) void {
     } else {
         generate_container_registry.addArgs(&.{
             "--azure-sdk-core-path",
-            b.option(
-                []const u8,
-                "azure-sdk-core-path",
-                "Local azure_sdk_core dependency path in generated build.zig.zon",
-            ) orelse "../../sdk/core",
+            azure_sdk_core_path orelse "../../../sdk/core",
         });
     }
     const generate_container_registry_step = b.step(
         "generate-container-registry-package",
-        "Regenerate rest/container_registry from the checked-in TypeSpec fixture",
+        "Regenerate Container Registry into an external package worktree",
     );
     generate_container_registry_step.dependOn(&generate_container_registry.step);
 

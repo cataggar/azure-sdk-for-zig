@@ -65,17 +65,20 @@ AZURE_REST_API_SPECS=/path/to/azure-rest-api-specs \
 ```
 
 Regenerate the tracked, entirely generator-owned ACR protocol package
-from that fixture with:
+from that fixture into a checkout of its package branch:
 
 ```bash
 cd codegen/cli
-zig build generate-container-registry-package
+zig build \
+  -Dcontainer-registry-output=/path/to/rest-container-registry \
+  -Dazure-sdk-core-commit=<release-commit> \
+  -Dazure-sdk-core-hash=<zig-package-hash> \
+  generate-container-registry-package
 ```
 
-The step replaces `rest/container_registry` and emits the package/module
-name `azure_rest_container_registry`, including its generated contract
-tests. Run it a second time and require an empty `git diff` when checking
-generator determinism.
+The step emits the package/module name `azure_rest_container_registry`,
+including its generated contract tests. Main does not contain a generated
+package tree; output always targets an external package worktree.
 
 ## Branch model
 
@@ -139,21 +142,13 @@ codegen/cli/scripts/run.sh \
     --azure-sdk-core-path ../../..
 ```
 
-## How to resync a tracked package
+## How to resync a package branch
 
-Tracked packages under `rest/<pkg>/` mostly own their `build.zig`,
+Generated package worktrees mostly own their `build.zig`,
 `build.zig.zon`, `README.md`, `.gitignore`, and (occasionally)
 `src/clients.zig` / `src/enums.zig` — operators wire in examples,
 add deps, work around emitter bugs, etc. `src/models.zig` is the one
 file the emitter currently owns end-to-end.
-
-```bash
-codegen/scripts/sync.sh                 # every existing rest/<pkg>/
-codegen/scripts/sync.sh arm_avs         # one package
-codegen/scripts/sync.sh --force <pkg>   # overwrite operator-owned files when onboarding
-```
-
-To update a package-branch worktree outside the monorepo:
 
 ```bash
 codegen/scripts/sync.sh \
@@ -178,8 +173,8 @@ when onboarding a brand-new package.
 > TypeSpec compilation. Override the engine location with
 > `STARLINGMONKEY_ENGINE=/path/to/wasm npm run build`.
 
-`rest/container_registry` is intentionally different: every package and
-source file is owned by
+The `rest/container_registry` branch is intentionally different: every package
+and source file is owned by
 `fixtures/generate_container_registry_package.zig`. Use the dedicated
 `generate-container-registry-package` step above rather than `sync.sh`;
 do not patch its generated files manually.

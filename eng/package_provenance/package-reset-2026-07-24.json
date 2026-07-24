@@ -1,0 +1,366 @@
+{
+  "schema_version": 1,
+  "reset_id": "package-reset-2026-07-24-global-r3",
+  "cutover_date": "2026-07-24",
+  "sealed_main": "2f34b8ce949a23245187664a04765b0029d87d9b",
+  "git_filter_repo": {
+    "release": "2.47.0",
+    "reported_version": "a40bce548d2c"
+  },
+  "ref_prefixes": {
+    "archive": "refs/heads/archive/package-reset-2026-07-24-global-r3/",
+    "migration": "refs/heads/migration/package-reset-2026-07-24-global-r3/"
+  },
+  "artifacts": {
+    "sealed_migration_manifest_sha256": "189c7a07b8292b3de5293316315bb7086404ab0676d23efb1cc52cddeb3c0a03",
+    "candidate_artifacts_tsv_sha256": "d38bbc8ea9fad7920d103da6c26eaf1713d4a8cfecf86591a6a4ee3c0dcd9408",
+    "history_audit_tsv_sha256": "1d71bd1f46ef6ca8871fe2d8856e2769b94314795d8e923c9a95cbabc7ebad3d",
+    "history_maps_sha256": "d2c2721ebef923799e56529fab860d5087212c43993fee0fe8c74fc1efb51991",
+    "recovery_bundle_filename": "azure-sdk-for-zig-package-reset-2026-07-24-global-r3.bundle",
+    "recovery_bundle_sha256": "c8fd86e017f008342e46a09e65900ccc9b021e9d946b205ce9b0dd1ae049a647",
+    "recovery_artifact_commit": "2de1d7ab17217a79b3aa1a07af5df8f17bef4800"
+  },
+  "packages": [
+    {
+      "name": "azure_rest_arm_avs",
+      "branch": "refs/heads/rest/arm_avs",
+      "tag": "refs/tags/azure_rest_arm_avs/v0.1.0",
+      "old_branch_target": "a541c4eb3a472caf050739b27d3fa5ecab4ba12e",
+      "old_tag_target": "a541c4eb3a472caf050739b27d3fa5ecab4ba12e",
+      "new_target": "fe7662a3416f599794c10d038854262bf22a664a",
+      "archive_branch": "refs/heads/archive/package-reset-2026-07-24-global-r3/heads/rest/arm_avs",
+      "archive_tag": "refs/heads/archive/package-reset-2026-07-24-global-r3/tags/azure_rest_arm_avs-v0.1.0",
+      "final_tree_sha256": "5748f8138db425673d83d283310e20c376bd58efceab623d9c030c2830e87169",
+      "commit_map_sha256": "04ffcb916895f3e8d15ab3427d579ffea9bb262a8cf5d9b6fb6b6909f91a4409",
+      "path_map_sha256": "808fd1a7e7db6793a3c10a7754d3a6c60c50cb4bbac70f0a6713d790bed75c2c"
+    },
+    {
+      "name": "azure_rest_keyvault_secrets",
+      "branch": "refs/heads/rest/keyvault_secrets",
+      "tag": "refs/tags/azure_rest_keyvault_secrets/v0.1.0",
+      "old_branch_target": "96759a0fc9df35ef8b7bbc0fe40d4ba520696290",
+      "old_tag_target": "96759a0fc9df35ef8b7bbc0fe40d4ba520696290",
+      "new_target": "7716ae63671f26a39bf8338dde48c7e4c3bb6304",
+      "archive_branch": "refs/heads/archive/package-reset-2026-07-24-global-r3/heads/rest/keyvault_secrets",
+      "archive_tag": "refs/heads/archive/package-reset-2026-07-24-global-r3/tags/azure_rest_keyvault_secrets-v0.1.0",
+      "final_tree_sha256": "8d2e13059d8ea6760f5be7b66f75b027b162bb2710c05b13849cd090b11601ba",
+      "commit_map_sha256": "ba382ddbea167888828c81deb8d449b5dc160a6892dc9d54f60f5ee715470662",
+      "path_map_sha256": "b2cf898e26ced4cf5153da7788e2f7c1ab252ab79c7d6af67423406c0e221eea"
+    },
+    {
+      "name": "azure_rest_container_registry",
+      "branch": "refs/heads/rest/container_registry",
+      "tag": "refs/tags/azure_rest_container_registry/v0.1.0",
+      "old_branch_target": "1d20fd6b51d2822f8ba69b1ef98399c3815b1a06",
+      "old_tag_target": "1d20fd6b51d2822f8ba69b1ef98399c3815b1a06",
+      "new_target": "70cf5bf1e8155fc9a5ae23206a6b092c2182d21b",
+      "archive_branch": "refs/heads/archive/package-reset-2026-07-24-global-r3/heads/rest/container_registry",
+      "archive_tag": "refs/heads/archive/package-reset-2026-07-24-global-r3/tags/azure_rest_container_registry-v0.1.0",
+      "final_tree_sha256": "cea3c09c4ae6f248ee26940dc0a89a73ffa26445ccc94adfc4a0630305010e29",
+      "commit_map_sha256": "f04b9daba42e8b115aa76bc18e2d0b50b84b195cba2c589cbc9eafc2cf254d0e",
+      "path_map_sha256": "806c50258eac583ae425e59518d3f29cff46efaa080dfbddbcd73f18aab283d9"
+    },
+    {
+      "name": "azure_sdk_container_registry",
+      "branch": "refs/heads/sdk/container_registry",
+      "tag": "refs/tags/azure_sdk_container_registry/v0.1.0",
+      "old_branch_target": "efcd07089b7692c67bf4b6c6a6afd242addd8b5e",
+      "old_tag_target": "efcd07089b7692c67bf4b6c6a6afd242addd8b5e",
+      "new_target": "c99143953fb06be5aada15ccae807162d0fc3524",
+      "archive_branch": "refs/heads/archive/package-reset-2026-07-24-global-r3/heads/sdk/container_registry",
+      "archive_tag": "refs/heads/archive/package-reset-2026-07-24-global-r3/tags/azure_sdk_container_registry-v0.1.0",
+      "final_tree_sha256": "4e51a2fcec346c97f874a1fd24f1b05bddb2fa16707db4a846c04b199b88fde0",
+      "commit_map_sha256": "3d69442f5ec440e5d00476261acfdceb9a1f1fefb81615e1ecb25a25978ab0b3",
+      "path_map_sha256": "74f1a22f202598e174afe78e4a7eba43544bf9799d8224a43cc4d52ab2792fbb"
+    },
+    {
+      "name": "azure_sdk_storage_common",
+      "branch": "refs/heads/sdk/storage_common",
+      "tag": "refs/tags/azure_sdk_storage_common/v0.1.0",
+      "old_branch_target": "f631fceb7355cdeb4f2c0ad3ed503b44363d0a36",
+      "old_tag_target": "f631fceb7355cdeb4f2c0ad3ed503b44363d0a36",
+      "new_target": "93be9fdd48cefa1f30023c5b852f89193671988c",
+      "archive_branch": "refs/heads/archive/package-reset-2026-07-24-global-r3/heads/sdk/storage_common",
+      "archive_tag": "refs/heads/archive/package-reset-2026-07-24-global-r3/tags/azure_sdk_storage_common-v0.1.0",
+      "final_tree_sha256": "90cd7fee1021d1dff49136dbf396e72406c6df44e27c5624bb6de480429e55a0",
+      "commit_map_sha256": "f60ea12009f08e4ec20f399e43fd4576bd064ba7c1a69c387dded20918bd1235",
+      "path_map_sha256": "e180eec965eb09923700eb6917a31dd7e00e2c911f4794c0449c9f06ac5c5624"
+    },
+    {
+      "name": "azure_sdk_storage_blobs",
+      "branch": "refs/heads/sdk/storage_blobs",
+      "tag": "refs/tags/azure_sdk_storage_blobs/v0.1.0",
+      "old_branch_target": "086e5564c78272f376a8fb12f7fd78c5783d2e3b",
+      "old_tag_target": "086e5564c78272f376a8fb12f7fd78c5783d2e3b",
+      "new_target": "4f1e3c0e3ed14df68956af442cd401ac2974b362",
+      "archive_branch": "refs/heads/archive/package-reset-2026-07-24-global-r3/heads/sdk/storage_blobs",
+      "archive_tag": "refs/heads/archive/package-reset-2026-07-24-global-r3/tags/azure_sdk_storage_blobs-v0.1.0",
+      "final_tree_sha256": "66a9331c3f1e0ab8455f78fc3e9cbcf7e5e2a680e06553e7b6931adaf8b16003",
+      "commit_map_sha256": "888deb178d5de5db90ff07b54840f3c36f6d8366e44f324f04f7af4c558dce9d",
+      "path_map_sha256": "69b2ea229bdc7c98a3bfdb475b537da8360c14344b449281c5bc2e79706ea89f"
+    },
+    {
+      "name": "azure_sdk_storage_queues",
+      "branch": "refs/heads/sdk/storage_queues",
+      "tag": "refs/tags/azure_sdk_storage_queues/v0.1.0",
+      "old_branch_target": "da55495e6950bc89ff076ea20437df1760ba15e5",
+      "old_tag_target": "da55495e6950bc89ff076ea20437df1760ba15e5",
+      "new_target": "fa33ee1b6a02f6dc3f6064e3563d292fd3320f2d",
+      "archive_branch": "refs/heads/archive/package-reset-2026-07-24-global-r3/heads/sdk/storage_queues",
+      "archive_tag": "refs/heads/archive/package-reset-2026-07-24-global-r3/tags/azure_sdk_storage_queues-v0.1.0",
+      "final_tree_sha256": "3f66461a1101875985cfaca159b81b3d6216fd243b512386daa0f8f6937f7aa3",
+      "commit_map_sha256": "06e7ace4ca1437a30b891c9d43ef57fc850d6fcb131c545f3cce6e6acc0d26bc",
+      "path_map_sha256": "bd6ec63bd5fdf6970a61c17a98884144fbaa3581f8474218e91cc5b2cea0c1d6"
+    },
+    {
+      "name": "azure_sdk_storage_files_shares",
+      "branch": "refs/heads/sdk/storage_files_shares",
+      "tag": "refs/tags/azure_sdk_storage_files_shares/v0.1.0",
+      "old_branch_target": "e20713e837e238b1e53efe0c2991007d57560648",
+      "old_tag_target": "e20713e837e238b1e53efe0c2991007d57560648",
+      "new_target": "c3873e2ada83f4d61c3beb61baf0653f38dfecb8",
+      "archive_branch": "refs/heads/archive/package-reset-2026-07-24-global-r3/heads/sdk/storage_files_shares",
+      "archive_tag": "refs/heads/archive/package-reset-2026-07-24-global-r3/tags/azure_sdk_storage_files_shares-v0.1.0",
+      "final_tree_sha256": "171c836dc53ac835c541a428fc88bbeac48258db05cd8fb7c9454cbbc511259f",
+      "commit_map_sha256": "c8f45c82ff1d4638c6571106144bff8f402a29805320364d44aa81d0ee0d1e6d",
+      "path_map_sha256": "aae58053b72e952aaffa825ae8b3c5cd713af1bd8f04dd47d19dad527ab0182e"
+    },
+    {
+      "name": "azure_sdk_storage_files_datalake",
+      "branch": "refs/heads/sdk/storage_files_datalake",
+      "tag": "refs/tags/azure_sdk_storage_files_datalake/v0.1.0",
+      "old_branch_target": "756265bd4ee366d6410635b55cb27a44867794da",
+      "old_tag_target": "756265bd4ee366d6410635b55cb27a44867794da",
+      "new_target": "3c7af8ad76756227d91baf9d695d9a605b8f5a0b",
+      "archive_branch": "refs/heads/archive/package-reset-2026-07-24-global-r3/heads/sdk/storage_files_datalake",
+      "archive_tag": "refs/heads/archive/package-reset-2026-07-24-global-r3/tags/azure_sdk_storage_files_datalake-v0.1.0",
+      "final_tree_sha256": "42572d801071fa4aae83bbf7a9e821afb9a9385ff10edc1849a1cb9e97d90525",
+      "commit_map_sha256": "9d3805854d4443d735a3c3ef96cda079fac501cbbf6996c9964004ee16471121",
+      "path_map_sha256": "a5ddde0b8badc8aaaa0c16b499d90622bcdc525cb919d760b84691bc386e0688"
+    },
+    {
+      "name": "azure_sdk_keyvault",
+      "branch": "refs/heads/sdk/keyvault",
+      "tag": "refs/tags/azure_sdk_keyvault/v0.1.0",
+      "old_branch_target": "52c3fc22544d0e7d0dda3b131377becb81ef120d",
+      "old_tag_target": "52c3fc22544d0e7d0dda3b131377becb81ef120d",
+      "new_target": "7a7f2023ec2bff3d13918bbb37f082d9b3420b3f",
+      "archive_branch": "refs/heads/archive/package-reset-2026-07-24-global-r3/heads/sdk/keyvault",
+      "archive_tag": "refs/heads/archive/package-reset-2026-07-24-global-r3/tags/azure_sdk_keyvault-v0.1.0",
+      "final_tree_sha256": "2617cd83d80d19fb9a8b98852522841ea45a2e81dca42cb3a9b6e936c2d90646",
+      "commit_map_sha256": "86790de47ee8db7b148d1ab2999b897080c1a7c34764c4839f1846270bf653d3",
+      "path_map_sha256": "0f0e9e9f9321f6f574bbdaf93a51e5d3601effd2afd9aae03ee5f43fc1ff85a8"
+    },
+    {
+      "name": "azure_sdk_data_tables",
+      "branch": "refs/heads/sdk/data_tables",
+      "tag": "refs/tags/azure_sdk_data_tables/v0.1.0",
+      "old_branch_target": "e9d3e3fdb59b5ebbd11b54822302be4b435c93b7",
+      "old_tag_target": "e9d3e3fdb59b5ebbd11b54822302be4b435c93b7",
+      "new_target": "915370a472a46baf718978e27b550dde935dece9",
+      "archive_branch": "refs/heads/archive/package-reset-2026-07-24-global-r3/heads/sdk/data_tables",
+      "archive_tag": "refs/heads/archive/package-reset-2026-07-24-global-r3/tags/azure_sdk_data_tables-v0.1.0",
+      "final_tree_sha256": "77693e0f81ab3334cc7681bb753c3e6d786c678a8c0588bbda63bbe131ceba71",
+      "commit_map_sha256": "5957b5832694c94b96d5cadf437547feffbd98ef0ef2398ac33cce0a1dccb895",
+      "path_map_sha256": "7f19603b9feba39498c226f60c49b0e9e75e7d5460e097609b9a795bd982ebef"
+    },
+    {
+      "name": "azure_sdk_data_cosmos",
+      "branch": "refs/heads/sdk/data_cosmos",
+      "tag": "refs/tags/azure_sdk_data_cosmos/v0.1.0",
+      "old_branch_target": "762278c711929e75da0bd4f72dc31ca6a81f55db",
+      "old_tag_target": "762278c711929e75da0bd4f72dc31ca6a81f55db",
+      "new_target": "f38a480fddf1728edb4f70e792ed3e9ff227f046",
+      "archive_branch": "refs/heads/archive/package-reset-2026-07-24-global-r3/heads/sdk/data_cosmos",
+      "archive_tag": "refs/heads/archive/package-reset-2026-07-24-global-r3/tags/azure_sdk_data_cosmos-v0.1.0",
+      "final_tree_sha256": "6a914b2997268eacd66064f385bf9889c3589e828211f8ab57e047e8eac80a2a",
+      "commit_map_sha256": "6d6abb8855941b3c7522f64c30dd919767560a328ca368014c6cb137cc276dce",
+      "path_map_sha256": "705f4bb40e6abcda46a591fd56d432102d00bde47bf4595ad2be8b17f72550d2"
+    },
+    {
+      "name": "azure_sdk_data_appconfiguration",
+      "branch": "refs/heads/sdk/data_appconfiguration",
+      "tag": "refs/tags/azure_sdk_data_appconfiguration/v0.1.0",
+      "old_branch_target": "1dd77b62073f6924d6c85f045c78f31c7829e666",
+      "old_tag_target": "1dd77b62073f6924d6c85f045c78f31c7829e666",
+      "new_target": "c17bc6759d51847ab603459b1103a731ed0d17a2",
+      "archive_branch": "refs/heads/archive/package-reset-2026-07-24-global-r3/heads/sdk/data_appconfiguration",
+      "archive_tag": "refs/heads/archive/package-reset-2026-07-24-global-r3/tags/azure_sdk_data_appconfiguration-v0.1.0",
+      "final_tree_sha256": "ffba47fb6255f728582118f024d36023c3626a7437e7849b0991d0e97ca8e0b9",
+      "commit_map_sha256": "e00fc9a8c22a2f9132d45c5bfb116b9bb1f4cdc7be4c2e8953b38a695bb1b381",
+      "path_map_sha256": "8fc0ccfa0e8f9b0399c3db0194f8fa0970ac791f2712a39f6c627a81ed18e38a"
+    },
+    {
+      "name": "azure_sdk_attestation",
+      "branch": "refs/heads/sdk/attestation",
+      "tag": "refs/tags/azure_sdk_attestation/v0.1.0",
+      "old_branch_target": "54241baae61ca254bb86b89ec2efff0c6d621d83",
+      "old_tag_target": "54241baae61ca254bb86b89ec2efff0c6d621d83",
+      "new_target": "e8ca692a96e6583da08ed810aaf41ec3f3c7355b",
+      "archive_branch": "refs/heads/archive/package-reset-2026-07-24-global-r3/heads/sdk/attestation",
+      "archive_tag": "refs/heads/archive/package-reset-2026-07-24-global-r3/tags/azure_sdk_attestation-v0.1.0",
+      "final_tree_sha256": "8f9460b60ce169a94f97df196d0e5b0eb238352a1a92036709524beda66574e2",
+      "commit_map_sha256": "e6e941f65abdaf494c43319f511a65ab5a3483a317b8819e5311d653063c406d",
+      "path_map_sha256": "e1dd8f59341e07e035f4f4a92dc415213e02b75d883e39fb86ba7f7cc46d9402"
+    },
+    {
+      "name": "azure_sdk_messaging_common",
+      "branch": "refs/heads/sdk/messaging_common",
+      "tag": "refs/tags/azure_sdk_messaging_common/v0.1.0",
+      "old_branch_target": "a7a3856654f14b71404d0bfcda120357011dc286",
+      "old_tag_target": "a7a3856654f14b71404d0bfcda120357011dc286",
+      "new_target": "51c5ec8e181abd59a0f8180fc4c37b9ddc8a2bcb",
+      "archive_branch": "refs/heads/archive/package-reset-2026-07-24-global-r3/heads/sdk/messaging_common",
+      "archive_tag": "refs/heads/archive/package-reset-2026-07-24-global-r3/tags/azure_sdk_messaging_common-v0.1.0",
+      "final_tree_sha256": "68575c04a476dbdf4eee2ef3cbf88455c100a47062ec9fb65cdfb42ca076503b",
+      "commit_map_sha256": "fb659745f119c6919846c98d5fd0ad4f8eed580251ba163b613ffed37982355f",
+      "path_map_sha256": "42adcefaa77517336459b0831d7c555f53287a4188d62ec344a543500d1bd672"
+    },
+    {
+      "name": "azure_sdk_eventhubs",
+      "branch": "refs/heads/sdk/eventhubs",
+      "tag": "refs/tags/azure_sdk_eventhubs/v0.1.0",
+      "old_branch_target": "34e73d95d0f66016e2a43a549ef2d1399f9ab710",
+      "old_tag_target": "34e73d95d0f66016e2a43a549ef2d1399f9ab710",
+      "new_target": "0bbe991cdbadbd4c63347ca49408877620817c46",
+      "archive_branch": "refs/heads/archive/package-reset-2026-07-24-global-r3/heads/sdk/eventhubs",
+      "archive_tag": "refs/heads/archive/package-reset-2026-07-24-global-r3/tags/azure_sdk_eventhubs-v0.1.0",
+      "final_tree_sha256": "e1a5eafe5587f0495a2ad8e0a990e818e9c7a3defc377e71f456804289425534",
+      "commit_map_sha256": "a3cb7e5428958b5c67e060ea2b6525c4f4f4bd6f53177a8b66d518956ea938b3",
+      "path_map_sha256": "24b6952f60feb8d61c2932d31d60e65bf1bb6ffc1e7983b6423f5822d1723e16"
+    },
+    {
+      "name": "azure_sdk_servicebus",
+      "branch": "refs/heads/sdk/servicebus",
+      "tag": "refs/tags/azure_sdk_servicebus/v0.1.0",
+      "old_branch_target": "e22ab7d40593f3d139afad9c63723753a525a422",
+      "old_tag_target": "e22ab7d40593f3d139afad9c63723753a525a422",
+      "new_target": "d19aff0729464de3fbcad15d4ea2ca4d23611530",
+      "archive_branch": "refs/heads/archive/package-reset-2026-07-24-global-r3/heads/sdk/servicebus",
+      "archive_tag": "refs/heads/archive/package-reset-2026-07-24-global-r3/tags/azure_sdk_servicebus-v0.1.0",
+      "final_tree_sha256": "d796f7fb7f9887c723987f6bf33d607a60f9edcc531a690df645b459f86cc257",
+      "commit_map_sha256": "93c69b786eb657fe5bdd01544bc63fc132eca3a96b7879a6bd29fd3fd787e01e",
+      "path_map_sha256": "b1e2cbca73d97233fbb0546e140ddde4426104ff81514c1cd5c63a544486de6c"
+    },
+    {
+      "name": "azure_sdk_kusto",
+      "branch": "refs/heads/sdk/kusto",
+      "tag": "refs/tags/azure_sdk_kusto/v0.1.0",
+      "old_branch_target": null,
+      "old_tag_target": null,
+      "new_target": "d9aab9910e295bf70057e163368767abff65fb39",
+      "archive_branch": null,
+      "archive_tag": null,
+      "final_tree_sha256": "326145dcd3e9f2d10aecf6d5ab3195cdcf9bd5f02d4a1f91ff7f2e92fda8e3d7",
+      "commit_map_sha256": "d9a3090bc6bd70a92169312748a8fa622a552c079faf37615bc98e8dbf4730cb",
+      "path_map_sha256": "6a545edfa5d997db80897ff3f14006dd5afbbea1bcbe7e8d3c338b0c7df21ce7"
+    }
+  ],
+  "examples": [
+    {
+      "branch": "refs/heads/example/arm_avs",
+      "old_target": "816a24e152b321d72bc4b1c42c11b2b007d61b4f",
+      "new_target": "661796509350f6bb3271d47822a3144428e77eef",
+      "archive_ref": "refs/heads/archive/package-reset-2026-07-24-global-r3/heads/example/arm_avs",
+      "final_tree_sha256": "532285bae5dec154472c1e5820fd4dc213de775062176a605aa4c8b628a34466",
+      "commit_map_sha256": "d40b8d80157646da3fc64de5aecbc0db2658943edc206fc6329a8d83f6476c76",
+      "path_map_sha256": "2a7b91b4877f1886f8da447d6abcb5c8a2befc4379d5c7dc723f5b2de5144281"
+    },
+    {
+      "branch": "refs/heads/example/arm_avs_wasi",
+      "old_target": "b4a363cc2d5db529ffc9c3be000c2e3ce5034b7f",
+      "new_target": "75d331df357a32d73a6fba968c9de78fc9bbc632",
+      "archive_ref": "refs/heads/archive/package-reset-2026-07-24-global-r3/heads/example/arm_avs_wasi",
+      "final_tree_sha256": "b565b4e8fc7ecffb7bc15ac8e684d82eba5f235a4cfd092a80ef6ef97cfa0903",
+      "commit_map_sha256": "3e9eed9b32b2273e9c5c33c5f0c602fa7bd0c56d8d652f07922dd5cbac9e2d07",
+      "path_map_sha256": "2a7b91b4877f1886f8da447d6abcb5c8a2befc4379d5c7dc723f5b2de5144281"
+    },
+    {
+      "branch": "refs/heads/example/kusto",
+      "old_target": null,
+      "new_target": "85952066382c4344fa24897e9f3ad582a3315b71",
+      "archive_ref": null,
+      "final_tree_sha256": "6e5590e516d88ad4e212f8861c0f3a4d91dd1a7f86277c3ec8a2f303238156ce",
+      "commit_map_sha256": "81d74ed4932f6072103cc448c61b40960a718c0e471b2d35ac26a8356c2f0c26",
+      "path_map_sha256": "b407a02cd51c9397efe2623415fa73623349ef9f4a7bfd1abf0c2fb7e8eac234"
+    }
+  ],
+  "retired_refs": [
+    {
+      "ref": "refs/heads/sdk/aggregate",
+      "old_target": "45dd5ba616c75c103f51be009fda62482cb12ad4",
+      "archive_ref": "refs/heads/archive/package-reset-2026-07-24-global-r3/heads/sdk/aggregate"
+    },
+    {
+      "ref": "refs/tags/azure_sdk/v0.1.0",
+      "old_target": "45dd5ba616c75c103f51be009fda62482cb12ad4",
+      "archive_ref": "refs/heads/archive/package-reset-2026-07-24-global-r3/tags/azure_sdk-v0.1.0"
+    },
+    {
+      "ref": "refs/heads/sdk/kusto_common",
+      "old_target": "4481c1b13a7644b3736f3ab6ec075799b81dff5b",
+      "archive_ref": "refs/heads/archive/package-reset-2026-07-24-global-r3/heads/sdk/kusto_common"
+    },
+    {
+      "ref": "refs/tags/azure_sdk_kusto_common/v0.1.0",
+      "old_target": "4481c1b13a7644b3736f3ab6ec075799b81dff5b",
+      "archive_ref": "refs/heads/archive/package-reset-2026-07-24-global-r3/tags/azure_sdk_kusto_common-v0.1.0"
+    },
+    {
+      "ref": "refs/heads/sdk/kusto_data",
+      "old_target": "4accb1cbdc21095ff3ebb7374c5a0e369d9ace8f",
+      "archive_ref": "refs/heads/archive/package-reset-2026-07-24-global-r3/heads/sdk/kusto_data"
+    },
+    {
+      "ref": "refs/tags/azure_sdk_kusto_data/v0.1.0",
+      "old_target": "4accb1cbdc21095ff3ebb7374c5a0e369d9ace8f",
+      "archive_ref": "refs/heads/archive/package-reset-2026-07-24-global-r3/tags/azure_sdk_kusto_data-v0.1.0"
+    },
+    {
+      "ref": "refs/heads/sdk/kusto_ingest",
+      "old_target": "cd1c44c895cbd76235a91f99bab24825d99b17d3",
+      "archive_ref": "refs/heads/archive/package-reset-2026-07-24-global-r3/heads/sdk/kusto_ingest"
+    },
+    {
+      "ref": "refs/tags/azure_sdk_kusto_ingest/v0.1.0",
+      "old_target": "cd1c44c895cbd76235a91f99bab24825d99b17d3",
+      "archive_ref": "refs/heads/archive/package-reset-2026-07-24-global-r3/tags/azure_sdk_kusto_ingest-v0.1.0"
+    }
+  ],
+  "preserved_core_refs": {
+    "azure_sdk_core_tracing": "b3ffebcddc9cfe2b0b09c16c06d90decb17143ac",
+    "azure_sdk_core_perf": "374831f07145f16e6b9c26c37e83f4c4bcc21d75",
+    "azure_sdk_core_amqp": "4864e9abb798bd9d8ec3fbfb6db0c718840411b6",
+    "azure_sdk_core": "5c37f2997b0a9dcc2db91f83baf0a492342621a2",
+    "azure_sdk_core_testing": "abc6b025b738b029564596777655f91d568f19cb"
+  },
+  "rulesets": [
+    {
+      "id": 19596337,
+      "name": "Protect Core release branches",
+      "summary": "Blocks deletion and non-fast-forward updates for the five Core release branches."
+    },
+    {
+      "id": 19693382,
+      "name": "Protect branch-owned packages",
+      "summary": "Requires pull requests, conversation resolution, and all three package-test operating-system checks."
+    },
+    {
+      "id": 19596339,
+      "name": "Protect package version tags",
+      "summary": "Blocks deletion and non-fast-forward updates for package version tags."
+    },
+    {
+      "id": 19693383,
+      "name": "Protect standalone examples",
+      "summary": "Requires pull requests, conversation resolution, and all three package-test operating-system checks."
+    }
+  ],
+  "validation": {
+    "archive_refs": 44,
+    "production_operations": 47,
+    "production_ci_runs": 21,
+    "production_ci_jobs": 63,
+    "rollback_rehearsal": "pass"
+  }
+}

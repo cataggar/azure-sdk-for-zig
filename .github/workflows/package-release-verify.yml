@@ -34,8 +34,10 @@ jobs:
         shell: bash
         run: |
           case "$PACKAGE" in
-            azure_rest_arm_avs|azure_rest_keyvault_secrets)
-              echo "::error::$PACKAGE requires the external TypeSpec repository and composed emitter; verify it locally."
+            azure_sdk_core_tracing|azure_sdk_core_perf|azure_sdk_core_amqp|azure_sdk_core|azure_sdk_core_testing)
+              ;;
+            *)
+              echo "::error::$PACKAGE is branch-owned. Run scripts/package-branch-release.sh verify $PACKAGE instead."
               exit 1
               ;;
           esac

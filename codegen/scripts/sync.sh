@@ -1,22 +1,20 @@
 #!/usr/bin/env bash
 #
-# sync.sh — regenerate one or more `rest/<pkg>/` packages from their
-# canonical TypeSpec spec and copy the regen-safe emitter output back
-# into the tracked tree.
+# sync.sh — regenerate a REST package from its canonical TypeSpec spec
+# into an external package-branch worktree.
 #
 # Usage:
 #
-#   codegen/scripts/sync.sh                  # sync every existing rest/<pkg>/
-#   codegen/scripts/sync.sh <pkg>...         # sync only these packages
-#   codegen/scripts/sync.sh --force <pkg>... # overwrite every emitter-managed
+#   codegen/scripts/sync.sh --output-root DIR <pkg>
+#                                            # sync one package in an external
+#                                            # package-branch worktree
+#   codegen/scripts/sync.sh --force --output-root DIR <pkg>
+#                                            # overwrite every emitter-managed
 #                                            #   file, including ones that
 #                                            #   normally need operator review
 #                                            #   (build.zig, .gitignore, …).
 #                                            #   Use when onboarding a fresh
 #                                            #   package.
-#   codegen/scripts/sync.sh --output-root DIR <pkg>
-#                                            # sync one package in an external
-#                                            # package-branch worktree.
 #
 # By default the helper only overwrites `src/models.zig`. Every other
 # emitter-managed file (`src/clients.zig`, `src/enums.zig`,
@@ -40,7 +38,6 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-REST_DIR="$ROOT/rest"
 RUN_SH="$ROOT/codegen/cli/scripts/run.sh"
 SPEC_ROOT="$ROOT/../azure-rest-api-specs"
 
@@ -84,20 +81,16 @@ while (($#)); do
 done
 
 if [[ ${#PKGS[@]} -eq 0 ]]; then
-    # Default: every existing rest/<pkg>/.
-    shopt -s nullglob
-    for d in "$REST_DIR"/*/; do
-        PKGS+=("$(basename "$d")")
-    done
-    shopt -u nullglob
-    if [[ ${#PKGS[@]} -eq 0 ]]; then
-        echo "sync.sh: no packages found under rest/ and none specified" >&2
-        exit 1
-    fi
+    echo "sync.sh: specify one package and --output-root" >&2
+    exit 2
 fi
 
-if [[ -n "$OUTPUT_ROOT" && ${#PKGS[@]} -ne 1 ]]; then
+if [[ ${#PKGS[@]} -ne 1 ]]; then
     echo "sync.sh: --output-root requires exactly one package" >&2
+    exit 2
+fi
+if [[ -z "$OUTPUT_ROOT" ]]; then
+    echo "sync.sh: Main contains no generated package source; --output-root is required" >&2
     exit 2
 fi
 if [[ -n "$AZURE_SDK_CORE_PATH" &&
@@ -111,14 +104,12 @@ if [[ -n "$AZURE_SDK_CORE_COMMIT" || -n "$AZURE_SDK_CORE_HASH" ]]; then
         exit 2
     fi
 fi
-if [[ -n "$OUTPUT_ROOT" && -z "$AZURE_SDK_CORE_PATH" &&
+if [[ -z "$AZURE_SDK_CORE_PATH" &&
     -z "$AZURE_SDK_CORE_COMMIT" ]]; then
     echo "sync.sh: external output requires an explicit core path or immutable pin" >&2
     exit 2
 fi
-if [[ -n "$OUTPUT_ROOT" ]]; then
-    OUTPUT_ROOT="$(cd "$(dirname "$OUTPUT_ROOT")" && pwd)/$(basename "$OUTPUT_ROOT")"
-fi
+OUTPUT_ROOT="$(cd "$(dirname "$OUTPUT_ROOT")" && pwd)/$(basename "$OUTPUT_ROOT")"
 
 # ── resolve zig package name → spec dir via tspconfigs.yaml ────────
 # Output format: "<zig_name>\t<spec_dir>" one per line.
@@ -186,7 +177,7 @@ EXIT_CODE=0
 for pkg in "${PKGS[@]}"; do
     echo "── $pkg ──────────────────────────────────────"
 
-    pkg_dir="${OUTPUT_ROOT:-$REST_DIR/$pkg}"
+    pkg_dir="$OUTPUT_ROOT"
     if [[ ! -d "$pkg_dir" ]]; then
         echo "  ERROR: package output does not exist: $pkg_dir"
         EXIT_CODE=1

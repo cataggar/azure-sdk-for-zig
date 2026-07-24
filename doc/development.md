@@ -11,11 +11,11 @@ zig build
 zig build test --summary all
 zig build package-check --summary all
 zig build package-history-check --summary all
-zig fmt --check sdk/ examples/ codegen/ eng/ build.zig
+zig fmt --check sdk/core/ examples/ codegen/ eng/ build.zig
 ```
 
 Root package tests intentionally run only the five Main-owned Core packages.
-The catalog and history checks still cover all 25 registered package
+The catalog and history checks still cover all 23 registered package
 identities.
 
 ## Branch-owned package work
@@ -41,32 +41,18 @@ Package manifests must pin internal dependencies by immutable URL and hash.
 Workspace-local `.path` dependencies are valid only among Main-owned Core
 packages.
 
-## History reconstruction
+## Reset history tooling
 
-Inspect reviewed mappings:
+The reviewed mappings remain available for provenance:
 
 ```bash
 scripts/package-history-reset.sh analyze
 ```
 
-Seal one source commit, then build and verify candidates in dependency order:
-
-```bash
-scripts/package-history-reset.sh seal-inputs \
-  --reset-id package-reset-YYYY-MM-DD
-
-PACKAGE_HISTORY_FILTER_REPO=/path/to/pinned/git-filter-repo \
-  scripts/package-history-reset.sh build-candidates \
-  --package azure_sdk_storage_common
-
-scripts/package-history-reset.sh verify-candidates \
-  --package azure_sdk_storage_common
-```
-
-Candidate output is written under `.release/package-reset` by default and is
-not source code to commit to `main`. After every candidate is finalized and
-reviewed, `publish-candidates` pushes the set atomically under
-`migration/<reset-id>/...`; it does not change production package refs.
+The completed cutover is recorded in
+[`package-reset-2026-07-24.md`](package-reset-2026-07-24.md). Candidate
+reconstruction requires the sealed pre-cleanup Main commit recorded there;
+current `main` intentionally contains no branch-owned source.
 
 ## Generated package work
 

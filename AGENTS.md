@@ -7,8 +7,8 @@ zig build
 zig build test --summary all
 zig build package-check --summary all
 zig build package-history-check --summary all
-zig fmt sdk/ examples/ codegen/ eng/ build.zig
-zig fmt --check sdk/ examples/ codegen/ eng/ build.zig
+zig fmt sdk/core/ examples/ codegen/ eng/ build.zig
+zig fmt --check sdk/core/ examples/ codegen/ eng/ build.zig
 ```
 
 ## Source ownership

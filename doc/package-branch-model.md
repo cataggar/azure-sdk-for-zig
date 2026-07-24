@@ -83,9 +83,9 @@ mappings for every branch-owned package. Boilerplate files such as copied
 licenses and manifests are explicitly excluded as ancestry evidence.
 
 `scripts/package-history-reset.sh` uses pinned `git-filter-repo` behavior to
-produce candidate repositories, path maps, and commit maps. Remote ref changes
-remain locked until candidate commits and old ref hashes are sealed for the
-cutover phase.
+produce candidate repositories, path maps, and commit maps. The completed
+cutover and retained recovery refs are documented in the
+[package reset record](package-reset-2026-07-24.md).
 
 ## Generated packages
 

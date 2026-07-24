@@ -55,22 +55,22 @@ For Kusto, finalize Core, Storage Common, Storage Blobs, and Storage Queues
 pins before finalizing `azure_sdk_kusto`; its manifest also pins the external
 `serde` dependency.
 
-## One-time reset
+## Completed one-time reset
 
-The package reset establishes 18 non-Core package branches and their `v0.1.0`
-tags from history-preserving candidate commits. Seventeen package identities
-replace existing branch and tag refs. Kusto instead consolidates into the
+The 2026-07-24 package reset established 18 non-Core package branches and
+their `v0.1.0` tags from history-preserving candidate commits. Seventeen
+package identities replaced existing branch and tag refs. Kusto consolidated into the
 single `azure_sdk_kusto` package and module on `sdk/kusto`, version `0.1.0`,
 with public `common`, `data`, and `ingest` namespaces.
 
-At cutover, archive and delete `sdk/kusto_common`, `sdk/kusto_data`, and
+The cutover archived and deleted `sdk/kusto_common`, `sdk/kusto_data`, and
 `sdk/kusto_ingest` and their corresponding
 `azure_sdk_kusto_common/v0.1.0`, `azure_sdk_kusto_data/v0.1.0`, and
-`azure_sdk_kusto_ingest/v0.1.0` tags. Create `sdk/kusto` and
+`azure_sdk_kusto_ingest/v0.1.0` tags. It created `sdk/kusto` and
 `azure_sdk_kusto/v0.1.0` with expected-absent leases in the same global atomic
 transaction. No compatibility branches, packages, or aliases are retained.
 
-Before the cutover:
+The cutover:
 
 1. Record every old branch and tag object ID.
 2. Push immutable archive refs.
@@ -80,15 +80,18 @@ Before the cutover:
 5. Use one exact-lease atomic push during the approved ruleset maintenance
    window.
 
-The recreated tags produce new Zig package hashes. Consumers must replace old
+The recreated tags produced new Zig package hashes. Consumers must replace old
 `v0.1.0` hashes with the hashes from the recreated tags. The old `arm_avs` and
 `keyvault_secrets` identities remain provenance notes only; they are not
 accepted release identities after the reset.
 
-The aggregate `sdk/aggregate` branch and `azure_sdk/v0.1.0` tag are retired
+The aggregate `sdk/aggregate` branch and `azure_sdk/v0.1.0` tag were retired
 during that cutover. They are not valid dependencies for new packages.
 
-The existing `example/arm_avs` and `example/arm_avs_wasi` branches receive
-fast-forward compatibility commits. The standalone Kusto project is created
+The existing `example/arm_avs` and `example/arm_avs_wasi` branches received
+fast-forward compatibility commits. The standalone Kusto project was created
 as the expected-absent `example/kusto` branch in the same transaction; example
 branches do not receive package release tags.
+
+See the [package reset record](package-reset-2026-07-24.md) for exact commits,
+archive refs, artifact digests, and recovery details.

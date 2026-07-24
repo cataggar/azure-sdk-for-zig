@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REST_PACKAGE_ROOT="$ROOT/rest/container_registry"
-SDK_PACKAGE_ROOT="$ROOT/sdk/container_registry"
+REST_PACKAGE_ROOT=""
+SDK_PACKAGE_ROOT=""
 
 while (($#)); do
   case "$1" in
@@ -17,11 +17,17 @@ while (($#)); do
       ;;
     *)
       echo "usage: verify-container-registry-regeneration.sh " \
-        "[--rest-package-root PATH] [--sdk-package-root PATH]" >&2
+        "--rest-package-root PATH --sdk-package-root PATH" >&2
       exit 2
       ;;
   esac
 done
+
+if [[ -z "$REST_PACKAGE_ROOT" || -z "$SDK_PACKAGE_ROOT" ]]; then
+  echo "usage: verify-container-registry-regeneration.sh " \
+    "--rest-package-root PATH --sdk-package-root PATH" >&2
+  exit 2
+fi
 
 SCRATCH="$ROOT/.release/container_registry/regeneration"
 CODEGEN_ZIG_PKG="$ROOT/codegen/cli/zig-pkg"
@@ -77,23 +83,19 @@ snapshot_tree "$REST_PACKAGE_ROOT" "$SCRATCH/rest.before"
 snapshot_tree "$SDK_PACKAGE_ROOT" "$SCRATCH/sdk.before"
 snapshot_status "$SCRATCH/status.before"
 
+dependency="$(
+  cd "$ROOT"
+  zig run eng/package_branch_tool.zig -- \
+    dependencies azure_rest_container_registry "$REST_PACKAGE_ROOT"
+)"
+core_url="$(cut -f2 <<<"$dependency")"
+core_hash="$(cut -f3 <<<"$dependency")"
+core_commit="${core_url##*#}"
 codegen_args=(
   -Dcontainer-registry-output="$SCRATCH/generated-rest"
+  -Dazure-sdk-core-commit="$core_commit"
+  -Dazure-sdk-core-hash="$core_hash"
 )
-if [[ "$REST_PACKAGE_ROOT" != "$ROOT/rest/container_registry" ]]; then
-  dependency="$(
-    cd "$ROOT"
-    zig run eng/package_branch_tool.zig -- \
-      dependencies azure_rest_container_registry "$REST_PACKAGE_ROOT"
-  )"
-  core_url="$(cut -f2 <<<"$dependency")"
-  core_hash="$(cut -f3 <<<"$dependency")"
-  core_commit="${core_url##*#}"
-  codegen_args+=(
-    -Dazure-sdk-core-commit="$core_commit"
-    -Dazure-sdk-core-hash="$core_hash"
-  )
-fi
 
 (
   cd "$ROOT/codegen/cli"

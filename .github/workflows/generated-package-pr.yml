@@ -89,7 +89,7 @@ jobs:
           {
             echo "generator_commit=$(git -C generator rev-parse HEAD)"
             echo "fixture=codegen/fixtures/container_registry.json"
-            echo "command=zig build generate-container-registry-package"
+            echo "command=(cd codegen/cli && zig build -Dcontainer-registry-output=<package-output> -Dazure-sdk-core-commit=$core_commit -Dazure-sdk-core-hash=$core_hash generate-container-registry-package)"
           } > package/.azure-sdk-generator
           (
             cd generator

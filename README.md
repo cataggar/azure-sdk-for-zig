@@ -19,6 +19,7 @@ dependencies, and validation commands.
 - [Development](doc/development.md)
 - [Package branch model](doc/package-branch-model.md)
 - [Releasing packages](doc/releasing-packages.md)
+- [Package reset record](doc/package-reset-2026-07-24.md)
 - [Code generation](codegen/README.md)
 - [Contributing](CONTRIBUTING.md)
 

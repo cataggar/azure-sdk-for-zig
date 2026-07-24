@@ -7,6 +7,7 @@ pub const ExampleHistory = struct {
     name: []const u8,
     branch: []const u8,
     current_source_path: []const u8,
+    source_on_main: bool,
     current_mappings: []const PathMapping,
     historical_mappings: []const PathMapping,
 };
@@ -16,6 +17,7 @@ pub const all = [_]ExampleHistory{
         .name = "kusto",
         .branch = "example/kusto",
         .current_source_path = "examples/kusto",
+        .source_on_main = false,
         .current_mappings = &.{
             .{ .source = "examples/kusto/.gitignore", .destination = ".gitignore" },
             .{ .source = "examples/kusto/README.md", .destination = "README.md" },
@@ -89,6 +91,7 @@ pub fn validate() !void {
 
 pub fn validateCurrentTrees(allocator: std.mem.Allocator, io: std.Io) !void {
     for (all) |entry| {
+        if (!entry.source_on_main) continue;
         var directory = try std.Io.Dir.cwd().openDir(
             io,
             entry.current_source_path,
@@ -215,6 +218,7 @@ test "Kusto example history separates current and historical paths" {
     try std.testing.expectEqual(@as(usize, 1), all.len);
     const kusto = find("kusto").?;
     try std.testing.expectEqualStrings("example/kusto", kusto.branch);
+    try std.testing.expect(!kusto.source_on_main);
     try std.testing.expectEqual(@as(usize, 9), kusto.current_mappings.len);
     try std.testing.expectEqual(@as(usize, 4), kusto.historical_mappings.len);
     try std.testing.expectEqualStrings(
