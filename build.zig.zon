@@ -1,13 +1,9 @@
 .{
     .name = .azure_sdk_core,
-    .version = "0.1.1",
+    .version = "0.1.2",
     .fingerprint = 0x0fdf522a12345678,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
-        .azure_sdk_core_tracing = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#b3ffebcddc9cfe2b0b09c16c06d90decb17143ac",
-            .hash = "azure_sdk_core_tracing-0.1.0-eFY0EgYxAAAZI0RyJjaO1xyymzdfvyxBaVn-jc_vUrx7",
-        },
         .serde = .{
             .url = "git+https://github.com/cataggar/serde.zig#73d872776b0361b6fc92f6cecd7ccf2f05e77cdd",
             .hash = "serde-1.0.1-1DszT1XhDACnteUU3yWahMMjLjkJqB34hwROPIfhZc7l",
@@ -22,6 +18,8 @@
         "credentials",
         "http",
         "identity",
+        "tracing",
+        "perf",
         "base64.zig",
         "case_insensitive_map.zig",
         "cloud.zig",

@@ -4,12 +4,6 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const tracing_dep = b.dependency("azure_sdk_core_tracing", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const tracing_mod = tracing_dep.module("azure_sdk_core_tracing");
-
     const serde_dep = b.dependency("serde", .{
         .target = target,
         .optimize = optimize,
@@ -21,7 +15,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "azure_sdk_core_tracing", .module = tracing_mod },
             .{ .name = "serde", .module = serde_mod },
         },
     });
@@ -32,7 +25,6 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "azure_sdk_core_tracing", .module = tracing_mod },
                 .{ .name = "serde", .module = serde_mod },
             },
         }),
