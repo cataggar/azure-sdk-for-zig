@@ -7,8 +7,8 @@ test {
     _ = @import("example_history_map.zig");
 }
 
-test "registry contains a valid twenty-three-package dependency graph" {
-    try std.testing.expectEqual(@as(usize, 23), registry.all.len);
+test "registry contains a valid twenty-one-package dependency graph" {
+    try std.testing.expectEqual(@as(usize, 21), registry.all.len);
     try registry.validate(std.testing.allocator, &registry.all);
     var main_owned: usize = 0;
     var branch_owned: usize = 0;
@@ -18,8 +18,8 @@ test "registry contains a valid twenty-three-package dependency graph" {
             .branch_owned => branch_owned += 1,
         }
     }
-    try std.testing.expectEqual(@as(usize, 5), main_owned);
-    try std.testing.expectEqual(@as(usize, 18), branch_owned);
+    try std.testing.expectEqual(@as(usize, 0), main_owned);
+    try std.testing.expectEqual(@as(usize, 21), branch_owned);
 }
 
 test "topological order places dependencies before dependents" {
@@ -38,7 +38,7 @@ test "topological order places dependencies before dependents" {
 test "package tags are package scoped" {
     const tag = try registry.tagAlloc(std.testing.allocator, registry.all[0]);
     defer std.testing.allocator.free(tag);
-    try std.testing.expectEqualStrings("azure_sdk_core_tracing/v0.1.0", tag);
+    try std.testing.expectEqualStrings("azure_sdk_amqp/v0.1.0", tag);
 }
 
 test "registry rejects duplicate names" {

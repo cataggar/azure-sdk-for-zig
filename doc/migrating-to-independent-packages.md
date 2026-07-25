@@ -9,10 +9,10 @@ The canonical import rename lands before package extraction.
 | Current module/package | Canonical package, module, or import |
 | --- | --- |
 | `azure_core` | `azure_sdk_core` |
-| `azure_core_amqp` | `azure_sdk_core_amqp` |
-| `azure_core_tracing` | `azure_sdk_core_tracing` |
-| `azure_core_testing` | `azure_sdk_core_testing` |
-| `azure_core_perf` | `azure_sdk_core_perf` |
+| `azure_core_amqp` | `azure_sdk_amqp` |
+| `azure_core_tracing` | `azure_sdk_core` (namespace `core.tracing`) |
+| `azure_core_testing` | `azure_sdk_testing` |
+| `azure_core_perf` | `azure_sdk_core` (namespace `core.perf`) |
 | `azure_rest_container_registry` | `azure_rest_container_registry` |
 | `azure_sdk_container_registry` | `azure_sdk_container_registry` |
 | `arm_avs` | `azure_rest_arm_avs` |

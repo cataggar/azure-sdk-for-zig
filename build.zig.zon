@@ -3,16 +3,10 @@
     .version = "0.1.0",
     .fingerprint = 0x96c2d79909d9671,
     .minimum_zig_version = "0.16.0",
-    .dependencies = .{
-        .azure_sdk_core = .{
-            .path = "sdk/core",
-        },
-    },
+    .dependencies = .{},
     .paths = .{
         "build.zig",
         "build.zig.zon",
-        "sdk",
-        "examples",
         "eng",
         "doc",
         "codegen",

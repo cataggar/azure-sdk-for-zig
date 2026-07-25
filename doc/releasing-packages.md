@@ -2,23 +2,15 @@
 
 Release commands depend on source ownership in `eng/packages.zig`.
 
-## Core-family releases from `main`
+## Core-family releases
 
-The existing staged release workflow applies only to Main-owned packages:
+`azure_sdk_core`, `azure_sdk_amqp`, and `azure_sdk_testing` are branch-owned
+and release through the branch-owned flow below, like every other package.
 
-```bash
-scripts/package-release.sh verify azure_sdk_core
-scripts/package-release.sh prepare azure_sdk_core
-scripts/package-release.sh publish azure_sdk_core --dry-run
-scripts/package-release.sh publish azure_sdk_core
-```
-
-The engine requires a clean, synchronized `main`, validates local package
-paths, rewrites internal Core dependencies to immutable pins, tests the staged
-tree, and atomically advances the package branch and creates the lightweight
-tag. It rejects branch-owned packages.
-
-Run the offline regression suite with:
+The staged release workflow in `scripts/package-release.sh` applies only to
+Main-owned packages. No package is currently Main-owned, so the staged engine
+governs no packages today; it is retained for any future Main-owned package
+and exercised by the offline regression suite:
 
 ```bash
 scripts/package-release.sh self-test

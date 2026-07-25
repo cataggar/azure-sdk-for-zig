@@ -2,20 +2,21 @@
 
 Use Zig 0.16.0 or later.
 
-## Main-owned Core work
+## Workspace tooling on `main`
 
-Core-family changes are developed normally against `main`:
+`main` carries only shared tooling. Validate it with:
 
 ```bash
 zig build
 zig build test --summary all
 zig build package-check --summary all
 zig build package-history-check --summary all
-zig fmt --check sdk/core/ codegen/ eng/ build.zig
+zig fmt --check codegen/ eng/ build.zig
 ```
 
-Root package tests intentionally run only the five Main-owned Core packages.
-The catalog and history checks still cover all 23 registered package
+`main` owns no package source, so root package tests run only the workspace
+tooling and a fixture consumer that pins `azure_sdk_core` by immutable commit
+and hash. The catalog and history checks still cover all 21 registered package
 identities.
 
 ## Branch-owned package work
@@ -38,8 +39,9 @@ scripts/package-branch-release.sh verify azure_sdk_storage_blobs
 ```
 
 Package manifests must pin internal dependencies by immutable URL and hash.
-Workspace-local `.path` dependencies are valid only among Main-owned Core
-packages.
+Workspace-local `.path` dependencies are not used for released packages; the
+root fixture consumer and codegen pin `azure_sdk_core` by immutable URL and
+hash.
 
 ## Reset history tooling
 

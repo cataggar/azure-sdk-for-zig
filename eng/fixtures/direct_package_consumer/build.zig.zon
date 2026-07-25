@@ -5,7 +5,8 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .azure_sdk_core = .{
-            .path = "../../../sdk/core",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#da55987aa3c90393a726fc1fa5e86ccd69d72271",
+            .hash = "azure_sdk_core-0.1.2-eFY0EtO6BQARBvYkxdhibifztfqTgJKEN1fe14sMUIYs",
         },
     },
     .paths = .{

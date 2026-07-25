@@ -2,15 +2,6 @@ const std = @import("std");
 const package_registry = @import("eng/packages.zig");
 
 pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
-
-    const core_dependency = b.dependency("azure_sdk_core", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const core_mod = core_dependency.module("azure_sdk_core");
-
     const test_step = b.step("test", "Run all package and workspace tests");
     const package_test_tail = addPackageTests(b);
     const direct_consumer = addFixtureTest(
@@ -21,12 +12,11 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&direct_consumer.step);
 
     addPackageToolSteps(b, test_step);
-    addExample(b, target, optimize, core_mod);
     addCodegenSteps(b);
     addRepositoryValidationSteps(b);
 }
 
-fn addPackageTests(b: *std.Build) *std.Build.Step {
+fn addPackageTests(b: *std.Build) ?*std.Build.Step {
     const order = package_registry.topologicalOrder(
         b.allocator,
         &package_registry.all,
@@ -51,13 +41,13 @@ fn addPackageTests(b: *std.Build) *std.Build.Step {
         if (previous) |step| package_tests.step.dependOn(step);
         previous = &package_tests.step;
     }
-    return previous orelse @panic("package registry has no tests");
+    return previous;
 }
 
 fn addFixtureTest(
     b: *std.Build,
     path: []const u8,
-    dependency: *std.Build.Step,
+    dependency: ?*std.Build.Step,
 ) *std.Build.Step.Run {
     const fixture_tests = b.addSystemCommand(&.{
         b.graph.zig_exe,
@@ -67,7 +57,7 @@ fn addFixtureTest(
         "all",
     });
     fixture_tests.setCwd(b.path(path));
-    fixture_tests.step.dependOn(dependency);
+    if (dependency) |dep| fixture_tests.step.dependOn(dep);
     return fixture_tests;
 }
 
@@ -174,32 +164,6 @@ fn addPackageToolSteps(b: *std.Build, test_step: *std.Build.Step) void {
         "Synchronize package licenses and local manifest identities",
     );
     package_sync_step.dependOn(&package_sync_run.step);
-}
-
-fn addExample(
-    b: *std.Build,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    core_mod: *std.Build.Module,
-) void {
-    const example = b.addExecutable(.{
-        .name = "azure_example",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("sdk/core/examples/hello.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "azure_sdk_core", .module = core_mod },
-            },
-        }),
-    });
-    b.installArtifact(example);
-
-    const run_example = b.addRunArtifact(example);
-    run_example.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run_example.addArgs(args);
-    const run_step = b.step("run", "Run the example");
-    run_step.dependOn(&run_example.step);
 }
 
 fn addCodegenSteps(b: *std.Build) void {
