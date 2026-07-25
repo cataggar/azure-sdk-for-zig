@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .azure_sdk_core = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#6c91f5ad3d4b0b9b6fb686c747b947465cfdaf46",
-            .hash = "azure_sdk_core-0.1.1-eFY0EmOIBQBv7fNCGWdfTvgMa_VNGt8JM4CBsdoJP9In",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#da55987aa3c90393a726fc1fa5e86ccd69d72271",
+            .hash = "azure_sdk_core-0.1.2-eFY0EtO6BQARBvYkxdhibifztfqTgJKEN1fe14sMUIYs",
         },
         .azure_sdk_storage_common = .{
             .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#93be9fdd48cefa1f30023c5b852f89193671988c",
