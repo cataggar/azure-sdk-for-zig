@@ -10,7 +10,7 @@ pub fn build(b: *std.Build) void {
     });
     const core_mod = core_dep.module("azure_sdk_core");
 
-    _ = b.addModule("azure_sdk_core_testing", .{
+    _ = b.addModule("azure_sdk_testing", .{
         .root_source_file = b.path("root.zig"),
         .target = target,
         .optimize = optimize,

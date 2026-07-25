@@ -1,4 +1,4 @@
-# azure_sdk_core_testing
+# azure_sdk_testing
 
 Testing helpers for Azure SDK packages, including playback-oriented HTTP
 transport support.
