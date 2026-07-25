@@ -116,6 +116,7 @@ pub const all = [_]Package{
             "errors.zig",
             "lro.zig",
             "open_enum.zig",
+            "fixed_enum.zig",
             "pager.zig",
             "response.zig",
             "safe_debug.zig",
