@@ -502,6 +502,14 @@ function serializationKind(options, contentTypes) {
   ) {
     return "json";
   }
+  if (
+    options?.xml ||
+    (contentTypes ?? []).some((c) =>
+      c.toLowerCase().includes("xml"),
+    )
+  ) {
+    return "xml";
+  }
   return "raw";
 }
 

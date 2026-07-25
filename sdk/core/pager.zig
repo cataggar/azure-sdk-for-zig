@@ -230,6 +230,11 @@ pub fn XmlPager(comptime T: type) type {
         /// Fetch the next page, or null when the listing is exhausted. The
         /// returned value is valid until the next `next()` or `deinit()`.
         pub fn next(self: *Self) !?T {
+            // Deserializing large service models (e.g. blob listings, whose
+            // element types carry dozens of fields) drives serde's comptime
+            // option-resolution past the default branch budget. Raise it here,
+            // at the sole call site of `serde.xml.fromSlice(T, ...)`.
+            @setEvalBranchQuota(1_000_000);
             if (self.started and self.marker == null) return null;
 
             const url = try self.buildUrl();
