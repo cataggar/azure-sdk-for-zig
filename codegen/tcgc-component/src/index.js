@@ -502,6 +502,14 @@ function serializationKind(options, contentTypes) {
   ) {
     return "json";
   }
+  if (
+    options?.xml ||
+    (contentTypes ?? []).some((c) =>
+      c.toLowerCase().includes("xml"),
+    )
+  ) {
+    return "xml";
+  }
   return "raw";
 }
 
@@ -666,6 +674,7 @@ export function adaptModel(model) {
       read_only: !!p.readOnly,
       flatten: !!p.flatten,
       multipart: adaptMultipartField(p.serializationOptions?.multipart),
+      xml: adaptXmlField(p.serializationOptions?.xml),
     })),
     parents: model.baseModel ? [model.baseModel.name] : [],
     discriminator: model.discriminatorProperty?.name ?? null,
@@ -675,6 +684,29 @@ export function adaptModel(model) {
     additional_properties: model.additionalProperties
       ? adaptType(model.additionalProperties)
       : null,
+    // XML serialization: a model is "xml" when any property carries XML
+    // serialization options. `xml_name` is the root element name (from
+    // `@xml.name`/`@encodedName`), used when the model is the top-level
+    // element of a request/response body.
+    is_xml: props.some((p) => !!p.serializationOptions?.xml),
+    xml_name: model.serializationOptions?.xml?.name ?? null,
+  };
+}
+
+/**
+ * Adapt a property's XML serialization options into the code model.
+ * `name` is the element (or attribute) name; `items_name` is the child
+ * element name for wrapped arrays (`unwrapped: false`). Returns null
+ * when the property has no XML serialization options.
+ */
+function adaptXmlField(xml) {
+  if (!xml) return null;
+  return {
+    name: xml.name,
+    attribute: !!xml.attribute,
+    unwrapped: !!xml.unwrapped,
+    items_name: xml.itemsName ?? null,
+    ns: xml.ns ? { namespace: xml.ns.namespace, prefix: xml.ns.prefix } : null,
   };
 }
 

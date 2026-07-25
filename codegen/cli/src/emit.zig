@@ -512,6 +512,30 @@ fn renderSubClientAccessor(w: *std.Io.Writer, parent: cm.Client, sc: cm.SubClien
 
 // ─── method bodies ────────────────────────────────────────────────────
 
+/// True when any success response of `m` is XML (content-type
+/// `application/xml`). Used to route XML list operations to `XmlPager`.
+fn responseIsXml(m: cm.Method) bool {
+    for (m.responses) |response| {
+        for (response.content_types) |ct| {
+            if (std.mem.indexOf(u8, ct, "xml") != null) return true;
+        }
+    }
+    return false;
+}
+
+/// The envelope model returned by an XML list operation's success response.
+/// The convenient `m.response` collapses a paging op to the item array, so
+/// the page envelope (e.g. `ListContainersResponse`) is read from the
+/// protocol response variants instead.
+fn xmlEnvelopeTypeRef(m: cm.Method) ?cm.TypeRef {
+    for (m.responses) |response| {
+        if (response.response_type) |t| {
+            if (t.isModel()) return t;
+        }
+    }
+    return null;
+}
+
 fn usesProtocolResult(m: cm.Method) bool {
     if (m.long_running != null or m.responses.len == 0) return false;
     for (m.responses) |response| {
@@ -629,7 +653,9 @@ fn responseBodyType(
     if (std.mem.eql(u8, response.body_kind, "none") or response.response_type == null) {
         return try allocator.dupe(u8, "void");
     }
-    if (std.mem.eql(u8, response.body_kind, "raw")) {
+    if (std.mem.eql(u8, response.body_kind, "raw") or
+        std.mem.eql(u8, response.body_kind, "multipart"))
+    {
         return try allocator.dupe(u8, "[]const u8");
     }
     return try types.renderType(allocator, response.response_type.?, .clients);
@@ -645,9 +671,11 @@ fn renderMethod(
     if (m.doc) |d| try renderDocComment(w, d);
 
     // Return type depends on method kind.
-    const ReturnKind = enum { void_op, value_op, list_op, lro_op, protocol_op };
+    const ReturnKind = enum { void_op, value_op, list_op, xml_list_op, lro_op, protocol_op };
     const ret_kind: ReturnKind = if (m.long_running != null)
         .lro_op
+    else if ((std.mem.eql(u8, m.kind, "paging") or std.mem.eql(u8, m.kind, "lropaging")) and responseIsXml(m))
+        .xml_list_op
     else if (usesProtocolResult(m))
         .protocol_op
     else if (std.mem.eql(u8, m.kind, "paging") or std.mem.eql(u8, m.kind, "lropaging"))
@@ -671,11 +699,13 @@ fn renderMethod(
     }
     try w.print(") !{s} {{\n", .{ret_str});
 
-    // URL build (path + query) — shared by every kind.
-    try renderUrlBuild(allocator, w, m);
+    // URL build (path + query) — shared by every kind. XML list pagers own
+    // the `marker` query pair, so it is excluded from the base URL here.
+    try renderUrlBuild(allocator, w, m, ret_kind == .xml_list_op);
 
     switch (ret_kind) {
         .list_op => try renderListBody(allocator, w, m),
+        .xml_list_op => try renderXmlListBody(allocator, w, m),
         .void_op => try renderVoidBody(allocator, w, model, c, m),
         .value_op => try renderValueBody(allocator, w, model, c, m),
         .lro_op => try renderLroBody(allocator, w, model, c, m),
@@ -717,6 +747,18 @@ fn renderReturnType(allocator: std.mem.Allocator, m: cm.Method, kind: anytype) !
             }
             break :blk try allocator.dupe(u8, "core.pager.PipelinePager(std.json.Value)");
         },
+        .xml_list_op => blk: {
+            // Each page is the whole XML envelope model (mirrors
+            // azure-sdk-for-rust's `Pager<ListContainersResponse, XmlFormat>`).
+            // The convenient `m.response` collapses to the item array, so the
+            // envelope comes from the protocol response variant.
+            if (xmlEnvelopeTypeRef(m)) |t| {
+                const ty = try types.renderType(allocator, t, .clients);
+                defer allocator.free(ty);
+                break :blk try std.fmt.allocPrint(allocator, "core.pager.XmlPager({s})", .{ty});
+            }
+            break :blk try allocator.dupe(u8, "core.pager.XmlPager(std.json.Value)");
+        },
         .lro_op => blk: {
             const final = if (m.long_running) |l| l.final_response_type else null;
             if (final) |t| {
@@ -741,7 +783,7 @@ fn renderReturnType(allocator: std.mem.Allocator, m: cm.Method, kind: anytype) !
 /// appended afterwards, each gated by `if (param) |v| { ... }`, with
 /// values percent-encoded via `core.url.percentEncode`. The final
 /// owned `[]u8` is exposed as `const url` and freed via `defer`.
-fn renderUrlBuild(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method) !void {
+fn renderUrlBuild(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method, exclude_marker: bool) !void {
     var fmt_buf: std.ArrayList(u8) = .empty;
     defer fmt_buf.deinit(allocator);
     var args_buf: std.ArrayList(u8) = .empty;
@@ -835,7 +877,10 @@ fn renderUrlBuild(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method)
     );
 
     for (m.query_parameters, 0..) |qp, index| {
-        if (qp.optional and qp.source.name != null) {
+        if (exclude_marker and std.mem.eql(u8, qp.wire_name, "marker")) continue;
+        if (queryParamArrayElement(m, qp)) |elem| {
+            try renderArrayQueryAppend(allocator, w, qp, elem);
+        } else if (qp.optional and qp.source.name != null) {
             const user_id = try ids.quoteIfNeeded(allocator, qp.source.name.?);
             defer allocator.free(user_id);
             try renderOptionalAppendNoRequired(w, user_id, qp.wire_name, innerOptionKind(m, qp));
@@ -999,6 +1044,99 @@ fn renderOptionalAppendNoRequired(
     }
 }
 
+/// If `qp` maps to a user parameter whose (optionally-unwrapped) type is an
+/// array, return the array element TypeRef; otherwise null. Array-valued query
+/// parameters (e.g. blob `include`) are serialized as a comma-joined list.
+fn queryParamArrayElement(m: cm.Method, qp: cm.WireParameter) ?cm.TypeRef {
+    if (!std.mem.eql(u8, qp.source.kind, "user")) return null;
+    const name = qp.source.name orelse return null;
+    for (m.user_parameters) |p| {
+        if (!std.mem.eql(u8, p.name, name)) continue;
+        var t = p.param_type;
+        if (t.isOption()) t = nestedTypeRef(t);
+        if (!t.isArray()) return null;
+        return nestedTypeRef(t);
+    }
+    return null;
+}
+
+/// Render a comma-joined, percent-encoded query parameter for an array-valued
+/// user parameter. Enum elements use `.toWire()`; scalar strings pass through;
+/// numeric/boolean elements are formatted inline.
+fn renderArrayQueryAppend(
+    allocator: std.mem.Allocator,
+    w: *std.Io.Writer,
+    qp: cm.WireParameter,
+    elem: cm.TypeRef,
+) !void {
+    const user_id = try ids.quoteIfNeeded(allocator, qp.source.name orelse "<missing>");
+    defer allocator.free(user_id);
+    const kind = classifyTypeRef(elem);
+    const item_expr: []const u8 = switch (kind) {
+        .enum_or_union => "item.toWire()",
+        .boolean => "if (item) \"true\" else \"false\"",
+        else => "item",
+    };
+
+    // Optional arrays are guarded with `if (list) |items|`; required arrays
+    // iterate the slice directly.
+    if (qp.optional) {
+        try w.print("        if ({s}) |items| {{\n", .{user_id});
+    } else {
+        try w.print("        {{\n            const items = {s};\n", .{user_id});
+    }
+
+    switch (kind) {
+        .numeric => try w.print(
+            \\            var list_buf: std.ArrayList(u8) = .empty;
+            \\            defer list_buf.deinit(alloc);
+            \\            for (items, 0..) |item, i| {{
+            \\                if (i != 0) try list_buf.append(alloc, ',');
+            \\                try list_buf.print(alloc, "{{d}}", .{{item}});
+            \\            }}
+            \\
+        , .{}),
+        else => try w.print(
+            \\            var list_buf: std.ArrayList(u8) = .empty;
+            \\            defer list_buf.deinit(alloc);
+            \\            for (items, 0..) |item, i| {{
+            \\                if (i != 0) try list_buf.append(alloc, ',');
+            \\                try list_buf.appendSlice(alloc, {s});
+            \\            }}
+            \\
+        , .{item_expr}),
+    }
+
+    try w.print(
+        \\            if (items.len != 0) {{
+        \\                const sep: []const u8 = if (has_query) "&" else "?";
+        \\                const enc = try core.url.percentEncode(alloc, list_buf.items);
+        \\                defer alloc.free(enc);
+        \\                try url_buf.print(alloc, "{{s}}{s}={{s}}", .{{ sep, enc }});
+        \\                has_query = true;
+        \\            }}
+        \\        }}
+        \\
+    , .{qp.wire_name});
+}
+
+/// Unwrap a single-nested TypeRef (`Option`/`Array`/`Map`) whose element type
+/// is stored as an object `{ kind, value }` in `.value`.
+fn nestedTypeRef(t: cm.TypeRef) cm.TypeRef {
+    switch (t.value) {
+        .object => |o| {
+            const kind_v = o.get("kind") orelse return t;
+            const kind = switch (kind_v) {
+                .string => |s| s,
+                else => return t,
+            };
+            const value_v = o.get("value") orelse std.json.Value{ .null = {} };
+            return .{ .kind = kind, .value = value_v };
+        },
+        else => return t,
+    }
+}
+
 fn sourceExpression(allocator: std.mem.Allocator, src: cm.WireSource) ![]u8 {
     if (std.mem.eql(u8, src.kind, "constant")) {
         return try std.fmt.allocPrint(allocator, "\"{s}\"", .{src.value orelse ""});
@@ -1042,6 +1180,39 @@ fn renderListBody(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method)
     , .{ item_ty, item_ty });
 }
 
+/// Body for an XML data-plane list operation. Returns a `core.pager.XmlPager`
+/// over the whole envelope model; the pager owns the `marker` query pair and
+/// the `x-ms-version` request header. The initial `marker` user parameter (if
+/// present) seeds the first page.
+fn renderXmlListBody(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method) !void {
+    const env_ty = if (xmlEnvelopeTypeRef(m)) |t|
+        try types.renderType(allocator, t, .clients)
+    else
+        try allocator.dupe(u8, "std.json.Value");
+    defer allocator.free(env_ty);
+
+    var has_marker = false;
+    var has_crid = false;
+    for (m.user_parameters) |p| {
+        if (std.mem.eql(u8, p.name, "marker")) has_marker = true;
+        if (std.mem.eql(u8, p.name, "client_request_id")) has_crid = true;
+    }
+    const marker_arg: []const u8 = if (has_marker) "marker" else "null";
+    const crid_arg: []const u8 = if (has_crid) "client_request_id" else "null";
+
+    try w.print(
+        \\        return core.pager.XmlPager({s}).init(
+        \\            self.pipeline,
+        \\            url,
+        \\            self.api_version,
+        \\            {s},
+        \\            {s},
+        \\            alloc,
+        \\        );
+        \\
+    , .{ env_ty, marker_arg, crid_arg });
+}
+
 fn renderRequestSetup(
     allocator: std.mem.Allocator,
     w: *std.Io.Writer,
@@ -1079,26 +1250,47 @@ fn renderRequestSetup(
                 try w.print("        try req.setHeader(\"{s}\", \"{s}\");\n", .{ hp.wire_name, hp.source.value orelse "" });
             }
         } else {
-            const source_name = hp.source.name orelse continue;
-            const source_id = try ids.quoteIfNeeded(allocator, source_name);
-            defer allocator.free(source_id);
+            if (hp.source.name == null) continue;
+            const value_expr = try sourceExpression(allocator, hp.source);
+            defer allocator.free(value_expr);
             const kind = sourceKind(m, hp.source);
             if (hp.optional) {
-                if (kind == .enum_or_union) {
-                    try w.print(
+                switch (kind) {
+                    .enum_or_union => try w.print(
                         \\        if ({s}) |value| try req.setHeader("{s}", value.toWire());
                         \\
-                    , .{ source_id, hp.wire_name });
-                } else {
-                    try w.print(
+                    , .{ value_expr, hp.wire_name }),
+                    .numeric => try w.print(
+                        \\        if ({s}) |value| {{
+                        \\            const header_val = try std.fmt.allocPrint(alloc, "{{d}}", .{{value}});
+                        \\            defer alloc.free(header_val);
+                        \\            try req.setHeader("{s}", header_val);
+                        \\        }}
+                        \\
+                    , .{ value_expr, hp.wire_name }),
+                    .boolean => try w.print(
+                        \\        if ({s}) |value| try req.setHeader("{s}", if (value) "true" else "false");
+                        \\
+                    , .{ value_expr, hp.wire_name }),
+                    .string_like => try w.print(
                         \\        if ({s}) |value| try req.setHeader("{s}", value);
                         \\
-                    , .{ source_id, hp.wire_name });
+                    , .{ value_expr, hp.wire_name }),
                 }
-            } else if (kind == .enum_or_union) {
-                try w.print("        try req.setHeader(\"{s}\", {s}.toWire());\n", .{ hp.wire_name, source_id });
             } else {
-                try w.print("        try req.setHeader(\"{s}\", {s});\n", .{ hp.wire_name, source_id });
+                switch (kind) {
+                    .enum_or_union => try w.print("        try req.setHeader(\"{s}\", {s}.toWire());\n", .{ hp.wire_name, value_expr }),
+                    .numeric => try w.print(
+                        \\        {{
+                        \\            const header_val = try std.fmt.allocPrint(alloc, "{{d}}", .{{{s}}});
+                        \\            defer alloc.free(header_val);
+                        \\            try req.setHeader("{s}", header_val);
+                        \\        }}
+                        \\
+                    , .{ value_expr, hp.wire_name }),
+                    .boolean => try w.print("        try req.setHeader(\"{s}\", if ({s}) \"true\" else \"false\");\n", .{ hp.wire_name, value_expr }),
+                    .string_like => try w.print("        try req.setHeader(\"{s}\", {s});\n", .{ hp.wire_name, value_expr }),
+                }
             }
         }
     }
@@ -1114,6 +1306,26 @@ fn renderRequestSetup(
             }
         } else if (std.mem.eql(u8, bp.serialization_kind, "multipart")) {
             try renderMultipartBody(allocator, w, model, bp, id);
+        } else if (std.mem.eql(u8, bp.serialization_kind, "xml")) {
+            if (bodyParameterIsOptional(m)) {
+                try w.print(
+                    \\        var body_xml: ?[]u8 = null;
+                    \\        defer if (body_xml) |bytes| alloc.free(bytes);
+                    \\        if ({s}) |body| {{
+                    \\            const bytes = try serde.xml.toSlice(alloc, body);
+                    \\            body_xml = bytes;
+                    \\            req.body = bytes;
+                    \\        }}
+                    \\
+                , .{id});
+            } else {
+                try w.print(
+                    \\        const body_xml = try serde.xml.toSlice(alloc, {s});
+                    \\        defer alloc.free(body_xml);
+                    \\        req.body = body_xml;
+                    \\
+                , .{id});
+            }
         } else {
             if (bodyParameterIsOptional(m)) {
                 try w.print(
@@ -1369,7 +1581,7 @@ fn renderProtocolBody(
         for (response.status_codes) |status| {
             const code = statusInteger(status) orelse continue;
             try w.print("            {d} => {{\n", .{code});
-            try renderProtocolVariantReturn(allocator, w, response, code);
+            try renderProtocolVariantReturn(allocator, w, model, response, code);
             try w.writeAll("            },\n");
         }
     }
@@ -1386,65 +1598,39 @@ fn renderProtocolBody(
 fn renderProtocolVariantReturn(
     allocator: std.mem.Allocator,
     w: *std.Io.Writer,
+    model: cm.CodeModel,
     response: cm.ResponseVariant,
     status: u16,
 ) !void {
     for (response.headers, 0..) |header, index| {
-        if (header.header_type.isScalar() and
-            std.mem.eql(u8, header.header_type.scalarName() orelse "", "int64"))
-        {
-            if (header.optional) {
-                try w.print(
-                    \\                const response_header_{d}: ?i64 = if (resp.getHeader("{s}")) |value|
-                    \\                    try std.fmt.parseInt(i64, value, 10)
-                    \\                else
-                    \\                    null;
-                    \\
-                , .{ index, header.wire_name });
-            } else {
-                try w.print(
-                    \\                const response_header_{d} = try std.fmt.parseInt(
-                    \\                    i64,
-                    \\                    resp.getHeader("{s}") orelse return error.MissingResponseHeader,
-                    \\                    10,
-                    \\                );
-                    \\
-                , .{ index, header.wire_name });
-            }
-        } else if (header.optional) {
-            try w.print(
-                \\                const response_header_{d} = if (resp.getHeader("{s}")) |value|
-                \\                    try alloc.dupe(u8, value)
-                \\                else
-                \\                    null;
-                \\                errdefer if (response_header_{d}) |value| alloc.free(value);
-                \\
-            , .{ index, header.wire_name, index });
-        } else {
-            try w.print(
-                \\                const response_header_{d} = try alloc.dupe(
-                \\                    u8,
-                \\                    resp.getHeader("{s}") orelse return error.MissingResponseHeader,
-                \\                );
-                \\                errdefer alloc.free(response_header_{d});
-                \\
-            , .{ index, header.wire_name, index });
-        }
+        try renderResponseHeaderExtract(allocator, w, model, header, index);
     }
 
-    if (std.mem.eql(u8, response.body_kind, "raw")) {
-        try w.writeAll(
-            \\                const response_body = try bufferRawResponseBody(alloc, resp.body);
-            \\                errdefer alloc.free(response_body);
-            \\
-        );
-    } else if (std.mem.eql(u8, response.body_kind, "json") and response.response_type != null) {
-        const ty = try types.renderType(allocator, response.response_type.?, .clients);
-        defer allocator.free(ty);
-        try w.print(
-            \\                const response_body = try serde.json.fromSlice({s}, alloc, resp.body);
-            \\
-        , .{ty});
+    const emits_body = response.response_type != null and
+        !std.mem.eql(u8, response.body_kind, "none");
+    if (emits_body) {
+        if (std.mem.eql(u8, response.body_kind, "json")) {
+            const ty = try types.renderType(allocator, response.response_type.?, .clients);
+            defer allocator.free(ty);
+            try w.print(
+                \\                const response_body = try serde.json.fromSlice({s}, alloc, resp.body);
+                \\
+            , .{ty});
+        } else if (std.mem.eql(u8, response.body_kind, "xml")) {
+            const ty = try types.renderType(allocator, response.response_type.?, .clients);
+            defer allocator.free(ty);
+            try w.print(
+                \\                const response_body = try serde.xml.fromSlice({s}, alloc, resp.body);
+                \\
+            , .{ty});
+        } else {
+            // raw / multipart / other binary bodies are surfaced as bytes.
+            try w.writeAll(
+                \\                const response_body = try bufferRawResponseBody(alloc, resp.body);
+                \\                errdefer alloc.free(response_body);
+                \\
+            );
+        }
     }
 
     try w.print(
@@ -1471,6 +1657,170 @@ fn renderProtocolVariantReturn(
         \\                } };
         \\
     );
+}
+
+/// Extract a single response header into a `response_header_{index}` local
+/// typed to match the generated struct field. Strings duplicate the raw
+/// value; integers/floats/booleans parse; enums use `fromWire` (open enums
+/// take the allocator to own an `unrecognized` value).
+fn renderResponseHeaderExtract(
+    allocator: std.mem.Allocator,
+    w: *std.Io.Writer,
+    model: cm.CodeModel,
+    header: cm.ResponseHeader,
+    index: usize,
+) !void {
+    var inner = header.header_type;
+    if (inner.isOption()) inner = unwrapOptionTypeRef(inner);
+    const optional = header.optional or header.header_type.isOption();
+    const zt = try types.renderType(allocator, inner, .clients);
+    defer allocator.free(zt);
+    const wire = header.wire_name;
+
+    // Enum header: parse the wire value into the enum via `fromWire`.
+    if (std.mem.startsWith(u8, zt, "enums.")) {
+        const extensible = enumIsExtensible(model, inner);
+        if (optional and extensible) {
+            try w.print(
+                \\                const response_header_{d}: ?{s} = if (resp.getHeader("{s}")) |value|
+                \\                    try {s}.fromWire(alloc, value)
+                \\                else
+                \\                    null;
+                \\
+            , .{ index, zt, wire, zt });
+        } else if (optional) {
+            try w.print(
+                \\                const response_header_{d}: ?{s} = if (resp.getHeader("{s}")) |value|
+                \\                    {s}.fromWire(value)
+                \\                else
+                \\                    null;
+                \\
+            , .{ index, zt, wire, zt });
+        } else if (extensible) {
+            try w.print(
+                \\                const response_header_{d} = try {s}.fromWire(
+                \\                    alloc,
+                \\                    resp.getHeader("{s}") orelse return error.MissingResponseHeader,
+                \\                );
+                \\
+            , .{ index, zt, wire });
+        } else {
+            try w.print(
+                \\                const response_header_{d} = {s}.fromWire(
+                \\                    resp.getHeader("{s}") orelse return error.MissingResponseHeader,
+                \\                ) orelse return error.UnexpectedResponseHeaderValue;
+                \\
+            , .{ index, zt, wire });
+        }
+        return;
+    }
+
+    // Boolean header.
+    if (std.mem.eql(u8, zt, "bool")) {
+        if (optional) {
+            try w.print(
+                \\                const response_header_{d}: ?bool = if (resp.getHeader("{s}")) |value|
+                \\                    std.mem.eql(u8, value, "true")
+                \\                else
+                \\                    null;
+                \\
+            , .{ index, wire });
+        } else {
+            try w.print(
+                \\                const response_header_{d} = std.mem.eql(u8, resp.getHeader("{s}") orelse return error.MissingResponseHeader, "true");
+                \\
+            , .{ index, wire });
+        }
+        return;
+    }
+
+    // Integer header.
+    if (isZigIntType(zt)) {
+        if (optional) {
+            try w.print(
+                \\                const response_header_{d}: ?{s} = if (resp.getHeader("{s}")) |value|
+                \\                    try std.fmt.parseInt({s}, value, 10)
+                \\                else
+                \\                    null;
+                \\
+            , .{ index, zt, wire, zt });
+        } else {
+            try w.print(
+                \\                const response_header_{d} = try std.fmt.parseInt(
+                \\                    {s},
+                \\                    resp.getHeader("{s}") orelse return error.MissingResponseHeader,
+                \\                    10,
+                \\                );
+                \\
+            , .{ index, zt, wire });
+        }
+        return;
+    }
+
+    // Float header.
+    if (std.mem.eql(u8, zt, "f32") or std.mem.eql(u8, zt, "f64")) {
+        if (optional) {
+            try w.print(
+                \\                const response_header_{d}: ?{s} = if (resp.getHeader("{s}")) |value|
+                \\                    try std.fmt.parseFloat({s}, value)
+                \\                else
+                \\                    null;
+                \\
+            , .{ index, zt, wire, zt });
+        } else {
+            try w.print(
+                \\                const response_header_{d} = try std.fmt.parseFloat(
+                \\                    {s},
+                \\                    resp.getHeader("{s}") orelse return error.MissingResponseHeader,
+                \\                );
+                \\
+            , .{ index, zt, wire });
+        }
+        return;
+    }
+
+    // String (and any other) header: duplicate the raw value.
+    if (optional) {
+        try w.print(
+            \\                const response_header_{d} = if (resp.getHeader("{s}")) |value|
+            \\                    try alloc.dupe(u8, value)
+            \\                else
+            \\                    null;
+            \\                errdefer if (response_header_{d}) |value| alloc.free(value);
+            \\
+        , .{ index, wire, index });
+    } else {
+        try w.print(
+            \\                const response_header_{d} = try alloc.dupe(
+            \\                    u8,
+            \\                    resp.getHeader("{s}") orelse return error.MissingResponseHeader,
+            \\                );
+            \\                errdefer alloc.free(response_header_{d});
+            \\
+        , .{ index, wire, index });
+    }
+}
+
+fn isZigIntType(s: []const u8) bool {
+    const ints = [_][]const u8{ "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64" };
+    for (ints) |i| {
+        if (std.mem.eql(u8, s, i)) return true;
+    }
+    return false;
+}
+
+fn enumIsExtensible(model: cm.CodeModel, t: cm.TypeRef) bool {
+    const name = t.namedTypeName() orelse return true;
+    for (model.enums) |e| {
+        if (std.mem.eql(u8, e.name, name)) return e.extensible;
+    }
+    return true;
+}
+
+/// Unwrap an `Option` TypeRef to its inner type.
+fn unwrapOptionTypeRef(t: cm.TypeRef) cm.TypeRef {
+    if (!t.isOption()) return t;
+    return nestedTypeRef(t);
 }
 
 fn renderExpectedStatuses(
@@ -1527,16 +1877,40 @@ pub fn renderModels(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
     for (model.models) |m| {
         if (m.doc) |d| try renderDocComment(w, d);
         try w.print("pub const {s} = struct {{\n", .{m.name});
+        // Azure services routinely omit nominally-required fields from
+        // response bodies (e.g. a blob listing omits `<Deleted>`/`<Snapshot>`
+        // for a normal blob). Match azure-sdk-for-rust, whose generated
+        // response models make every field optional, by treating fields of
+        // output-usage models as optional so deserialization tolerates the
+        // absence. Wrapped arrays already default to an empty collection.
+        // Restrict this to PURELY-output models: a model also used as a
+        // request body (`is_input`) keeps its declared optionality so
+        // request-side code (multipart bodies, header sources, serialization)
+        // can access required fields without unwrapping.
+        const force_optional = m.is_output and !m.is_input;
         for (m.fields) |f| {
             if (f.doc) |d| {
                 try w.writeAll("    ");
                 try renderDocComment(w, d);
             }
-            const ty = try renderFieldType(allocator, f.field_type, f.optional, .models);
-            defer allocator.free(ty);
             const id = try ids.quoteIfNeeded(allocator, f.name);
             defer allocator.free(id);
-            if (f.optional) {
+            if (xmlWrappedArray(f) != null) {
+                // Wrapped XML array (e.g. `<Containers><Container>…`): the
+                // property becomes a nested wrapper struct declared below.
+                const wt = try xmlWrapperTypeName(allocator, f);
+                defer allocator.free(wt);
+                if (f.optional) {
+                    try w.print("    {s}: ?{s} = null,\n", .{ id, wt });
+                } else {
+                    try w.print("    {s}: {s} = .{{}},\n", .{ id, wt });
+                }
+                continue;
+            }
+            const opt = f.optional or force_optional;
+            const ty = try renderFieldType(allocator, f.field_type, opt, .models);
+            defer allocator.free(ty);
+            if (opt) {
                 try w.print("    {s}: {s} = null,\n", .{ id, ty });
             } else {
                 try w.print("    {s}: {s},\n", .{ id, ty });
@@ -1544,6 +1918,22 @@ pub fn renderModels(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
         }
         if (m.additional_properties != null) {
             try w.writeAll("    additional_properties: std.StringArrayHashMapUnmanaged(JsonValue) = .empty,\n");
+        }
+
+        // Nested wrapper structs for wrapped XML arrays.
+        for (m.fields) |f| {
+            const x = xmlWrappedArray(f) orelse continue;
+            const wt = try xmlWrapperTypeName(allocator, f);
+            defer allocator.free(wt);
+            const elem_ty = try renderFieldType(allocator, f.field_type, false, .models);
+            defer allocator.free(elem_ty);
+            try w.print(
+                \\    pub const {s} = struct {{
+                \\        items: {s} = &.{{}},
+                \\        pub const serde = .{{ .rename = .{{ .items = "{s}" }} }};
+                \\    }};
+                \\
+            , .{ wt, elem_ty, x.items_name.? });
         }
 
         try renderModelSerdeOptions(allocator, w, m);
@@ -1705,6 +2095,10 @@ fn renderModelSerdeOptions(
     w: *std.Io.Writer,
     model: cm.Model,
 ) !void {
+    if (model.is_xml) {
+        try renderXmlModelSerdeOptions(allocator, w, model);
+        return;
+    }
     try w.writeAll("\n    pub const serde = .{\n        .rename_all = .camel_case,\n");
     var has_renames = false;
     for (model.fields) |field| {
@@ -1725,6 +2119,111 @@ fn renderModelSerdeOptions(
         try w.writeAll("        .skip = .{ .additional_properties = .always },\n");
     }
     try w.writeAll("    };\n");
+}
+
+/// True when `f` is a wrapped XML array — an array property whose items
+/// are nested under a wrapper element (`<Containers><Container>…`), i.e.
+/// `xml.unwrapped == false`. Such properties are emitted as a nested
+/// wrapper struct. Unwrapped arrays (repeated sibling elements) keep
+/// their slice type and are handled by serde.xml directly.
+fn xmlWrappedArray(f: cm.Field) ?cm.XmlField {
+    const x = f.xml orelse return null;
+    if (x.unwrapped) return null;
+    if (!f.field_type.isArray()) return null;
+    if (x.items_name == null) return null;
+    return x;
+}
+
+/// Nested wrapper-struct type name for a wrapped XML array property, e.g.
+/// `container_items` → `ContainerItemsXml`. Caller owns the returned slice.
+fn xmlWrapperTypeName(allocator: std.mem.Allocator, f: cm.Field) ![]u8 {
+    const pascal = try naming.toPascalCase(allocator, f.name);
+    defer allocator.free(pascal);
+    return std.fmt.allocPrint(allocator, "{s}Xml", .{pascal});
+}
+
+/// XML flavor of `renderModelSerdeOptions`. Emits `xml_root` (the element
+/// name for the model when it is a body root), `xml_attribute` for
+/// attribute properties, and an exact per-field `.rename` derived from the
+/// TCGC XML name (blob XML uses PascalCase with hyphens/acronyms that a
+/// `rename_all` convention cannot reproduce, e.g. `Last-Modified`, `Etag`).
+fn renderXmlModelSerdeOptions(
+    allocator: std.mem.Allocator,
+    w: *std.Io.Writer,
+    model: cm.Model,
+) !void {
+    try w.writeAll("\n    pub const serde = .{\n");
+    if (model.xml_name) |root| {
+        try w.print("        .xml_root = \"{s}\",\n", .{root});
+    }
+
+    // Attribute properties → `.xml_attribute = .{ .a, .b }`.
+    var has_attr = false;
+    for (model.fields) |f| {
+        const x = f.xml orelse continue;
+        if (!x.attribute) continue;
+        const id = try ids.quoteIfNeeded(allocator, f.name);
+        defer allocator.free(id);
+        if (!has_attr) {
+            try w.writeAll("        .xml_attribute = .{ ");
+            has_attr = true;
+        } else {
+            try w.writeAll(", ");
+        }
+        try w.print(".{s}", .{id});
+    }
+    if (has_attr) try w.writeAll(" },\n");
+
+    // Text-content property → `.xml_text = .field`. An `unwrapped` scalar
+    // (non-array, non-attribute) XML property carries the element's text
+    // content (e.g. `<Name Encoded=..>blob</Name>`), not a child element.
+    for (model.fields) |f| {
+        if (!xmlIsTextContent(f)) continue;
+        const id = try ids.quoteIfNeeded(allocator, f.name);
+        defer allocator.free(id);
+        try w.print("        .xml_text = .{s},\n", .{id});
+        break;
+    }
+
+    // Exact per-field element/attribute names. Wrapped-array properties
+    // carry the wrapper element name (`xml.name`); the item name lives on
+    // the nested wrapper struct's own `serde.rename`. Text-content fields
+    // are matched by field name via `xml_text`, so they are not renamed.
+    try w.writeAll("        .rename = .{\n");
+    for (model.fields) |f| {
+        if (xmlIsTextContent(f)) continue;
+        const id = try ids.quoteIfNeeded(allocator, f.name);
+        defer allocator.free(id);
+        const wire = if (f.xml) |x| x.name else f.serialized_name;
+        try w.print("            .{s} = \"{s}\",\n", .{ id, wire });
+    }
+    try w.writeAll("        },\n");
+    try w.writeAll("    };\n");
+}
+
+/// Returns true when the field is an `unwrapped` scalar XML property, i.e.
+/// it maps to the enclosing element's text content rather than a child
+/// element. Unwrapped *arrays* (sibling lists) are excluded.
+fn xmlIsTextContent(f: cm.Field) bool {
+    const x = f.xml orelse return false;
+    if (!x.unwrapped or x.attribute) return false;
+    return !xmlEffectiveIsArrayOrMap(f.field_type);
+}
+
+fn xmlEffectiveIsArrayOrMap(t: cm.TypeRef) bool {
+    if (t.isArray() or t.isMap()) return true;
+    if (t.isOption()) {
+        switch (t.value) {
+            .object => |o| {
+                if (o.get("kind")) |k| switch (k) {
+                    .string => |s| return std.mem.eql(u8, s, "Array") or std.mem.eql(u8, s, "Map"),
+                    else => {},
+                };
+            },
+            else => {},
+        }
+    }
+    return false;
 }
 
 fn renderOpenModelMethods(
@@ -1809,12 +2308,15 @@ fn renderEnums(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
     errdefer aw.deinit();
     const w = &aw.writer;
 
-    var any_extensible = false;
+    var any_needs_core = false;
     for (model.enums) |e| {
         if (e.extensible) {
-            any_extensible = true;
+            any_needs_core = true;
             break;
         }
+        // Fixed enums with values now emit serde hooks that call
+        // `core.fixed_enum`, so they need the core import too.
+        if (e.values.len > 0) any_needs_core = true;
     }
 
     try w.writeAll(
@@ -1828,7 +2330,7 @@ fn renderEnums(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
         \\const std = @import("std");
         \\
     );
-    if (any_extensible) {
+    if (any_needs_core) {
         try w.writeAll(
             \\const core = @import("azure_sdk_core");
             \\
@@ -1875,6 +2377,10 @@ fn renderEnums(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
                 \\    pub fn toWire(self: @This()) []const u8 {
                 \\        return core.open_enum.toWire(self, wire_names);
                 \\    }
+                \\
+                \\    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+                \\        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+                \\    }
                 \\};
                 \\
                 \\
@@ -1887,6 +2393,49 @@ fn renderEnums(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
                 const tag = try ids.quoteIfNeeded(allocator, snake);
                 defer allocator.free(tag);
                 try w.print("    {s},\n", .{tag});
+            }
+            if (e.values.len > 0) {
+                // toWire: map each variant to its fixed wire string.
+                try w.writeAll("\n    pub fn toWire(self: @This()) []const u8 {\n        return switch (self) {\n");
+                for (e.values) |v| {
+                    const snake = try naming.toSnakeCase(allocator, v.name);
+                    defer allocator.free(snake);
+                    const tag = try ids.quoteIfNeeded(allocator, snake);
+                    defer allocator.free(tag);
+                    const wire = wireNameForEnumValue(v);
+                    try w.print("            .{s} => \"{s}\",\n", .{ tag, wire });
+                }
+                try w.writeAll("        };\n    }\n\n");
+                // fromWire: parse a wire string into a variant, or null if unknown.
+                try w.writeAll("    pub fn fromWire(s: []const u8) ?@This() {\n");
+                for (e.values) |v| {
+                    const snake = try naming.toSnakeCase(allocator, v.name);
+                    defer allocator.free(snake);
+                    const tag = try ids.quoteIfNeeded(allocator, snake);
+                    defer allocator.free(tag);
+                    const wire = wireNameForEnumValue(v);
+                    try w.print("        if (std.mem.eql(u8, s, \"{s}\")) return .{s};\n", .{ wire, tag });
+                }
+                try w.writeAll("        return null;\n    }\n");
+                // serde hooks: route (de)serialization through the wire mapping
+                // (toWire/fromWire) instead of serde's default enum handling,
+                // which matches by the Zig variant identifier (snake_case) and
+                // would never match the PascalCase wire form.
+                try w.writeAll(
+                    \\
+                    \\    pub fn zerdeDeserialize(
+                    \\        comptime T: type,
+                    \\        allocator: std.mem.Allocator,
+                    \\        deserializer: anytype,
+                    \\    ) @TypeOf(deserializer.*).Error!T {
+                    \\        return core.fixed_enum.deserialize(T, allocator, deserializer);
+                    \\    }
+                    \\
+                    \\    pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
+                    \\        return core.fixed_enum.serialize(self, serializer);
+                    \\    }
+                    \\
+                );
             }
             try w.writeAll("};\n\n");
         }
@@ -1980,8 +2529,8 @@ fn renderBuildZigZon(
 
     const serde_entry =
         \\        .serde = .{
-        \\            .url = "git+https://github.com/cataggar/serde.zig#7012f58c7ddf490125852e1d22006b552a1693c7",
-        \\            .hash = "serde-1.0.1-1DszT-e9DABp6u1PoDvGFzeGaST2hRp2KGtGn_CkIl0J",
+        \\            .url = "git+https://github.com/cataggar/serde.zig#73d872776b0361b6fc92f6cecd7ccf2f05e77cdd",
+        \\            .hash = "serde-1.0.1-1DszT1XhDACnteUU3yWahMMjLjkJqB34hwROPIfhZc7l",
         \\        },
         \\
     ;

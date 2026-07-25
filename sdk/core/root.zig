@@ -33,6 +33,7 @@ pub const tracing = @import("azure_sdk_core_tracing");
 pub const dotenv = @import("dotenv.zig");
 pub const arm = @import("arm/resource.zig");
 pub const open_enum = @import("open_enum.zig");
+pub const fixed_enum = @import("fixed_enum.zig");
 pub const env_token = @import("credentials/env_token.zig");
 
 /// WASI HTTP transport for running the SDK inside a `wasi:http`-capable

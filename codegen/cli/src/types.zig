@@ -56,6 +56,11 @@ pub fn renderType(
         if (t.namedTypeName()) |n| return allocator.dupe(u8, n);
         return allocator.dupe(u8, "std.json.Value");
     }
+    if (std.mem.eql(u8, t.kind, "Constant")) {
+        // TypeSpec literal (e.g. a fixed `Content-Type` header). The adapter
+        // stringifies the value, so the Zig representation is a string.
+        return try renderScalar(allocator, "string", scope);
+    }
     if (t.isScalar()) {
         return try renderScalar(allocator, t.scalarName() orelse "unknown", scope);
     }
