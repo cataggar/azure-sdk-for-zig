@@ -1,4 +1,4 @@
-# azure_sdk_core_amqp
+# azure_sdk_amqp
 
 AMQP 1.0 integration for Azure SDK clients, backed by the pure Zig
 [`azure-uamqp-zig`](https://github.com/cataggar/azure-uamqp-zig) package.

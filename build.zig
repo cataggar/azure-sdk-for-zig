@@ -10,7 +10,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
 
-    _ = b.addModule("azure_sdk_core_amqp", .{
+    _ = b.addModule("azure_sdk_amqp", .{
         .root_source_file = b.path("root.zig"),
         .target = target,
         .optimize = optimize,

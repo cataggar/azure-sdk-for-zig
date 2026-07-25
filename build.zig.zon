@@ -1,7 +1,7 @@
 .{
-    .name = .azure_sdk_core_amqp,
+    .name = .azure_sdk_amqp,
     .version = "0.1.0",
-    .fingerprint = 0x32edc0d712345678,
+    .fingerprint = 0xe0a2f9e77f72407d,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .uamqp = .{
