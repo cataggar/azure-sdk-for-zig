@@ -7,26 +7,27 @@ zig build
 zig build test --summary all
 zig build package-check --summary all
 zig build package-history-check --summary all
-zig fmt sdk/core/ codegen/ eng/ build.zig
-zig fmt --check sdk/core/ codegen/ eng/ build.zig
+zig fmt codegen/ eng/ build.zig
+zig fmt --check codegen/ eng/ build.zig
 ```
 
 ## Source ownership
 
-- `main` owns only `sdk/core`, `sdk/core/tracing`, `sdk/core/perf`,
-  `sdk/core/amqp`, and `sdk/core/testing`.
-- All other registered packages are branch-owned and have no
-  `workspace_path` in `eng/packages.zig`.
+- `main` owns no package source. Every registered package is
+  branch-owned and has no `workspace_path` in `eng/packages.zig`.
+- `main` carries only shared tooling: `eng/`, `codegen/`, `doc/`,
+  `scripts/`, and the workspace `build.zig`.
 - Branch-owned changes target their package branch, not `main`.
 - Do not restore branch-owned package source to `main`.
 
 ## Repository structure
 
-- `sdk/core/` — Main-owned framework, credentials, and Core examples
 - `eng/` — package registry, validation, history, and release tooling
 - `codegen/` — TypeSpec and fixture-based package generation
 
-Branch-owned source is available from the package branches documented in
+Branch-owned source (including `azure_sdk_core` on `sdk/core`,
+`azure_sdk_amqp` on `sdk/amqp`, and `azure_sdk_testing` on
+`sdk/testing`) is available from the package branches documented in
 `doc/package-catalog.md`.
 
 ## Naming conventions

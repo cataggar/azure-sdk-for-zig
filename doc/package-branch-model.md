@@ -1,30 +1,20 @@
 # Package Branch Model
 
 The repository separates package catalog ownership from package source
-ownership. `eng/packages.zig` remains the catalog for all supported packages,
-but source can live on `main` or on a package branch.
+ownership. `eng/packages.zig` remains the catalog for all supported packages;
+every package's source lives on its package branch, while `main` carries only
+shared tooling (`eng/`, `codegen/`, `doc/`, `scripts/`, and the workspace
+`build.zig`).
 
 ## Ownership classes
 
-### Main-owned packages
-
-The five Core-family packages remain in the `main` worktree:
-
-- `sdk/core`
-- `sdk/core_tracing`
-- `sdk/core_perf`
-- `sdk/core_amqp`
-- `sdk/core_testing`
-
-Their registry entries use `.ownership = .main_owned` and a non-null
-`workspace_path`. Root builds, local manifest checks, and the staged release
-engine operate only on these packages.
-
 ### Branch-owned packages
 
-All non-Core SDK and REST packages use `.ownership = .branch_owned`. Their
+Every registered package uses `.ownership = .branch_owned`. Their
 registry entries retain package identity, branch, dependencies, release
-commands, and `historical_source_path`, but have no `workspace_path`.
+commands, and `historical_source_path`, but have no `workspace_path`. `main`
+owns no package source, so root builds run only workspace tooling and the
+fixture consumer that pins `azure_sdk_core` by immutable commit and hash.
 
 The package branch is the development branch and contains the package at its
 repository root. Changes are made on feature branches and merged through pull
@@ -41,7 +31,8 @@ generated/acr-1234    -> rest/container_registry
 One branch-owned package can expose multiple public namespaces. The
 `azure_sdk_kusto` package and module on `sdk/kusto` expose `common`, `data`,
 and `ingest`; those namespaces are not separate packages or compatibility
-aliases.
+aliases. Likewise, `azure_sdk_core` on `sdk/core` exposes `tracing` and `perf`
+as namespaces (`core.tracing`, `core.perf`) rather than separate packages.
 
 ## Required package-branch checks
 
@@ -66,8 +57,8 @@ declared, and compiles live tests without credentials when declared.
 
 ## Dependency rules
 
-Local paths are allowed only between Main-owned packages in the `main`
-worktree. Package branches pin every internal dependency with:
+Released packages never use local `.path` dependencies. Package branches pin
+every internal dependency with:
 
 - the dependency package's release commit in `.url`;
 - the matching Zig package `.hash`; and

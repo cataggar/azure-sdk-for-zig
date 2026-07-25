@@ -6,10 +6,10 @@ Idiomatic Azure client libraries for Zig 0.16.0 and later.
 
 This repository uses mixed source ownership:
 
-- `main` owns the five Core-family packages under `sdk/core`.
-- Every other SDK and REST package is developed on its package branch.
+- Every SDK and REST package is developed and owned on its package branch;
+  `main` carries only shared tooling (`eng/`, `codegen/`, `doc/`, `scripts/`).
 - Package consumers use immutable package tags such as
-  `azure_sdk_core/v0.1.0`.
+  `azure_sdk_core/v0.1.2`.
 
 See the [package catalog](doc/package-catalog.md) for ownership, branches,
 dependencies, and validation commands.

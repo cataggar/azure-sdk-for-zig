@@ -1,15 +1,13 @@
 # Package Catalog
 
-`eng/packages.zig` is authoritative. Main paths are listed only for
-Main-owned packages; branch-owned source lives at the root of the named branch.
+`eng/packages.zig` is authoritative. Every package is branch-owned;
+its source lives at the root of the named branch.
 
 | Package | Ownership | Main path | Package branch | Internal dependencies |
 | --- | --- | --- | --- | --- |
-| `azure_sdk_core_tracing` | Main | [`sdk/core/tracing`](../sdk/core/tracing) | `sdk/core_tracing` | — |
-| `azure_sdk_core_perf` | Main | [`sdk/core/perf`](../sdk/core/perf) | `sdk/core_perf` | `azure_sdk_core_tracing` |
-| `azure_sdk_core_amqp` | Main | [`sdk/core/amqp`](../sdk/core/amqp) | `sdk/core_amqp` | `azure_sdk_core_tracing` |
-| `azure_sdk_core` | Main | [`sdk/core`](../sdk/core) | `sdk/core` | `azure_sdk_core_tracing` |
-| `azure_sdk_core_testing` | Main | [`sdk/core/testing`](../sdk/core/testing) | `sdk/core_testing` | `azure_sdk_core`, `azure_sdk_core_tracing` |
+| `azure_sdk_core` | Branch | — | [`sdk/core`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/core) | — |
+| `azure_sdk_amqp` | Branch | — | [`sdk/amqp`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/amqp) | — |
+| `azure_sdk_testing` | Branch | — | [`sdk/testing`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/testing) | `azure_sdk_core` |
 | `azure_rest_arm_avs` | Branch | — | [`rest/arm_avs`](https://github.com/cataggar/azure-sdk-for-zig/tree/rest/arm_avs) | `azure_sdk_core` |
 | `azure_rest_keyvault_secrets` | Branch | — | [`rest/keyvault_secrets`](https://github.com/cataggar/azure-sdk-for-zig/tree/rest/keyvault_secrets) | `azure_sdk_core` |
 | `azure_rest_container_registry` | Branch | — | [`rest/container_registry`](https://github.com/cataggar/azure-sdk-for-zig/tree/rest/container_registry) | `azure_sdk_core` |

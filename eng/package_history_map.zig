@@ -25,6 +25,21 @@ const current_only = struct {
 
 pub const all = [_]PackageHistory{
     .{
+        .package = "azure_sdk_core",
+        .branch = "sdk/core",
+        .mappings = current_only.mappings("sdk/core"),
+    },
+    .{
+        .package = "azure_sdk_amqp",
+        .branch = "sdk/amqp",
+        .mappings = current_only.mappings("sdk/core/amqp"),
+    },
+    .{
+        .package = "azure_sdk_testing",
+        .branch = "sdk/testing",
+        .mappings = current_only.mappings("sdk/core/testing"),
+    },
+    .{
         .package = "azure_rest_arm_avs",
         .branch = "rest/arm_avs",
         .mappings = current_only.mappings("rest/arm_avs"),
@@ -251,10 +266,10 @@ fn validatePath(path: []const u8, allow_empty: bool) !void {
 
 test "history map covers every branch-owned package" {
     try validate(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 18), all.len);
+    try std.testing.expectEqual(@as(usize, 21), all.len);
     try std.testing.expectEqual(@as(usize, 5), rejected_paths.len);
     try std.testing.expect(find("azure_sdk_storage_blobs") != null);
-    try std.testing.expect(find("azure_sdk_core") == null);
+    try std.testing.expect(find("azure_sdk_core") != null);
     const kusto = find("azure_sdk_kusto").?;
     try std.testing.expectEqual(@as(usize, 2), kusto.mappings.len);
     try std.testing.expectEqualStrings(
