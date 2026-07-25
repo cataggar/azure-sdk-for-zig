@@ -2,6 +2,7 @@ const std = @import("std");
 const serde = @import("serde");
 const pipeline_mod = @import("http/pipeline.zig");
 const transport = @import("http/transport.zig");
+const url_mod = @import("url.zig");
 
 /// Log a non-2xx HTTP response body so the developer sees the ARM/data-plane
 /// error message before the generic `PageFetchFailed` propagates upward.
@@ -140,6 +141,146 @@ pub fn PipelinePager(comptime T: type) type {
         fn deinitImpl(pager_ptr: *Pager(T)) void {
             const self: *Self = @alignCast(@fieldParentPtr("pager", pager_ptr));
             self.deinit();
+        }
+    };
+}
+
+// ─────────────────────────── XML marker pager ──────────────────────────────
+
+/// Pager for Azure XML data-plane list endpoints (Blob, Queue, …).
+///
+/// Unlike ARM's `{ value, nextLink }` JSON envelope, these APIs return an
+/// XML body whose `<NextMarker>` element carries the continuation token, and
+/// the next page is fetched by setting `?marker=<token>` on the *same* URL
+/// (not by following an absolute `nextLink`). Every request also needs the
+/// `x-ms-version` header. `T` is the whole per-page envelope model (e.g.
+/// `ListContainersResponse`), mirroring azure-sdk-for-rust's
+/// `Pager<ListContainersResponse, XmlFormat>`.
+///
+/// `T` must expose an optional `next_marker: ?[]const u8` field; when it is
+/// absent or empty the pager stops.
+///
+/// Each `next()` returns the deserialized envelope for one page, allocated
+/// from an internal arena that is reset on the following `next()` call — so a
+/// page is only valid until the next call or `deinit()`. Copy anything you
+/// need to retain.
+///
+/// Usage:
+/// ```
+/// var pager = try XmlPager(ListContainersResponse).init(
+///     pipeline, url, api_version, initial_marker, client_request_id, allocator);
+/// defer pager.deinit();
+/// while (try pager.next()) |page| {
+///     for (page.container_items.items) |container| { ... }
+/// }
+/// ```
+pub fn XmlPager(comptime T: type) type {
+    if (!@hasField(T, "next_marker"))
+        @compileError("XmlPager(" ++ @typeName(T) ++ ") requires a `next_marker` field");
+    return struct {
+        pipeline: pipeline_mod.HttpPipeline,
+        allocator: std.mem.Allocator,
+        arena: std.heap.ArenaAllocator,
+        /// Request URL without any `marker` query pair; the pager appends it.
+        base_url: []u8,
+        api_version: []const u8,
+        /// Optional `x-ms-client-request-id` correlation header, owned by
+        /// `allocator`, set on every page request when present.
+        client_request_id: ?[]u8,
+        /// Continuation (or initial) marker, owned by `allocator`. Null means
+        /// "no marker on the next request".
+        marker: ?[]u8,
+        /// False until the first page has been fetched, so that a null marker
+        /// on the first call means "start" rather than "done".
+        started: bool,
+
+        const Self = @This();
+
+        pub fn init(
+            pipeline: pipeline_mod.HttpPipeline,
+            initial_url: []const u8,
+            api_version: []const u8,
+            initial_marker: ?[]const u8,
+            client_request_id: ?[]const u8,
+            allocator: std.mem.Allocator,
+        ) !Self {
+            const base = try allocator.dupe(u8, initial_url);
+            errdefer allocator.free(base);
+            const marker: ?[]u8 = if (initial_marker) |m|
+                try allocator.dupe(u8, m)
+            else
+                null;
+            errdefer if (marker) |mk| allocator.free(mk);
+            const crid: ?[]u8 = if (client_request_id) |c|
+                try allocator.dupe(u8, c)
+            else
+                null;
+            return .{
+                .pipeline = pipeline,
+                .allocator = allocator,
+                .arena = std.heap.ArenaAllocator.init(allocator),
+                .base_url = base,
+                .api_version = api_version,
+                .client_request_id = crid,
+                .marker = marker,
+                .started = false,
+            };
+        }
+
+        /// Fetch the next page, or null when the listing is exhausted. The
+        /// returned value is valid until the next `next()` or `deinit()`.
+        pub fn next(self: *Self) !?T {
+            if (self.started and self.marker == null) return null;
+
+            const url = try self.buildUrl();
+            defer self.allocator.free(url);
+
+            var req = transport.Request.init(self.allocator, .GET, url);
+            defer req.deinit();
+            try req.setHeader("x-ms-version", self.api_version);
+            try req.setHeader("Accept", "application/xml");
+            if (self.client_request_id) |crid| try req.setHeader("x-ms-client-request-id", crid);
+
+            var resp = try self.pipeline.send(&req);
+            defer resp.deinit();
+            if (!resp.isSuccess()) {
+                logHttpError("XmlPager.next", resp.status_code, resp.body);
+                return error.PageFetchFailed;
+            }
+
+            _ = self.arena.reset(.retain_capacity);
+            const page = serde.xml.fromSlice(T, self.arena.allocator(), resp.body) catch |err| {
+                logHttpError("XmlPager.next parse failed", resp.status_code, resp.body);
+                return err;
+            };
+
+            // Advance the continuation marker. A missing/empty NextMarker
+            // ends the listing.
+            if (self.marker) |old| self.allocator.free(old);
+            self.marker = null;
+            if (page.next_marker) |nm| {
+                if (nm.len > 0) self.marker = try self.allocator.dupe(u8, nm);
+            }
+            self.started = true;
+            return page;
+        }
+
+        /// Free pager-owned state (URL, marker, and the page arena).
+        pub fn deinit(self: *Self) void {
+            self.arena.deinit();
+            self.allocator.free(self.base_url);
+            if (self.marker) |m| self.allocator.free(m);
+            self.marker = null;
+            if (self.client_request_id) |c| self.allocator.free(c);
+            self.client_request_id = null;
+        }
+
+        fn buildUrl(self: *Self) ![]u8 {
+            const marker = self.marker orelse return self.allocator.dupe(u8, self.base_url);
+            const enc = try url_mod.percentEncode(self.allocator, marker);
+            defer self.allocator.free(enc);
+            const sep: []const u8 = if (std.mem.indexOfScalar(u8, self.base_url, '?') != null) "&" else "?";
+            return std.fmt.allocPrint(self.allocator, "{s}{s}marker={s}", .{ self.base_url, sep, enc });
         }
     };
 }
@@ -307,6 +448,57 @@ test "PipelinePager error propagation" {
     try std.testing.expectError(error.PageFetchFailed, pip.next());
 }
 
+test "XmlPager paginates via NextMarker" {
+    const allocator = std.testing.allocator;
+    const Item = struct {
+        name: []const u8,
+        pub const serde = .{ .rename = .{ .name = "Name" } };
+    };
+    const Envelope = struct {
+        containers: ContainersXml = .{},
+        next_marker: ?[]const u8 = null,
+        pub const ContainersXml = struct {
+            items: []const Item = &.{},
+            pub const serde = .{ .rename = .{ .items = "Container" } };
+        };
+        pub const serde = .{
+            .xml_root = "EnumerationResults",
+            .rename = .{ .containers = "Containers", .next_marker = "NextMarker" },
+        };
+    };
+    const responses = [_]transport.SequenceMockTransport.CannedResponse{
+        .{ .status = 200, .body =
+        \\<EnumerationResults><Containers><Container><Name>a</Name></Container></Containers><NextMarker>m2</NextMarker></EnumerationResults>
+        },
+        .{ .status = 200, .body =
+        \\<EnumerationResults><Containers><Container><Name>b</Name></Container><Container><Name>c</Name></Container></Containers><NextMarker></NextMarker></EnumerationResults>
+        },
+    };
+    var seq = transport.SequenceMockTransport.init(allocator, &responses);
+
+    var pager = try XmlPager(Envelope).init(
+        .{ .policies = &.{}, .transport_impl = seq.asTransport() },
+        "https://example.com/?comp=list",
+        "2026-06-06",
+        null,
+        null,
+        allocator,
+    );
+    defer pager.deinit();
+
+    const p1 = (try pager.next()) orelse return error.ExpectedPage;
+    try std.testing.expectEqual(@as(usize, 1), p1.containers.items.len);
+    try std.testing.expectEqualStrings("a", p1.containers.items[0].name);
+
+    const p2 = (try pager.next()) orelse return error.ExpectedPage;
+    try std.testing.expectEqual(@as(usize, 2), p2.containers.items.len);
+    try std.testing.expectEqualStrings("b", p2.containers.items[0].name);
+    try std.testing.expectEqualStrings("c", p2.containers.items[1].name);
+
+    // Empty NextMarker ends the listing.
+    try std.testing.expect(try pager.next() == null);
+}
+
 test "Pager interface via asPager" {
     const allocator = std.testing.allocator;
     var mock = transport.MockTransport.init(allocator, 200,
@@ -340,7 +532,6 @@ test "Pager interface via asPager" {
 
 test "listPageParser handles standard envelope" {
     const allocator = std.testing.allocator;
-
     const Item = struct {
         name: []const u8,
 

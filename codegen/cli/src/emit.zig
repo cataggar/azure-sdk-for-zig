@@ -512,6 +512,30 @@ fn renderSubClientAccessor(w: *std.Io.Writer, parent: cm.Client, sc: cm.SubClien
 
 // ─── method bodies ────────────────────────────────────────────────────
 
+/// True when any success response of `m` is XML (content-type
+/// `application/xml`). Used to route XML list operations to `XmlPager`.
+fn responseIsXml(m: cm.Method) bool {
+    for (m.responses) |response| {
+        for (response.content_types) |ct| {
+            if (std.mem.indexOf(u8, ct, "xml") != null) return true;
+        }
+    }
+    return false;
+}
+
+/// The envelope model returned by an XML list operation's success response.
+/// The convenient `m.response` collapses a paging op to the item array, so
+/// the page envelope (e.g. `ListContainersResponse`) is read from the
+/// protocol response variants instead.
+fn xmlEnvelopeTypeRef(m: cm.Method) ?cm.TypeRef {
+    for (m.responses) |response| {
+        if (response.response_type) |t| {
+            if (t.isModel()) return t;
+        }
+    }
+    return null;
+}
+
 fn usesProtocolResult(m: cm.Method) bool {
     if (m.long_running != null or m.responses.len == 0) return false;
     for (m.responses) |response| {
@@ -629,7 +653,9 @@ fn responseBodyType(
     if (std.mem.eql(u8, response.body_kind, "none") or response.response_type == null) {
         return try allocator.dupe(u8, "void");
     }
-    if (std.mem.eql(u8, response.body_kind, "raw")) {
+    if (std.mem.eql(u8, response.body_kind, "raw") or
+        std.mem.eql(u8, response.body_kind, "multipart"))
+    {
         return try allocator.dupe(u8, "[]const u8");
     }
     return try types.renderType(allocator, response.response_type.?, .clients);
@@ -645,9 +671,11 @@ fn renderMethod(
     if (m.doc) |d| try renderDocComment(w, d);
 
     // Return type depends on method kind.
-    const ReturnKind = enum { void_op, value_op, list_op, lro_op, protocol_op };
+    const ReturnKind = enum { void_op, value_op, list_op, xml_list_op, lro_op, protocol_op };
     const ret_kind: ReturnKind = if (m.long_running != null)
         .lro_op
+    else if ((std.mem.eql(u8, m.kind, "paging") or std.mem.eql(u8, m.kind, "lropaging")) and responseIsXml(m))
+        .xml_list_op
     else if (usesProtocolResult(m))
         .protocol_op
     else if (std.mem.eql(u8, m.kind, "paging") or std.mem.eql(u8, m.kind, "lropaging"))
@@ -671,11 +699,13 @@ fn renderMethod(
     }
     try w.print(") !{s} {{\n", .{ret_str});
 
-    // URL build (path + query) — shared by every kind.
-    try renderUrlBuild(allocator, w, m);
+    // URL build (path + query) — shared by every kind. XML list pagers own
+    // the `marker` query pair, so it is excluded from the base URL here.
+    try renderUrlBuild(allocator, w, m, ret_kind == .xml_list_op);
 
     switch (ret_kind) {
         .list_op => try renderListBody(allocator, w, m),
+        .xml_list_op => try renderXmlListBody(allocator, w, m),
         .void_op => try renderVoidBody(allocator, w, model, c, m),
         .value_op => try renderValueBody(allocator, w, model, c, m),
         .lro_op => try renderLroBody(allocator, w, model, c, m),
@@ -717,6 +747,18 @@ fn renderReturnType(allocator: std.mem.Allocator, m: cm.Method, kind: anytype) !
             }
             break :blk try allocator.dupe(u8, "core.pager.PipelinePager(std.json.Value)");
         },
+        .xml_list_op => blk: {
+            // Each page is the whole XML envelope model (mirrors
+            // azure-sdk-for-rust's `Pager<ListContainersResponse, XmlFormat>`).
+            // The convenient `m.response` collapses to the item array, so the
+            // envelope comes from the protocol response variant.
+            if (xmlEnvelopeTypeRef(m)) |t| {
+                const ty = try types.renderType(allocator, t, .clients);
+                defer allocator.free(ty);
+                break :blk try std.fmt.allocPrint(allocator, "core.pager.XmlPager({s})", .{ty});
+            }
+            break :blk try allocator.dupe(u8, "core.pager.XmlPager(std.json.Value)");
+        },
         .lro_op => blk: {
             const final = if (m.long_running) |l| l.final_response_type else null;
             if (final) |t| {
@@ -741,7 +783,7 @@ fn renderReturnType(allocator: std.mem.Allocator, m: cm.Method, kind: anytype) !
 /// appended afterwards, each gated by `if (param) |v| { ... }`, with
 /// values percent-encoded via `core.url.percentEncode`. The final
 /// owned `[]u8` is exposed as `const url` and freed via `defer`.
-fn renderUrlBuild(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method) !void {
+fn renderUrlBuild(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method, exclude_marker: bool) !void {
     var fmt_buf: std.ArrayList(u8) = .empty;
     defer fmt_buf.deinit(allocator);
     var args_buf: std.ArrayList(u8) = .empty;
@@ -835,6 +877,7 @@ fn renderUrlBuild(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method)
     );
 
     for (m.query_parameters, 0..) |qp, index| {
+        if (exclude_marker and std.mem.eql(u8, qp.wire_name, "marker")) continue;
         if (qp.optional and qp.source.name != null) {
             const user_id = try ids.quoteIfNeeded(allocator, qp.source.name.?);
             defer allocator.free(user_id);
@@ -1042,6 +1085,39 @@ fn renderListBody(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method)
     , .{ item_ty, item_ty });
 }
 
+/// Body for an XML data-plane list operation. Returns a `core.pager.XmlPager`
+/// over the whole envelope model; the pager owns the `marker` query pair and
+/// the `x-ms-version` request header. The initial `marker` user parameter (if
+/// present) seeds the first page.
+fn renderXmlListBody(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method) !void {
+    const env_ty = if (xmlEnvelopeTypeRef(m)) |t|
+        try types.renderType(allocator, t, .clients)
+    else
+        try allocator.dupe(u8, "std.json.Value");
+    defer allocator.free(env_ty);
+
+    var has_marker = false;
+    var has_crid = false;
+    for (m.user_parameters) |p| {
+        if (std.mem.eql(u8, p.name, "marker")) has_marker = true;
+        if (std.mem.eql(u8, p.name, "client_request_id")) has_crid = true;
+    }
+    const marker_arg: []const u8 = if (has_marker) "marker" else "null";
+    const crid_arg: []const u8 = if (has_crid) "client_request_id" else "null";
+
+    try w.print(
+        \\        return core.pager.XmlPager({s}).init(
+        \\            self.pipeline,
+        \\            url,
+        \\            self.api_version,
+        \\            {s},
+        \\            {s},
+        \\            alloc,
+        \\        );
+        \\
+    , .{ env_ty, marker_arg, crid_arg });
+}
+
 fn renderRequestSetup(
     allocator: std.mem.Allocator,
     w: *std.Io.Writer,
@@ -1079,26 +1155,47 @@ fn renderRequestSetup(
                 try w.print("        try req.setHeader(\"{s}\", \"{s}\");\n", .{ hp.wire_name, hp.source.value orelse "" });
             }
         } else {
-            const source_name = hp.source.name orelse continue;
-            const source_id = try ids.quoteIfNeeded(allocator, source_name);
-            defer allocator.free(source_id);
+            if (hp.source.name == null) continue;
+            const value_expr = try sourceExpression(allocator, hp.source);
+            defer allocator.free(value_expr);
             const kind = sourceKind(m, hp.source);
             if (hp.optional) {
-                if (kind == .enum_or_union) {
-                    try w.print(
+                switch (kind) {
+                    .enum_or_union => try w.print(
                         \\        if ({s}) |value| try req.setHeader("{s}", value.toWire());
                         \\
-                    , .{ source_id, hp.wire_name });
-                } else {
-                    try w.print(
+                    , .{ value_expr, hp.wire_name }),
+                    .numeric => try w.print(
+                        \\        if ({s}) |value| {{
+                        \\            const header_val = try std.fmt.allocPrint(alloc, "{{d}}", .{{value}});
+                        \\            defer alloc.free(header_val);
+                        \\            try req.setHeader("{s}", header_val);
+                        \\        }}
+                        \\
+                    , .{ value_expr, hp.wire_name }),
+                    .boolean => try w.print(
+                        \\        if ({s}) |value| try req.setHeader("{s}", if (value) "true" else "false");
+                        \\
+                    , .{ value_expr, hp.wire_name }),
+                    .string_like => try w.print(
                         \\        if ({s}) |value| try req.setHeader("{s}", value);
                         \\
-                    , .{ source_id, hp.wire_name });
+                    , .{ value_expr, hp.wire_name }),
                 }
-            } else if (kind == .enum_or_union) {
-                try w.print("        try req.setHeader(\"{s}\", {s}.toWire());\n", .{ hp.wire_name, source_id });
             } else {
-                try w.print("        try req.setHeader(\"{s}\", {s});\n", .{ hp.wire_name, source_id });
+                switch (kind) {
+                    .enum_or_union => try w.print("        try req.setHeader(\"{s}\", {s}.toWire());\n", .{ hp.wire_name, value_expr }),
+                    .numeric => try w.print(
+                        \\        {{
+                        \\            const header_val = try std.fmt.allocPrint(alloc, "{{d}}", .{{{s}}});
+                        \\            defer alloc.free(header_val);
+                        \\            try req.setHeader("{s}", header_val);
+                        \\        }}
+                        \\
+                    , .{ value_expr, hp.wire_name }),
+                    .boolean => try w.print("        try req.setHeader(\"{s}\", if ({s}) \"true\" else \"false\");\n", .{ hp.wire_name, value_expr }),
+                    .string_like => try w.print("        try req.setHeader(\"{s}\", {s});\n", .{ hp.wire_name, value_expr }),
+                }
             }
         }
     }
@@ -1432,19 +1529,24 @@ fn renderProtocolVariantReturn(
         }
     }
 
-    if (std.mem.eql(u8, response.body_kind, "raw")) {
-        try w.writeAll(
-            \\                const response_body = try bufferRawResponseBody(alloc, resp.body);
-            \\                errdefer alloc.free(response_body);
-            \\
-        );
-    } else if (std.mem.eql(u8, response.body_kind, "json") and response.response_type != null) {
-        const ty = try types.renderType(allocator, response.response_type.?, .clients);
-        defer allocator.free(ty);
-        try w.print(
-            \\                const response_body = try serde.json.fromSlice({s}, alloc, resp.body);
-            \\
-        , .{ty});
+    const emits_body = response.response_type != null and
+        !std.mem.eql(u8, response.body_kind, "none");
+    if (emits_body) {
+        if (std.mem.eql(u8, response.body_kind, "json")) {
+            const ty = try types.renderType(allocator, response.response_type.?, .clients);
+            defer allocator.free(ty);
+            try w.print(
+                \\                const response_body = try serde.json.fromSlice({s}, alloc, resp.body);
+                \\
+            , .{ty});
+        } else {
+            // raw / multipart / other binary bodies are surfaced as bytes.
+            try w.writeAll(
+                \\                const response_body = try bufferRawResponseBody(alloc, resp.body);
+                \\                errdefer alloc.free(response_body);
+                \\
+            );
+        }
     }
 
     try w.print(
@@ -1532,10 +1634,22 @@ pub fn renderModels(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
                 try w.writeAll("    ");
                 try renderDocComment(w, d);
             }
-            const ty = try renderFieldType(allocator, f.field_type, f.optional, .models);
-            defer allocator.free(ty);
             const id = try ids.quoteIfNeeded(allocator, f.name);
             defer allocator.free(id);
+            if (xmlWrappedArray(f) != null) {
+                // Wrapped XML array (e.g. `<Containers><Container>…`): the
+                // property becomes a nested wrapper struct declared below.
+                const wt = try xmlWrapperTypeName(allocator, f);
+                defer allocator.free(wt);
+                if (f.optional) {
+                    try w.print("    {s}: ?{s} = null,\n", .{ id, wt });
+                } else {
+                    try w.print("    {s}: {s} = .{{}},\n", .{ id, wt });
+                }
+                continue;
+            }
+            const ty = try renderFieldType(allocator, f.field_type, f.optional, .models);
+            defer allocator.free(ty);
             if (f.optional) {
                 try w.print("    {s}: {s} = null,\n", .{ id, ty });
             } else {
@@ -1544,6 +1658,22 @@ pub fn renderModels(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
         }
         if (m.additional_properties != null) {
             try w.writeAll("    additional_properties: std.StringArrayHashMapUnmanaged(JsonValue) = .empty,\n");
+        }
+
+        // Nested wrapper structs for wrapped XML arrays.
+        for (m.fields) |f| {
+            const x = xmlWrappedArray(f) orelse continue;
+            const wt = try xmlWrapperTypeName(allocator, f);
+            defer allocator.free(wt);
+            const elem_ty = try renderFieldType(allocator, f.field_type, false, .models);
+            defer allocator.free(elem_ty);
+            try w.print(
+                \\    pub const {s} = struct {{
+                \\        items: {s} = &.{{}},
+                \\        pub const serde = .{{ .rename = .{{ .items = "{s}" }} }};
+                \\    }};
+                \\
+            , .{ wt, elem_ty, x.items_name.? });
         }
 
         try renderModelSerdeOptions(allocator, w, m);
@@ -1705,6 +1835,10 @@ fn renderModelSerdeOptions(
     w: *std.Io.Writer,
     model: cm.Model,
 ) !void {
+    if (model.is_xml) {
+        try renderXmlModelSerdeOptions(allocator, w, model);
+        return;
+    }
     try w.writeAll("\n    pub const serde = .{\n        .rename_all = .camel_case,\n");
     var has_renames = false;
     for (model.fields) |field| {
@@ -1725,6 +1859,111 @@ fn renderModelSerdeOptions(
         try w.writeAll("        .skip = .{ .additional_properties = .always },\n");
     }
     try w.writeAll("    };\n");
+}
+
+/// True when `f` is a wrapped XML array — an array property whose items
+/// are nested under a wrapper element (`<Containers><Container>…`), i.e.
+/// `xml.unwrapped == false`. Such properties are emitted as a nested
+/// wrapper struct. Unwrapped arrays (repeated sibling elements) keep
+/// their slice type and are handled by serde.xml directly.
+fn xmlWrappedArray(f: cm.Field) ?cm.XmlField {
+    const x = f.xml orelse return null;
+    if (x.unwrapped) return null;
+    if (!f.field_type.isArray()) return null;
+    if (x.items_name == null) return null;
+    return x;
+}
+
+/// Nested wrapper-struct type name for a wrapped XML array property, e.g.
+/// `container_items` → `ContainerItemsXml`. Caller owns the returned slice.
+fn xmlWrapperTypeName(allocator: std.mem.Allocator, f: cm.Field) ![]u8 {
+    const pascal = try naming.toPascalCase(allocator, f.name);
+    defer allocator.free(pascal);
+    return std.fmt.allocPrint(allocator, "{s}Xml", .{pascal});
+}
+
+/// XML flavor of `renderModelSerdeOptions`. Emits `xml_root` (the element
+/// name for the model when it is a body root), `xml_attribute` for
+/// attribute properties, and an exact per-field `.rename` derived from the
+/// TCGC XML name (blob XML uses PascalCase with hyphens/acronyms that a
+/// `rename_all` convention cannot reproduce, e.g. `Last-Modified`, `Etag`).
+fn renderXmlModelSerdeOptions(
+    allocator: std.mem.Allocator,
+    w: *std.Io.Writer,
+    model: cm.Model,
+) !void {
+    try w.writeAll("\n    pub const serde = .{\n");
+    if (model.xml_name) |root| {
+        try w.print("        .xml_root = \"{s}\",\n", .{root});
+    }
+
+    // Attribute properties → `.xml_attribute = .{ .a, .b }`.
+    var has_attr = false;
+    for (model.fields) |f| {
+        const x = f.xml orelse continue;
+        if (!x.attribute) continue;
+        const id = try ids.quoteIfNeeded(allocator, f.name);
+        defer allocator.free(id);
+        if (!has_attr) {
+            try w.writeAll("        .xml_attribute = .{ ");
+            has_attr = true;
+        } else {
+            try w.writeAll(", ");
+        }
+        try w.print(".{s}", .{id});
+    }
+    if (has_attr) try w.writeAll(" },\n");
+
+    // Text-content property → `.xml_text = .field`. An `unwrapped` scalar
+    // (non-array, non-attribute) XML property carries the element's text
+    // content (e.g. `<Name Encoded=..>blob</Name>`), not a child element.
+    for (model.fields) |f| {
+        if (!xmlIsTextContent(f)) continue;
+        const id = try ids.quoteIfNeeded(allocator, f.name);
+        defer allocator.free(id);
+        try w.print("        .xml_text = .{s},\n", .{id});
+        break;
+    }
+
+    // Exact per-field element/attribute names. Wrapped-array properties
+    // carry the wrapper element name (`xml.name`); the item name lives on
+    // the nested wrapper struct's own `serde.rename`. Text-content fields
+    // are matched by field name via `xml_text`, so they are not renamed.
+    try w.writeAll("        .rename = .{\n");
+    for (model.fields) |f| {
+        if (xmlIsTextContent(f)) continue;
+        const id = try ids.quoteIfNeeded(allocator, f.name);
+        defer allocator.free(id);
+        const wire = if (f.xml) |x| x.name else f.serialized_name;
+        try w.print("            .{s} = \"{s}\",\n", .{ id, wire });
+    }
+    try w.writeAll("        },\n");
+    try w.writeAll("    };\n");
+}
+
+/// Returns true when the field is an `unwrapped` scalar XML property, i.e.
+/// it maps to the enclosing element's text content rather than a child
+/// element. Unwrapped *arrays* (sibling lists) are excluded.
+fn xmlIsTextContent(f: cm.Field) bool {
+    const x = f.xml orelse return false;
+    if (!x.unwrapped or x.attribute) return false;
+    return !xmlEffectiveIsArrayOrMap(f.field_type);
+}
+
+fn xmlEffectiveIsArrayOrMap(t: cm.TypeRef) bool {
+    if (t.isArray() or t.isMap()) return true;
+    if (t.isOption()) {
+        switch (t.value) {
+            .object => |o| {
+                if (o.get("kind")) |k| switch (k) {
+                    .string => |s| return std.mem.eql(u8, s, "Array") or std.mem.eql(u8, s, "Map"),
+                    else => {},
+                };
+            },
+            else => {},
+        }
+    }
+    return false;
 }
 
 fn renderOpenModelMethods(

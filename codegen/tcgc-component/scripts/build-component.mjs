@@ -44,6 +44,7 @@ const packages = [
   "@typespec/rest",
   "@typespec/versioning",
   "@typespec/openapi",
+  "@typespec/xml",
   "@azure-tools/typespec-azure-core",
   "@azure-tools/typespec-azure-resource-manager",
   "@azure-tools/typespec-client-generator-core",

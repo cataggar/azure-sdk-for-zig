@@ -191,6 +191,12 @@ pub const Model = struct {
     /// Type accepted for undeclared JSON properties. Null means the
     /// model is closed.
     additional_properties: ?TypeRef = null,
+    /// True when any property carries XML serialization options; drives
+    /// whether the emitter renders an XML-flavored `serde` decl.
+    is_xml: bool = false,
+    /// Root XML element name (from `@xml.name`/`@encodedName`), used when
+    /// the model is the top-level element of a request/response body.
+    xml_name: ?[]const u8 = null,
 };
 
 pub const Field = struct {
@@ -202,6 +208,26 @@ pub const Field = struct {
     read_only: bool = false,
     flatten: bool = false,
     multipart: ?MultipartField = null,
+    /// XML serialization options for this property, when present.
+    xml: ?XmlField = null,
+};
+
+pub const XmlField = struct {
+    /// Element (or attribute) name.
+    name: []const u8,
+    /// True when the property is an XML attribute rather than a child element.
+    attribute: bool = false,
+    /// When false (the default for arrays), the property is a wrapper element
+    /// named `name` containing repeated `items_name` child elements.
+    unwrapped: bool = false,
+    /// Child element name for wrapped arrays.
+    items_name: ?[]const u8 = null,
+    ns: ?XmlNs = null,
+};
+
+pub const XmlNs = struct {
+    namespace: []const u8,
+    prefix: []const u8,
 };
 
 pub const MultipartField = struct {

@@ -8,8 +8,8 @@
             .path = "../../sdk/core",
         },
         .serde = .{
-            .url = "git+https://github.com/cataggar/serde.zig#7012f58c7ddf490125852e1d22006b552a1693c7",
-            .hash = "serde-1.0.1-1DszT-e9DABp6u1PoDvGFzeGaST2hRp2KGtGn_CkIl0J",
+            .url = "git+https://github.com/cataggar/serde.zig#f0a50369cb4188961047a3922ad01e03ed928b45",
+            .hash = "serde-1.0.1-1DszT8jXDAB_pa3Zn5LX9v5L46vhXhQkbcF10yOuSkRu",
         },
     },
     .paths = .{
