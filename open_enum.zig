@@ -87,6 +87,23 @@ pub fn toWire(value: anytype, comptime wire_names: anytype) []const u8 {
     unreachable;
 }
 
+/// Parse a wire string into an open-enum union value. Known values map to
+/// their void variant; unlisted values are captured in the `unrecognized`
+/// variant, whose backing string is duplicated with `allocator` so it
+/// outlives the borrowed input. The caller owns the returned value.
+pub fn fromWire(
+    comptime T: type,
+    comptime wire_names: anytype,
+    allocator: std.mem.Allocator,
+    s: []const u8,
+) std.mem.Allocator.Error!T {
+    inline for (comptime std.meta.fields(@TypeOf(wire_names))) |f| {
+        const wire: []const u8 = @field(wire_names, f.name);
+        if (std.mem.eql(u8, s, wire)) return @unionInit(T, f.name, {});
+    }
+    return @unionInit(T, "unrecognized", try allocator.dupe(u8, s));
+}
+
 // ─────────────────────────── Tests ───────────────────────────
 
 const testing = std.testing;
@@ -113,11 +130,32 @@ const Sample = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return @import("open_enum.zig").toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return @import("open_enum.zig").fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 test "open enum: toWire returns mapped wire name" {
     try testing.expectEqualStrings("One", Sample.toWire(.one));
     try testing.expectEqualStrings("Two", Sample.toWire(.two));
+}
+
+test "open enum: fromWire maps known wire name" {
+    try testing.expectEqual(Sample.one, try Sample.fromWire(testing.allocator, "One"));
+    try testing.expectEqual(Sample.two, try Sample.fromWire(testing.allocator, "Two"));
+}
+
+test "open enum: fromWire captures unrecognized wire value" {
+    const out = try Sample.fromWire(testing.allocator, "Floomp");
+    defer switch (out) {
+        .unrecognized => |s| testing.allocator.free(s),
+        else => {},
+    };
+    switch (out) {
+        .unrecognized => |s| try testing.expectEqualStrings("Floomp", s),
+        else => return error.ExpectedUnrecognized,
+    }
 }
 
 test "open enum: toWire returns inner string for unrecognized" {
