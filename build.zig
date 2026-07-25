@@ -70,4 +70,26 @@ pub fn build(b: *std.Build) void {
         "Upload a file through a complete Blob SAS URL",
     );
     complete_sas_upload_step.dependOn(&run_complete_sas_upload.step);
+
+    const list_live = b.addExecutable(.{
+        .name = "storage-blob-list-live",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/list_blobs_live.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "azure_sdk_core", .module = core_mod },
+                .{ .name = "azure_sdk_storage_blobs", .module = blobs_mod },
+            },
+        }),
+    });
+    examples_step.dependOn(&list_live.step);
+    test_step.dependOn(&list_live.step);
+    const run_list_live = b.addRunArtifact(list_live);
+    if (b.args) |args| run_list_live.addArgs(args);
+    const list_live_step = b.step(
+        "list-live",
+        "Live: list containers and blobs via AAD token",
+    );
+    list_live_step.dependOn(&run_list_live.step);
 }
