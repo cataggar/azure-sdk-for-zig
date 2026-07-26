@@ -96,6 +96,23 @@ Typed Zig entities add compile-time schema checking while `DynamicEntity`
 retains the runtime-schema escape hatch. `$batch` is absent from the canonical
 TypeSpec, so transactions remain hand-written unless upstream adds it.
 
+### Entity codecs
+
+`EntityCodec(T)` validates entity shapes when it is instantiated. `T` needs
+string `partition_key` and `row_key` fields; an optional `timestamp` is the
+service `Timestamp`. Supported property types are `bool`, `i32`, `f64`,
+strings, optionals, and the `EdmBinary`, `EdmDateTime`, `EdmGuid`, and
+`EdmInt64` wrappers. Declare `pub const table = .{ .rename = .{ ... } };` to
+rename application properties on the wire. `Codec.toJson` returns an
+allocator-owned byte slice; values returned by `Codec.deserialize` own decoded
+strings and binary data and must be released with `Codec.deinit`.
+
+For runtime schemas, `DynamicEntity.init` and `put` copy keys and values.
+Release it with `DynamicEntity.deinit`; use `dynamicToJson` and
+`dynamicFromJson` for its OData JSON representation. The original
+string-only `TableEntity` remains available as a compatibility export and
+continues to borrow its keys and values.
+
 ## Public API conventions
 
 - Public types and generic type families use `PascalCase`; functions, methods,
