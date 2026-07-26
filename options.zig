@@ -91,6 +91,18 @@ pub const UpsertEntityOptions = struct {
     mode: UpdateMode = .merge,
 };
 
+/// Explicit boundaries are primarily useful for deterministic wire tests.
+/// Normal transaction submissions generate unpredictable MIME boundaries.
+pub const TransactionBoundaries = struct {
+    batch: []const u8,
+    changeset: []const u8,
+};
+
+pub const TransactionOptions = struct {
+    protocol: ProtocolOptions = .{},
+    boundaries: ?TransactionBoundaries = null,
+};
+
 pub const RetryOptions = struct {
     max_retries: u32 = 3,
     initial_delay_ms: u64 = 800,

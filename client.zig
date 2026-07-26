@@ -12,6 +12,7 @@ const request = @import("request.zig");
 const sas_types = @import("sas.zig");
 const responses = @import("responses.zig");
 const service_models = @import("service_models.zig");
+const transaction = @import("transaction.zig");
 
 /// Client for Azure Table Storage REST operations.
 ///
@@ -484,6 +485,44 @@ pub const TableClient = struct {
             upsert_options.mode,
             null,
             upsert_options.protocol,
+        );
+    }
+
+    /// Atomically submits the builder's ordered actions.
+    pub fn submitTransaction(
+        self: *TableClient,
+        allocator: std.mem.Allocator,
+        builder: *const transaction.TransactionBuilder,
+        transaction_options: options.TransactionOptions,
+    ) !transaction.TransactionResponse {
+        const result = try self.submitTransactionResult(
+            allocator,
+            builder,
+            transaction_options,
+        );
+        return switch (result) {
+            .success => |response| response,
+            .failure => |table_error| {
+                var owned_error = table_error;
+                owned_error.deinit();
+                return error.SubmitTransactionFailed;
+            },
+        };
+    }
+
+    /// Preserves outer and indexed inner Tables service failures.
+    pub fn submitTransactionResult(
+        self: *TableClient,
+        allocator: std.mem.Allocator,
+        builder: *const transaction.TransactionBuilder,
+        transaction_options: options.TransactionOptions,
+    ) !transaction.TransactionResult {
+        return transaction.submitResult(
+            &self.protocol,
+            allocator,
+            self.table_name,
+            builder,
+            transaction_options,
         );
     }
 

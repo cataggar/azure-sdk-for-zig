@@ -396,6 +396,36 @@ pub const CallContext = struct {
             .{
                 .options = retry_options,
                 .conditional = conditional,
+                .outcome = .mutation,
+            },
+        );
+    }
+
+    /// Transactions are atomic but not safely replayable after transport
+    /// entry. Retry only failures known to precede transport dispatch.
+    pub fn initTransaction(
+        allocator: std.mem.Allocator,
+        base: core.pipeline.HttpPipeline,
+        raw_endpoint_query: ?[]const u8,
+        endpoint_query_is_sas: bool,
+        operation_timeout_ms: ?u64,
+        server_timeout: ?i32,
+        custom_policies: []const *HttpPolicy,
+        retry_options: options.RetryOptions,
+    ) !CallContext {
+        return initInternal(
+            allocator,
+            base,
+            raw_endpoint_query,
+            endpoint_query_is_sas,
+            operation_timeout_ms,
+            server_timeout,
+            custom_policies,
+            .none,
+            .{
+                .options = retry_options,
+                .conditional = true,
+                .outcome = .transaction,
             },
         );
     }
@@ -475,10 +505,12 @@ pub const CallContext = struct {
 };
 
 const CaptureMode = enum { none, failure_only, all };
+const OutcomeKind = enum { mutation, transaction };
 
 const MutationRetry = struct {
     options: options.RetryOptions,
     conditional: bool,
+    outcome: OutcomeKind,
 };
 
 const ConfigPolicy = struct {
@@ -554,7 +586,7 @@ const ConfigPolicy = struct {
 
         if (!mutation.conditional) {
             return callNext(request, next, transport) catch |err| {
-                if (request.transport_started) return error.MutationOutcomeUnknown;
+                if (request.transport_started) return outcomeUnknown(mutation.outcome);
                 return err;
             };
         }
@@ -579,7 +611,7 @@ const ConfigPolicy = struct {
             request.transport_started = false;
             const result = callNext(request, next, transport);
             if (result) |response| return response else |err| {
-                if (request.transport_started) return error.MutationOutcomeUnknown;
+                if (request.transport_started) return outcomeUnknown(mutation.outcome);
                 if (!isRetryablePreTransportError(err) or
                     attempt >= mutation.options.max_retries)
                 {
@@ -593,6 +625,13 @@ const ConfigPolicy = struct {
         }
     }
 };
+
+fn outcomeUnknown(kind: OutcomeKind) anyerror {
+    return switch (kind) {
+        .mutation => error.MutationOutcomeUnknown,
+        .transaction => error.TransactionOutcomeUnknown,
+    };
+}
 
 fn retryDelay(
     retry_options: options.RetryOptions,
