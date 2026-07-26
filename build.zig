@@ -10,11 +10,18 @@ pub fn build(b: *std.Build) void {
     });
     const core_mod = core_dep.module("azure_sdk_core");
 
+    const serde_dep = b.dependency("serde", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const serde_mod = serde_dep.module("serde");
+
     _ = b.addModule("azure_sdk_data_tables", .{
         .root_source_file = b.path("root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_sdk_core", .module = core_mod },
+            .{ .name = "serde", .module = serde_mod },
         },
     });
 
@@ -25,6 +32,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "azure_sdk_core", .module = core_mod },
+                .{ .name = "serde", .module = serde_mod },
             },
         }),
     });
