@@ -301,13 +301,13 @@ test "derived clients share token cache and transport and borrow pipeline state"
 
     var first = try service.getTableClient("FirstTable");
     try std.testing.expect(first.pipeline_state == shared_state);
-    var first_response = try first.getEntityRaw(allocator, "pk", "rk");
+    var first_response = try first.getEntity(allocator, "pk", "rk");
     first_response.deinit();
     first.deinit();
 
     var second = try service.getTableClient("SecondTable");
     defer second.deinit();
-    var second_response = try second.getEntityRaw(allocator, "pk", "rk");
+    var second_response = try second.getEntity(allocator, "pk", "rk");
     second_response.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), credential.calls);

@@ -1,6 +1,10 @@
 const std = @import("std");
 const edm = @import("edm.zig");
 
+/// Azure Tables permits 255 properties total. PartitionKey, RowKey, and the
+/// service Timestamp reserve three slots for every entity.
+pub const max_custom_properties = 252;
+
 /// A runtime-typed Table property. Dynamic entities own all values placed in
 /// their property map and release them through `DynamicEntity.deinit`.
 pub const EdmValue = union(enum) {
