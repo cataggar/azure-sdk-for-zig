@@ -12,11 +12,13 @@ const ProtocolTable = @typeInfo(@TypeOf(protocol.TablesClient.table)).@"fn".retu
 pub const ProtocolClient = struct {
     allocator: std.mem.Allocator,
     endpoint: request.NormalizedEndpoint,
+    endpoint_query_is_sas: bool,
     api_version: []u8,
     pipeline: core.pipeline.HttpPipeline,
 
     pub const InitOptions = struct {
         api_version: []const u8 = options.latest_api_version,
+        endpoint_query_is_sas: bool = false,
     };
 
     pub fn init(
@@ -31,6 +33,7 @@ pub const ProtocolClient = struct {
         return .{
             .allocator = allocator,
             .endpoint = normalized,
+            .endpoint_query_is_sas = init_options.endpoint_query_is_sas,
             .api_version = try allocator.dupe(u8, init_options.api_version),
             .pipeline = http_pipeline,
         };
@@ -138,6 +141,16 @@ pub const ProtocolClient = struct {
         };
     }
 
+    pub fn send(
+        self: *ProtocolClient,
+        req: *core.http.Request,
+        call_options: options.ProtocolOptions,
+    ) !core.http.Response {
+        var call = try self.beginCall(req.allocator, call_options);
+        defer call.deinit();
+        return call.pipeline.send(req);
+    }
+
     fn beginCall(
         self: *ProtocolClient,
         allocator: std.mem.Allocator,
@@ -147,6 +160,7 @@ pub const ProtocolClient = struct {
             allocator,
             self.pipeline,
             if (self.endpoint.has_query) self.endpoint.raw_query else null,
+            self.endpoint_query_is_sas,
             call_options.operation_timeout_ms,
             call_options.policies,
         );
@@ -189,7 +203,7 @@ test "generated query receives SDK options and preserves SAS bytes" {
         allocator,
         "https://account.table.core.windows.net/?sv=1%2F2&sig=a+b%3D&sp=r",
         base_pipeline,
-        .{ .api_version = "2020-test" },
+        .{ .api_version = "2020-test", .endpoint_query_is_sas = true },
     );
     defer client.deinit();
     var header_policy = HeaderPolicy{};

@@ -1,5 +1,7 @@
 const std = @import("std");
 const core = @import("azure_sdk_core");
+const auth = @import("auth.zig");
+const connection_string = @import("connection_string.zig");
 const entity = @import("entity.zig");
 const options = @import("options.zig");
 const pipeline = @import("pipeline.zig");
@@ -19,6 +21,7 @@ pub const TableClient = struct {
     table_name: []u8,
     pipeline_state: *pipeline.PipelineState,
     owns_pipeline_state: bool,
+    owned_credential: ?*auth.SharedKeyCredential = null,
 
     pub const Options = options.TableClientOptions;
 
@@ -47,6 +50,67 @@ pub const TableClient = struct {
             state,
             true,
         );
+    }
+
+    /// Creates a SharedKeyLite-authenticated Table client. The credential is
+    /// borrowed and must outlive the client.
+    pub fn initWithSharedKey(
+        allocator: std.mem.Allocator,
+        endpoint: []const u8,
+        table_name: []const u8,
+        credential: *auth.SharedKeyCredential,
+        transport: *core.http.HttpTransport,
+        init_options: Options,
+    ) !TableClient {
+        try request.validateTableName(table_name);
+        try request.validateSharedKeyEndpoint(endpoint);
+        const state = try pipeline.PipelineState.createSharedKey(
+            allocator,
+            credential,
+            transport,
+            init_options,
+        );
+        errdefer state.deinit();
+        return initWithState(allocator, endpoint, table_name, init_options.api_version, state, true);
+    }
+
+    /// Creates a credential-free client from a complete, pre-signed SAS URL.
+    /// The raw query is retained verbatim and no Authorization policy exists.
+    pub fn initWithSasUrl(
+        allocator: std.mem.Allocator,
+        complete_sas_url: []const u8,
+        table_name: []const u8,
+        transport: *core.http.HttpTransport,
+        init_options: Options,
+    ) !TableClient {
+        try request.validateTableName(table_name);
+        try request.validateSasEndpoint(complete_sas_url);
+        const state = try pipeline.PipelineState.createNoAuth(allocator, transport, init_options);
+        errdefer state.deinit();
+        return initWithState(allocator, complete_sas_url, table_name, init_options.api_version, state, true);
+    }
+
+    /// Parses a Storage or Azurite connection string and constructs the
+    /// matching Shared Key or credential-free SAS client.
+    pub fn initFromConnectionString(
+        allocator: std.mem.Allocator,
+        value: []const u8,
+        table_name: []const u8,
+        transport: *core.http.HttpTransport,
+        init_options: Options,
+    ) !TableClient {
+        var parsed = try connection_string.parse(allocator, value);
+        defer parsed.deinit();
+        if (parsed.account_key) |key| {
+            const credential = try allocator.create(auth.SharedKeyCredential);
+            errdefer allocator.destroy(credential);
+            credential.* = try auth.SharedKeyCredential.init(allocator, parsed.account_name, key);
+            errdefer credential.deinit();
+            var result = try initWithSharedKey(allocator, parsed.endpoint, table_name, credential, transport, init_options);
+            result.owned_credential = credential;
+            return result;
+        }
+        return initWithSasUrl(allocator, parsed.endpoint, table_name, transport, init_options);
     }
 
     /// Internal constructor for service-derived clients.
@@ -80,7 +144,10 @@ pub const TableClient = struct {
             allocator,
             endpoint,
             state.pipeline,
-            .{ .api_version = api_version },
+            .{
+                .api_version = api_version,
+                .endpoint_query_is_sas = state.usesSas(),
+            },
         );
         errdefer protocol.deinit();
         return .{
@@ -89,6 +156,7 @@ pub const TableClient = struct {
             .table_name = try allocator.dupe(u8, table_name),
             .pipeline_state = state,
             .owns_pipeline_state = owns_state,
+            .owned_credential = null,
         };
     }
 
@@ -96,7 +164,16 @@ pub const TableClient = struct {
         self.protocol.deinit();
         self.allocator.free(self.table_name);
         if (self.owns_pipeline_state) self.pipeline_state.deinit();
+        if (self.owned_credential) |credential| {
+            credential.deinit();
+            self.allocator.destroy(credential);
+        }
         self.* = undefined;
+    }
+
+    /// Formats a query-redacted endpoint so SAS signatures never enter logs.
+    pub fn format(self: TableClient, writer: anytype) !void {
+        try writer.print("TableClient({s})", .{self.protocol.endpoint.base_url});
     }
 
     /// GET `{endpoint}/{tableName}(PartitionKey='{pk}',RowKey='{rk}')`.
@@ -119,7 +196,7 @@ pub const TableClient = struct {
         defer req.deinit();
         try req.setHeader("Accept", "application/json;odata=nometadata");
         try req.setHeader("x-ms-version", self.protocol.api_version);
-        return self.protocol.pipeline.send(&req);
+        return self.protocol.send(&req, .{});
     }
 
     /// POST `{endpoint}/{tableName}` with JSON entity body.
@@ -131,7 +208,10 @@ pub const TableClient = struct {
         const url = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}",
-            .{ self.protocol.endpoint.base_url, self.table_name },
+            .{
+                self.protocol.endpoint.base_url,
+                self.table_name,
+            },
         );
         defer allocator.free(url);
 
@@ -159,7 +239,7 @@ pub const TableClient = struct {
         try req.setHeader("Accept", "application/json;odata=nometadata");
         try req.setHeader("x-ms-version", self.protocol.api_version);
         req.body = body_buf.items;
-        return self.protocol.pipeline.send(&req);
+        return self.protocol.send(&req, .{});
     }
 
     /// DELETE `{endpoint}/{tableName}(PartitionKey='{pk}',RowKey='{rk}')`.
@@ -182,7 +262,7 @@ pub const TableClient = struct {
         defer req.deinit();
         try req.setHeader("If-Match", "*");
         try req.setHeader("x-ms-version", self.protocol.api_version);
-        return self.protocol.pipeline.send(&req);
+        return self.protocol.send(&req, .{});
     }
 };
 
@@ -323,4 +403,70 @@ test "token client accepts HTTPS custom private endpoint" {
     );
     try std.testing.expectEqual(@as(usize, 0), credential.calls);
     try std.testing.expectEqual(@as(usize, 0), mock.call_count);
+}
+
+test "Shared Key and SAS constructors have isolated authentication behavior" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200, "{}");
+    defer mock.deinit();
+    var credential = try auth.SharedKeyCredential.init(
+        allocator,
+        "account",
+        "YWNjb3VudC1rZXk=",
+    );
+    defer credential.deinit();
+
+    var shared = try TableClient.initWithSharedKey(
+        allocator,
+        "https://account.table.core.windows.net",
+        "Table123",
+        &credential,
+        mock.asTransport(),
+        .{},
+    );
+    defer shared.deinit();
+    var shared_response = try shared.getEntity(allocator, "pk", "rk");
+    shared_response.deinit();
+    try std.testing.expect(std.mem.startsWith(
+        u8,
+        mock.last_headers.get("Authorization").?,
+        "SharedKeyLite account:",
+    ));
+    try std.testing.expect(mock.last_headers.get("x-ms-date") != null);
+
+    var sas = try TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1%2F2&sig=a+b%3D&sp=r",
+        "Table123",
+        mock.asTransport(),
+        .{},
+    );
+    defer sas.deinit();
+    var sas_response = try sas.getEntity(allocator, "pk", "rk");
+    sas_response.deinit();
+    try std.testing.expect(mock.last_headers.get("Authorization") == null);
+    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "sv=1%2F2&sig=a+b%3D&sp=r") != null);
+}
+
+fn testSasOperationAllocationFailures(allocator: std.mem.Allocator) !void {
+    var mock = core.http.MockTransport.init(allocator, 200, "{}");
+    defer mock.deinit();
+    var sas = try TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1%2F2&sig=allocation+SECRET%3D&sp=r",
+        "Table123",
+        mock.asTransport(),
+        .{},
+    );
+    defer sas.deinit();
+    var response = try sas.getEntity(allocator, "pk", "rk");
+    response.deinit();
+}
+
+test "SAS operation allocation failure paths are leak-free" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        testSasOperationAllocationFailures,
+        .{},
+    );
 }

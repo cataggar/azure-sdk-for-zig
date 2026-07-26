@@ -62,6 +62,21 @@ name and protocol configuration while borrowing the service client's stable
 pipeline state. Deinitialize every derived client before its service client.
 Derived clients share the parent's bearer-token cache and transport.
 
+## Shared Key, SAS, and connection strings
+
+`SharedKeyCredential.init` validates and decodes an account key, and
+`initWithSharedKey` uses the Table-only `SharedKeyLite` canonical form. The
+signer runs after retry, so it applies a current `x-ms-date`, API version, and
+signature to every attempt. Use `initWithSasUrl` only with a complete signed
+URL; its query bytes are retained verbatim and the pipeline has no
+`Authorization` policy. Client formatting omits all query strings.
+
+`initFromConnectionString` accepts account-key and SAS strings with
+`DefaultEndpointsProtocol`, `EndpointSuffix`, or `TableEndpoint`, plus
+`UseDevelopmentStorage=true` for Azurite. It rejects duplicate, unknown, and
+ambiguous fields before creating a pipeline. Token authentication is always
+HTTPS; cleartext Shared Key/SAS endpoints are limited to local emulators.
+
 Client options configure retry count/delays, telemetry application ID, a
 default client request ID, a default operation timeout, API version, and
 caller policies. Per-operation request IDs and operation timeouts override
