@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("azure_sdk_core");
+const errors = @import("errors.zig");
 const protocol = @import("azure_rest_data_tables");
 const options = @import("options.zig");
 const pipeline_mod = @import("pipeline.zig");
@@ -7,6 +8,10 @@ const request = @import("request.zig");
 const responses = @import("responses.zig");
 
 const ProtocolTable = @typeInfo(@TypeOf(protocol.TablesClient.table)).@"fn".return_type.?;
+
+pub const QueryTablesResponse = ProtocolTable.QueryResult;
+pub const CreateTableResponse = ProtocolTable.CreateResult;
+pub const DeleteTableResponse = ProtocolTable.DeleteResult;
 
 /// Validated bridge from SDK options to the generated Tables protocol client.
 pub const ProtocolClient = struct {
@@ -141,6 +146,78 @@ pub const ProtocolClient = struct {
         };
     }
 
+    pub fn queryTables(self: *ProtocolClient, allocator: std.mem.Allocator, query_options: options.ListTablesOptions) !responses.TableResult(responses.SdkResponse(QueryTablesResponse)) {
+        try request.validateProtocolOptions(query_options.protocol);
+        if (query_options.top) |top| if (top <= 0) return error.InvalidTop;
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena);
+        arena.* = .init(allocator);
+        errdefer arena.deinit();
+        const arena_allocator = arena.allocator();
+        var call = try self.beginCall(arena_allocator, query_options.protocol);
+        errdefer call.deinit();
+        var generated = protocol.TablesClient.initWithPipeline(arena_allocator, call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
+        var table = generated.table();
+        const value = table.query(arena_allocator, query_options.protocol.client_request_id, query_options.protocol.metadata, query_options.top, query_options.select, query_options.filter, query_options.continuation_token) catch |err| {
+            const table_error = try self.tableErrorFromGeneratedFailure(allocator, &call, err);
+            call.deinit();
+            arena.deinit();
+            allocator.destroy(arena);
+            return .{ .failure = table_error };
+        };
+        const metadata = try call.takeResponse();
+        call.deinit();
+        return .{ .success = .{ .value = value, .status = metadata.status, .headers = metadata.headers, .arena = arena, .allocator = allocator } };
+    }
+
+    pub fn createTable(self: *ProtocolClient, allocator: std.mem.Allocator, table_name: []const u8, create_options: options.CreateTableOptions) !responses.TableResult(responses.SdkResponse(CreateTableResponse)) {
+        try request.validateTableName(table_name);
+        try request.validateProtocolOptions(create_options.protocol);
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena);
+        arena.* = .init(allocator);
+        errdefer arena.deinit();
+        const arena_allocator = arena.allocator();
+        var call = try self.beginCall(arena_allocator, create_options.protocol);
+        errdefer call.deinit();
+        var generated = protocol.TablesClient.initWithPipeline(arena_allocator, call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
+        var table = generated.table();
+        const value = table.create(arena_allocator, create_options.protocol.client_request_id, create_options.protocol.metadata, .{ .table_name = table_name }, create_options.prefer) catch |err| {
+            const table_error = try self.tableErrorFromGeneratedFailure(allocator, &call, err);
+            call.deinit();
+            arena.deinit();
+            allocator.destroy(arena);
+            return .{ .failure = table_error };
+        };
+        const metadata = try call.takeResponse();
+        call.deinit();
+        return .{ .success = .{ .value = value, .status = metadata.status, .headers = metadata.headers, .arena = arena, .allocator = allocator } };
+    }
+
+    pub fn deleteTable(self: *ProtocolClient, allocator: std.mem.Allocator, table_name: []const u8, delete_options: options.DeleteTableOptions) !responses.TableResult(responses.SdkResponse(DeleteTableResponse)) {
+        try request.validateTableName(table_name);
+        try request.validateProtocolOptions(delete_options.protocol);
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena);
+        arena.* = .init(allocator);
+        errdefer arena.deinit();
+        const arena_allocator = arena.allocator();
+        var call = try self.beginCall(arena_allocator, delete_options.protocol);
+        errdefer call.deinit();
+        var generated = protocol.TablesClient.initWithPipeline(arena_allocator, call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
+        var table = generated.table();
+        const value = table.delete(arena_allocator, delete_options.protocol.client_request_id, table_name) catch |err| {
+            const table_error = try self.tableErrorFromGeneratedFailure(allocator, &call, err);
+            call.deinit();
+            arena.deinit();
+            allocator.destroy(arena);
+            return .{ .failure = table_error };
+        };
+        const metadata = try call.takeResponse();
+        call.deinit();
+        return .{ .success = .{ .value = value, .status = metadata.status, .headers = metadata.headers, .arena = arena, .allocator = allocator } };
+    }
+
     pub fn send(
         self: *ProtocolClient,
         req: *core.http.Request,
@@ -149,6 +226,14 @@ pub const ProtocolClient = struct {
         var call = try self.beginCall(req.allocator, call_options);
         defer call.deinit();
         return call.pipeline.send(req);
+    }
+
+    fn tableErrorFromGeneratedFailure(self: *ProtocolClient, allocator: std.mem.Allocator, call: *pipeline_mod.CallContext, generated_error: anyerror) !errors.TableError {
+        _ = self;
+        if (generated_error != error.AzureRequestFailed) return generated_error;
+        var metadata = call.takeResponse() catch return generated_error;
+        defer metadata.deinit();
+        return errors.TableError.fromResponse(allocator, metadata.status, metadata.headers.getFirst("Content-Type"), metadata.headers.getFirst("x-ms-request-id"), null, metadata.body orelse "");
     }
 
     fn beginCall(

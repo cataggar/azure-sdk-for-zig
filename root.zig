@@ -54,6 +54,13 @@ pub const dynamicFromJson = entity_codec.dynamicFromJson;
 pub const TableError = errors.TableError;
 pub const TableErrorCode = errors.TableErrorCode;
 pub const TableResult = responses.TableResult;
+pub const CreateTableOptions = options.CreateTableOptions;
+pub const DeleteTableOptions = options.DeleteTableOptions;
+pub const ListTablesOptions = options.ListTablesOptions;
+pub const TablePager = pager.TablePager;
+pub const ListTablesPage = pager.ListTablesPage;
+pub const CreateTableResponse = responses.SdkResponse(protocol_client.CreateTableResponse);
+pub const DeleteTableResponse = responses.SdkResponse(protocol_client.DeleteTableResponse);
 pub const unwrapGetEntity = responses.unwrapGetEntity;
 pub const unwrapCreateEntity = responses.unwrapCreateEntity;
 
@@ -110,6 +117,13 @@ test {
     _ = TableError;
     _ = TableErrorCode;
     _ = TableResult;
+    _ = CreateTableOptions;
+    _ = DeleteTableOptions;
+    _ = ListTablesOptions;
+    _ = TablePager;
+    _ = ListTablesPage;
+    _ = CreateTableResponse;
+    _ = DeleteTableResponse;
     _ = unwrapGetEntity;
     _ = unwrapCreateEntity;
 }

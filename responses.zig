@@ -65,6 +65,7 @@ pub const RawHeaders = struct {
 pub const ResponseMetadata = struct {
     status: u16,
     headers: RawHeaders,
+    body: ?[]const u8 = null,
 
     pub fn fromResponse(allocator: std.mem.Allocator, response: *const core.http.Response) !ResponseMetadata {
         return .{
@@ -75,6 +76,7 @@ pub const ResponseMetadata = struct {
 
     pub fn deinit(self: *ResponseMetadata) void {
         self.headers.deinit();
+        if (self.body) |body| self.headers.allocator.free(body);
     }
 };
 
@@ -172,6 +174,39 @@ pub fn unwrapCreateEntity(comptime T: type, result: TableResult(T)) error{Create
             var owned_error = table_error;
             owned_error.deinit();
             return error.CreateEntityFailed;
+        },
+    };
+}
+
+pub fn unwrapCreateTable(comptime T: type, result: TableResult(T)) error{CreateTableFailed}!T {
+    return switch (result) {
+        .success => |value| value,
+        .failure => |table_error| {
+            var owned_error = table_error;
+            owned_error.deinit();
+            return error.CreateTableFailed;
+        },
+    };
+}
+
+pub fn unwrapDeleteTable(comptime T: type, result: TableResult(T)) error{DeleteTableFailed}!T {
+    return switch (result) {
+        .success => |value| value,
+        .failure => |table_error| {
+            var owned_error = table_error;
+            owned_error.deinit();
+            return error.DeleteTableFailed;
+        },
+    };
+}
+
+pub fn unwrapListTables(comptime T: type, result: TableResult(T)) error{ListTablesFailed}!T {
+    return switch (result) {
+        .success => |value| value,
+        .failure => |table_error| {
+            var owned_error = table_error;
+            owned_error.deinit();
+            return error.ListTablesFailed;
         },
     };
 }

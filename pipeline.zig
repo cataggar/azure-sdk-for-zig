@@ -465,6 +465,11 @@ const CapturePolicy = struct {
         errdefer response.deinit();
         if (self.metadata) |*old| old.deinit();
         self.metadata = try responses.ResponseMetadata.fromResponse(self.allocator, &response);
+        errdefer {
+            self.metadata.?.deinit();
+            self.metadata = null;
+        }
+        self.metadata.?.body = try self.allocator.dupe(u8, response.body);
         return response;
     }
 
