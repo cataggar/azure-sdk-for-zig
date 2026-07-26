@@ -119,10 +119,13 @@ fn copyListOptions(
     if (source.protocol.client_request_id) |value|
         result.protocol.client_request_id = try allocator.dupe(u8, value);
     if (source.protocol.metadata) |metadata| {
-        result.protocol.metadata = switch (metadata) {
-            .unrecognized => |value| .{ .unrecognized = try allocator.dupe(u8, value) },
-            else => metadata,
-        };
+        switch (metadata) {
+            .unrecognized => |value| {
+                const owned_value = try allocator.dupe(u8, value);
+                result.protocol.metadata = .{ .unrecognized = owned_value };
+            },
+            else => result.protocol.metadata = metadata,
+        }
     }
     if (source.protocol.policies.len > 0)
         result.protocol.policies = try allocator.dupe(
