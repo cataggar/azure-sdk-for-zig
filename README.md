@@ -228,7 +228,9 @@ Each page exposes the generated table wire response plus status and raw
 headers. Page values are borrowed from the pager until its next successful
 request or `deinit`. A pager owns an immutable protocol configuration copy,
 but borrows the service client's heap-stable pipeline state; deinitialize it
-before its parent service client.
+before its parent service client. `ListTablesOptions` strings and policy
+pointer-list storage are copied at pager creation, but the policy objects
+themselves are borrowed and must remain stable and outlive the pager.
 
 The pipeline policy order is request ID, telemetry, retry, then authentication.
 Putting authentication after retry ensures date-sensitive SharedKeyLite
