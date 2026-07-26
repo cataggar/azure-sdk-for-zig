@@ -268,6 +268,17 @@ pub fn unwrapListTables(comptime T: type, result: TableResult(T)) error{ListTabl
     };
 }
 
+pub fn unwrapQueryEntities(comptime T: type, result: TableResult(T)) error{QueryEntitiesFailed}!T {
+    return switch (result) {
+        .success => |value| value,
+        .failure => |table_error| {
+            var owned_error = table_error;
+            owned_error.deinit();
+            return error.QueryEntitiesFailed;
+        },
+    };
+}
+
 fn deinitPayload(comptime T: type, allocator: std.mem.Allocator, value: *T) void {
     switch (@typeInfo(T)) {
         .@"struct", .@"union", .@"enum", .@"opaque" => {},

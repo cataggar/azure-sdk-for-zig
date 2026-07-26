@@ -5,6 +5,7 @@ const connection_string = @import("connection_string.zig");
 const entity = @import("entity.zig");
 const entity_codec = @import("entity_codec.zig");
 const options = @import("options.zig");
+const pager = @import("pager.zig");
 const pipeline = @import("pipeline.zig");
 const protocol_client = @import("protocol_client.zig");
 const request = @import("request.zig");
@@ -246,6 +247,23 @@ pub const TableClient = struct {
         return responses.unwrapDeleteTable(
             responses.SdkResponse(protocol_client.DeleteTableResponse),
             try self.deleteTableResult(allocator, delete_options),
+        );
+    }
+
+    /// Starts a typed or dynamic entity query. The returned pager owns copies
+    /// of request options and table protocol configuration; its pages remain
+    /// valid only until its next successful call or deinitialization.
+    pub fn queryEntities(
+        self: *TableClient,
+        comptime T: type,
+        allocator: std.mem.Allocator,
+        query_options: options.QueryEntitiesOptions,
+    ) !pager.EntityPager(T) {
+        return pager.EntityPager(T).init(
+            allocator,
+            &self.protocol,
+            self.table_name,
+            query_options,
         );
     }
 
@@ -994,6 +1012,37 @@ test "entity constraints and malformed success fail locally" {
         return error.TestExpectedMalformedPayload;
     } else |_| {}
     try std.testing.expectEqual(@as(usize, 1), mock.call_count);
+}
+
+test "entity query pager survives moving its source client" {
+    const SimpleEntity = struct {
+        partition_key: []const u8,
+        row_key: []const u8,
+        name: []const u8,
+    };
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200,
+        \\{"value":[{"PartitionKey":"p","RowKey":"r","name":"moved"}]}
+    );
+    defer mock.deinit();
+    mock.response_headers_list = entity_response_headers;
+    var table_client = try TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=secret",
+        "Table123",
+        mock.asTransport(),
+        .{},
+    );
+    var entity_pager = try table_client.queryEntities(SimpleEntity, allocator, .{});
+    errdefer entity_pager.deinit();
+
+    var moved_client = moveClient(table_client);
+    table_client = undefined;
+    defer moved_client.deinit();
+
+    const page = (try entity_pager.next()).?;
+    try std.testing.expectEqualStrings("moved", page.values[0].name);
+    entity_pager.deinit();
 }
 
 test "dynamic entity enforces 252 custom properties regardless of timestamp" {
