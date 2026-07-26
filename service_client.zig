@@ -854,7 +854,7 @@ test "service properties use generated XML and preserve response metadata" {
 
     transport.response_status = 200;
     transport.response_body =
-        "<StorageServiceProperties><Logging><Version>1.0</Version><Delete>true</Delete><Read>false</Read><Write>true</Write><RetentionPolicy><Enabled>true</Enabled><Days>7</Days></RetentionPolicy></Logging><Cors><CorsRule><AllowedOrigins>https://example.test</AllowedOrigins><AllowedMethods>GET</AllowedMethods><AllowedHeaders>*</AllowedHeaders><ExposedHeaders>x-ms-request-id</ExposedHeaders><MaxAgeInSeconds>60</MaxAgeInSeconds></CorsRule></Cors></StorageServiceProperties>";
+        "<StorageServiceProperties><Logging><Version>1.0</Version><Delete>true</Delete><Read>false</Read><Write>true</Write><RetentionPolicy><Enabled>true</Enabled><Days>7</Days></RetentionPolicy></Logging><HourMetrics><Version>1.0</Version><Enabled>false</Enabled><IncludeAPIs>false</IncludeAPIs><RetentionPolicy><Enabled>false</Enabled><Days>7</Days></RetentionPolicy></HourMetrics><Cors><CorsRule><AllowedOrigins>https://example.test</AllowedOrigins><AllowedMethods>GET</AllowedMethods><AllowedHeaders>*</AllowedHeaders><ExposedHeaders>x-ms-request-id</ExposedHeaders><MaxAgeInSeconds>60</MaxAgeInSeconds></CorsRule></Cors></StorageServiceProperties>";
     transport.response_headers_list = &.{
         .{ .name = "x-ms-version", .value = "2019-02-02" },
         .{ .name = "x-ms-request-id", .value = "get-properties-id" },
@@ -869,6 +869,21 @@ test "service properties use generated XML and preserve response metadata" {
             try std.testing.expectEqual(@as(usize, 1), response.body.cors.?.items.len);
             try std.testing.expectEqualStrings("https://example.test", response.body.cors.?.items[0].allowed_origins);
             try std.testing.expectEqual(@as(?i32, 7), response.body.logging.?.retention_policy.days);
+            try std.testing.expectEqual(false, response.body.hour_metrics.?.enabled);
+            try std.testing.expectEqual(@as(?bool, false), response.body.hour_metrics.?.include_apis);
+            try std.testing.expectEqual(@as(?i32, 7), response.body.hour_metrics.?.retention_policy.?.days);
+
+            transport.response_status = 202;
+            transport.response_body = "";
+            transport.response_headers_list = &.{
+                .{ .name = "x-ms-version", .value = "2019-02-02" },
+            };
+            var roundtrip = try service.setServiceProperties(allocator, response.body, .{});
+            defer roundtrip.deinit();
+            try std.testing.expectEqualStrings(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?><StorageServiceProperties><Logging><Version>1.0</Version><Delete>true</Delete><Read>false</Read><Write>true</Write><RetentionPolicy><Enabled>true</Enabled><Days>7</Days></RetentionPolicy></Logging><HourMetrics><Version>1.0</Version><Enabled>false</Enabled><IncludeAPIs>false</IncludeAPIs><RetentionPolicy><Enabled>false</Enabled><Days>7</Days></RetentionPolicy></HourMetrics><Cors><CorsRule><AllowedOrigins>https://example.test</AllowedOrigins><AllowedMethods>GET</AllowedMethods><AllowedHeaders>*</AllowedHeaders><ExposedHeaders>x-ms-request-id</ExposedHeaders><MaxAgeInSeconds>60</MaxAgeInSeconds></CorsRule></Cors></StorageServiceProperties>",
+                capture.body.?,
+            );
         },
     }
 }
@@ -896,6 +911,7 @@ test "service administration validates before transport and returns structured f
             .minute_metrics = .{
                 .version = "1.0",
                 .enabled = true,
+                .include_apis = false,
                 .retention_policy = .{ .enabled = true, .days = 0 },
             },
         }, .{}),

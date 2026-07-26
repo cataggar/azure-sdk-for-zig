@@ -21,7 +21,6 @@ pub const validateServiceProperties = admin.validateServiceProperties;
 pub const serializeServicePropertiesXml = admin.serializeServicePropertiesXml;
 pub const validateServiceStatistics = admin.validateServiceStatistics;
 
-
 /// Azure Tables stores policy timestamps at 100-nanosecond precision.
 ///
 /// `parse` accepts an ISO 8601 UTC designator or numeric offset and normalizes
