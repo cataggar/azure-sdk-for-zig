@@ -11,6 +11,7 @@ const protocol_client = @import("protocol_client.zig");
 const request = @import("request.zig");
 const sas_types = @import("sas.zig");
 const responses = @import("responses.zig");
+const service_models = @import("service_models.zig");
 
 /// Client for Azure Table Storage REST operations.
 ///
@@ -532,6 +533,51 @@ pub const TableClient = struct {
                 } };
             },
         };
+    }
+
+    pub fn getAccessPolicyResult(
+        self: *TableClient,
+        allocator: std.mem.Allocator,
+        get_options: options.GetAccessPolicyOptions,
+    ) !responses.TableResult(responses.SdkResponse(protocol_client.GetAccessPolicyResponse)) {
+        return self.protocol.getAccessPolicy(allocator, self.table_name, get_options);
+    }
+
+    pub fn getAccessPolicy(
+        self: *TableClient,
+        allocator: std.mem.Allocator,
+        get_options: options.GetAccessPolicyOptions,
+    ) !responses.SdkResponse(protocol_client.GetAccessPolicyResponse) {
+        return responses.unwrapGetAccessPolicy(
+            responses.SdkResponse(protocol_client.GetAccessPolicyResponse),
+            try self.getAccessPolicyResult(allocator, get_options),
+        );
+    }
+
+    pub fn setAccessPolicyResult(
+        self: *TableClient,
+        allocator: std.mem.Allocator,
+        identifiers: []const service_models.SignedIdentifier,
+        set_options: options.SetAccessPolicyOptions,
+    ) !responses.TableResult(responses.SdkResponse(protocol_client.SetAccessPolicyResponse)) {
+        return self.protocol.setAccessPolicy(
+            allocator,
+            self.table_name,
+            identifiers,
+            set_options,
+        );
+    }
+
+    pub fn setAccessPolicy(
+        self: *TableClient,
+        allocator: std.mem.Allocator,
+        identifiers: []const service_models.SignedIdentifier,
+        set_options: options.SetAccessPolicyOptions,
+    ) !responses.SdkResponse(protocol_client.SetAccessPolicyResponse) {
+        return responses.unwrapSetAccessPolicy(
+            responses.SdkResponse(protocol_client.SetAccessPolicyResponse),
+            try self.setAccessPolicyResult(allocator, identifiers, set_options),
+        );
     }
 
     /// Compatibility escape hatch for the original raw GET operation.
@@ -2212,5 +2258,368 @@ test "table SAS scope rejects mismatched duplicate and malformed tn" {
             transport.asTransport(),
             .{},
         ),
+    );
+}
+
+test "stored access policies use generated XML and preserve response metadata" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 204, "");
+    defer transport.deinit();
+    transport.response_headers_list = &.{
+        .{ .name = "Date", .value = "Sun, 26 Jul 2026 18:32:16 GMT" },
+        .{ .name = "x-ms-version", .value = "2019-02-02" },
+        .{ .name = "x-ms-request-id", .value = "set-policy-id" },
+        .{ .name = "x-ms-client-request-id", .value = "temporary-id" },
+    };
+    var credential = TestCredential{};
+    var table_client = try TableClient.initWithToken(
+        allocator,
+        "https://account.table.core.windows.net",
+        "People",
+        credential.asCredential(),
+        transport.asTransport(),
+        .{},
+    );
+    defer table_client.deinit();
+
+    var set_response = try table_client.setAccessPolicy(
+        allocator,
+        &.{
+            .{
+                .id = "read<&>",
+                .access_policy = .{
+                    .start = try service_models.AccessPolicyTime.parse(
+                        "2026-07-26T20:02:16.1234567+01:30",
+                    ),
+                    .expiry = try service_models.AccessPolicyTime.parse(
+                        "2026-07-27T14:32:16.120-04:00",
+                    ),
+                    .permissions = .{ .table = .{ .read = true, .update = true } },
+                },
+            },
+            .{
+                .id = "future",
+                .access_policy = .{ .permissions = .{ .raw = "ad" } },
+            },
+        },
+        .{ .protocol = .{ .client_request_id = "temporary-id", .timeout = 17 } },
+    );
+    defer set_response.deinit();
+    try std.testing.expectEqual(@as(u16, 204), set_response.status);
+    try std.testing.expectEqualStrings(
+        "set-policy-id",
+        set_response.headers.getFirst("x-ms-request-id").?,
+    );
+    try std.testing.expectEqual(.PUT, transport.last_method.?);
+    try std.testing.expectEqualStrings(
+        "https://account.table.core.windows.net/People?comp=acl&timeout=17",
+        transport.last_url.?,
+    );
+    try std.testing.expectEqualStrings(
+        "application/xml",
+        transport.last_headers.get("Content-Type").?,
+    );
+    try std.testing.expectEqualStrings(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><SignedIdentifiers><SignedIdentifier><Id>read&lt;&amp;&gt;</Id><AccessPolicy><Start>2026-07-26T18:32:16.1234567Z</Start><Expiry>2026-07-27T18:32:16.120Z</Expiry><Permission>ru</Permission></AccessPolicy></SignedIdentifier><SignedIdentifier><Id>future</Id><AccessPolicy><Start></Start><Expiry></Expiry><Permission>ad</Permission></AccessPolicy></SignedIdentifier></SignedIdentifiers>",
+        transport.last_body.?,
+    );
+
+    transport.response_status = 200;
+    transport.response_body =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><SignedIdentifiers><SignedIdentifier><Id>read&lt;&amp;&gt;</Id><AccessPolicy><Start>2026-07-26T18:32:16.1234567Z</Start><Expiry>2026-07-27T18:32:16.120Z</Expiry><Permission>ru</Permission></AccessPolicy></SignedIdentifier><SignedIdentifier><Id>future</Id><AccessPolicy><Start></Start><Expiry></Expiry><Permission>rx</Permission></AccessPolicy></SignedIdentifier></SignedIdentifiers>";
+    transport.response_headers_list = &.{
+        .{ .name = "Date", .value = "Sun, 26 Jul 2026 18:32:16 GMT" },
+        .{ .name = "x-ms-version", .value = "2019-02-02" },
+        .{ .name = "x-ms-request-id", .value = "get-policy-id" },
+        .{ .name = "Content-Type", .value = "application/xml" },
+    };
+    var get_response = try table_client.getAccessPolicy(
+        allocator,
+        .{ .protocol = .{ .timeout = 3 } },
+    );
+    defer get_response.deinit();
+    try std.testing.expectEqual(@as(u16, 200), get_response.status);
+    try std.testing.expectEqualStrings(
+        "get-policy-id",
+        get_response.headers.getFirst("x-ms-request-id").?,
+    );
+    try std.testing.expectEqual(@as(usize, 2), get_response.value.len);
+    try std.testing.expectEqualStrings("read<&>", get_response.value[0].id);
+    var time_buffer: [32]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "2026-07-26T18:32:16.1234567Z",
+        try get_response.value[0].access_policy.start.?.format(&time_buffer),
+    );
+    var permission_buffer: [4]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "ru",
+        get_response.value[0].access_policy.permissions.string(&permission_buffer),
+    );
+    try std.testing.expect(get_response.value[1].access_policy.start == null);
+    try std.testing.expect(get_response.value[1].access_policy.expiry == null);
+    try std.testing.expectEqualStrings(
+        "rx",
+        get_response.value[1].access_policy.permissions.string(&permission_buffer),
+    );
+}
+
+test "stored access policy limits preserve empty zero and five lists" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 204, "");
+    defer transport.deinit();
+    transport.response_headers_list = &.{
+        .{ .name = "Date", .value = "Sun, 26 Jul 2026 18:32:16 GMT" },
+        .{ .name = "x-ms-version", .value = "2019-02-02" },
+    };
+    var credential = TestCredential{};
+    var table_client = try TableClient.initWithToken(
+        allocator,
+        "https://account.table.core.windows.net",
+        "People",
+        credential.asCredential(),
+        transport.asTransport(),
+        .{},
+    );
+    defer table_client.deinit();
+
+    var empty_set = try table_client.setAccessPolicy(allocator, &.{}, .{});
+    empty_set.deinit();
+    try std.testing.expectEqualStrings(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><SignedIdentifiers></SignedIdentifiers>",
+        transport.last_body.?,
+    );
+
+    const five = [_]service_models.SignedIdentifier{
+        .{ .id = "one", .access_policy = .{} },
+        .{ .id = "two", .access_policy = .{} },
+        .{ .id = "three", .access_policy = .{} },
+        .{ .id = "four", .access_policy = .{} },
+        .{ .id = "x" ** 64, .access_policy = .{} },
+    };
+    var five_set = try table_client.setAccessPolicy(allocator, &five, .{});
+    five_set.deinit();
+    try std.testing.expectEqual(@as(usize, 2), transport.call_count);
+    try std.testing.expectEqual(
+        @as(usize, 5),
+        std.mem.count(u8, transport.last_body.?, "<Start></Start><Expiry></Expiry><Permission></Permission>"),
+    );
+
+    try std.testing.expectError(
+        error.InvalidSignedIdentifier,
+        table_client.setAccessPolicyResult(
+            std.testing.failing_allocator,
+            &.{.{ .id = "雪" ** 65, .access_policy = .{} }},
+            .{},
+        ),
+    );
+    try std.testing.expectError(
+        error.InvalidSignedIdentifier,
+        table_client.setAccessPolicyResult(
+            std.testing.failing_allocator,
+            &.{.{ .id = "\xff", .access_policy = .{} }},
+            .{},
+        ),
+    );
+    try std.testing.expectError(
+        error.DuplicateSignedIdentifier,
+        table_client.setAccessPolicyResult(
+            std.testing.failing_allocator,
+            &.{
+                .{ .id = "duplicate", .access_policy = .{} },
+                .{ .id = "duplicate", .access_policy = .{} },
+            },
+            .{},
+        ),
+    );
+    try std.testing.expectError(
+        error.InvalidAccessPolicyPermissions,
+        table_client.setAccessPolicyResult(
+            std.testing.failing_allocator,
+            &.{.{
+                .id = "permissions",
+                .access_policy = .{ .permissions = .{ .raw = "rx" } },
+            }},
+            .{},
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 2), transport.call_count);
+
+    const six = five ++ [_]service_models.SignedIdentifier{
+        .{ .id = "six", .access_policy = .{} },
+    };
+    try std.testing.expectError(
+        error.TooManyStoredAccessPolicies,
+        table_client.setAccessPolicyResult(allocator, &six, .{}),
+    );
+    try std.testing.expectEqual(@as(usize, 2), transport.call_count);
+
+    transport.response_status = 200;
+    transport.response_body =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><SignedIdentifiers></SignedIdentifiers>";
+    transport.response_headers_list = &.{
+        .{ .name = "Date", .value = "Sun, 26 Jul 2026 18:32:16 GMT" },
+        .{ .name = "x-ms-version", .value = "2019-02-02" },
+        .{ .name = "Content-Type", .value = "application/xml" },
+    };
+    var empty_get = try table_client.getAccessPolicy(allocator, .{});
+    defer empty_get.deinit();
+    try std.testing.expectEqual(@as(usize, 0), empty_get.value.len);
+}
+
+test "stored policy identifiers generate SAS and policy calls use every auth mode" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 204, "");
+    defer transport.deinit();
+    transport.response_headers_list = &.{
+        .{ .name = "Date", .value = "Sun, 26 Jul 2026 18:32:16 GMT" },
+        .{ .name = "x-ms-version", .value = "2019-02-02" },
+    };
+    var shared_credential = try auth.SharedKeyCredential.init(
+        allocator,
+        "account",
+        "YWNjb3VudC1rZXk=",
+    );
+    defer shared_credential.deinit();
+    var shared = try TableClient.initWithSharedKey(
+        allocator,
+        "https://account.table.core.windows.net",
+        "People",
+        &shared_credential,
+        transport.asTransport(),
+        .{},
+    );
+    defer shared.deinit();
+    const identifier = service_models.SignedIdentifier{
+        .id = "stored-read",
+        .access_policy = .{ .permissions = .{ .table = .{ .read = true } } },
+    };
+    var stored = try shared.setAccessPolicy(allocator, &.{identifier}, .{});
+    stored.deinit();
+    try std.testing.expect(std.mem.startsWith(
+        u8,
+        transport.last_headers.get("Authorization").?,
+        "SharedKeyLite account:",
+    ));
+    const sas_url = try shared.getTableSasUrl(allocator, .{
+        .accessPolicy = .{ .stored = identifier.id },
+    });
+    defer allocator.free(sas_url);
+    try std.testing.expect(std.mem.indexOf(u8, sas_url, "si=stored-read") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sas_url, "sp=") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sas_url, "st=") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sas_url, "se=") == null);
+
+    var anonymous = try TableClient.initWithSasUrl(
+        allocator,
+        sas_url,
+        "People",
+        transport.asTransport(),
+        .{},
+    );
+    defer anonymous.deinit();
+    var sas_set = try anonymous.setAccessPolicy(allocator, &.{identifier}, .{});
+    sas_set.deinit();
+    try std.testing.expect(transport.last_headers.get("Authorization") == null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.last_url.?, "si=stored-read") != null);
+}
+
+test "stored policy malformed XML and service failures remain distinct" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(
+        allocator,
+        200,
+        "<SignedIdentifiers><SignedIdentifier>",
+    );
+    defer transport.deinit();
+    transport.response_headers_list = &.{
+        .{ .name = "Date", .value = "Sun, 26 Jul 2026 18:32:16 GMT" },
+        .{ .name = "x-ms-version", .value = "2019-02-02" },
+        .{ .name = "Content-Type", .value = "application/xml" },
+    };
+    var credential = TestCredential{};
+    var table_client = try TableClient.initWithToken(
+        allocator,
+        "https://account.table.core.windows.net",
+        "People",
+        credential.asCredential(),
+        transport.asTransport(),
+        .{},
+    );
+    defer table_client.deinit();
+    if (table_client.getAccessPolicyResult(allocator, .{})) |result| {
+        var unexpected = result;
+        unexpected.deinit(allocator);
+        return error.ExpectedMalformedXmlFailure;
+    } else |_| {}
+
+    transport.response_status = 403;
+    transport.response_body =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>AuthorizationFailure</Code><Message>denied</Message></Error>";
+    transport.response_headers_list = &.{
+        .{ .name = "Content-Type", .value = "application/xml" },
+        .{ .name = "x-ms-request-id", .value = "denied-id" },
+    };
+    var result = try table_client.setAccessPolicyResult(allocator, &.{}, .{});
+    defer result.deinit(allocator);
+    switch (result) {
+        .failure => |failure| {
+            try std.testing.expectEqual(@as(u16, 403), failure.status);
+            try std.testing.expectEqualStrings("AuthorizationFailure", failure.code);
+            try std.testing.expectEqualStrings("denied-id", failure.request_id.?);
+        },
+        .success => return error.TestUnexpectedResult,
+    }
+}
+
+fn testAccessPolicyAllocationFailures(allocator: std.mem.Allocator) !void {
+    var transport = core.http.MockTransport.init(
+        allocator,
+        200,
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><SignedIdentifiers><SignedIdentifier><Id>read</Id><AccessPolicy><Start>2026-07-26T18:32:16.1234567Z</Start><Expiry>2026-07-27T18:32:16Z</Expiry><Permission>r</Permission></AccessPolicy></SignedIdentifier></SignedIdentifiers>",
+    );
+    defer transport.deinit();
+    transport.response_headers_list = &.{
+        .{ .name = "Date", .value = "Sun, 26 Jul 2026 18:32:16 GMT" },
+        .{ .name = "x-ms-version", .value = "2019-02-02" },
+        .{ .name = "Content-Type", .value = "application/xml" },
+    };
+    var credential = TestCredential{};
+    var table_client = try TableClient.initWithToken(
+        allocator,
+        "https://account.table.core.windows.net",
+        "People",
+        credential.asCredential(),
+        transport.asTransport(),
+        .{},
+    );
+    defer table_client.deinit();
+    var get_result = try table_client.getAccessPolicyResult(allocator, .{});
+    get_result.deinit(allocator);
+
+    transport.response_status = 204;
+    transport.response_body = "";
+    transport.response_headers_list = &.{
+        .{ .name = "Date", .value = "Sun, 26 Jul 2026 18:32:16 GMT" },
+        .{ .name = "x-ms-version", .value = "2019-02-02" },
+    };
+    var set_result = try table_client.setAccessPolicyResult(
+        allocator,
+        &.{.{
+            .id = "read",
+            .access_policy = .{
+                .start = try service_models.AccessPolicyTime.parse("2026-07-26T18:32:16Z"),
+                .permissions = .{ .raw = "rd" },
+            },
+        }},
+        .{ .protocol = .{ .client_request_id = "temporary" } },
+    );
+    set_result.deinit(allocator);
+}
+
+test "stored policy allocation failures are leak-free" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        testAccessPolicyAllocationFailures,
+        .{},
     );
 }

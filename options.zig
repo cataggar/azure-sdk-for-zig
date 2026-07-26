@@ -40,6 +40,14 @@ pub const DeleteTableOptions = struct {
     protocol: ProtocolOptions = .{},
 };
 
+pub const GetAccessPolicyOptions = struct {
+    protocol: ProtocolOptions = .{},
+};
+
+pub const SetAccessPolicyOptions = struct {
+    protocol: ProtocolOptions = .{},
+};
+
 pub const ListTablesOptions = struct {
     protocol: ProtocolOptions = .{},
     top: ?i32 = null,

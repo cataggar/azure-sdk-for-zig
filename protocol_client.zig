@@ -7,6 +7,7 @@ const options = @import("options.zig");
 const pipeline_mod = @import("pipeline.zig");
 const request = @import("request.zig");
 const responses = @import("responses.zig");
+const service_models = @import("service_models.zig");
 
 const ProtocolTable = @typeInfo(@TypeOf(protocol.TablesClient.table)).@"fn".return_type.?;
 
@@ -14,6 +15,8 @@ pub const QueryTablesResponse = ProtocolTable.QueryResult;
 pub const QueryEntitiesResponse = ProtocolTable.QueryEntitiesResult;
 pub const CreateTableResponse = ProtocolTable.CreateResult;
 pub const DeleteTableResponse = ProtocolTable.DeleteResult;
+pub const GetAccessPolicyResponse = []const service_models.SignedIdentifier;
+pub const SetAccessPolicyResponse = ProtocolTable.SetAccessPolicyResult;
 
 /// Validated bridge from SDK options to the generated Tables protocol client.
 pub const ProtocolClient = struct {
@@ -315,6 +318,123 @@ pub const ProtocolClient = struct {
         const metadata = try call.takeResponse();
         call.deinit();
         return .{ .success = .{ .value = value, .status = metadata.status, .headers = metadata.headers, .arena = arena, .allocator = allocator } };
+    }
+
+    pub fn getAccessPolicy(
+        self: *ProtocolClient,
+        allocator: std.mem.Allocator,
+        table_name: []const u8,
+        get_options: options.GetAccessPolicyOptions,
+    ) !responses.TableResult(responses.SdkResponse(GetAccessPolicyResponse)) {
+        try request.validateTableName(table_name);
+        try request.validateProtocolOptions(get_options.protocol);
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena);
+        arena.* = .init(allocator);
+        errdefer arena.deinit();
+        const arena_allocator = arena.allocator();
+        var call = try pipeline_mod.CallContext.initWithResponseBody(
+            arena_allocator,
+            self.pipeline,
+            if (self.endpoint.has_query) self.endpoint.raw_query else null,
+            self.endpoint_query_is_sas,
+            get_options.protocol.operation_timeout_ms,
+            null,
+            get_options.protocol.policies,
+        );
+        errdefer call.deinit();
+        var generated = protocol.TablesClient.initWithPipeline(arena_allocator, call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
+        var table = generated.table();
+        const generated_value = table.getAccessPolicy(
+            arena_allocator,
+            get_options.protocol.client_request_id,
+            table_name,
+            get_options.protocol.timeout,
+        ) catch |err| {
+            if (err == error.MissingField) {
+                const metadata = try call.takeResponse();
+                if (metadata.status == 200 and
+                    try service_models.isEmptyWireXml(metadata.body orelse ""))
+                {
+                    call.deinit();
+                    return .{ .success = .{
+                        .value = &.{},
+                        .status = metadata.status,
+                        .headers = metadata.headers,
+                        .body = metadata.body,
+                        .arena = arena,
+                        .allocator = allocator,
+                    } };
+                }
+                var owned_metadata = metadata;
+                owned_metadata.deinit();
+                return err;
+            }
+            const table_error = try self.tableErrorFromGeneratedFailure(allocator, &call, err);
+            call.deinit();
+            arena.deinit();
+            allocator.destroy(arena);
+            return .{ .failure = table_error };
+        };
+        const wire = switch (generated_value) {
+            .status_200 => |value| value.body,
+        };
+        const value = try service_models.fromWire(arena_allocator, wire);
+        const metadata = try call.takeResponse();
+        call.deinit();
+        return .{ .success = .{
+            .value = value,
+            .status = metadata.status,
+            .headers = metadata.headers,
+            .body = metadata.body,
+            .arena = arena,
+            .allocator = allocator,
+        } };
+    }
+
+    pub fn setAccessPolicy(
+        self: *ProtocolClient,
+        allocator: std.mem.Allocator,
+        table_name: []const u8,
+        identifiers: []const service_models.SignedIdentifier,
+        set_options: options.SetAccessPolicyOptions,
+    ) !responses.TableResult(responses.SdkResponse(SetAccessPolicyResponse)) {
+        try request.validateTableName(table_name);
+        try request.validateProtocolOptions(set_options.protocol);
+        try service_models.validateForSet(identifiers);
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena);
+        arena.* = .init(allocator);
+        errdefer arena.deinit();
+        const arena_allocator = arena.allocator();
+        const table_acl = try service_models.toWire(arena_allocator, identifiers);
+        var call = try self.beginCall(arena_allocator, set_options.protocol, null);
+        errdefer call.deinit();
+        var generated = protocol.TablesClient.initWithPipeline(arena_allocator, call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
+        var table = generated.table();
+        const value = table.setAccessPolicy(
+            arena_allocator,
+            set_options.protocol.client_request_id,
+            table_name,
+            table_acl,
+            set_options.protocol.timeout,
+        ) catch |err| {
+            const table_error = try self.tableErrorFromGeneratedFailure(allocator, &call, err);
+            call.deinit();
+            arena.deinit();
+            allocator.destroy(arena);
+            return .{ .failure = table_error };
+        };
+        const metadata = try call.takeResponse();
+        call.deinit();
+        return .{ .success = .{
+            .value = value,
+            .status = metadata.status,
+            .headers = metadata.headers,
+            .body = metadata.body,
+            .arena = arena,
+            .allocator = allocator,
+        } };
     }
 
     /// Adapts the generated insert operation into an SDK result without

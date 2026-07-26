@@ -273,6 +273,28 @@ pub fn unwrapDeleteTable(comptime T: type, result: TableResult(T)) error{DeleteT
     };
 }
 
+pub fn unwrapGetAccessPolicy(comptime T: type, result: TableResult(T)) error{GetAccessPolicyFailed}!T {
+    return switch (result) {
+        .success => |value| value,
+        .failure => |table_error| {
+            var owned_error = table_error;
+            owned_error.deinit();
+            return error.GetAccessPolicyFailed;
+        },
+    };
+}
+
+pub fn unwrapSetAccessPolicy(comptime T: type, result: TableResult(T)) error{SetAccessPolicyFailed}!T {
+    return switch (result) {
+        .success => |value| value,
+        .failure => |table_error| {
+            var owned_error = table_error;
+            owned_error.deinit();
+            return error.SetAccessPolicyFailed;
+        },
+    };
+}
+
 pub fn unwrapListTables(comptime T: type, result: TableResult(T)) error{ListTablesFailed}!T {
     return switch (result) {
         .success => |value| value,
