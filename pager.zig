@@ -262,7 +262,7 @@ pub fn EntityPager(comptime T: type) type {
             var query = self.options;
             query.next_partition_key = self.next_partition_key;
             query.next_row_key = self.next_row_key;
-            const result = try self.protocol.queryEntities(
+            const result = try self.protocol.queryEntitiesResult(
                 self.allocator,
                 self.table_name,
                 query,

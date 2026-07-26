@@ -127,6 +127,56 @@ pub const ProtocolClient = struct {
         allocator: std.mem.Allocator,
         table_name: []const u8,
         query_options: options.QueryEntitiesOptions,
+    ) !responses.SdkResponse(QueryEntitiesResponse) {
+        try request.validateTableName(table_name);
+        try request.validateProtocolOptions(query_options.protocol);
+        if (query_options.top) |top| {
+            if (top <= 0) return error.InvalidTop;
+        }
+
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena);
+        arena.* = .init(allocator);
+        errdefer arena.deinit();
+        const arena_allocator = arena.allocator();
+
+        var call = try self.beginCall(arena_allocator, query_options.protocol, null);
+        defer call.deinit();
+        var generated = protocol.TablesClient.initWithPipeline(
+            arena_allocator,
+            call.pipeline,
+            .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version },
+        );
+        var table = generated.table();
+        const value = try table.queryEntities(
+            arena_allocator,
+            query_options.protocol.client_request_id,
+            table_name,
+            query_options.protocol.metadata,
+            query_options.top,
+            query_options.select,
+            query_options.filter,
+            query_options.protocol.timeout,
+            query_options.next_partition_key,
+            query_options.next_row_key,
+        );
+        const metadata = try call.takeResponse();
+        return .{
+            .value = value,
+            .status = metadata.status,
+            .headers = metadata.headers,
+            .arena = arena,
+            .allocator = allocator,
+        };
+    }
+
+    /// Result-preserving counterpart to `queryEntities`. HTTP failures retain
+    /// structured Tables error details for pagers and advanced callers.
+    pub fn queryEntitiesResult(
+        self: *ProtocolClient,
+        allocator: std.mem.Allocator,
+        table_name: []const u8,
+        query_options: options.QueryEntitiesOptions,
     ) !responses.TableResult(responses.SdkResponse(ProtocolTable.QueryEntitiesResult)) {
         try request.validateTableName(table_name);
         try request.validateProtocolOptions(query_options.protocol);
@@ -650,4 +700,49 @@ test "invalid generated call inputs fail before transport" {
         client.queryEntity(allocator, "Table123", "bad/key", "rk", .{}),
     );
     try std.testing.expectEqual(@as(usize, 0), mock.call_count);
+}
+
+test "queryEntities retains its source-compatible raw response signature" {
+    const QueryEntitiesFn = fn (
+        *ProtocolClient,
+        std.mem.Allocator,
+        []const u8,
+        options.QueryEntitiesOptions,
+    ) anyerror!responses.SdkResponse(QueryEntitiesResponse);
+    const query_entities: QueryEntitiesFn = ProtocolClient.queryEntities;
+
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200,
+        \\{"value":[]}
+    );
+    defer mock.deinit();
+    mock.response_headers_list = &.{
+        .{ .name = "x-ms-version", .value = "2019-02-02" },
+        .{ .name = "Date", .value = "Sun, 26 Jul 2026 00:00:00 GMT" },
+        .{ .name = "Content-Type", .value = "application/json" },
+    };
+    const base_pipeline: core.pipeline.HttpPipeline = .{
+        .policies = &.{},
+        .transport_impl = mock.asTransport(),
+    };
+    var client = try ProtocolClient.init(
+        allocator,
+        "https://account.table.core.windows.net",
+        base_pipeline,
+        .{},
+    );
+    defer client.deinit();
+
+    var response = try query_entities(&client, allocator, "Table123", .{
+        .top = 1,
+        .next_partition_key = "p /%?",
+        .next_row_key = "r /%?",
+    });
+    defer response.deinit();
+    try std.testing.expectEqual(@as(u16, 200), response.status);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        mock.last_url.?,
+        "NextPartitionKey=p%20%2F%25%3F&NextRowKey=r%20%2F%25%3F",
+    ) != null);
 }
