@@ -226,7 +226,9 @@ Their `*Result` variants retain non-2xx service failures as `TableError`.
 metadata format, and an initial continuation through `ListTablesOptions`.
 Each page exposes the generated table wire response plus status and raw
 headers. Page values are borrowed from the pager until its next successful
-request or `deinit`.
+request or `deinit`. A pager owns an immutable protocol configuration copy,
+but borrows the service client's heap-stable pipeline state; deinitialize it
+before its parent service client.
 
 The pipeline policy order is request ID, telemetry, retry, then authentication.
 Putting authentication after retry ensures date-sensitive SharedKeyLite

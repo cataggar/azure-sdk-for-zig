@@ -50,6 +50,28 @@ pub const ProtocolClient = struct {
         self.* = undefined;
     }
 
+    /// Clones immutable request configuration while retaining the same
+    /// heap-stable pipeline. The source client and its pipeline owner must
+    /// outlive the clone.
+    pub fn clone(self: *const ProtocolClient, allocator: std.mem.Allocator) !ProtocolClient {
+        if (self.endpoint.has_query) {
+            const endpoint = try std.fmt.allocPrint(
+                allocator,
+                "{s}?{s}",
+                .{ self.endpoint.base_url, self.endpoint.raw_query },
+            );
+            defer allocator.free(endpoint);
+            return init(allocator, endpoint, self.pipeline, .{
+                .api_version = self.api_version,
+                .endpoint_query_is_sas = self.endpoint_query_is_sas,
+            });
+        }
+        return init(allocator, self.endpoint.base_url, self.pipeline, .{
+            .api_version = self.api_version,
+            .endpoint_query_is_sas = self.endpoint_query_is_sas,
+        });
+    }
+
     pub fn queryEntity(
         self: *ProtocolClient,
         allocator: std.mem.Allocator,

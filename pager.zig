@@ -13,7 +13,9 @@ pub const ListTablesPage = responses.SdkResponse(protocol_client.QueryTablesResp
 
 pub const TablePager = struct {
     allocator: std.mem.Allocator,
-    protocol: *protocol_client.ProtocolClient,
+    /// Owns immutable endpoint/version configuration while borrowing the
+    /// parent client's heap-stable pipeline. The parent must outlive this pager.
+    protocol: protocol_client.ProtocolClient,
     options: options.ListTablesOptions,
     continuation_token: ?[]u8,
     current: ?ListTablesPage = null,
@@ -27,9 +29,11 @@ pub const TablePager = struct {
         if (list_options.top) |top| {
             if (top <= 0) return error.InvalidTop;
         }
+        var owned_protocol = try protocol.clone(allocator);
+        errdefer owned_protocol.deinit();
         return .{
             .allocator = allocator,
-            .protocol = protocol,
+            .protocol = owned_protocol,
             .options = list_options,
             .continuation_token = if (list_options.continuation_token) |token|
                 try allocator.dupe(u8, token)
@@ -41,6 +45,7 @@ pub const TablePager = struct {
     pub fn deinit(self: *TablePager) void {
         if (self.current) |*page| page.deinit();
         if (self.continuation_token) |token| self.allocator.free(token);
+        self.protocol.deinit();
         self.* = undefined;
     }
 

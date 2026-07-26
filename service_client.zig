@@ -269,6 +269,20 @@ const CountingCredential = struct {
     }
 };
 
+const MovedServicePager = struct {
+    service: TableServiceClient,
+    table_pager: pager.TablePager,
+};
+
+fn moveServiceWithPager(
+    service: TableServiceClient,
+    allocator: std.mem.Allocator,
+) !MovedServicePager {
+    var relocated = service;
+    const table_pager = try relocated.listTables(allocator, .{});
+    return .{ .service = relocated, .table_pager = table_pager };
+}
+
 test "derived clients share token cache and transport and borrow pipeline state" {
     const allocator = std.testing.allocator;
     var transport = core.http.MockTransport.init(allocator, 200, "{}");
@@ -298,6 +312,57 @@ test "derived clients share token cache and transport and borrow pipeline state"
 
     try std.testing.expectEqual(@as(usize, 1), credential.calls);
     try std.testing.expectEqual(@as(usize, 2), transport.call_count);
+}
+
+test "table pager survives a service client move across continuation pages" {
+    const allocator = std.testing.allocator;
+    const pages = [_]core.http.SequenceMockTransport.CannedResponse{
+        .{
+            .status = 200,
+            .body = "{\"value\":[{\"TableName\":\"First\"}]}",
+            .headers = &.{
+                .{ .name = "x-ms-version", .value = "2019-02-02" },
+                .{ .name = "Date", .value = "Sun, 26 Jul 2026 00:00:00 GMT" },
+                .{ .name = "Content-Type", .value = "application/json" },
+                .{ .name = "x-ms-continuation-NextTableName", .value = "Second" },
+            },
+        },
+        .{
+            .status = 200,
+            .body = "{\"value\":[{\"TableName\":\"Second\"}]}",
+            .headers = &.{
+                .{ .name = "x-ms-version", .value = "2019-02-02" },
+                .{ .name = "Date", .value = "Sun, 26 Jul 2026 00:00:00 GMT" },
+                .{ .name = "Content-Type", .value = "application/json" },
+            },
+        },
+    };
+    var transport = core.http.SequenceMockTransport.init(allocator, &pages);
+    var credential = CountingCredential{};
+    var source = try TableServiceClient.initWithToken(
+        allocator,
+        "https://account.table.core.windows.net",
+        credential.asCredential(),
+        transport.asTransport(),
+        .{},
+    );
+    var moved = try moveServiceWithPager(source, allocator);
+    source = undefined;
+    defer moved.service.deinit();
+    defer moved.table_pager.deinit();
+
+    const first = try moved.table_pager.next();
+    try std.testing.expect(first != null);
+    try std.testing.expectEqualStrings("First", switch (first.?.value) {
+        .status_200 => |value| value.body.value.?[0].table_name.?,
+    });
+    const second = try moved.table_pager.next();
+    try std.testing.expect(second != null);
+    try std.testing.expectEqualStrings("Second", switch (second.?.value) {
+        .status_200 => |value| value.body.value.?[0].table_name.?,
+    });
+    try std.testing.expectEqual(@as(usize, 2), transport.call_count);
+    try std.testing.expectEqual(@as(usize, 1), credential.calls);
 }
 
 test "token service client rejects HTTP before credential and transport use" {
