@@ -92,4 +92,26 @@ pub fn build(b: *std.Build) void {
         "Live: list containers and blobs via AAD token",
     );
     list_live_step.dependOn(&run_list_live.step);
+
+    const conv_live = b.addExecutable(.{
+        .name = "storage-blob-convenience-live",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/blob_convenience_live.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "azure_sdk_core", .module = core_mod },
+                .{ .name = "azure_sdk_storage_blobs", .module = blobs_mod },
+            },
+        }),
+    });
+    examples_step.dependOn(&conv_live.step);
+    test_step.dependOn(&conv_live.step);
+    const run_conv_live = b.addRunArtifact(conv_live);
+    if (b.args) |args| run_conv_live.addArgs(args);
+    const conv_live_step = b.step(
+        "blob-convenience-live",
+        "Live: exists + auto-chunking upload + download round trip via AAD token",
+    );
+    conv_live_step.dependOn(&run_conv_live.step);
 }
