@@ -21,13 +21,15 @@ pub const ProtocolClient = struct {
     endpoint: request.NormalizedEndpoint,
     endpoint_query_is_sas: bool,
     api_version: []u8,
-    mutation_max_retries: u32,
+    mutation_retry: options.RetryOptions,
+    default_operation_timeout_ms: ?u64,
     pipeline: core.pipeline.HttpPipeline,
 
     pub const InitOptions = struct {
         api_version: []const u8 = options.latest_api_version,
         endpoint_query_is_sas: bool = false,
-        mutation_max_retries: u32 = 3,
+        mutation_retry: options.RetryOptions = .{},
+        default_operation_timeout_ms: ?u64 = null,
     };
 
     pub fn init(
@@ -44,7 +46,8 @@ pub const ProtocolClient = struct {
             .endpoint = normalized,
             .endpoint_query_is_sas = init_options.endpoint_query_is_sas,
             .api_version = try allocator.dupe(u8, init_options.api_version),
-            .mutation_max_retries = init_options.mutation_max_retries,
+            .mutation_retry = init_options.mutation_retry,
+            .default_operation_timeout_ms = init_options.default_operation_timeout_ms,
             .pipeline = http_pipeline,
         };
     }
@@ -69,13 +72,15 @@ pub const ProtocolClient = struct {
             return init(allocator, endpoint, self.pipeline, .{
                 .api_version = self.api_version,
                 .endpoint_query_is_sas = self.endpoint_query_is_sas,
-                .mutation_max_retries = self.mutation_max_retries,
+                .mutation_retry = self.mutation_retry,
+                .default_operation_timeout_ms = self.default_operation_timeout_ms,
             });
         }
         return init(allocator, self.endpoint.base_url, self.pipeline, .{
             .api_version = self.api_version,
             .endpoint_query_is_sas = self.endpoint_query_is_sas,
-            .mutation_max_retries = self.mutation_max_retries,
+            .mutation_retry = self.mutation_retry,
+            .default_operation_timeout_ms = self.default_operation_timeout_ms,
         });
     }
 
@@ -364,6 +369,7 @@ pub const ProtocolClient = struct {
             .return_content,
             properties,
         ) catch |operation_error| {
+            if (operation_error == error.WriteFailed) return error.OutOfMemory;
             if (operation_error != error.AzureRequestFailed) return operation_error;
             var metadata = try call.takeResponse();
             const table_error = try errorsFromMetadata(allocator, &metadata);
@@ -573,6 +579,7 @@ pub const ProtocolClient = struct {
                 row_key,
                 properties,
             ) catch |operation_error| {
+                if (operation_error == error.WriteFailed) return error.OutOfMemory;
                 if (operation_error != error.AzureRequestFailed) return operation_error;
                 return self.mutationFailure(allocator, arena, &call);
             },
@@ -586,6 +593,7 @@ pub const ProtocolClient = struct {
                 row_key,
                 properties,
             ) catch |operation_error| {
+                if (operation_error == error.WriteFailed) return error.OutOfMemory;
                 if (operation_error != error.AzureRequestFailed) return operation_error;
                 return self.mutationFailure(allocator, arena, &call);
             },
@@ -630,10 +638,10 @@ pub const ProtocolClient = struct {
             self.pipeline,
             if (self.endpoint.has_query) self.endpoint.raw_query else null,
             self.endpoint_query_is_sas,
-            call_options.operation_timeout_ms,
+            call_options.operation_timeout_ms orelse self.default_operation_timeout_ms,
             call_options.timeout,
             call_options.policies,
-            self.mutation_max_retries,
+            self.mutation_retry,
             conditional,
         );
     }

@@ -14,6 +14,22 @@ const HttpTransport = core.http.HttpTransport;
 const Request = core.http.Request;
 const Response = core.http.Response;
 
+fn nanoTimestamp() i128 {
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    return std.Io.Timestamp.now(threaded.io(), .real).toNanoseconds();
+}
+
+fn monotonicNanoTimestamp() i128 {
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    return std.Io.Timestamp.now(threaded.io(), .awake).toNanoseconds();
+}
+
+fn sleepMs(ms: u64) void {
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    const nanoseconds = @as(i96, ms) * std.time.ns_per_ms;
+    threaded.io().sleep(.fromNanoseconds(nanoseconds), .awake) catch {};
+}
+
 pub const user_agent = "azsdk-zig-data-tables/0.1.0";
 
 /// Heap-owned policy storage shared by an owning client and its derived
@@ -169,6 +185,18 @@ pub const PipelineState = struct {
             .shared_key => |*policy| policy.credential,
             else => null,
         };
+    }
+
+    pub fn retryOptions(self: *const PipelineState) options.RetryOptions {
+        return .{
+            .max_retries = self.retry.max_retries,
+            .initial_delay_ms = self.retry.initial_delay_ms,
+            .max_delay_ms = self.retry.max_delay_ms,
+        };
+    }
+
+    pub fn operationTimeoutMs(self: *const PipelineState) ?u64 {
+        return self.request_options.operation_timeout_ms;
     }
 };
 
@@ -353,7 +381,7 @@ pub const CallContext = struct {
         operation_timeout_ms: ?u64,
         server_timeout: ?i32,
         custom_policies: []const *HttpPolicy,
-        max_pre_transport_retries: u32,
+        retry_options: options.RetryOptions,
         conditional: bool,
     ) !CallContext {
         return initInternal(
@@ -366,7 +394,7 @@ pub const CallContext = struct {
             custom_policies,
             .failure_only,
             .{
-                .max_pre_transport_retries = max_pre_transport_retries,
+                .options = retry_options,
                 .conditional = conditional,
             },
         );
@@ -449,7 +477,7 @@ pub const CallContext = struct {
 const CaptureMode = enum { none, failure_only, all };
 
 const MutationRetry = struct {
-    max_pre_transport_retries: u32,
+    options: options.RetryOptions,
     conditional: bool,
 };
 
@@ -534,22 +562,92 @@ const ConfigPolicy = struct {
         const old_retryable = request.retryable;
         request.retryable = false;
         defer request.retryable = old_retryable;
-        var retry_count: u32 = 0;
+        const deadline_ns: ?i128 = if (request.operation_timeout_ms) |timeout_ms|
+            std.math.add(
+                i128,
+                monotonicNanoTimestamp(),
+                @as(i128, timeout_ms) * std.time.ns_per_ms,
+            ) catch std.math.maxInt(i128)
+        else
+            null;
+        var attempt: u32 = 0;
+        var prng = std.Random.DefaultPrng.init(
+            @truncate(@as(u128, @bitCast(nanoTimestamp()))),
+        );
         while (true) {
+            if (deadlineExpired(deadline_ns)) return error.OperationTimedOut;
             request.transport_started = false;
-            return callNext(request, next, transport) catch |err| {
+            const result = callNext(request, next, transport);
+            if (result) |response| return response else |err| {
                 if (request.transport_started) return error.MutationOutcomeUnknown;
                 if (!isRetryablePreTransportError(err) or
-                    retry_count >= mutation.max_pre_transport_retries)
+                    attempt >= mutation.options.max_retries)
                 {
                     return err;
                 }
-                retry_count += 1;
-                continue;
-            };
+                attempt += 1;
+                const delay = retryDelay(mutation.options, &prng, attempt);
+                if (!sleepWithinBudget(delay, deadline_ns))
+                    return error.OperationTimedOut;
+            }
         }
     }
 };
+
+fn retryDelay(
+    retry_options: options.RetryOptions,
+    prng: *std.Random.DefaultPrng,
+    attempt: u32,
+) u64 {
+    const base_delay = exponentialDelayMs(
+        retry_options.initial_delay_ms,
+        retry_options.max_delay_ms,
+        attempt,
+    );
+    const jitter = prng.random().uintLessThan(u64, @max(base_delay, 1));
+    return base_delay / 2 + jitter / 2;
+}
+
+fn deadlineExpired(deadline_ns: ?i128) bool {
+    const deadline = deadline_ns orelse return false;
+    return monotonicNanoTimestamp() >= deadline;
+}
+
+fn sleepWithinBudget(delay_ms: u64, deadline_ns: ?i128) bool {
+    const deadline = deadline_ns orelse {
+        sleepMs(delay_ms);
+        return true;
+    };
+    const now = monotonicNanoTimestamp();
+    if (now >= deadline) return false;
+
+    const remaining_ns = deadline - now;
+    const delay_ns = @as(i128, delay_ms) * std.time.ns_per_ms;
+    if (delay_ns >= remaining_ns) {
+        var threaded: std.Io.Threaded = .init_single_threaded;
+        threaded.io().sleep(
+            .fromNanoseconds(@intCast(remaining_ns)),
+            .awake,
+        ) catch {};
+        return false;
+    }
+    sleepMs(delay_ms);
+    return true;
+}
+
+fn exponentialDelayMs(
+    initial_delay_ms: u64,
+    max_delay_ms: u64,
+    attempt: u32,
+) u64 {
+    if (initial_delay_ms == 0 or max_delay_ms == 0) return 0;
+    const shift = attempt -| 1;
+    if (shift >= 64) return max_delay_ms;
+    const multiplier = @as(u64, 1) << @intCast(shift);
+    const scaled = std.math.mul(u64, initial_delay_ms, multiplier) catch
+        std.math.maxInt(u64);
+    return @min(scaled, max_delay_ms);
+}
 
 fn isRetryablePreTransportError(failure: anyerror) bool {
     return switch (failure) {

@@ -157,7 +157,8 @@ pub const TableClient = struct {
             .{
                 .api_version = api_version,
                 .endpoint_query_is_sas = state.usesSas(),
-                .mutation_max_retries = state.retry.max_retries,
+                .mutation_retry = state.retryOptions(),
+                .default_operation_timeout_ms = state.operationTimeoutMs(),
             },
         );
         errdefer protocol.deinit();
@@ -928,6 +929,24 @@ const PreTransportOncePolicy = struct {
     }
 };
 
+const AlwaysFailPreTransportPolicy = struct {
+    calls: usize = 0,
+    policy: core.pipeline.HttpPolicy = .{ .processFn = &process },
+
+    fn process(
+        policy: *core.pipeline.HttpPolicy,
+        _: *core.http.Request,
+        _: []*core.pipeline.HttpPolicy,
+        _: *core.http.HttpTransport,
+    ) anyerror!core.http.Response {
+        const self: *AlwaysFailPreTransportPolicy = @alignCast(
+            @fieldParentPtr("policy", policy),
+        );
+        self.calls += 1;
+        return error.InjectedPreTransportFailure;
+    }
+};
+
 const FailingMutationTransport = struct {
     calls: usize = 0,
     transport: core.http.HttpTransport = .{ .sendFn = &send },
@@ -1043,6 +1062,97 @@ test "typed and dynamic add share EDM wire behavior and preserve metadata" {
     try std.testing.expectEqualStrings("widget", dynamic_response.value.properties.get("name").?.string);
     try std.testing.expectEqual(std.math.maxInt(i64), dynamic_response.value.properties.get("count").?.int64.value);
     try std.testing.expect(std.mem.indexOf(u8, mock.last_body.?, "\"count@odata.type\":\"Edm.Int64\"") != null);
+}
+
+test "typed and dynamic add update and upsert payloads omit Timestamp exactly" {
+    const ParityEntity = struct {
+        partition_key: []const u8,
+        row_key: []const u8,
+        name: []const u8,
+        timestamp: ?edm.EdmDateTime = null,
+    };
+    const allocator = std.testing.allocator;
+    const expected = "{\"PartitionKey\":\"p\",\"RowKey\":\"r\",\"name\":\"widget\"}";
+    var mock = core.http.MockTransport.init(allocator, 201, expected);
+    defer mock.deinit();
+    mock.response_headers_list = entity_response_headers;
+    var client = try TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=secret",
+        "Table123",
+        mock.asTransport(),
+        .{},
+    );
+    defer client.deinit();
+    const timestamp = try edm.EdmDateTime.init("2026-07-26T00:00:00Z");
+    const typed = ParityEntity{
+        .partition_key = "p",
+        .row_key = "r",
+        .name = "widget",
+        .timestamp = timestamp,
+    };
+    var dynamic = try entity.DynamicEntity.init(allocator, "p", "r");
+    defer dynamic.deinit();
+    try dynamic.put("name", .{ .string = "widget" });
+    try dynamic.setTimestamp(timestamp);
+
+    var typed_add = try client.addEntity(allocator, typed, .{});
+    typed_add.deinit();
+    try std.testing.expectEqualStrings(expected, mock.last_body.?);
+    var dynamic_add = try client.addEntity(allocator, dynamic, .{});
+    dynamic_add.deinit();
+    try std.testing.expectEqualStrings(expected, mock.last_body.?);
+
+    mock.response_status = 204;
+    mock.response_body = "";
+    mock.response_headers_list = mutation_response_headers;
+    var typed_update = try client.updateEntity(allocator, typed, .{});
+    typed_update.deinit();
+    try std.testing.expectEqualStrings(expected, mock.last_body.?);
+    var dynamic_update = try client.updateEntity(allocator, dynamic, .{});
+    dynamic_update.deinit();
+    try std.testing.expectEqualStrings(expected, mock.last_body.?);
+
+    var typed_upsert = try client.upsertEntity(allocator, typed, .{});
+    typed_upsert.deinit();
+    try std.testing.expectEqualStrings(expected, mock.last_body.?);
+    var dynamic_upsert = try client.upsertEntity(allocator, dynamic, .{});
+    dynamic_upsert.deinit();
+    try std.testing.expectEqualStrings(expected, mock.last_body.?);
+}
+
+test "dynamic read retains Timestamp but read-then-update omits it" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200,
+        \\{"PartitionKey":"p","RowKey":"r","name":"server","Timestamp":"2026-07-26T00:00:00Z"}
+    );
+    defer mock.deinit();
+    mock.response_headers_list = entity_response_headers;
+    var client = try TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=secret",
+        "Table123",
+        mock.asTransport(),
+        .{},
+    );
+    defer client.deinit();
+
+    var read = try client.getEntityAs(entity.DynamicEntity, allocator, "p", "r", .{});
+    defer read.deinit();
+    try std.testing.expectEqualStrings(
+        "2026-07-26T00:00:00Z",
+        read.value.timestamp.?.value,
+    );
+
+    mock.response_status = 204;
+    mock.response_body = "";
+    mock.response_headers_list = mutation_response_headers;
+    var updated = try client.updateEntity(allocator, read.value, .{});
+    updated.deinit();
+    try std.testing.expectEqualStrings(
+        "{\"PartitionKey\":\"p\",\"RowKey\":\"r\",\"name\":\"server\"}",
+        mock.last_body.?,
+    );
 }
 
 test "get supports full minimal and no metadata responses" {
@@ -1318,6 +1428,60 @@ test "conditional mutation retries before transport and classifies ambiguity aft
     response.deinit();
     try std.testing.expectEqual(@as(usize, 2), before_transport.calls);
     try std.testing.expectEqual(@as(usize, 1), mock.call_count);
+
+    var exhausted = AlwaysFailPreTransportPolicy{};
+    try std.testing.expectError(
+        error.InjectedPreTransportFailure,
+        client.updateEntityResult(allocator, value, .{
+            .if_match = "W/\"exact\"",
+            .protocol = .{ .policies = &.{&exhausted.policy} },
+        }),
+    );
+    try std.testing.expectEqual(@as(usize, 3), exhausted.calls);
+    try std.testing.expectEqual(@as(usize, 1), mock.call_count);
+
+    var expired = PreTransportOncePolicy{};
+    try std.testing.expectError(
+        error.OperationTimedOut,
+        client.updateEntityResult(allocator, value, .{
+            .if_match = "W/\"exact\"",
+            .protocol = .{
+                .operation_timeout_ms = 0,
+                .policies = &.{&expired.policy},
+            },
+        }),
+    );
+    try std.testing.expectEqual(@as(usize, 0), expired.calls);
+    try std.testing.expectEqual(@as(usize, 1), mock.call_count);
+
+    var tight_mock = core.http.MockTransport.init(allocator, 204, "");
+    defer tight_mock.deinit();
+    tight_mock.response_headers_list = mutation_response_headers;
+    var tight_client = try TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=secret",
+        "Table123",
+        tight_mock.asTransport(),
+        .{
+            .operation_timeout_ms = 1,
+            .retry = .{
+                .max_retries = 2,
+                .initial_delay_ms = 100,
+                .max_delay_ms = 100,
+            },
+        },
+    );
+    defer tight_client.deinit();
+    var tight = AlwaysFailPreTransportPolicy{};
+    try std.testing.expectError(
+        error.OperationTimedOut,
+        tight_client.updateEntityResult(allocator, value, .{
+            .if_match = "W/\"exact\"",
+            .protocol = .{ .policies = &.{&tight.policy} },
+        }),
+    );
+    try std.testing.expectEqual(@as(usize, 1), tight.calls);
+    try std.testing.expectEqual(@as(usize, 0), tight_mock.call_count);
 
     var failing = FailingMutationTransport{};
     var conditional_client = try TableClient.initWithSasUrl(

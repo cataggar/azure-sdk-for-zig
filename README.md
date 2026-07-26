@@ -133,9 +133,12 @@ and removes them. Updates default to wildcard `If-Match` and accept an explicit
 ETag, while upserts omit `If-Match` so a missing entity is created. Mutation
 responses own the returned ETag, status, selected headers, and raw headers.
 Explicit-ETag updates retry only failures before transport entry; a transport
-failure after entry is `error.MutationOutcomeUnknown`. Wildcard updates and
-upserts use normal retries because repeating the same payload is safe, but an
-exhausted transport failure is still classified as outcome-unknown.
+failure after entry is `error.MutationOutcomeUnknown`. Their pre-transport
+retries use the configured retry limit and exponential jittered backoff while
+checking the effective operation deadline before every attempt and delay.
+Wildcard updates and upserts use normal retries because repeating the same
+payload is safe, but an exhausted transport failure is still classified as
+outcome-unknown.
 
 ## Checked feature-parity contract
 
@@ -209,7 +212,9 @@ strings and binary data and must be released with `Codec.deinit`.
 
 For runtime schemas, `DynamicEntity.init` and `put` copy keys and values.
 Release it with `DynamicEntity.deinit`; use `dynamicToJson` and
-`dynamicFromJson` for its OData JSON representation. The original
+`dynamicFromJson` for its OData JSON representation. `Timestamp` is retained
+when decoding service responses but omitted by both typed and dynamic
+serialization because the service owns that field. The original
 string-only `TableEntity` remains available as a compatibility export and
 continues to borrow its keys and values.
 
