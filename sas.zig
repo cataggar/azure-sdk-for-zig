@@ -116,6 +116,15 @@ pub const TablePermissions = struct {
     }
 };
 
+pub const TableAccessPolicy = union(enum) {
+    adHoc: struct {
+        permissions: TablePermissions,
+        startTime: ?UtcTime = null,
+        expiryTime: UtcTime,
+    },
+    stored: []const u8,
+};
+
 pub const Protocol = enum {
     https,
     httpsAndHttp,
@@ -258,12 +267,9 @@ pub const AccountSignatureValues = struct {
 
 pub const TableSignatureValues = struct {
     tableName: []const u8 = "",
-    permissions: TablePermissions = .{},
-    startTime: ?UtcTime = null,
-    expiryTime: ?UtcTime = null,
+    accessPolicy: TableAccessPolicy,
     protocol: Protocol = .https,
     ipRange: ?IPRange = null,
-    identifier: ?[]const u8 = null,
     startPartitionKey: ?[]const u8 = null,
     startRowKey: ?[]const u8 = null,
     endPartitionKey: ?[]const u8 = null,
@@ -277,14 +283,29 @@ pub const TableSignatureValues = struct {
         try self.validate();
 
         var permissions_buffer: [TablePermissions.order.len]u8 = undefined;
-        const permissions = self.permissions.string(&permissions_buffer);
+        const permissions = switch (self.accessPolicy) {
+            .adHoc => |policy| policy.permissions.string(&permissions_buffer),
+            .stored => "",
+        };
         var start_buffer: [32]u8 = undefined;
-        const start = if (self.startTime) |value| try formatTime(&start_buffer, value) else "";
+        const start = switch (self.accessPolicy) {
+            .adHoc => |policy| if (policy.startTime) |value|
+                try formatTime(&start_buffer, value)
+            else
+                "",
+            .stored => "",
+        };
         var expiry_buffer: [32]u8 = undefined;
-        const expiry = if (self.expiryTime) |value| try formatTime(&expiry_buffer, value) else "";
+        const expiry = switch (self.accessPolicy) {
+            .adHoc => |policy| try formatTime(&expiry_buffer, policy.expiryTime),
+            .stored => "",
+        };
         var ip_buffer: [31]u8 = undefined;
         const ip = if (self.ipRange) |value| formatIPRange(&ip_buffer, value) else "";
-        const identifier = self.identifier orelse "";
+        const identifier = switch (self.accessPolicy) {
+            .adHoc => "",
+            .stored => |value| value,
+        };
         const start_pk = self.startPartitionKey orelse "";
         const start_rk = self.startRowKey orelse "";
         const end_pk = self.endPartitionKey orelse "";
@@ -351,24 +372,22 @@ pub const TableSignatureValues = struct {
 
     fn validate(self: TableSignatureValues) !void {
         try request.validateTableName(self.tableName);
-        var permissions_buffer: [TablePermissions.order.len]u8 = undefined;
-        const has_permissions = self.permissions.string(&permissions_buffer).len != 0;
-        if (self.identifier) |identifier| {
-            try validateIdentifier(identifier);
-        } else {
-            if (!has_permissions) return error.MissingSasPermissions;
+        switch (self.accessPolicy) {
+            .adHoc => |policy| {
+                var permissions_buffer: [TablePermissions.order.len]u8 = undefined;
+                if (policy.permissions.string(&permissions_buffer).len == 0)
+                    return error.MissingSasPermissions;
+                try validateTimeRange(policy.startTime, policy.expiryTime);
+            },
+            .stored => |identifier| try validateIdentifier(identifier),
         }
-        if (self.expiryTime) |expiry|
-            try validateTimeRange(self.startTime, expiry)
-        else if (self.identifier == null)
-            return error.MissingSasExpiry;
         if (self.ipRange) |value| try validateIPRange(value);
 
         const has_start_pk = self.startPartitionKey != null;
         const has_start_rk = self.startRowKey != null;
         const has_end_pk = self.endPartitionKey != null;
         const has_end_rk = self.endRowKey != null;
-        if (has_start_pk != has_start_rk or has_end_pk != has_end_rk)
+        if ((!has_start_pk and has_start_rk) or (!has_end_pk and has_end_rk))
             return error.InvalidSasKeyRange;
         if (self.startPartitionKey) |value| try request.validateEntityKey(value);
         if (self.startRowKey) |value| try request.validateEntityKey(value);
@@ -380,12 +399,9 @@ pub const TableSignatureValues = struct {
                 self.startPartitionKey.?,
                 self.endPartitionKey.?,
             );
-            if (partition_order == .gt or
-                (partition_order == .eq and std.mem.order(
-                    u8,
-                    self.startRowKey.?,
-                    self.endRowKey.?,
-                ) == .gt))
+            if (partition_order == .gt or (partition_order == .eq and
+                has_start_rk and has_end_rk and
+                std.mem.order(u8, self.startRowKey.?, self.endRowKey.?) == .gt))
             {
                 return error.InvalidSasKeyRange;
             }
@@ -609,9 +625,11 @@ test "Azure Go SDK table SAS vector adapted to a valid table name" {
     defer credential.deinit();
     var parameters = try (TableSignatureValues{
         .tableName = "faketable",
-        .permissions = .{ .read = true },
-        .startTime = .fromUnixSeconds(1_699_455_845),
-        .expiryTime = .fromUnixSeconds(1_699_459_445),
+        .accessPolicy = .{ .adHoc = .{
+            .permissions = .{ .read = true },
+            .startTime = .fromUnixSeconds(1_699_455_845),
+            .expiryTime = .fromUnixSeconds(1_699_459_445),
+        } },
     }).sign(allocator, &credential);
     defer parameters.deinit();
     const encoded = try parameters.encode(allocator);
@@ -649,13 +667,13 @@ test "official account SAS canonical form and SDK ordering" {
     );
 }
 
-test "table identifier bounds IP and percent encoding are exact" {
+test "stored policy omits inline access fields and signs exact canonical values" {
     const allocator = std.testing.allocator;
     var credential = try vectorCredential(allocator);
     defer credential.deinit();
     var parameters = try (TableSignatureValues{
         .tableName = "People",
-        .identifier = "policy & one",
+        .accessPolicy = .{ .stored = "policy & one" },
         .ipRange = try IPRange.parse("192.0.2.1", "192.0.2.20"),
         .protocol = .httpsAndHttp,
         .startPartitionKey = "A + & = 雪",
@@ -670,6 +688,58 @@ test "table identifier bounds IP and percent encoding are exact" {
         "epk=Z&erk=99&si=policy%20%26%20one&sig=npbOLkJRhAhlx4bDjVjlPs7bAOixqDhZY6DcKvWLsgg%3D&sip=192.0.2.1-192.0.2.20&spk=A%20%2B%20%26%20%3D%20%E9%9B%AA&spr=https%2Chttp&srk=00&sv=2019-02-02&tn=people",
         encoded,
     );
+}
+
+test "partition-only bounds have exact canonical signature" {
+    const allocator = std.testing.allocator;
+    var credential = try vectorCredential(allocator);
+    defer credential.deinit();
+    var parameters = try (TableSignatureValues{
+        .tableName = "People",
+        .accessPolicy = .{ .stored = "policy" },
+        .startPartitionKey = "A",
+        .endPartitionKey = "Z",
+    }).sign(allocator, &credential);
+    defer parameters.deinit();
+    const encoded = try parameters.encode(allocator);
+    defer allocator.free(encoded);
+    try std.testing.expectEqualStrings(
+        "epk=Z&si=policy&sig=HXhHt66%2F1r83Zy%2FXe4rRBwpDvBbBlhr7J8jv2pGO%2BI0%3D&spk=A&spr=https&sv=2019-02-02&tn=people",
+        encoded,
+    );
+}
+
+test "all absent partition-only and partition-row bound combinations are valid" {
+    const allocator = std.testing.allocator;
+    var credential = try vectorCredential(allocator);
+    defer credential.deinit();
+    const Bound = struct {
+        partition: ?[]const u8,
+        row: ?[]const u8,
+    };
+    const starts = [_]Bound{
+        .{ .partition = null, .row = null },
+        .{ .partition = "A", .row = null },
+        .{ .partition = "A", .row = "0" },
+    };
+    const ends = [_]Bound{
+        .{ .partition = null, .row = null },
+        .{ .partition = "Z", .row = null },
+        .{ .partition = "Z", .row = "9" },
+    };
+    for (starts) |start| {
+        for (ends) |end| {
+            var parameters = try (TableSignatureValues{
+                .tableName = "People",
+                .accessPolicy = .{ .stored = "policy" },
+                .startPartitionKey = start.partition,
+                .startRowKey = start.row,
+                .endPartitionKey = end.partition,
+                .endRowKey = end.row,
+            }).sign(allocator, &credential);
+            parameters.deinit();
+        }
+    }
 }
 
 test "SAS validation rejects missing fields combinations and reversed ranges" {
@@ -729,23 +799,25 @@ test "SAS validation rejects missing fields combinations and reversed ranges" {
         error.InvalidSasTimeRange,
         (TableSignatureValues{
             .tableName = "People",
-            .permissions = .{ .read = true },
-            .startTime = .fromUnixSeconds(2),
-            .expiryTime = .fromUnixSeconds(2),
+            .accessPolicy = .{ .adHoc = .{
+                .permissions = .{ .read = true },
+                .startTime = .fromUnixSeconds(2),
+                .expiryTime = .fromUnixSeconds(2),
+            } },
         }).sign(allocator, &credential),
     );
     try std.testing.expectError(
         error.InvalidSasIdentifier,
         (TableSignatureValues{
             .tableName = "People",
-            .identifier = "",
+            .accessPolicy = .{ .stored = "" },
         }).sign(allocator, &credential),
     );
     try std.testing.expectError(
         error.InvalidSasKeyRange,
         (TableSignatureValues{
             .tableName = "People",
-            .identifier = "policy",
+            .accessPolicy = .{ .stored = "policy" },
             .startPartitionKey = "z",
             .startRowKey = "0",
             .endPartitionKey = "a",
@@ -756,8 +828,27 @@ test "SAS validation rejects missing fields combinations and reversed ranges" {
         error.InvalidSasKeyRange,
         (TableSignatureValues{
             .tableName = "People",
-            .identifier = "policy",
+            .accessPolicy = .{ .stored = "policy" },
+            .endRowKey = "z",
+        }).sign(allocator, &credential),
+    );
+    try std.testing.expectError(
+        error.InvalidSasKeyRange,
+        (TableSignatureValues{
+            .tableName = "People",
+            .accessPolicy = .{ .stored = "policy" },
             .startPartitionKey = "a",
+            .startRowKey = "z",
+            .endPartitionKey = "a",
+            .endRowKey = "a",
+        }).sign(allocator, &credential),
+    );
+    try std.testing.expectError(
+        error.InvalidSasKeyRange,
+        (TableSignatureValues{
+            .tableName = "People",
+            .accessPolicy = .{ .stored = "policy" },
+            .startRowKey = "a",
         }).sign(allocator, &credential),
     );
     try std.testing.expectError(
@@ -792,8 +883,10 @@ test "SAS value and query formatting redact all sensitive values" {
     defer credential.deinit();
     const values = TableSignatureValues{
         .tableName = "People",
-        .permissions = .{ .read = true },
-        .expiryTime = .fromUnixSeconds(1_699_459_445),
+        .accessPolicy = .{ .adHoc = .{
+            .permissions = .{ .read = true },
+            .expiryTime = .fromUnixSeconds(1_699_459_445),
+        } },
     };
     var parameters = try values.sign(allocator, &credential);
     defer parameters.deinit();
@@ -828,9 +921,11 @@ fn testSasSigningAllocationFailures(allocator: std.mem.Allocator) !void {
     defer allocator.free(account_url);
     var parameters = try (TableSignatureValues{
         .tableName = "People",
-        .permissions = .{ .read = true },
-        .startTime = .fromUnixSeconds(1_699_455_845),
-        .expiryTime = .fromUnixSeconds(1_699_459_445),
+        .accessPolicy = .{ .adHoc = .{
+            .permissions = .{ .read = true },
+            .startTime = .fromUnixSeconds(1_699_455_845),
+            .expiryTime = .fromUnixSeconds(1_699_459_445),
+        } },
         .ipRange = try IPRange.parse("192.0.2.1", "192.0.2.20"),
         .startPartitionKey = "A & B",
         .startRowKey = "0",

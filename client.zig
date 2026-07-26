@@ -308,17 +308,96 @@ fn serviceEndpointFromSasUrl(
 ) ![]u8 {
     var normalized = try request.NormalizedEndpoint.init(allocator, complete_sas_url);
     defer normalized.deinit();
-    const suffix = try std.fmt.allocPrint(allocator, "/{s}", .{table_name});
-    defer allocator.free(suffix);
-    const base = if (std.mem.endsWith(u8, normalized.base_url, suffix))
-        normalized.base_url[0 .. normalized.base_url.len - suffix.len]
-    else
-        normalized.base_url;
+    const signed_table_name = try tableNameFromSasQuery(allocator, normalized.raw_query);
+    defer if (signed_table_name) |value| allocator.free(value);
+
+    var base = normalized.base_url;
+    if (signed_table_name) |value| {
+        if (!std.ascii.eqlIgnoreCase(value, table_name))
+            return error.SasTableNameMismatch;
+        const slash = std.mem.lastIndexOfScalar(u8, normalized.base_url, '/') orelse
+            return error.InvalidTableSasUrl;
+        if (!std.ascii.eqlIgnoreCase(normalized.base_url[slash + 1 ..], table_name))
+            return error.InvalidTableSasUrl;
+        base = normalized.base_url[0..slash];
+    }
     return std.fmt.allocPrint(
         allocator,
         "{s}?{s}",
         .{ base, normalized.raw_query },
     );
+}
+
+fn tableNameFromSasQuery(
+    allocator: std.mem.Allocator,
+    raw_query: []const u8,
+) !?[]u8 {
+    var result: ?[]u8 = null;
+    errdefer if (result) |value| allocator.free(value);
+    var parameters = std.mem.splitScalar(u8, raw_query, '&');
+    while (parameters.next()) |parameter| {
+        const equal = std.mem.indexOfScalar(u8, parameter, '=') orelse parameter.len;
+        if (!try queryComponentEqlIgnoreCase(parameter[0..equal], "tn")) continue;
+        if (result != null) return error.DuplicateSasTableName;
+        const raw_value = if (equal < parameter.len) parameter[equal + 1 ..] else "";
+        const value = try decodeQueryComponent(allocator, raw_value);
+        errdefer allocator.free(value);
+        request.validateTableName(value) catch return error.InvalidSasTableName;
+        result = value;
+    }
+    return result;
+}
+
+fn queryComponentEqlIgnoreCase(raw: []const u8, expected: []const u8) !bool {
+    var raw_index: usize = 0;
+    var expected_index: usize = 0;
+    while (raw_index < raw.len) : (expected_index += 1) {
+        const byte = try decodeQueryByte(raw, &raw_index);
+        if (expected_index >= expected.len or
+            std.ascii.toLower(byte) != std.ascii.toLower(expected[expected_index]))
+        {
+            return false;
+        }
+    }
+    return expected_index == expected.len;
+}
+
+fn decodeQueryComponent(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+) ![]u8 {
+    var decoded: std.ArrayList(u8) = .empty;
+    errdefer decoded.deinit(allocator);
+    var index: usize = 0;
+    while (index < raw.len)
+        try decoded.append(allocator, try decodeQueryByte(raw, &index));
+    return decoded.toOwnedSlice(allocator);
+}
+
+fn decodeQueryByte(raw: []const u8, index: *usize) !u8 {
+    const byte = raw[index.*];
+    if (byte == '+') {
+        index.* += 1;
+        return ' ';
+    }
+    if (byte != '%') {
+        index.* += 1;
+        return byte;
+    }
+    if (index.* + 2 >= raw.len) return error.InvalidSasQueryEncoding;
+    const high = queryHexDigit(raw[index.* + 1]) orelse
+        return error.InvalidSasQueryEncoding;
+    const low = queryHexDigit(raw[index.* + 2]) orelse
+        return error.InvalidSasQueryEncoding;
+    index.* += 3;
+    return high * 16 + low;
+}
+
+fn queryHexDigit(byte: u8) ?u8 {
+    if (byte >= '0' and byte <= '9') return byte - '0';
+    if (byte >= 'a' and byte <= 'f') return byte - 'a' + 10;
+    if (byte >= 'A' and byte <= 'F') return byte - 'A' + 10;
+    return null;
 }
 
 const TestCredential = struct {
@@ -508,7 +587,7 @@ fn testSasOperationAllocationFailures(allocator: std.mem.Allocator) !void {
     defer mock.deinit();
     var sas = try TableClient.initWithSasUrl(
         allocator,
-        "https://account.table.core.windows.net?sv=1%2F2&sig=allocation+SECRET%3D&sp=r",
+        "https://account.table.core.windows.net/Table123?sv=1%2F2&sig=allocation+SECRET%3D&sp=r&tn=Table123",
         "Table123",
         mock.asTransport(),
         .{},
@@ -546,9 +625,11 @@ test "table SAS URL is exact and full URL initializes a credential-free client" 
     );
     defer shared.deinit();
     const sas_url = try shared.getTableSasUrl(allocator, .{
-        .permissions = .{ .read = true },
-        .startTime = .fromUnixSeconds(1_699_455_845),
-        .expiryTime = .fromUnixSeconds(1_699_459_445),
+        .accessPolicy = .{ .adHoc = .{
+            .permissions = .{ .read = true },
+            .startTime = .fromUnixSeconds(1_699_455_845),
+            .expiryTime = .fromUnixSeconds(1_699_459_445),
+        } },
         .startPartitionKey = "A",
         .startRowKey = "0",
         .endPartitionKey = "Z",
@@ -575,8 +656,10 @@ test "table SAS URL is exact and full URL initializes a credential-free client" 
     try std.testing.expectError(
         error.SasRequiresSharedKeyCredential,
         anonymous.getTableSasUrl(allocator, .{
-            .permissions = .{ .read = true },
-            .expiryTime = .fromUnixSeconds(1_699_459_445),
+            .accessPolicy = .{ .adHoc = .{
+                .permissions = .{ .read = true },
+                .expiryTime = .fromUnixSeconds(1_699_459_445),
+            } },
         }),
     );
     var formatted: std.Io.Writer.Allocating = .init(allocator);
@@ -599,4 +682,122 @@ test "table SAS URL is exact and full URL initializes a credential-free client" 
         transport.last_url.?,
         sas_url[(std.mem.indexOfScalar(u8, sas_url, '?').? + 1)..],
     ));
+}
+
+test "account SAS preserves a custom account path equal to the table name" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 200, "{}");
+    defer transport.deinit();
+    const account_sas =
+        "http://127.0.0.1:10002/People?sv=2019-02-02&ss=t&srt=o&sig=opaque%2Bvalue%3D";
+    var table = try TableClient.initWithSasUrl(
+        allocator,
+        account_sas,
+        "People",
+        transport.asTransport(),
+        .{},
+    );
+    defer table.deinit();
+    try std.testing.expectEqualStrings(
+        "http://127.0.0.1:10002/People",
+        table.protocol.endpoint.base_url,
+    );
+    try std.testing.expectEqualStrings(
+        "sv=2019-02-02&ss=t&srt=o&sig=opaque%2Bvalue%3D",
+        table.protocol.endpoint.raw_query,
+    );
+    var response = try table.getEntity(allocator, "p", "r");
+    response.deinit();
+    try std.testing.expect(std.mem.startsWith(
+        u8,
+        transport.last_url.?,
+        "http://127.0.0.1:10002/People/People(PartitionKey='p',RowKey='r')?",
+    ));
+}
+
+test "table SAS scope uses decoded case-insensitive tn without changing query bytes" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 200, "{}");
+    defer transport.deinit();
+    const table_sas =
+        "http://127.0.0.1:10002/People/People?sv=2019-02-02&%54%6E=%50eople&sig=opaque%2Bvalue%3D";
+    var table = try TableClient.initWithSasUrl(
+        allocator,
+        table_sas,
+        "People",
+        transport.asTransport(),
+        .{},
+    );
+    defer table.deinit();
+    try std.testing.expectEqualStrings(
+        "http://127.0.0.1:10002/People",
+        table.protocol.endpoint.base_url,
+    );
+    try std.testing.expectEqualStrings(
+        "sv=2019-02-02&%54%6E=%50eople&sig=opaque%2Bvalue%3D",
+        table.protocol.endpoint.raw_query,
+    );
+    var response = try table.getEntity(allocator, "p", "r");
+    response.deinit();
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        transport.last_url.?,
+        "?sv=2019-02-02&%54%6E=%50eople&sig=opaque%2Bvalue%3D",
+    ) != null);
+}
+
+test "table SAS scope rejects mismatched duplicate and malformed tn" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 200, "{}");
+    defer transport.deinit();
+    try std.testing.expectError(
+        error.SasTableNameMismatch,
+        TableClient.initWithSasUrl(
+            allocator,
+            "https://account.table.core.windows.net/Other?sv=1&tn=Other&sig=x",
+            "People",
+            transport.asTransport(),
+            .{},
+        ),
+    );
+    try std.testing.expectError(
+        error.DuplicateSasTableName,
+        TableClient.initWithSasUrl(
+            allocator,
+            "https://account.table.core.windows.net/People?tn=People&TN=%50eople&sig=x",
+            "People",
+            transport.asTransport(),
+            .{},
+        ),
+    );
+    try std.testing.expectError(
+        error.InvalidTableSasUrl,
+        TableClient.initWithSasUrl(
+            allocator,
+            "https://account.table.core.windows.net?tn=People&sig=x",
+            "People",
+            transport.asTransport(),
+            .{},
+        ),
+    );
+    try std.testing.expectError(
+        error.InvalidSasQueryEncoding,
+        TableClient.initWithSasUrl(
+            allocator,
+            "https://account.table.core.windows.net/People?t%ZZ=People&sig=x",
+            "People",
+            transport.asTransport(),
+            .{},
+        ),
+    );
+    try std.testing.expectError(
+        error.InvalidSasQueryEncoding,
+        TableClient.initWithSasUrl(
+            allocator,
+            "https://account.table.core.windows.net/People?tn=Peop%ZZle&sig=x",
+            "People",
+            transport.asTransport(),
+            .{},
+        ),
+    );
 }

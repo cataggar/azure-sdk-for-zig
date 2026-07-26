@@ -32,6 +32,7 @@ pub const AccountServices = sas.AccountServices;
 pub const AccountResourceTypes = sas.AccountResourceTypes;
 pub const TableSignatureValues = sas.TableSignatureValues;
 pub const TablePermissions = sas.TablePermissions;
+pub const TableAccessPolicy = sas.TableAccessPolicy;
 pub const SasProtocol = sas.Protocol;
 pub const SasIPRange = sas.IPRange;
 pub const SasUtcTime = sas.UtcTime;
@@ -87,6 +88,7 @@ test {
     _ = AccountResourceTypes;
     _ = TableSignatureValues;
     _ = TablePermissions;
+    _ = TableAccessPolicy;
     _ = SasProtocol;
     _ = SasIPRange;
     _ = SasUtcTime;
