@@ -134,7 +134,7 @@ pub fn canonicalizedResource(
     var parts = std.mem.splitScalar(u8, raw_query, '&');
     while (parts.next()) |part| {
         const equal = std.mem.indexOfScalar(u8, part, '=') orelse part.len;
-        if (!std.mem.eql(u8, part[0..equal], "comp")) continue;
+        if (!std.ascii.eqlIgnoreCase(part[0..equal], "comp")) continue;
         if (comp != null) return error.InvalidCompQuery;
         comp = try percentDecode(allocator, if (equal < part.len) part[equal + 1 ..] else "");
     }
@@ -224,4 +224,31 @@ test "canonical resource includes paths and only decoded comp" {
     const entity = try canonicalizedResource(allocator, "account", "https://account.table.core.windows.net/People(PartitionKey='p',RowKey='r')?sig=secret&comp=acl%2Fvalue&x=1");
     defer allocator.free(entity);
     try std.testing.expectEqualStrings("/account/People(PartitionKey='p',RowKey='r')?comp=acl/value", entity);
+}
+
+test "canonical resource recognizes comp case-insensitively and emits lowercase comp" {
+    const allocator = std.testing.allocator;
+    const title_case = try canonicalizedResource(
+        allocator,
+        "account",
+        "https://account.table.core.windows.net?Comp=acl%2Fvalue",
+    );
+    defer allocator.free(title_case);
+    try std.testing.expectEqualStrings("/account/?comp=acl/value", title_case);
+
+    const upper_case = try canonicalizedResource(
+        allocator,
+        "account",
+        "https://account.table.core.windows.net?COMP=properties%20value",
+    );
+    defer allocator.free(upper_case);
+    try std.testing.expectEqualStrings("/account/?comp=properties value", upper_case);
+    try std.testing.expectError(
+        error.InvalidCompQuery,
+        canonicalizedResource(
+            allocator,
+            "account",
+            "https://account.table.core.windows.net?Comp=one&COMP=two",
+        ),
+    );
 }

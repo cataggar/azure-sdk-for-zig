@@ -32,6 +32,7 @@ pub const PipelineState = struct {
     pipeline: core.pipeline.HttpPipeline,
     owned_user_agent: []u8,
     owned_client_request_id: ?[]u8,
+    owned_api_version: []u8,
 
     pub fn create(
         allocator: std.mem.Allocator,
@@ -94,6 +95,9 @@ pub const PipelineState = struct {
         const state = try allocator.create(PipelineState);
         errdefer allocator.destroy(state);
 
+        const api_version = try allocator.dupe(u8, init_options.api_version);
+        errdefer allocator.free(api_version);
+
         const request_id = if (init_options.client_request_id) |value|
             try allocator.dupe(u8, value)
         else
@@ -125,7 +129,9 @@ pub const PipelineState = struct {
             .pipeline = undefined,
             .owned_user_agent = agent,
             .owned_client_request_id = request_id,
+            .owned_api_version = api_version,
         };
+        state.authentication.bindApiVersion(state.owned_api_version);
         state.retry.max_retries = init_options.retry.max_retries;
         state.retry.initial_delay_ms = init_options.retry.initial_delay_ms;
         state.retry.max_delay_ms = init_options.retry.max_delay_ms;
@@ -150,6 +156,7 @@ pub const PipelineState = struct {
         allocator.free(self.policy_ptrs);
         allocator.free(self.owned_user_agent);
         if (self.owned_client_request_id) |value| allocator.free(value);
+        allocator.free(self.owned_api_version);
         allocator.destroy(self);
     }
 };
@@ -191,6 +198,13 @@ const Authentication = union(enum) {
         switch (self.*) {
             .bearer => |*policy| policy.deinit(),
             .shared_key, .none => {},
+        }
+    }
+
+    fn bindApiVersion(self: *Authentication, api_version: []const u8) void {
+        switch (self.*) {
+            .shared_key => |*policy| policy.api_version = api_version,
+            .bearer, .none => {},
         }
     }
 };
@@ -514,4 +528,32 @@ test "stable policy order authenticates every retry and runs caller policies" {
     try std.testing.expectEqual(@as(usize, 2), configured.calls);
     try std.testing.expectEqual(@as(usize, 2), per_call.calls);
     try std.testing.expectEqual(@as(usize, 1), mock.call_count);
+}
+
+test "Shared Key policy retains an owned API version across caller mutation and policy moves" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200, "{}");
+    defer mock.deinit();
+    var credential = try auth.SharedKeyCredential.init(allocator, "account", "YWNjb3VudC1rZXk=");
+    defer credential.deinit();
+
+    const supplied_api_version = try allocator.dupe(u8, "2020-owned-version");
+    var state = try PipelineState.createSharedKey(
+        allocator,
+        &credential,
+        mock.asTransport(),
+        .{ .api_version = supplied_api_version },
+    );
+    defer state.deinit();
+    @memset(supplied_api_version, 'x');
+    allocator.free(supplied_api_version);
+
+    var request = Request.init(allocator, .GET, "https://account.table.core.windows.net");
+    defer request.deinit();
+    var response = try state.pipeline.send(&request);
+    defer response.deinit();
+    try std.testing.expectEqualStrings(
+        "2020-owned-version",
+        mock.last_headers.get("x-ms-version").?,
+    );
 }
