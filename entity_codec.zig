@@ -39,7 +39,10 @@ pub fn EntityCodec(comptime T: type) type {
         pub fn toJson(allocator: std.mem.Allocator, value: T) ![]u8 {
             var output: std.Io.Writer.Allocating = .init(allocator);
             errdefer output.deinit();
-            try Self.serialize(value, &output.writer);
+            Self.serialize(value, &output.writer) catch |err| {
+                if (err == error.WriteFailed) return error.OutOfMemory;
+                return err;
+            };
             return output.toOwnedSlice();
         }
 
@@ -96,7 +99,14 @@ pub fn EntityCodec(comptime T: type) type {
 pub fn dynamicToJson(allocator: std.mem.Allocator, value: DynamicEntity) ![]u8 {
     var output: std.Io.Writer.Allocating = .init(allocator);
     errdefer output.deinit();
-    const writer = &output.writer;
+    serializeDynamic(value, &output.writer) catch |err| {
+        if (err == error.WriteFailed) return error.OutOfMemory;
+        return err;
+    };
+    return output.toOwnedSlice();
+}
+
+fn serializeDynamic(value: DynamicEntity, writer: anytype) !void {
     var first = true;
     try writer.writeByte('{');
     try writePropertyPrefix(writer, &first, "PartitionKey");
@@ -120,7 +130,6 @@ pub fn dynamicToJson(allocator: std.mem.Allocator, value: DynamicEntity) ![]u8 {
         try writeJsonString(writer, timestamp.value);
     }
     try writer.writeByte('}');
-    return output.toOwnedSlice();
 }
 
 /// Decodes a runtime-schema entity. The returned entity owns its keys and

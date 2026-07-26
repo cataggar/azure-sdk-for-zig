@@ -66,9 +66,13 @@ pub const CreateTableResponse = responses.SdkResponse(protocol_client.CreateTabl
 pub const DeleteTableResponse = responses.SdkResponse(protocol_client.DeleteTableResponse);
 pub const EntityResponse = responses.EntityResponse;
 pub const DeleteEntityResponse = responses.DeleteEntityResponse;
+pub const MutationEntityResponse = responses.MutationEntityResponse;
 pub const AddEntityOptions = options.AddEntityOptions;
 pub const GetEntityOptions = options.GetEntityOptions;
 pub const DeleteEntityOptions = options.DeleteEntityOptions;
+pub const UpdateMode = options.UpdateMode;
+pub const UpdateEntityOptions = options.UpdateEntityOptions;
+pub const UpsertEntityOptions = options.UpsertEntityOptions;
 pub const unwrapGetEntity = responses.unwrapGetEntity;
 pub const unwrapCreateEntity = responses.unwrapCreateEntity;
 
@@ -137,9 +141,13 @@ test {
     _ = DeleteTableResponse;
     _ = EntityResponse;
     _ = DeleteEntityResponse;
+    _ = MutationEntityResponse;
     _ = AddEntityOptions;
     _ = GetEntityOptions;
     _ = DeleteEntityOptions;
+    _ = UpdateMode;
+    _ = UpdateEntityOptions;
+    _ = UpsertEntityOptions;
     _ = unwrapGetEntity;
     _ = unwrapCreateEntity;
 }

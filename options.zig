@@ -62,6 +62,27 @@ pub const DeleteEntityOptions = struct {
     if_match: []const u8 = "*",
 };
 
+/// Selects the service's closed set of entity mutation semantics.
+pub const UpdateMode = enum {
+    /// Preserve properties omitted from the request body.
+    merge,
+    /// Remove properties omitted from the request body.
+    replace,
+};
+
+pub const UpdateEntityOptions = struct {
+    protocol: ProtocolOptions = .{},
+    mode: UpdateMode = .merge,
+    /// `"*"` updates the current entity unconditionally; an entity ETag makes
+    /// the update conditional.
+    if_match: []const u8 = "*",
+};
+
+pub const UpsertEntityOptions = struct {
+    protocol: ProtocolOptions = .{},
+    mode: UpdateMode = .merge,
+};
+
 pub const RetryOptions = struct {
     max_retries: u32 = 3,
     initial_delay_ms: u64 = 800,

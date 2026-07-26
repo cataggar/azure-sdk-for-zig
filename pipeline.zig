@@ -294,6 +294,7 @@ pub const CallContext = struct {
             server_timeout,
             custom_policies,
             .failure_only,
+            null,
         );
     }
 
@@ -315,6 +316,7 @@ pub const CallContext = struct {
             server_timeout,
             custom_policies,
             .all,
+            null,
         );
     }
 
@@ -336,6 +338,37 @@ pub const CallContext = struct {
             server_timeout,
             custom_policies,
             .none,
+            null,
+        );
+    }
+
+    /// Entity mutations with an explicit ETag retry only failures known to
+    /// have happened before transport entry. Wildcard updates and upserts use
+    /// the standard retry policy because repeating their payload is safe.
+    pub fn initMutation(
+        allocator: std.mem.Allocator,
+        base: core.pipeline.HttpPipeline,
+        raw_endpoint_query: ?[]const u8,
+        endpoint_query_is_sas: bool,
+        operation_timeout_ms: ?u64,
+        server_timeout: ?i32,
+        custom_policies: []const *HttpPolicy,
+        max_pre_transport_retries: u32,
+        conditional: bool,
+    ) !CallContext {
+        return initInternal(
+            allocator,
+            base,
+            raw_endpoint_query,
+            endpoint_query_is_sas,
+            operation_timeout_ms,
+            server_timeout,
+            custom_policies,
+            .failure_only,
+            .{
+                .max_pre_transport_retries = max_pre_transport_retries,
+                .conditional = conditional,
+            },
         );
     }
 
@@ -348,6 +381,7 @@ pub const CallContext = struct {
         server_timeout: ?i32,
         custom_policies: []const *HttpPolicy,
         capture_mode: CaptureMode,
+        mutation_retry: ?MutationRetry,
     ) !CallContext {
         const config = try allocator.create(ConfigPolicy);
         errdefer allocator.destroy(config);
@@ -355,6 +389,7 @@ pub const CallContext = struct {
             if (endpoint_query_is_sas) null else raw_endpoint_query,
             operation_timeout_ms,
             server_timeout,
+            mutation_retry,
         );
         const capture = if (capture_mode != .none)
             try allocator.create(CapturePolicy)
@@ -413,21 +448,29 @@ pub const CallContext = struct {
 
 const CaptureMode = enum { none, failure_only, all };
 
+const MutationRetry = struct {
+    max_pre_transport_retries: u32,
+    conditional: bool,
+};
+
 const ConfigPolicy = struct {
     raw_query: ?[]const u8,
     operation_timeout_ms: ?u64,
     server_timeout: ?i32,
+    mutation_retry: ?MutationRetry,
     policy: HttpPolicy,
 
     fn init(
         raw_query: ?[]const u8,
         operation_timeout_ms: ?u64,
         server_timeout: ?i32,
+        mutation_retry: ?MutationRetry,
     ) ConfigPolicy {
         return .{
             .raw_query = raw_query,
             .operation_timeout_ms = operation_timeout_ms,
             .server_timeout = server_timeout,
+            .mutation_retry = mutation_retry,
             .policy = .{ .processFn = &process },
         };
     }
@@ -461,7 +504,7 @@ const ConfigPolicy = struct {
             owned_url = timeout_url;
             url = timeout_url;
         }
-        if (owned_url == null) return callNext(request, next, transport);
+        if (owned_url == null) return self.send(request, next, transport);
         const final_url = owned_url.?;
         owned_url = null;
         request.url = final_url;
@@ -469,9 +512,57 @@ const ConfigPolicy = struct {
             request.url = old_url;
             request.allocator.free(final_url);
         }
-        return callNext(request, next, transport);
+        return self.send(request, next, transport);
+    }
+
+    fn send(
+        self: *ConfigPolicy,
+        request: *Request,
+        next: []*HttpPolicy,
+        transport: *HttpTransport,
+    ) !Response {
+        const mutation = self.mutation_retry orelse
+            return callNext(request, next, transport);
+
+        if (!mutation.conditional) {
+            return callNext(request, next, transport) catch |err| {
+                if (request.transport_started) return error.MutationOutcomeUnknown;
+                return err;
+            };
+        }
+
+        const old_retryable = request.retryable;
+        request.retryable = false;
+        defer request.retryable = old_retryable;
+        var retry_count: u32 = 0;
+        while (true) {
+            request.transport_started = false;
+            return callNext(request, next, transport) catch |err| {
+                if (request.transport_started) return error.MutationOutcomeUnknown;
+                if (!isRetryablePreTransportError(err) or
+                    retry_count >= mutation.max_pre_transport_retries)
+                {
+                    return err;
+                }
+                retry_count += 1;
+                continue;
+            };
+        }
     }
 };
+
+fn isRetryablePreTransportError(failure: anyerror) bool {
+    return switch (failure) {
+        error.OutOfMemory,
+        error.OperationTimedOut,
+        error.OperationCancelled,
+        error.InvalidHttpHeaderName,
+        error.InvalidHttpHeaderValue,
+        error.InvalidUrl,
+        => false,
+        else => true,
+    };
+}
 
 /// Appends an opaque SAS query only for the transport call. It is always the
 /// final policy, inside retry, so caller observability sees a credential-free

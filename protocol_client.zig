@@ -21,11 +21,13 @@ pub const ProtocolClient = struct {
     endpoint: request.NormalizedEndpoint,
     endpoint_query_is_sas: bool,
     api_version: []u8,
+    mutation_max_retries: u32,
     pipeline: core.pipeline.HttpPipeline,
 
     pub const InitOptions = struct {
         api_version: []const u8 = options.latest_api_version,
         endpoint_query_is_sas: bool = false,
+        mutation_max_retries: u32 = 3,
     };
 
     pub fn init(
@@ -42,6 +44,7 @@ pub const ProtocolClient = struct {
             .endpoint = normalized,
             .endpoint_query_is_sas = init_options.endpoint_query_is_sas,
             .api_version = try allocator.dupe(u8, init_options.api_version),
+            .mutation_max_retries = init_options.mutation_max_retries,
             .pipeline = http_pipeline,
         };
     }
@@ -66,11 +69,13 @@ pub const ProtocolClient = struct {
             return init(allocator, endpoint, self.pipeline, .{
                 .api_version = self.api_version,
                 .endpoint_query_is_sas = self.endpoint_query_is_sas,
+                .mutation_max_retries = self.mutation_max_retries,
             });
         }
         return init(allocator, self.endpoint.base_url, self.pipeline, .{
             .api_version = self.api_version,
             .endpoint_query_is_sas = self.endpoint_query_is_sas,
+            .mutation_max_retries = self.mutation_max_retries,
         });
     }
 
@@ -497,6 +502,140 @@ pub const ProtocolClient = struct {
             .arena = arena,
             .allocator = allocator,
         } };
+    }
+
+    /// Uses the generated PUT/PATCH operations for both update and upsert.
+    /// Supplying `if_match` selects update semantics; null selects the
+    /// generated insert-or-replace/insert-or-merge semantics.
+    pub fn mutateEntityResult(
+        self: *ProtocolClient,
+        allocator: std.mem.Allocator,
+        table_name: []const u8,
+        partition_key: []const u8,
+        row_key: []const u8,
+        entity_json: []const u8,
+        mode: options.UpdateMode,
+        if_match: ?[]const u8,
+        protocol_options_input: options.ProtocolOptions,
+    ) !responses.TableResult(responses.SdkResponse(void)) {
+        try request.validateTableName(table_name);
+        try request.validateEntityKey(partition_key);
+        try request.validateEntityKey(row_key);
+        if (if_match) |value| try request.validateIfMatch(value);
+        try request.validateProtocolOptions(protocol_options_input);
+        if (entity_json.len == 0 or entity_json.len > 1024 * 1024)
+            return error.InvalidEntity;
+
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena);
+        arena.* = .init(allocator);
+        errdefer arena.deinit();
+        const arena_allocator = arena.allocator();
+        const properties = try serde.json.fromSlice(
+            std.json.ArrayHashMap(protocol.models.JsonValue),
+            arena_allocator,
+            entity_json,
+        );
+
+        const body_policy = try arena_allocator.create(BodyOverridePolicy);
+        body_policy.* = .{ .body = entity_json };
+        const call_policies = try arena_allocator.alloc(
+            *core.pipeline.HttpPolicy,
+            protocol_options_input.policies.len + 1,
+        );
+        @memcpy(
+            call_policies[0..protocol_options_input.policies.len],
+            protocol_options_input.policies,
+        );
+        call_policies[call_policies.len - 1] = &body_policy.policy;
+        var protocol_options = protocol_options_input;
+        protocol_options.policies = call_policies;
+        var call = try self.beginMutationCall(
+            arena_allocator,
+            protocol_options,
+            if_match != null and !std.mem.eql(u8, if_match.?, "*"),
+        );
+        errdefer call.deinit();
+        var generated = protocol.TablesClient.initWithPipeline(
+            arena_allocator,
+            call.pipeline,
+            .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version },
+        );
+        var table = generated.table();
+        switch (mode) {
+            .replace => _ = table.updateEntity(
+                arena_allocator,
+                protocol_options_input.client_request_id,
+                table_name,
+                protocol_options_input.timeout,
+                if_match,
+                partition_key,
+                row_key,
+                properties,
+            ) catch |operation_error| {
+                if (operation_error != error.AzureRequestFailed) return operation_error;
+                return self.mutationFailure(allocator, arena, &call);
+            },
+            .merge => _ = table.mergeEntity(
+                arena_allocator,
+                protocol_options_input.client_request_id,
+                table_name,
+                protocol_options_input.timeout,
+                if_match,
+                partition_key,
+                row_key,
+                properties,
+            ) catch |operation_error| {
+                if (operation_error != error.AzureRequestFailed) return operation_error;
+                return self.mutationFailure(allocator, arena, &call);
+            },
+        }
+        const metadata = try call.takeResponse();
+        call.deinit();
+        return .{ .success = .{
+            .value = {},
+            .status = metadata.status,
+            .headers = metadata.headers,
+            .body = metadata.body,
+            .arena = arena,
+            .allocator = allocator,
+        } };
+    }
+
+    fn mutationFailure(
+        self: *ProtocolClient,
+        allocator: std.mem.Allocator,
+        arena: *std.heap.ArenaAllocator,
+        call: *pipeline_mod.CallContext,
+    ) !responses.TableResult(responses.SdkResponse(void)) {
+        _ = self;
+        var metadata = try call.takeResponse();
+        errdefer metadata.deinit();
+        const table_error = try errorsFromMetadata(allocator, &metadata);
+        metadata.deinit();
+        call.deinit();
+        arena.deinit();
+        allocator.destroy(arena);
+        return .{ .failure = table_error };
+    }
+
+    fn beginMutationCall(
+        self: *ProtocolClient,
+        allocator: std.mem.Allocator,
+        call_options: options.ProtocolOptions,
+        conditional: bool,
+    ) !pipeline_mod.CallContext {
+        return pipeline_mod.CallContext.initMutation(
+            allocator,
+            self.pipeline,
+            if (self.endpoint.has_query) self.endpoint.raw_query else null,
+            self.endpoint_query_is_sas,
+            call_options.operation_timeout_ms,
+            call_options.timeout,
+            call_options.policies,
+            self.mutation_max_retries,
+            conditional,
+        );
     }
 
     fn beginEntityCall(

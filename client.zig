@@ -157,6 +157,7 @@ pub const TableClient = struct {
             .{
                 .api_version = api_version,
                 .endpoint_query_is_sas = state.usesSas(),
+                .mutation_max_retries = state.retry.max_retries,
             },
         );
         errdefer protocol.deinit();
@@ -407,6 +408,123 @@ pub const TableClient = struct {
                 break :blk .{ .success = .{
                     .status = raw.status,
                     .headers = etag_headers,
+                    .raw_headers = raw.headers,
+                    .arena = raw.arena,
+                    .allocator = raw.allocator,
+                } };
+            },
+        };
+    }
+
+    /// Updates an existing typed or dynamic entity. Merge preserves omitted
+    /// properties; replace removes them.
+    pub fn updateEntity(
+        self: *TableClient,
+        allocator: std.mem.Allocator,
+        value: anytype,
+        update_options: options.UpdateEntityOptions,
+    ) !responses.MutationEntityResponse {
+        const result = try self.updateEntityResult(allocator, value, update_options);
+        return switch (result) {
+            .success => |response| response,
+            .failure => |table_error| {
+                var owned_error = table_error;
+                owned_error.deinit();
+                return error.UpdateEntityFailed;
+            },
+        };
+    }
+
+    pub fn updateEntityResult(
+        self: *TableClient,
+        allocator: std.mem.Allocator,
+        value: anytype,
+        update_options: options.UpdateEntityOptions,
+    ) !responses.TableResult(responses.MutationEntityResponse) {
+        try request.validateIfMatch(update_options.if_match);
+        return self.mutateEntityResult(
+            allocator,
+            value,
+            update_options.mode,
+            update_options.if_match,
+            update_options.protocol,
+        );
+    }
+
+    /// Inserts a missing entity or updates an existing one using the selected
+    /// merge/replace semantics.
+    pub fn upsertEntity(
+        self: *TableClient,
+        allocator: std.mem.Allocator,
+        value: anytype,
+        upsert_options: options.UpsertEntityOptions,
+    ) !responses.MutationEntityResponse {
+        const result = try self.upsertEntityResult(allocator, value, upsert_options);
+        return switch (result) {
+            .success => |response| response,
+            .failure => |table_error| {
+                var owned_error = table_error;
+                owned_error.deinit();
+                return error.UpsertEntityFailed;
+            },
+        };
+    }
+
+    pub fn upsertEntityResult(
+        self: *TableClient,
+        allocator: std.mem.Allocator,
+        value: anytype,
+        upsert_options: options.UpsertEntityOptions,
+    ) !responses.TableResult(responses.MutationEntityResponse) {
+        return self.mutateEntityResult(
+            allocator,
+            value,
+            upsert_options.mode,
+            null,
+            upsert_options.protocol,
+        );
+    }
+
+    fn mutateEntityResult(
+        self: *TableClient,
+        allocator: std.mem.Allocator,
+        value: anytype,
+        mode: options.UpdateMode,
+        if_match: ?[]const u8,
+        protocol_options: options.ProtocolOptions,
+    ) !responses.TableResult(responses.MutationEntityResponse) {
+        const T = @TypeOf(value);
+        try validateEntityValue(T, value);
+        const json = if (T == entity.DynamicEntity)
+            try entity_codec.dynamicToJson(allocator, value)
+        else
+            try entity_codec.EntityCodec(T).toJson(allocator, value);
+        defer allocator.free(json);
+        if (json.len > 1024 * 1024) return error.EntityTooLarge;
+
+        const partition_key = @field(value, "partition_key");
+        const row_key = @field(value, "row_key");
+        const protocol_result = try self.protocol.mutateEntityResult(
+            allocator,
+            self.table_name,
+            partition_key,
+            row_key,
+            json,
+            mode,
+            if_match,
+            protocol_options,
+        );
+        return switch (protocol_result) {
+            .failure => |table_error| .{ .failure = table_error },
+            .success => |raw_value| blk: {
+                var raw = raw_value;
+                errdefer raw.deinit();
+                const etag = raw.headers.getFirst("ETag") orelse
+                    return error.MissingResponseHeader;
+                break :blk .{ .success = .{
+                    .etag = etag,
+                    .status = raw.status,
+                    .headers = entityHeaders(&raw.headers),
                     .raw_headers = raw.headers,
                     .arena = raw.arena,
                     .allocator = raw.allocator,
@@ -792,6 +910,44 @@ const TestCredential = struct {
     }
 };
 
+const PreTransportOncePolicy = struct {
+    calls: usize = 0,
+    policy: core.pipeline.HttpPolicy = .{ .processFn = &process },
+
+    fn process(
+        policy: *core.pipeline.HttpPolicy,
+        req: *core.http.Request,
+        next: []*core.pipeline.HttpPolicy,
+        transport: *core.http.HttpTransport,
+    ) anyerror!core.http.Response {
+        const self: *PreTransportOncePolicy = @alignCast(@fieldParentPtr("policy", policy));
+        self.calls += 1;
+        if (self.calls == 1) return error.InjectedPreTransportFailure;
+        if (next.len == 0) return transport.send(req);
+        return next[0].process(req, next[1..], transport);
+    }
+};
+
+const FailingMutationTransport = struct {
+    calls: usize = 0,
+    transport: core.http.HttpTransport = .{ .sendFn = &send },
+
+    fn asTransport(self: *FailingMutationTransport) *core.http.HttpTransport {
+        return &self.transport;
+    }
+
+    fn send(
+        transport: *core.http.HttpTransport,
+        _: *core.http.Request,
+    ) anyerror!core.http.Response {
+        const self: *FailingMutationTransport = @alignCast(
+            @fieldParentPtr("transport", transport),
+        );
+        self.calls += 1;
+        return error.InjectedTransportFailure;
+    }
+};
+
 fn moveClient(client: TableClient) TableClient {
     return client;
 }
@@ -820,6 +976,14 @@ const entity_response_headers = &[_]core.http.MockTransport.HeaderPair{
     .{ .name = "Date", .value = "Sun, 26 Jul 2026 00:00:00 GMT" },
     .{ .name = "Content-Type", .value = "application/json" },
     .{ .name = "Preference-Applied", .value = "return-content" },
+};
+
+const mutation_response_headers = &[_]core.http.MockTransport.HeaderPair{
+    .{ .name = "ETag", .value = "W/\"updated\"" },
+    .{ .name = "x-ms-version", .value = "2019-02-02" },
+    .{ .name = "x-ms-request-id", .value = "mutation-request" },
+    .{ .name = "x-ms-client-request-id", .value = "mutation-client" },
+    .{ .name = "Date", .value = "Sun, 26 Jul 2026 00:00:00 GMT" },
 };
 
 const typed_entity_json =
@@ -973,6 +1137,229 @@ test "conditional delete preserves service failure and wildcard success" {
     try std.testing.expectEqualStrings("*", mock.last_headers.get("If-Match").?);
 }
 
+test "typed and dynamic update and upsert use generated merge and replace operations" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 204, "");
+    defer mock.deinit();
+    mock.response_headers_list = mutation_response_headers;
+    var client = try TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=secret",
+        "Table123",
+        mock.asTransport(),
+        .{},
+    );
+    defer client.deinit();
+
+    var typed = try client.updateEntity(allocator, try testEntityValue(), .{
+        .mode = .merge,
+        .if_match = "W/\"current\"",
+        .protocol = .{ .client_request_id = "mutation-client" },
+    });
+    defer typed.deinit();
+    try std.testing.expectEqual(@as(u16, 204), typed.status);
+    try std.testing.expectEqualStrings("W/\"updated\"", typed.etag);
+    try std.testing.expectEqualStrings("mutation-request", typed.headers.request_id.?);
+    try std.testing.expectEqual(core.http.Method.PATCH, mock.last_method.?);
+    try std.testing.expectEqualStrings("W/\"current\"", mock.last_headers.get("If-Match").?);
+    try std.testing.expect(std.mem.indexOf(u8, mock.last_body.?, "\"count@odata.type\":\"Edm.Int64\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, mock.last_body.?, "\"data@odata.type\":\"Edm.Binary\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, mock.last_body.?, "\"created@odata.type\":\"Edm.DateTime\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, mock.last_body.?, "\"id@odata.type\":\"Edm.Guid\"") != null);
+
+    var dynamic = try entity.DynamicEntity.init(allocator, "p", "r");
+    defer dynamic.deinit();
+    try dynamic.put("name", .{ .string = "widget" });
+    try dynamic.put("active", .{ .boolean = true });
+    try dynamic.put("count", .{ .int64 = .{ .value = std.math.maxInt(i64) } });
+    try dynamic.put("small_count", .{ .int32 = 7 });
+    try dynamic.put("ratio", .{ .float64 = 1.5 });
+    try dynamic.put("data", .{ .binary = .{ .bytes = "hi" } });
+    try dynamic.put("created", .{ .datetime = try edm.EdmDateTime.init("2026-07-26T00:00:00Z") });
+    try dynamic.put("id", .{ .guid = try edm.EdmGuid.init("01234567-89ab-cdef-0123-456789abcdef") });
+    try dynamic.put("nullable", .null);
+    var upserted = try client.upsertEntity(allocator, dynamic, .{ .mode = .replace });
+    defer upserted.deinit();
+    try std.testing.expectEqual(core.http.Method.PUT, mock.last_method.?);
+    try std.testing.expect(mock.last_headers.get("If-Match") == null);
+    try std.testing.expect(std.mem.indexOf(u8, mock.last_body.?, "\"count@odata.type\":\"Edm.Int64\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, mock.last_body.?, "\"data@odata.type\":\"Edm.Binary\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, mock.last_body.?, "\"created@odata.type\":\"Edm.DateTime\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, mock.last_body.?, "\"id@odata.type\":\"Edm.Guid\"") != null);
+}
+
+test "update existence and ETag failures remain structured while upsert creates" {
+    const PartialEntity = struct {
+        partition_key: []const u8,
+        row_key: []const u8,
+        changed: []const u8,
+    };
+    const value = PartialEntity{ .partition_key = "p", .row_key = "r", .changed = "new" };
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 404,
+        \\{"code":"ResourceNotFound","message":"missing"}
+    );
+    defer mock.deinit();
+    mock.response_headers_list = &.{
+        .{ .name = "Content-Type", .value = "application/json" },
+        .{ .name = "x-ms-request-id", .value = "missing-request" },
+    };
+    var client = try TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=secret",
+        "Table123",
+        mock.asTransport(),
+        .{},
+    );
+    defer client.deinit();
+
+    var missing = try client.updateEntityResult(allocator, value, .{});
+    defer missing.deinit(allocator);
+    switch (missing) {
+        .failure => |table_error| {
+            try std.testing.expectEqual(@as(u16, 404), table_error.status);
+            try std.testing.expectEqualStrings("ResourceNotFound", table_error.code);
+        },
+        .success => return error.TestUnexpectedResult,
+    }
+
+    mock.response_status = 412;
+    mock.response_body =
+        \\{"code":"UpdateConditionNotSatisfied","message":"stale"}
+    ;
+    var stale = try client.updateEntityResult(allocator, value, .{
+        .if_match = "W/\"stale\"",
+    });
+    defer stale.deinit(allocator);
+    switch (stale) {
+        .failure => |table_error| {
+            try std.testing.expectEqual(@as(u16, 412), table_error.status);
+            try std.testing.expectEqualStrings("UpdateConditionNotSatisfied", table_error.code);
+        },
+        .success => return error.TestUnexpectedResult,
+    }
+
+    mock.response_status = 204;
+    mock.response_body = "";
+    mock.response_headers_list = mutation_response_headers;
+    var matching = try client.updateEntity(allocator, value, .{
+        .mode = .replace,
+        .if_match = "W/\"matching\"",
+    });
+    matching.deinit();
+    try std.testing.expectEqualStrings("W/\"matching\"", mock.last_headers.get("If-Match").?);
+
+    var created = try client.upsertEntity(allocator, value, .{ .mode = .merge });
+    created.deinit();
+    try std.testing.expectEqual(core.http.Method.PATCH, mock.last_method.?);
+    try std.testing.expect(mock.last_headers.get("If-Match") == null);
+}
+
+test "merge preserves omitted properties and replace removes them by wire operation" {
+    const PartialEntity = struct {
+        partition_key: []const u8,
+        row_key: []const u8,
+        changed: []const u8,
+    };
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 204, "");
+    defer mock.deinit();
+    mock.response_headers_list = mutation_response_headers;
+    var client = try TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=secret",
+        "Table123",
+        mock.asTransport(),
+        .{},
+    );
+    defer client.deinit();
+    const partial = PartialEntity{ .partition_key = "p", .row_key = "r", .changed = "new" };
+
+    var merged = try client.upsertEntity(allocator, partial, .{ .mode = .merge });
+    merged.deinit();
+    try std.testing.expectEqual(core.http.Method.PATCH, mock.last_method.?);
+    try std.testing.expect(std.mem.indexOf(u8, mock.last_body.?, "preserved") == null);
+
+    var replaced = try client.upsertEntity(allocator, partial, .{ .mode = .replace });
+    replaced.deinit();
+    try std.testing.expectEqual(core.http.Method.PUT, mock.last_method.?);
+    try std.testing.expect(std.mem.indexOf(u8, mock.last_body.?, "preserved") == null);
+}
+
+test "conditional mutation retries before transport and classifies ambiguity after entry" {
+    const SimpleEntity = struct {
+        partition_key: []const u8,
+        row_key: []const u8,
+        name: []const u8,
+    };
+    const value = SimpleEntity{ .partition_key = "p", .row_key = "r", .name = "updated" };
+    const allocator = std.testing.allocator;
+
+    var mock = core.http.MockTransport.init(allocator, 204, "");
+    defer mock.deinit();
+    mock.response_headers_list = mutation_response_headers;
+    var client = try TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=secret",
+        "Table123",
+        mock.asTransport(),
+        .{ .retry = .{
+            .max_retries = 2,
+            .initial_delay_ms = 0,
+            .max_delay_ms = 0,
+        } },
+    );
+    defer client.deinit();
+    var before_transport = PreTransportOncePolicy{};
+    var response = try client.updateEntity(allocator, value, .{
+        .if_match = "W/\"exact\"",
+        .protocol = .{ .policies = &.{&before_transport.policy} },
+    });
+    response.deinit();
+    try std.testing.expectEqual(@as(usize, 2), before_transport.calls);
+    try std.testing.expectEqual(@as(usize, 1), mock.call_count);
+
+    var failing = FailingMutationTransport{};
+    var conditional_client = try TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=secret",
+        "Table123",
+        failing.asTransport(),
+        .{ .retry = .{
+            .max_retries = 2,
+            .initial_delay_ms = 0,
+            .max_delay_ms = 0,
+        } },
+    );
+    defer conditional_client.deinit();
+    try std.testing.expectError(
+        error.MutationOutcomeUnknown,
+        conditional_client.updateEntityResult(allocator, value, .{
+            .if_match = "W/\"exact\"",
+        }),
+    );
+    try std.testing.expectEqual(@as(usize, 1), failing.calls);
+
+    var safe_failing = FailingMutationTransport{};
+    var safe_client = try TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=secret",
+        "Table123",
+        safe_failing.asTransport(),
+        .{ .retry = .{
+            .max_retries = 2,
+            .initial_delay_ms = 0,
+            .max_delay_ms = 0,
+        } },
+    );
+    defer safe_client.deinit();
+    try std.testing.expectError(
+        error.MutationOutcomeUnknown,
+        safe_client.upsertEntityResult(allocator, value, .{}),
+    );
+    try std.testing.expectEqual(@as(usize, 3), safe_failing.calls);
+}
+
 test "entity constraints and malformed success fail locally" {
     const SimpleEntity = struct {
         partition_key: []const u8,
@@ -1004,6 +1391,22 @@ test "entity constraints and malformed success fail locally" {
         error.InvalidIfMatch,
         client.deleteEntityResult(allocator, "p", "r", .{ .if_match = "" }),
     );
+    try std.testing.expectError(
+        error.InvalidEntityKey,
+        client.updateEntityResult(allocator, SimpleEntity{
+            .partition_key = "bad/key",
+            .row_key = "r",
+            .name = "invalid",
+        }, .{}),
+    );
+    try std.testing.expectError(
+        error.InvalidIfMatch,
+        client.updateEntityResult(allocator, SimpleEntity{
+            .partition_key = "p",
+            .row_key = "r",
+            .name = "invalid",
+        }, .{ .if_match = "" }),
+    );
     try std.testing.expectEqual(@as(usize, 0), mock.call_count);
 
     if (client.getEntityResult(SimpleEntity, allocator, "p", "r", .{})) |result| {
@@ -1012,6 +1415,21 @@ test "entity constraints and malformed success fail locally" {
         return error.TestExpectedMalformedPayload;
     } else |_| {}
     try std.testing.expectEqual(@as(usize, 1), mock.call_count);
+
+    mock.response_status = 204;
+    mock.response_body = "";
+    mock.response_headers_list = &.{
+        .{ .name = "x-ms-version", .value = "2019-02-02" },
+        .{ .name = "Date", .value = "Sun, 26 Jul 2026 00:00:00 GMT" },
+    };
+    try std.testing.expectError(
+        error.MissingResponseHeader,
+        client.upsertEntityResult(allocator, SimpleEntity{
+            .partition_key = "p",
+            .row_key = "r",
+            .name = "malformed",
+        }, .{}),
+    );
 }
 
 test "entity query pager survives moving its source client" {
@@ -1214,6 +1632,44 @@ test "entity CRUD allocation failure paths are leak-free" {
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
         testEntityCrudAllocationFailures,
+        .{},
+    );
+}
+
+fn testEntityMutationAllocationFailures(allocator: std.mem.Allocator) !void {
+    const SimpleEntity = struct {
+        partition_key: []const u8,
+        row_key: []const u8,
+        name: []const u8,
+    };
+    var mock = core.http.MockTransport.init(allocator, 204, "");
+    defer mock.deinit();
+    mock.response_headers_list = mutation_response_headers;
+    var client = try TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=allocation-secret",
+        "Table123",
+        mock.asTransport(),
+        .{},
+    );
+    defer client.deinit();
+    var response = client.upsertEntity(allocator, SimpleEntity{
+        .partition_key = "p",
+        .row_key = "r",
+        .name = "owned",
+    }, .{ .mode = .replace }) catch |err| {
+        // The failing allocator can trip the mock after transport entry; the
+        // production API correctly reports that outcome as ambiguous.
+        if (err == error.MutationOutcomeUnknown) return error.OutOfMemory;
+        return err;
+    };
+    response.deinit();
+}
+
+test "entity mutation allocation failure paths are leak-free" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        testEntityMutationAllocationFailures,
         .{},
     );
 }

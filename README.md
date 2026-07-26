@@ -126,6 +126,17 @@ conditional delete through `deleteEntityWithOptions`. The original
 compatibility; explicit `getEntityRaw` and `deleteEntityRaw` aliases are also
 available.
 
+`UpdateMode` is a closed `merge`/`replace` enum shared by `updateEntity` and
+`upsertEntity` (and their result-preserving variants). Merge uses the generated
+PATCH operation and preserves omitted properties; replace uses generated PUT
+and removes them. Updates default to wildcard `If-Match` and accept an explicit
+ETag, while upserts omit `If-Match` so a missing entity is created. Mutation
+responses own the returned ETag, status, selected headers, and raw headers.
+Explicit-ETag updates retry only failures before transport entry; a transport
+failure after entry is `error.MutationOutcomeUnknown`. Wildcard updates and
+upserts use normal retries because repeating the same payload is safe, but an
+exhausted transport failure is still classified as outcome-unknown.
+
 ## Checked feature-parity contract
 
 `[x]` means the Go capability has been reviewed and assigned a Zig API owner;
