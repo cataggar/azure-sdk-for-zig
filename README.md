@@ -77,6 +77,23 @@ URL; its query bytes are retained verbatim and the pipeline has no
 ambiguous fields before creating a pipeline. Token authentication is always
 HTTPS; cleartext Shared Key/SAS endpoints are limited to local emulators.
 
+`sas.AccountSignatureValues` generates Table-only account SAS values, and
+`sas.TableSignatureValues` generates table service SAS values including stored
+identifier and inclusive partition/row bounds. Its `accessPolicy` is a tagged
+union: `.adHoc` requires permissions and expiry, while `.stored` accepts only
+the identifier, so inline access fields cannot accidentally accompany a stored
+policy. A partition bound may stand alone; a row bound requires its matching
+partition. Permissions, services, and resource types are emitted in Azure's
+required order; invalid time, permission, identifier, IP, and key-range
+combinations fail before signing. SAS times use UTC whole-second precision and
+the canonical Tables version `2019-02-02`.
+`getAccountSasUrl` and `getTableSasUrl` are available only on Shared Key
+clients. Their caller-owned URL results are secrets; SAS value/query formatting
+is redacted. A full generated table URL can be passed directly to
+`TableClient.initWithSasUrl`. It recognizes table scope from one unambiguous,
+decoded `tn` parameter and retains the complete encoded query bytes verbatim;
+account SAS URLs never infer scope from their path.
+
 Client options configure retry count/delays, telemetry application ID, a
 default client request ID, a default operation timeout, API version, and
 caller policies. Per-operation request IDs and operation timeouts override

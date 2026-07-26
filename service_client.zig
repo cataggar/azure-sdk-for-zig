@@ -7,6 +7,7 @@ const options = @import("options.zig");
 const pipeline = @import("pipeline.zig");
 const protocol_client = @import("protocol_client.zig");
 const request = @import("request.zig");
+const sas = @import("sas.zig");
 
 /// Client for Azure Table Service operations (list/create/delete tables).
 ///
@@ -169,6 +170,26 @@ pub const TableServiceClient = struct {
     pub fn format(self: TableServiceClient, writer: anytype) !void {
         try writer.print("TableServiceClient({s})", .{self.protocol.endpoint.base_url});
     }
+
+    /// Generates a full Table-service account SAS URL. This is available only
+    /// on a Shared Key client; the returned URL is secret and caller-owned.
+    pub fn getAccountSasUrl(
+        self: *TableServiceClient,
+        allocator: std.mem.Allocator,
+        signature_values: sas.AccountSignatureValues,
+    ) ![]u8 {
+        const credential = self.pipeline_state.sharedKeyCredential() orelse
+            return error.SasRequiresSharedKeyCredential;
+        var parameters = try signature_values.sign(allocator, credential);
+        defer parameters.deinit();
+        const service_url = try std.fmt.allocPrint(
+            allocator,
+            "{s}/",
+            .{self.protocol.endpoint.base_url},
+        );
+        defer allocator.free(service_url);
+        return parameters.appendToUrl(allocator, service_url);
+    }
 };
 
 const CountingCredential = struct {
@@ -269,4 +290,60 @@ test "token service client accepts HTTPS custom private endpoint" {
     );
     try std.testing.expectEqual(@as(usize, 0), credential.calls);
     try std.testing.expectEqual(@as(usize, 0), transport.call_count);
+}
+
+test "account SAS URL is exact and works with a credential-free service client" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 200, "{}");
+    defer transport.deinit();
+    var credential = try auth.SharedKeyCredential.init(
+        allocator,
+        "fakeaccount",
+        "ZmFrZS1rZXk=",
+    );
+    defer credential.deinit();
+    var shared = try TableServiceClient.initWithSharedKey(
+        allocator,
+        "https://fakeaccount.table.core.windows.net",
+        &credential,
+        transport.asTransport(),
+        .{},
+    );
+    defer shared.deinit();
+
+    const sas_url = try shared.getAccountSasUrl(allocator, .{
+        .permissions = .{ .read = true, .list = true },
+        .resourceTypes = .{ .service = true, .container = true },
+        .startTime = .fromUnixSeconds(1_699_455_845),
+        .expiryTime = .fromUnixSeconds(1_699_459_445),
+    });
+    defer allocator.free(sas_url);
+    try std.testing.expectEqualStrings(
+        "https://fakeaccount.table.core.windows.net/?se=2023-11-08T16%3A04%3A05Z&sig=%2BUBePkRnknhwbw%2FT4HuUIu0YAlJlq7mt6Lrfwpestjo%3D&sp=rl&spr=https&srt=sc&ss=t&st=2023-11-08T15%3A04%3A05Z&sv=2019-02-02",
+        sas_url,
+    );
+
+    var anonymous = try TableServiceClient.initWithSasUrl(
+        allocator,
+        sas_url,
+        transport.asTransport(),
+        .{},
+    );
+    defer anonymous.deinit();
+    try std.testing.expectError(
+        error.SasRequiresSharedKeyCredential,
+        anonymous.getAccountSasUrl(allocator, .{
+            .permissions = .{ .read = true },
+            .resourceTypes = .{ .service = true },
+            .expiryTime = .fromUnixSeconds(1_699_459_445),
+        }),
+    );
+    var table = try anonymous.getTableClient("People");
+    defer table.deinit();
+    var response = try table.getEntity(allocator, "p", "r");
+    response.deinit();
+    try std.testing.expect(transport.last_headers.get("Authorization") == null);
+    const signed_query = sas_url[(std.mem.indexOfScalar(u8, sas_url, '?').? + 1)..];
+    const sent_query = transport.last_url.?[(std.mem.indexOfScalar(u8, transport.last_url.?, '?').? + 1)..];
+    try std.testing.expectEqualStrings(signed_query, sent_query);
 }
