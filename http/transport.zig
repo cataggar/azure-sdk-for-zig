@@ -866,6 +866,12 @@ const StdStreamingOperation = struct {
     response: std.http.Client.Response,
     transfer_reader: *std.Io.Reader,
     transfer_buffer: [64]u8,
+    // Owned empty reader handed back for responses that carry no body (HEAD,
+    // TRACE). It must be a per-operation instance rather than the shared
+    // `std.Io.Reader.ending` global because `finishImpl` drains it with
+    // `discardRemaining`, which writes `seek = end`; writing through the shared
+    // const instance faults on targets that place it in read-only memory.
+    empty_reader: std.Io.Reader,
     upload_read_buffer: [16 * 1024]u8,
     upload_write_buffer: [16 * 1024]u8,
     decompress: std.http.Decompress,
@@ -898,6 +904,7 @@ const StdStreamingOperation = struct {
             .response = undefined,
             .transfer_reader = undefined,
             .transfer_buffer = undefined,
+            .empty_reader = undefined,
             .upload_read_buffer = undefined,
             .upload_write_buffer = undefined,
             .decompress = undefined,
@@ -953,17 +960,30 @@ const StdStreamingOperation = struct {
             .deflate, .gzip => try allocator.alloc(u8, std.compress.flate.max_window_len),
             .compress => return error.UnsupportedCompressionMethod,
         };
+        // A HEAD (or TRACE) response never carries a body even when it reports a
+        // Content-Length, so mirror std's `Response.reader` and hand back an
+        // already-ended reader. Building a length-framed body reader here would
+        // block forever waiting for bytes the server will not send. The empty
+        // reader is a per-operation instance (see `empty_reader`) so that
+        // `finishImpl`'s `discardRemaining` writes to owned, writable memory.
+        const no_response_body = !self.request.method.responseHasBody();
+        if (no_response_body) self.empty_reader = std.Io.Reader.fixed("");
         self.transfer_reader =
-            if (self.response.head.transfer_encoding != .none or
+            if (no_response_body)
+                &self.empty_reader
+            else if (self.response.head.transfer_encoding != .none or
             self.response.head.content_length != null)
                 &self.request.reader.interface
             else
                 self.request.reader.in;
-        const body_reader = self.response.readerDecompressing(
-            &self.transfer_buffer,
-            &self.decompress,
-            self.decompress_buffer,
-        );
+        const body_reader = if (no_response_body)
+            &self.empty_reader
+        else
+            self.response.readerDecompressing(
+                &self.transfer_buffer,
+                &self.decompress,
+                self.decompress_buffer,
+            );
         self.operation = .{
             .status_code = status_code,
             .headers = header_set.map,
@@ -1008,6 +1028,7 @@ const StdStreamingOperation = struct {
         var writer = try self.request.sendBodyUnflushed(&self.upload_write_buffer);
         try writer.writer.writeAll(bytes);
         try writer.end();
+        try self.request.connection.?.flush();
     }
 
     fn sendStream(
@@ -1048,6 +1069,7 @@ const StdStreamingOperation = struct {
         }
         try checkCancelled(cancellation);
         try writer.end();
+        try self.request.connection.?.flush();
     }
 
     fn finishImpl(operation: *HttpOperation) !void {
@@ -2473,6 +2495,97 @@ const LocalHttpServer = struct {
             try writer.interface.flush();
             try writer.interface.writeAll(self.encoded_response[midpoint..]);
         }
+        try writer.interface.flush();
+    }
+};
+
+// Regression guard for HEAD (and other bodiless) responses. Azure answers a
+// HEAD with the Content-Length the matching GET would return, but sends no
+// body. `Response.readerDecompressing` (unlike std's `Response.reader`) does
+// not special-case `!method.responseHasBody()`, so without the guard in
+// `StdStreamingOperation.open` the client builds a length-framed reader that
+// blocks forever waiting for bytes the server never sends.
+test "standard transport returns an empty body for HEAD responses" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var address: std.Io.net.IpAddress = .{ .ip4 = .loopback(0) };
+    var server = try address.listen(io, .{ .reuse_address = true });
+    defer server.deinit(io);
+
+    var context = HeadOnlyServer{ .io = io, .server = &server };
+    const thread = try std.Thread.spawn(.{}, HeadOnlyServer.run, .{&context});
+
+    const url = try std.fmt.allocPrint(
+        allocator,
+        "http://127.0.0.1:{d}/head",
+        .{server.socket.address.getPort()},
+    );
+    defer allocator.free(url);
+
+    var transport = StdHttpTransport.init(allocator, io);
+    defer transport.deinit();
+    var request = Request.init(allocator, .HEAD, url);
+    defer request.deinit();
+
+    var operation = transport.asTransport().open(&request, .{}) catch |err| {
+        thread.join();
+        if (context.failure) |failure| return failure;
+        return err;
+    };
+    defer operation.deinit();
+
+    try std.testing.expectEqual(@as(u16, 200), operation.status_code);
+    // The advertised body length must not turn into a blocking read.
+    try std.testing.expectEqualStrings("42", operation.getHeader("content-length").?);
+    var sink: std.Io.Writer.Allocating = .init(allocator);
+    defer sink.deinit();
+    _ = try (try operation.reader()).streamRemaining(&sink.writer);
+    try std.testing.expectEqual(@as(usize, 0), sink.writer.buffered().len);
+
+    try operation.finish();
+    thread.join();
+    if (context.failure) |failure| return failure;
+    try std.testing.expect(context.saw_head);
+}
+
+const HeadOnlyServer = struct {
+    io: std.Io,
+    server: *std.Io.net.Server,
+    saw_head: bool = false,
+    failure: ?anyerror = null,
+
+    fn run(self: *HeadOnlyServer) void {
+        self.serve() catch |err| {
+            self.failure = err;
+        };
+    }
+
+    fn serve(self: *HeadOnlyServer) !void {
+        const stream = try self.server.accept(self.io);
+        defer stream.close(self.io);
+        var read_buffer: [1024]u8 = undefined;
+        var reader = std.Io.net.Stream.Reader.init(stream, self.io, &read_buffer);
+        var write_buffer: [1024]u8 = undefined;
+        var writer = std.Io.net.Stream.Writer.init(stream, self.io, &write_buffer);
+
+        var first_line = true;
+        while (true) {
+            const raw_line = (reader.interface.takeDelimiter('\n') catch
+                return error.ServerHeaderReadFailed) orelse
+                return error.ServerHeaderReadFailed;
+            const line = std.mem.trimEnd(u8, raw_line, "\r");
+            if (first_line) {
+                self.saw_head = std.ascii.startsWithIgnoreCase(line, "HEAD ");
+                first_line = false;
+            }
+            if (line.len == 0) break;
+        }
+
+        // A HEAD response advertises the length of the body the matching GET
+        // would return, but carries no body itself.
+        try writer.interface.writeAll(
+            "HTTP/1.1 200 OK\r\nContent-Length: 42\r\nConnection: close\r\n\r\n",
+        );
         try writer.interface.flush();
     }
 };
