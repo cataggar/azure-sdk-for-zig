@@ -33,6 +33,11 @@ pub const DynamicEntity = entity.DynamicEntity;
 pub const EntityCodec = entity_codec.EntityCodec;
 pub const dynamicToJson = entity_codec.dynamicToJson;
 pub const dynamicFromJson = entity_codec.dynamicFromJson;
+pub const TableError = errors.TableError;
+pub const TableErrorCode = errors.TableErrorCode;
+pub const TableResult = responses.TableResult;
+pub const unwrapGetEntity = responses.unwrapGetEntity;
+pub const unwrapCreateEntity = responses.unwrapCreateEntity;
 
 test {
     _ = auth;
@@ -66,4 +71,9 @@ test {
     _ = EntityCodec;
     _ = dynamicToJson;
     _ = dynamicFromJson;
+    _ = TableError;
+    _ = TableErrorCode;
+    _ = TableResult;
+    _ = unwrapGetEntity;
+    _ = unwrapCreateEntity;
 }
