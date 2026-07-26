@@ -801,11 +801,25 @@ pub const ProtocolClient = struct {
         arena.* = .init(allocator);
         errdefer arena.deinit();
         const arena_allocator = arena.allocator();
-        var call = try self.beginCall(arena_allocator, call_options, null);
+        const body_xml = try service_models.serializeServicePropertiesXml(arena_allocator, properties);
+        const body_policy = try arena_allocator.create(BodyOverridePolicy);
+        body_policy.* = .{ .body = body_xml };
+        const call_policies = try arena_allocator.alloc(
+            *core.pipeline.HttpPolicy,
+            call_options.policies.len + 1,
+        );
+        @memcpy(call_policies[0..call_options.policies.len], call_options.policies);
+        call_policies[call_policies.len - 1] = &body_policy.policy;
+        var body_options = call_options;
+        body_options.policies = call_policies;
+        var call = try self.beginCall(arena_allocator, body_options, null);
         errdefer call.deinit();
         var generated = protocol.TablesClient.initWithPipeline(arena_allocator, call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
         var service = generated.service();
         const value = service.setProperties(arena_allocator, call_options.client_request_id, call_options.timeout, properties) catch |err| {
+            // The generated XML serializer maps its allocation failure to
+            // WriteFailed before the body override policy can run.
+            if (err == error.WriteFailed) return error.OutOfMemory;
             const table_error = try self.tableErrorFromGeneratedFailure(allocator, &call, err);
             call.deinit();
             arena.deinit();
@@ -932,8 +946,8 @@ const BodyOverridePolicy = struct {
     body: []const u8,
     policy: core.pipeline.HttpPolicy = .{ .processFn = &process },
 
-    // The generated open JSON model cannot retain property annotations during
-    // serialization, so the SDK codec's validated bytes are authoritative.
+    // Generated serializers cannot represent all SDK wire adaptations, such
+    // as validated JSON annotations and omission-aware XML optionals.
     fn process(
         policy: *core.pipeline.HttpPolicy,
         req: *core.http.Request,

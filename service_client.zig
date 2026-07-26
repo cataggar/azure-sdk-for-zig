@@ -358,10 +358,10 @@ const BodyCapturePolicy = struct {
         transport: *core.http.HttpTransport,
     ) anyerror!core.http.Response {
         const self: *BodyCapturePolicy = @alignCast(@fieldParentPtr("policy", policy));
+        const response = if (next.len == 0) try transport.send(req) else try next[0].process(req, next[1..], transport);
         if (self.body) |body| self.allocator.free(body);
         self.body = if (req.body) |body| try self.allocator.dupe(u8, body) else null;
-        if (next.len == 0) return transport.send(req);
-        return next[0].process(req, next[1..], transport);
+        return response;
     }
 };
 
@@ -848,7 +848,7 @@ test "service properties use generated XML and preserve response metadata" {
     try std.testing.expectEqualStrings("set-client-id", transport.last_headers.get("x-ms-client-request-id").?);
     try std.testing.expect(std.mem.startsWith(u8, transport.last_headers.get("Authorization").?, "Bearer "));
     try std.testing.expectEqualStrings(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><StorageServiceProperties><Logging><Version>1.0</Version><Delete>true</Delete><Read>false</Read><Write>true</Write><RetentionPolicy><Enabled>true</Enabled><Days>7</Days></RetentionPolicy></Logging><HourMetrics><Version>1.0</Version><Enabled>true</Enabled><IncludeAPIs>true</IncludeAPIs><RetentionPolicy><Enabled>false</Enabled><Days/></RetentionPolicy></HourMetrics><MinuteMetrics/><Cors><CorsRule><AllowedOrigins>https://example.test</AllowedOrigins><AllowedMethods>GET,PUT</AllowedMethods><AllowedHeaders>x-ms-meta-*</AllowedHeaders><ExposedHeaders>x-ms-request-id</ExposedHeaders><MaxAgeInSeconds>60</MaxAgeInSeconds></CorsRule></Cors></StorageServiceProperties>",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><StorageServiceProperties><Logging><Version>1.0</Version><Delete>true</Delete><Read>false</Read><Write>true</Write><RetentionPolicy><Enabled>true</Enabled><Days>7</Days></RetentionPolicy></Logging><HourMetrics><Version>1.0</Version><Enabled>true</Enabled><IncludeAPIs>true</IncludeAPIs><RetentionPolicy><Enabled>false</Enabled></RetentionPolicy></HourMetrics><Cors><CorsRule><AllowedOrigins>https://example.test</AllowedOrigins><AllowedMethods>GET,PUT</AllowedMethods><AllowedHeaders>x-ms-meta-*</AllowedHeaders><ExposedHeaders>x-ms-request-id</ExposedHeaders><MaxAgeInSeconds>60</MaxAgeInSeconds></CorsRule></Cors></StorageServiceProperties>",
         capture.body.?,
     );
 
@@ -930,7 +930,7 @@ test "secondary statistics preserve unknown replication status and UTC time" {
     var transport = core.http.MockTransport.init(
         allocator,
         200,
-        "<StorageServiceStats><GeoReplication><Status>future-status</Status><LastSyncTime>2026-07-26T18:32:16.123Z</LastSyncTime></GeoReplication></StorageServiceStats>",
+        "<StorageServiceStats><GeoReplication><Status>future-status</Status><LastSyncTime>Wed, 23 Oct 2013 22:05:54 GMT</LastSyncTime></GeoReplication></StorageServiceStats>",
     );
     defer transport.deinit();
     transport.response_headers_list = &.{
@@ -960,6 +960,16 @@ test "secondary statistics preserve unknown replication status and UTC time" {
         .status_200 => |stats| switch (stats.body.geo_replication.?.status.?) {
             .unrecognized => |value| try std.testing.expectEqualStrings("future-status", value),
             else => return error.TestUnexpectedResult,
+        },
+    }
+
+    transport.response_body =
+        "<StorageServiceStats><GeoReplication><Status>bootstrap</Status><LastSyncTime></LastSyncTime></GeoReplication></StorageServiceStats>";
+    var unavailable = try service.getStatistics(allocator, .{});
+    defer unavailable.deinit();
+    switch (unavailable.value) {
+        .status_200 => |stats| {
+            try std.testing.expectEqual(@as(usize, 0), stats.body.geo_replication.?.last_sync_time.?.len);
         },
     }
 }

@@ -300,8 +300,9 @@ HTTP status, raw headers, request IDs, and structured `TableError` values.
 `{account}-secondary.table...` geo-replication endpoints. It returns generated
 `ServiceStatistics` / `GeoReplication` values; its open
 `GeoReplicationStatus` preserves future service status strings. Last-sync
-timestamps must be UTC (`Z`) times. All three allocating responses own an
-arena and must be released with `deinit`.
+timestamps use RFC 7231 HTTP-date syntax and may be empty while replication is
+bootstrapping or unavailable; parse them with `LastSyncTime.parse`. All three
+allocating responses own an arena and must be released with `deinit`.
 
 ## Module ownership
 
