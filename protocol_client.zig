@@ -2,6 +2,7 @@ const std = @import("std");
 const core = @import("azure_sdk_core");
 const errors = @import("errors.zig");
 const protocol = @import("azure_rest_data_tables");
+const serde = @import("serde");
 const options = @import("options.zig");
 const pipeline_mod = @import("pipeline.zig");
 const request = @import("request.zig");
@@ -244,14 +245,238 @@ pub const ProtocolClient = struct {
         return .{ .success = .{ .value = value, .status = metadata.status, .headers = metadata.headers, .arena = arena, .allocator = allocator } };
     }
 
+    /// Adapts the generated insert operation into an SDK result without
+    /// discarding non-2xx response details.
+    pub fn insertEntityResult(
+        self: *ProtocolClient,
+        allocator: std.mem.Allocator,
+        table_name: []const u8,
+        entity_json: []const u8,
+        add_options: options.AddEntityOptions,
+    ) !responses.TableResult(responses.SdkResponse(ProtocolTable.InsertEntityResult)) {
+        try request.validateTableName(table_name);
+        try request.validateProtocolOptions(add_options.protocol);
+        if (entity_json.len == 0 or entity_json.len > 1024 * 1024)
+            return error.InvalidEntity;
+
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena);
+        arena.* = .init(allocator);
+        errdefer arena.deinit();
+        const arena_allocator = arena.allocator();
+        const properties = try serde.json.fromSlice(
+            std.json.ArrayHashMap(protocol.models.JsonValue),
+            arena_allocator,
+            entity_json,
+        );
+
+        const body_policy = try arena_allocator.create(BodyOverridePolicy);
+        body_policy.* = .{ .body = entity_json };
+        const call_policies = try arena_allocator.alloc(
+            *core.pipeline.HttpPolicy,
+            add_options.protocol.policies.len + 1,
+        );
+        @memcpy(call_policies[0..add_options.protocol.policies.len], add_options.protocol.policies);
+        call_policies[call_policies.len - 1] = &body_policy.policy;
+        var protocol_options = add_options.protocol;
+        protocol_options.policies = call_policies;
+        var call = try self.beginEntityCall(arena_allocator, protocol_options);
+        errdefer call.deinit();
+        var generated = protocol.TablesClient.initWithPipeline(
+            arena_allocator,
+            call.pipeline,
+            .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version },
+        );
+        var table = generated.table();
+        const value = table.insertEntity(
+            arena_allocator,
+            table_name,
+            add_options.protocol.timeout,
+            add_options.protocol.metadata,
+            add_options.protocol.client_request_id,
+            .return_content,
+            properties,
+        ) catch |operation_error| {
+            if (operation_error != error.AzureRequestFailed) return operation_error;
+            var metadata = try call.takeResponse();
+            const table_error = try errorsFromMetadata(allocator, &metadata);
+            metadata.deinit();
+            call.deinit();
+            arena.deinit();
+            allocator.destroy(arena);
+            return .{ .failure = table_error };
+        };
+        const metadata = try call.takeResponse();
+        call.deinit();
+        return .{ .success = .{
+            .value = value,
+            .status = metadata.status,
+            .headers = metadata.headers,
+            .body = metadata.body,
+            .arena = arena,
+            .allocator = allocator,
+        } };
+    }
+
+    /// Result-preserving counterpart to `queryEntity`.
+    pub fn queryEntityResult(
+        self: *ProtocolClient,
+        allocator: std.mem.Allocator,
+        table_name: []const u8,
+        partition_key: []const u8,
+        row_key: []const u8,
+        query_options: options.QueryEntityOptions,
+    ) !responses.TableResult(responses.SdkResponse(ProtocolTable.QueryEntityWithPartitionAndRowKeyResult)) {
+        try request.validateTableName(table_name);
+        try request.validateEntityKey(partition_key);
+        try request.validateEntityKey(row_key);
+        try request.validateProtocolOptions(query_options.protocol);
+
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena);
+        arena.* = .init(allocator);
+        errdefer arena.deinit();
+        const arena_allocator = arena.allocator();
+
+        var call = try self.beginEntityCall(arena_allocator, query_options.protocol);
+        errdefer call.deinit();
+        var generated = protocol.TablesClient.initWithPipeline(
+            arena_allocator,
+            call.pipeline,
+            .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version },
+        );
+        var table = generated.table();
+        const value = table.queryEntityWithPartitionAndRowKey(
+            arena_allocator,
+            query_options.protocol.client_request_id,
+            table_name,
+            query_options.protocol.timeout,
+            query_options.protocol.metadata,
+            query_options.select,
+            query_options.filter,
+            partition_key,
+            row_key,
+        ) catch |operation_error| {
+            if (operation_error != error.AzureRequestFailed) return operation_error;
+            var metadata = try call.takeResponse();
+            const table_error = try errorsFromMetadata(allocator, &metadata);
+            metadata.deinit();
+            call.deinit();
+            arena.deinit();
+            allocator.destroy(arena);
+            return .{ .failure = table_error };
+        };
+        const metadata = try call.takeResponse();
+        call.deinit();
+        return .{ .success = .{
+            .value = value,
+            .status = metadata.status,
+            .headers = metadata.headers,
+            .body = metadata.body,
+            .arena = arena,
+            .allocator = allocator,
+        } };
+    }
+
+    /// Adapts the generated delete operation, including conditional failures.
+    pub fn deleteEntityResult(
+        self: *ProtocolClient,
+        allocator: std.mem.Allocator,
+        table_name: []const u8,
+        partition_key: []const u8,
+        row_key: []const u8,
+        delete_options: options.DeleteEntityOptions,
+    ) !responses.TableResult(responses.SdkResponse(ProtocolTable.DeleteEntityResult)) {
+        try request.validateTableName(table_name);
+        try request.validateEntityKey(partition_key);
+        try request.validateEntityKey(row_key);
+        try request.validateIfMatch(delete_options.if_match);
+        try request.validateProtocolOptions(delete_options.protocol);
+
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena);
+        arena.* = .init(allocator);
+        errdefer arena.deinit();
+        const arena_allocator = arena.allocator();
+
+        var call = try self.beginEntityCall(arena_allocator, delete_options.protocol);
+        errdefer call.deinit();
+        var generated = protocol.TablesClient.initWithPipeline(
+            arena_allocator,
+            call.pipeline,
+            .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version },
+        );
+        var table = generated.table();
+        const value = table.deleteEntity(
+            arena_allocator,
+            delete_options.protocol.client_request_id,
+            table_name,
+            delete_options.protocol.timeout,
+            delete_options.if_match,
+            partition_key,
+            row_key,
+        ) catch |operation_error| {
+            if (operation_error != error.AzureRequestFailed) return operation_error;
+            var metadata = try call.takeResponse();
+            const table_error = try errorsFromMetadata(allocator, &metadata);
+            metadata.deinit();
+            call.deinit();
+            arena.deinit();
+            allocator.destroy(arena);
+            return .{ .failure = table_error };
+        };
+        const metadata = try call.takeResponse();
+        call.deinit();
+        return .{ .success = .{
+            .value = value,
+            .status = metadata.status,
+            .headers = metadata.headers,
+            .body = metadata.body,
+            .arena = arena,
+            .allocator = allocator,
+        } };
+    }
+
+    fn beginEntityCall(
+        self: *ProtocolClient,
+        allocator: std.mem.Allocator,
+        call_options: options.ProtocolOptions,
+    ) !pipeline_mod.CallContext {
+        return pipeline_mod.CallContext.initWithResponseBody(
+            allocator,
+            self.pipeline,
+            if (self.endpoint.has_query) self.endpoint.raw_query else null,
+            self.endpoint_query_is_sas,
+            call_options.operation_timeout_ms,
+            call_options.timeout,
+            call_options.policies,
+        );
+    }
+
     pub fn send(
         self: *ProtocolClient,
         req: *core.http.Request,
         call_options: options.ProtocolOptions,
     ) !core.http.Response {
-        var call = try self.beginCall(req.allocator, call_options, null);
+        var call = try self.beginCallNoCapture(req.allocator, call_options);
         defer call.deinit();
         return call.pipeline.send(req);
+    }
+
+    fn beginCallNoCapture(
+        self: *ProtocolClient,
+        allocator: std.mem.Allocator,
+        call_options: options.ProtocolOptions,
+    ) !pipeline_mod.CallContext {
+        return pipeline_mod.CallContext.initNoCapture(
+            allocator,
+            self.pipeline,
+            if (self.endpoint.has_query) self.endpoint.raw_query else null,
+            self.endpoint_query_is_sas,
+            call_options.operation_timeout_ms,
+            call_options.timeout,
+            call_options.policies,
+        );
     }
 
     fn tableErrorFromGeneratedFailure(self: *ProtocolClient, allocator: std.mem.Allocator, call: *pipeline_mod.CallContext, generated_error: anyerror) !errors.TableError {
@@ -279,6 +504,41 @@ pub const ProtocolClient = struct {
         );
     }
 };
+
+const BodyOverridePolicy = struct {
+    body: []const u8,
+    policy: core.pipeline.HttpPolicy = .{ .processFn = &process },
+
+    // The generated open JSON model cannot retain property annotations during
+    // serialization, so the SDK codec's validated bytes are authoritative.
+    fn process(
+        policy: *core.pipeline.HttpPolicy,
+        req: *core.http.Request,
+        next: []*core.pipeline.HttpPolicy,
+        transport: *core.http.HttpTransport,
+    ) anyerror!core.http.Response {
+        const self: *BodyOverridePolicy = @alignCast(@fieldParentPtr("policy", policy));
+        req.body = self.body;
+        if (next.len == 0) return transport.send(req);
+        return next[0].process(req, next[1..], transport);
+    }
+};
+
+fn errorsFromMetadata(
+    allocator: std.mem.Allocator,
+    metadata: *responses.ResponseMetadata,
+) !@import("errors.zig").TableError {
+    const content_type = metadata.headers.getFirst("Content-Type");
+    const request_id = metadata.headers.getFirst("x-ms-request-id");
+    return @import("errors.zig").TableError.fromResponse(
+        allocator,
+        metadata.status,
+        content_type,
+        request_id,
+        null,
+        metadata.body orelse "",
+    );
+}
 
 const HeaderPolicy = struct {
     policy: core.pipeline.HttpPolicy = .{ .processFn = &process },

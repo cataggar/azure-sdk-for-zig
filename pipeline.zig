@@ -271,7 +271,7 @@ fn validateHeaderValue(value: ?[]const u8, comptime invalid_error: anyerror) !vo
 pub const CallContext = struct {
     allocator: std.mem.Allocator,
     config_policy: *ConfigPolicy,
-    capture_policy: *CapturePolicy,
+    capture_policy: ?*CapturePolicy,
     sas_policy: *SasAuthPolicy,
     policy_ptrs: []*HttpPolicy,
     pipeline: core.pipeline.HttpPipeline,
@@ -285,6 +285,70 @@ pub const CallContext = struct {
         server_timeout: ?i32,
         custom_policies: []const *HttpPolicy,
     ) !CallContext {
+        return initInternal(
+            allocator,
+            base,
+            raw_endpoint_query,
+            endpoint_query_is_sas,
+            operation_timeout_ms,
+            server_timeout,
+            custom_policies,
+            .failure_only,
+        );
+    }
+
+    pub fn initWithResponseBody(
+        allocator: std.mem.Allocator,
+        base: core.pipeline.HttpPipeline,
+        raw_endpoint_query: ?[]const u8,
+        endpoint_query_is_sas: bool,
+        operation_timeout_ms: ?u64,
+        server_timeout: ?i32,
+        custom_policies: []const *HttpPolicy,
+    ) !CallContext {
+        return initInternal(
+            allocator,
+            base,
+            raw_endpoint_query,
+            endpoint_query_is_sas,
+            operation_timeout_ms,
+            server_timeout,
+            custom_policies,
+            .all,
+        );
+    }
+
+    pub fn initNoCapture(
+        allocator: std.mem.Allocator,
+        base: core.pipeline.HttpPipeline,
+        raw_endpoint_query: ?[]const u8,
+        endpoint_query_is_sas: bool,
+        operation_timeout_ms: ?u64,
+        server_timeout: ?i32,
+        custom_policies: []const *HttpPolicy,
+    ) !CallContext {
+        return initInternal(
+            allocator,
+            base,
+            raw_endpoint_query,
+            endpoint_query_is_sas,
+            operation_timeout_ms,
+            server_timeout,
+            custom_policies,
+            .none,
+        );
+    }
+
+    fn initInternal(
+        allocator: std.mem.Allocator,
+        base: core.pipeline.HttpPipeline,
+        raw_endpoint_query: ?[]const u8,
+        endpoint_query_is_sas: bool,
+        operation_timeout_ms: ?u64,
+        server_timeout: ?i32,
+        custom_policies: []const *HttpPolicy,
+        capture_mode: CaptureMode,
+    ) !CallContext {
         const config = try allocator.create(ConfigPolicy);
         errdefer allocator.destroy(config);
         config.* = ConfigPolicy.init(
@@ -292,22 +356,30 @@ pub const CallContext = struct {
             operation_timeout_ms,
             server_timeout,
         );
-        const capture = try allocator.create(CapturePolicy);
-        errdefer allocator.destroy(capture);
-        capture.* = CapturePolicy.init(allocator);
+        const capture = if (capture_mode != .none)
+            try allocator.create(CapturePolicy)
+        else
+            null;
+        errdefer if (capture) |value| allocator.destroy(value);
+        if (capture) |value|
+            value.* = CapturePolicy.init(allocator, capture_mode == .all);
         const sas = try allocator.create(SasAuthPolicy);
         errdefer allocator.destroy(sas);
         sas.* = SasAuthPolicy.init(if (endpoint_query_is_sas) raw_endpoint_query else null);
 
         const policies = try allocator.alloc(
             *HttpPolicy,
-            3 + custom_policies.len + base.policies.len,
+            2 + @intFromBool(capture != null) + custom_policies.len + base.policies.len,
         );
         errdefer allocator.free(policies);
         policies[0] = config.asPolicy();
-        policies[1] = capture.asPolicy();
-        @memcpy(policies[2 .. 2 + base.policies.len], base.policies);
-        const custom_start = 2 + base.policies.len;
+        var base_start: usize = 1;
+        if (capture) |value| {
+            policies[1] = value.asPolicy();
+            base_start += 1;
+        }
+        @memcpy(policies[base_start .. base_start + base.policies.len], base.policies);
+        const custom_start = base_start + base.policies.len;
         @memcpy(policies[custom_start .. custom_start + custom_policies.len], custom_policies);
         policies[policies.len - 1] = sas.asPolicy();
         return .{
@@ -321,20 +393,25 @@ pub const CallContext = struct {
     }
 
     pub fn takeResponse(self: *CallContext) !responses.ResponseMetadata {
-        const metadata = self.capture_policy.metadata orelse return error.MissingRawResponse;
-        self.capture_policy.metadata = null;
+        const capture = self.capture_policy orelse return error.ResponseCaptureDisabled;
+        const metadata = capture.metadata orelse return error.MissingRawResponse;
+        capture.metadata = null;
         return metadata;
     }
 
     pub fn deinit(self: *CallContext) void {
-        self.capture_policy.deinit();
+        if (self.capture_policy) |capture| {
+            capture.deinit();
+            self.allocator.destroy(capture);
+        }
         self.allocator.free(self.policy_ptrs);
-        self.allocator.destroy(self.capture_policy);
         self.allocator.destroy(self.config_policy);
         self.allocator.destroy(self.sas_policy);
         self.* = undefined;
     }
 };
+
+const CaptureMode = enum { none, failure_only, all };
 
 const ConfigPolicy = struct {
     raw_query: ?[]const u8,
@@ -476,12 +553,14 @@ fn appendServerTimeout(
 
 const CapturePolicy = struct {
     allocator: std.mem.Allocator,
+    capture_success_body: bool,
     metadata: ?responses.ResponseMetadata = null,
     policy: HttpPolicy,
 
-    fn init(allocator: std.mem.Allocator) CapturePolicy {
+    fn init(allocator: std.mem.Allocator, capture_success_body: bool) CapturePolicy {
         return .{
             .allocator = allocator,
+            .capture_success_body = capture_success_body,
             .policy = .{ .processFn = &process },
         };
     }
@@ -505,7 +584,7 @@ const CapturePolicy = struct {
             self.metadata.?.deinit();
             self.metadata = null;
         }
-        if (response.status_code < 200 or response.status_code >= 300)
+        if (self.capture_success_body or response.status_code < 200 or response.status_code >= 300)
             self.metadata.?.body = try self.allocator.dupe(u8, response.body);
         return response;
     }

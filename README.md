@@ -111,6 +111,18 @@ The canonical TypeSpec does not model `$batch`; the generated provenance and
 operation inventory test prove that gap. This layer does not hand-write a
 replacement: the later transaction issue owns its documented implementation.
 
+## Entity CRUD
+
+`TableClient.addEntity` accepts either a comptime-validated caller struct or a
+`DynamicEntity`; `getEntity(T, ...)` decodes either form. The matching
+`*Result` methods retain structured service failures, while simple methods map
+them to operation errors. `EntityResponse(T)` owns its decoded value, ETag,
+OData metadata, selected and raw headers in an arena; call `deinit`.
+
+`DeleteEntityOptions.if_match` defaults to `"*"` and accepts an ETag for a
+conditional delete. `getEntityRaw`, `createEntity`, and `deleteEntityRaw`
+retain access to the original raw-response operations during migration.
+
 ## Checked feature-parity contract
 
 `[x]` means the Go capability has been reviewed and assigned a Zig API owner;

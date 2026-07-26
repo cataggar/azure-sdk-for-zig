@@ -147,16 +147,26 @@ pub fn dynamicFromJson(allocator: std.mem.Allocator, json: []const u8) !DynamicE
     while (it.next()) |entry| {
         const name = entry.key_ptr.*;
         if (std.mem.eql(u8, name, "PartitionKey") or std.mem.eql(u8, name, "RowKey") or
-            std.mem.eql(u8, name, "Timestamp") or std.mem.endsWith(u8, name, "@odata.type")) continue;
+            std.mem.eql(u8, name, "Timestamp") or std.mem.endsWith(u8, name, "@odata.type") or
+            isEntityMetadataAnnotation(name)) continue;
         const annotation = getAnnotation(object, name);
         const property = try decodeEdmValue(allocator, entry.value_ptr.*, annotation);
         defer {
             var owned_property = property;
             owned_property.deinit(allocator);
         }
+
         try result.put(name, property);
     }
     return result;
+}
+
+fn isEntityMetadataAnnotation(name: []const u8) bool {
+    return std.mem.eql(u8, name, "odata.metadata") or
+        std.mem.eql(u8, name, "odata.type") or
+        std.mem.eql(u8, name, "odata.id") or
+        std.mem.eql(u8, name, "odata.etag") or
+        std.mem.eql(u8, name, "odata.editLink");
 }
 
 fn validateEntity(comptime T: type) void {
