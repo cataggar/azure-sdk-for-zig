@@ -390,3 +390,7 @@ codegen/tcgc-component/tcgc.wasm
 .env.local
 .env.*.local
 *.env
+
+# Zig package release engine sources (override the [Rr]elease/ ignore rule).
+!eng/release/
+!eng/release/*.zig
