@@ -40,6 +40,7 @@ snapshot_tree() {
   (
     cd "$path"
     find . -type f \
+      ! -path './.git' \
       ! -path './.git/*' \
       ! -path './.github/*' \
       ! -path './.gitattributes' \
