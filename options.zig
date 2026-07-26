@@ -31,7 +31,31 @@ pub const QueryEntityOptions = struct {
     filter: ?[]const u8 = null,
 };
 
-/// Options accepted by the compatibility `TableClient.init` constructor.
+pub const RetryOptions = struct {
+    max_retries: u32 = 3,
+    initial_delay_ms: u64 = 800,
+    max_delay_ms: u64 = 60_000,
+};
+
+pub const TelemetryOptions = struct {
+    /// Optional application identifier prepended to the SDK user agent.
+    application_id: ?[]const u8 = null,
+};
+
+/// Settings copied or applied by token-authenticated client constructors.
+///
+/// Policy objects and the transport are borrowed and must outlive the owning
+/// client. All string values and the policy pointer list are copied.
 pub const TableClientOptions = struct {
     api_version: []const u8 = latest_api_version,
+    retry: RetryOptions = .{},
+    telemetry: TelemetryOptions = .{},
+    /// Default request ID. Per-operation IDs take precedence.
+    client_request_id: ?[]const u8 = null,
+    /// Default end-to-end budget. Per-operation budgets take precedence.
+    operation_timeout_ms: ?u64 = null,
+    /// Policies run after authentication and therefore once per retry.
+    policies: []const *core.pipeline.HttpPolicy = &.{},
 };
+
+pub const TableServiceClientOptions = TableClientOptions;

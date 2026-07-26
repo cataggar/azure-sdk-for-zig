@@ -46,6 +46,33 @@ request ID, server timeout, client timeout, and per-call policy options, and
 adapts generated values with allocator-owned raw response headers. Generated
 models remain the only wire models.
 
+## Microsoft Entra authentication
+
+Create owning token-authenticated clients with
+`TableServiceClient.initWithToken` or `TableClient.initWithToken`. Both copy
+their endpoint, API version, telemetry application ID, default client request
+ID, and policy pointer list. The credential, transport, and policy objects
+remain borrowed and must outlive the client. The bearer policy requests
+`https://storage.azure.com/.default`.
+
+`TableServiceClient.getTableClient` creates a table client that owns its table
+name and protocol configuration while borrowing the service client's stable
+pipeline state. Deinitialize every derived client before its service client.
+Derived clients share the parent's bearer-token cache and transport.
+
+Client options configure retry count/delays, telemetry application ID, a
+default client request ID, a default operation timeout, API version, and
+caller policies. Per-operation request IDs and operation timeouts override
+client defaults. The stable policy order is request ID, telemetry, retry,
+bearer authentication, client policies, then per-operation policies. Thus
+authentication and caller policies run on every retry.
+
+Initialized clients may be moved because policy objects and their type-erased
+pointers live in allocator-owned stable storage. Calls that share a pipeline
+must nevertheless be serialized: the bearer-token cache and standard HTTP
+transport are mutable and not thread-safe. Callers may provide external
+synchronization when sharing a client or using multiple derived clients.
+
 The canonical TypeSpec does not model `$batch`; the generated provenance and
 operation inventory test prove that gap. This layer does not hand-write a
 replacement: the later transaction issue owns its documented implementation.
