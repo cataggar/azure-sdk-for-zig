@@ -52,7 +52,11 @@ snapshot_tree() {
       -print |
       LC_ALL=C sort |
       while IFS= read -r file; do
-        shasum -a 256 "${file#./}"
+        if command -v shasum >/dev/null 2>&1; then
+          shasum -a 256 "${file#./}"
+        else
+          sha256sum "${file#./}"
+        fi
       done
   ) >"$output"
 }
