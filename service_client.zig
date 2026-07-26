@@ -1,5 +1,7 @@
 const std = @import("std");
 const core = @import("azure_sdk_core");
+const auth = @import("auth.zig");
+const connection_string = @import("connection_string.zig");
 const client = @import("client.zig");
 const options = @import("options.zig");
 const pipeline = @import("pipeline.zig");
@@ -16,6 +18,7 @@ pub const TableServiceClient = struct {
     allocator: std.mem.Allocator,
     protocol: protocol_client.ProtocolClient,
     pipeline_state: *pipeline.PipelineState,
+    owned_credential: ?*auth.SharedKeyCredential = null,
 
     pub const Options = options.TableServiceClientOptions;
 
@@ -45,6 +48,68 @@ pub const TableServiceClient = struct {
             .protocol = protocol,
             .pipeline_state = state,
         };
+    }
+
+    /// Creates a SharedKeyLite-authenticated service client. The credential is
+    /// borrowed and must outlive the client.
+    pub fn initWithSharedKey(
+        allocator: std.mem.Allocator,
+        endpoint: []const u8,
+        credential: *auth.SharedKeyCredential,
+        transport: *core.http.HttpTransport,
+        init_options: Options,
+    ) !TableServiceClient {
+        try request.validateSharedKeyEndpoint(endpoint);
+        const state = try pipeline.PipelineState.createSharedKey(allocator, credential, transport, init_options);
+        errdefer state.deinit();
+        const protocol = try protocol_client.ProtocolClient.init(
+            allocator,
+            endpoint,
+            state.pipeline,
+            .{ .api_version = init_options.api_version },
+        );
+        return .{ .allocator = allocator, .protocol = protocol, .pipeline_state = state };
+    }
+
+    /// Creates a credential-free service client from a complete SAS URL.
+    pub fn initWithSasUrl(
+        allocator: std.mem.Allocator,
+        complete_sas_url: []const u8,
+        transport: *core.http.HttpTransport,
+        init_options: Options,
+    ) !TableServiceClient {
+        try request.validateSasEndpoint(complete_sas_url);
+        const state = try pipeline.PipelineState.createNoAuth(allocator, transport, init_options);
+        errdefer state.deinit();
+        const protocol = try protocol_client.ProtocolClient.init(
+            allocator,
+            complete_sas_url,
+            state.pipeline,
+            .{ .api_version = init_options.api_version },
+        );
+        return .{ .allocator = allocator, .protocol = protocol, .pipeline_state = state };
+    }
+
+    /// Parses a Storage or Azurite connection string before constructing the
+    /// pipeline. Account-key credentials are owned by the returned client.
+    pub fn initFromConnectionString(
+        allocator: std.mem.Allocator,
+        value: []const u8,
+        transport: *core.http.HttpTransport,
+        init_options: Options,
+    ) !TableServiceClient {
+        var parsed = try connection_string.parse(allocator, value);
+        defer parsed.deinit();
+        if (parsed.account_key) |key| {
+            const credential = try allocator.create(auth.SharedKeyCredential);
+            errdefer allocator.destroy(credential);
+            credential.* = try auth.SharedKeyCredential.init(allocator, parsed.account_name, key);
+            errdefer credential.deinit();
+            var result = try initWithSharedKey(allocator, parsed.endpoint, credential, transport, init_options);
+            result.owned_credential = credential;
+            return result;
+        }
+        return initWithSasUrl(allocator, parsed.endpoint, transport, init_options);
     }
 
     /// Creates a table client that shares this service client's pipeline,
@@ -84,7 +149,16 @@ pub const TableServiceClient = struct {
     pub fn deinit(self: *TableServiceClient) void {
         self.protocol.deinit();
         self.pipeline_state.deinit();
+        if (self.owned_credential) |credential| {
+            credential.deinit();
+            self.allocator.destroy(credential);
+        }
         self.* = undefined;
+    }
+
+    /// Formats a query-redacted endpoint so SAS signatures never enter logs.
+    pub fn format(self: TableServiceClient, writer: anytype) !void {
+        try writer.print("TableServiceClient({s})", .{self.protocol.endpoint.base_url});
     }
 };
 

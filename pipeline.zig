@@ -27,7 +27,7 @@ pub const PipelineState = struct {
     request_options: RequestOptionsPolicy,
     telemetry: core.pipeline.TelemetryPolicy,
     retry: core.pipeline.RetryPolicy,
-    bearer_auth: core.pipeline.BearerTokenAuthPolicy,
+    authentication: Authentication,
     policy_ptrs: []*HttpPolicy,
     pipeline: core.pipeline.HttpPipeline,
     owned_user_agent: []u8,
@@ -45,6 +45,52 @@ pub const PipelineState = struct {
             error.InvalidApplicationId,
         );
 
+        return createWithAuthentication(
+            allocator,
+            transport,
+            init_options,
+            .{ .bearer = core.pipeline.BearerTokenAuthPolicy.init(
+                allocator,
+                credential,
+                &.{auth.storage_scope},
+            ) },
+        );
+    }
+
+    pub fn createSharedKey(
+        allocator: std.mem.Allocator,
+        credential: *auth.SharedKeyCredential,
+        transport: *HttpTransport,
+        init_options: options.TableClientOptions,
+    ) !*PipelineState {
+        return createWithAuthentication(
+            allocator,
+            transport,
+            init_options,
+            .{ .shared_key = auth.SharedKeyLitePolicy.init(credential, init_options.api_version) },
+        );
+    }
+
+    /// Used by SAS clients. It deliberately has no authorization policy.
+    pub fn createNoAuth(
+        allocator: std.mem.Allocator,
+        transport: *HttpTransport,
+        init_options: options.TableClientOptions,
+    ) !*PipelineState {
+        return createWithAuthentication(allocator, transport, init_options, .{ .none = .{} });
+    }
+
+    fn createWithAuthentication(
+        allocator: std.mem.Allocator,
+        transport: *HttpTransport,
+        init_options: options.TableClientOptions,
+        authentication: Authentication,
+    ) !*PipelineState {
+        try validateHeaderValue(init_options.client_request_id, error.InvalidClientRequestId);
+        try validateHeaderValue(
+            init_options.telemetry.application_id,
+            error.InvalidApplicationId,
+        );
         const state = try allocator.create(PipelineState);
         errdefer allocator.destroy(state);
 
@@ -74,11 +120,7 @@ pub const PipelineState = struct {
             ),
             .telemetry = core.pipeline.TelemetryPolicy.init(agent),
             .retry = core.pipeline.RetryPolicy.init(),
-            .bearer_auth = core.pipeline.BearerTokenAuthPolicy.init(
-                allocator,
-                credential,
-                &.{auth.storage_scope},
-            ),
+            .authentication = authentication,
             .policy_ptrs = policy_ptrs,
             .pipeline = undefined,
             .owned_user_agent = agent,
@@ -93,7 +135,7 @@ pub const PipelineState = struct {
         policy_ptrs[0] = state.request_options.asPolicy();
         policy_ptrs[1] = state.telemetry.asPolicy();
         policy_ptrs[2] = state.retry.asPolicy();
-        policy_ptrs[3] = state.bearer_auth.asPolicy();
+        policy_ptrs[3] = state.authentication.asPolicy();
         @memcpy(policy_ptrs[4..], init_options.policies);
         state.pipeline = .{
             .policies = policy_ptrs,
@@ -104,11 +146,52 @@ pub const PipelineState = struct {
 
     pub fn deinit(self: *PipelineState) void {
         const allocator = self.allocator;
-        self.bearer_auth.deinit();
+        self.authentication.deinit();
         allocator.free(self.policy_ptrs);
         allocator.free(self.owned_user_agent);
         if (self.owned_client_request_id) |value| allocator.free(value);
         allocator.destroy(self);
+    }
+};
+
+const NoAuthenticationPolicy = struct {
+    policy: HttpPolicy = .{ .processFn = &process },
+
+    fn asPolicy(self: *NoAuthenticationPolicy) *HttpPolicy {
+        return &self.policy;
+    }
+
+    fn process(
+        _: *HttpPolicy,
+        request: *Request,
+        next: []*HttpPolicy,
+        transport: *HttpTransport,
+    ) anyerror!Response {
+        // A SAS URL's signature is in the query. The SDK never synthesizes
+        // Authorization for this mode.
+        if (next.len == 0) return transport.send(request);
+        return next[0].process(request, next[1..], transport);
+    }
+};
+
+const Authentication = union(enum) {
+    bearer: core.pipeline.BearerTokenAuthPolicy,
+    shared_key: auth.SharedKeyLitePolicy,
+    none: NoAuthenticationPolicy,
+
+    fn asPolicy(self: *Authentication) *HttpPolicy {
+        return switch (self.*) {
+            .bearer => |*policy| policy.asPolicy(),
+            .shared_key => |*policy| policy.asPolicy(),
+            .none => |*policy| policy.asPolicy(),
+        };
+    }
+
+    fn deinit(self: *Authentication) void {
+        switch (self.*) {
+            .bearer => |*policy| policy.deinit(),
+            .shared_key, .none => {},
+        }
     }
 };
 
@@ -410,7 +493,7 @@ test "stable policy order authenticates every retry and runs caller policies" {
     try std.testing.expect(state.policy_ptrs[0] == state.request_options.asPolicy());
     try std.testing.expect(state.policy_ptrs[1] == state.telemetry.asPolicy());
     try std.testing.expect(state.policy_ptrs[2] == state.retry.asPolicy());
-    try std.testing.expect(state.policy_ptrs[3] == state.bearer_auth.asPolicy());
+    try std.testing.expect(state.policy_ptrs[3] == state.authentication.asPolicy());
     try std.testing.expect(state.policy_ptrs[4] == &configured.policy);
 
     var per_call = RetryOncePolicy{};

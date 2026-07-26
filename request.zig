@@ -81,6 +81,32 @@ pub fn validateTokenEndpoint(endpoint: []const u8) !void {
         return error.TokenAuthenticationRequiresHttps;
 }
 
+/// Cleartext is restricted to local emulator endpoints. Production Shared Key
+/// and SAS URLs must remain HTTPS even though they do not use bearer tokens.
+pub fn validateSharedKeyEndpoint(endpoint: []const u8) !void {
+    const parsed = try parseEndpoint(endpoint);
+    if (std.ascii.eqlIgnoreCase(parsed.scheme, "https")) return;
+    try validateLocalEmulator(endpoint);
+}
+
+pub fn validateSasEndpoint(endpoint: []const u8) !void {
+    const parsed = try parseEndpoint(endpoint);
+    if (!parsed.has_query or parsed.raw_query.len == 0) return error.MissingSasQuery;
+    if (std.ascii.eqlIgnoreCase(parsed.scheme, "https")) return;
+    try validateLocalEmulator(endpoint);
+}
+
+fn validateLocalEmulator(endpoint: []const u8) !void {
+    const uri = std.Uri.parse(endpoint) catch return error.InvalidEndpoint;
+    var host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
+    const host = uri.getHost(&host_buffer) catch return error.InvalidEndpoint;
+    if (!std.mem.eql(u8, host.bytes, "127.0.0.1") and
+        !std.ascii.eqlIgnoreCase(host.bytes, "localhost"))
+    {
+        return error.CleartextEndpointRequiresLocalEmulator;
+    }
+}
+
 pub fn validateTableName(name: []const u8) !void {
     if (name.len < 3 or name.len > 63 or !std.ascii.isAlphabetic(name[0]))
         return error.InvalidTableName;
