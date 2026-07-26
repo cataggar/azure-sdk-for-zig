@@ -543,7 +543,7 @@ fn formatIPRange(buffer: *[31]u8, value: IPRange) []const u8 {
     ) catch unreachable;
 }
 
-fn validateIdentifier(value: []const u8) !void {
+pub fn validateIdentifier(value: []const u8) !void {
     if (value.len == 0 or value.len > 64 or !std.unicode.utf8ValidateSlice(value))
         return error.InvalidSasIdentifier;
     for (value) |byte| {

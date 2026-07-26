@@ -33,58 +33,79 @@ pub const AccessPolicyTime = struct {
     }
 
     pub fn parse(value: []const u8) !AccessPolicyTime {
-        if (value.len < 20 or value[4] != '-' or value[7] != '-' or
-            (value[10] != 'T' and value[10] != 't') or value[13] != ':' or
-            value[16] != ':')
-        {
+        if (value.len < 10 or value[4] != '-' or value[7] != '-') {
             return error.InvalidAccessPolicyTime;
         }
 
         const year = try parseDigits(value[0..4]);
         const month = try parseDigits(value[5..7]);
         const day = try parseDigits(value[8..10]);
-        const hour = try parseDigits(value[11..13]);
-        const minute = try parseDigits(value[14..16]);
-        const second = try parseDigits(value[17..19]);
         if (year < 1 or year > 9999 or month < 1 or month > 12 or
-            day < 1 or day > daysInMonth(year, month) or hour > 23 or
-            minute > 59 or second > 59)
+            day < 1 or day > daysInMonth(year, month))
         {
             return error.InvalidAccessPolicyTime;
         }
 
-        var index: usize = 19;
+        var hour: u32 = 0;
+        var minute: u32 = 0;
+        var second: u32 = 0;
+        var index: usize = 10;
         var ticks: u32 = 0;
         var precision: u8 = 0;
-        if (index < value.len and value[index] == '.') {
-            index += 1;
-            const fraction_start = index;
-            while (index < value.len and std.ascii.isDigit(value[index])) : (index += 1) {
-                if (precision == 7) return error.AccessPolicyTimePrecisionLoss;
-                ticks = ticks * 10 + (value[index] - '0');
-                precision += 1;
+
+        if (index < value.len) {
+            if (value[index] != 'T' and value[index] != 't')
+                return error.InvalidAccessPolicyTime;
+            if (value.len < index + 7 or value[index + 3] != ':')
+                return error.InvalidAccessPolicyTime;
+            hour = try parseDigits(value[index + 1 .. index + 3]);
+            minute = try parseDigits(value[index + 4 .. index + 6]);
+            if (hour > 23 or minute > 59) return error.InvalidAccessPolicyTime;
+            index += 6;
+
+            var has_seconds = false;
+            if (index < value.len and value[index] == ':') {
+                if (index + 3 > value.len) return error.InvalidAccessPolicyTime;
+                second = try parseDigits(value[index + 1 .. index + 3]);
+                if (second > 59) return error.InvalidAccessPolicyTime;
+                index += 3;
+                has_seconds = true;
             }
-            if (index == fraction_start) return error.InvalidAccessPolicyTime;
-            var pad = precision;
-            while (pad < 7) : (pad += 1) ticks *= 10;
+
+            if (index < value.len and value[index] == '.') {
+                if (!has_seconds) return error.InvalidAccessPolicyTime;
+                index += 1;
+                const fraction_start = index;
+                while (index < value.len and std.ascii.isDigit(value[index])) : (index += 1) {
+                    if (precision == 7) return error.AccessPolicyTimePrecisionLoss;
+                    ticks = ticks * 10 + (value[index] - '0');
+                    precision += 1;
+                }
+                if (index == fraction_start) return error.InvalidAccessPolicyTime;
+                var pad = precision;
+                while (pad < 7) : (pad += 1) ticks *= 10;
+            }
         }
 
         var offset_seconds: i64 = 0;
-        if (index == value.len) return error.InvalidAccessPolicyTime;
-        switch (value[index]) {
-            'Z', 'z' => index += 1,
-            '+', '-' => |sign| {
-                if (index + 6 != value.len or value[index + 3] != ':')
-                    return error.InvalidAccessPolicyTime;
-                const offset_hour = try parseDigits(value[index + 1 .. index + 3]);
-                const offset_minute = try parseDigits(value[index + 4 .. index + 6]);
-                if (offset_hour > 23 or offset_minute > 59)
-                    return error.InvalidAccessPolicyTime;
-                offset_seconds = @as(i64, @intCast(offset_hour * 3600 + offset_minute * 60));
-                if (sign == '-') offset_seconds = -offset_seconds;
-                index += 6;
-            },
-            else => return error.InvalidAccessPolicyTime,
+        if (index != value.len) {
+            switch (value[index]) {
+                'Z', 'z' => index += 1,
+                '+', '-' => |sign| {
+                    if (index + 6 != value.len or value[index + 3] != ':')
+                        return error.InvalidAccessPolicyTime;
+                    const offset_hour = try parseDigits(value[index + 1 .. index + 3]);
+                    const offset_minute = try parseDigits(value[index + 4 .. index + 6]);
+                    if (offset_hour > 23 or offset_minute > 59)
+                        return error.InvalidAccessPolicyTime;
+                    offset_seconds = @as(i64, @intCast(offset_hour * 3600 + offset_minute * 60));
+                    if (sign == '-') offset_seconds = -offset_seconds;
+                    index += 6;
+                },
+                else => return error.InvalidAccessPolicyTime,
+            }
+        } else if (value.len != 10) {
+            return error.InvalidAccessPolicyTime;
         }
         if (index != value.len) return error.InvalidAccessPolicyTime;
 
@@ -98,8 +119,12 @@ pub const AccessPolicyTime = struct {
             try std.math.mul(i64, days, std.time.s_per_day),
             @as(i64, @intCast(hour * 3600 + minute * 60 + second)),
         );
+        const unix_seconds = try std.math.sub(i64, local_seconds, offset_seconds);
+        const normalized = civilFromDays(@divFloor(unix_seconds, std.time.s_per_day));
+        if (normalized.year < 1 or normalized.year > 9999)
+            return error.InvalidAccessPolicyTime;
         return .{
-            .unix_seconds = try std.math.sub(i64, local_seconds, offset_seconds),
+            .unix_seconds = unix_seconds,
             .fraction_100ns = ticks,
             .fractional_digits = precision,
         };
@@ -142,7 +167,8 @@ pub const AccessPolicyTime = struct {
 };
 
 /// Policy permission bytes. `.table` provides the same canonical `raud`
-/// ordering as table SAS generation; `.raw` preserves service extensions.
+/// ordering as table SAS generation. `.raw` preserves service extensions
+/// returned by GET; SET accepts only ordered `r`, `a`, `u`, and `d`.
 pub const AccessPolicyPermissions = union(enum) {
     table: sas.TablePermissions,
     raw: []const u8,
@@ -152,6 +178,22 @@ pub const AccessPolicyPermissions = union(enum) {
             .table => |permissions| permissions.string(buffer),
             .raw => |value| value,
         };
+    }
+
+    pub fn validate(self: AccessPolicyPermissions) !void {
+        const value = switch (self) {
+            .table => return,
+            .raw => |raw| raw,
+        };
+        var previous: ?usize = null;
+        for (value) |byte| {
+            const position = std.mem.indexOfScalar(u8, "raud", byte) orelse
+                return error.InvalidAccessPolicyPermissions;
+            if (previous) |last| {
+                if (position <= last) return error.InvalidAccessPolicyPermissions;
+            }
+            previous = position;
+        }
     }
 };
 
@@ -163,17 +205,33 @@ pub const AccessPolicy = struct {
     permissions: AccessPolicyPermissions = .{ .raw = "" },
 };
 
-/// Borrowed input model. A response owns the identifier and raw permission
-/// slices in its response arena.
+/// Borrowed input model. SET identifiers use the same nonempty, valid UTF-8,
+/// 64-byte limit as table SAS. A response owns the identifier and raw
+/// permission slices in its response arena.
 pub const SignedIdentifier = struct {
     id: []const u8,
     access_policy: AccessPolicy,
 };
 
+pub fn validateForSet(identifiers: []const SignedIdentifier) !void {
+    if (identifiers.len > max_stored_access_policies)
+        return error.TooManyStoredAccessPolicies;
+    for (identifiers, 0..) |identifier, index| {
+        sas.validateIdentifier(identifier.id) catch
+            return error.InvalidSignedIdentifier;
+        try identifier.access_policy.permissions.validate();
+        for (identifiers[0..index]) |previous| {
+            if (std.mem.eql(u8, previous.id, identifier.id))
+                return error.DuplicateSignedIdentifier;
+        }
+    }
+}
+
 pub fn toWire(
     allocator: std.mem.Allocator,
     identifiers: []const SignedIdentifier,
 ) !protocol.models.SignedIdentifiers {
+    try validateForSet(identifiers);
     const wire = try allocator.alloc(protocol.models.SignedIdentifier, identifiers.len);
     var initialized: usize = 0;
     errdefer {
@@ -362,8 +420,11 @@ fn civilFromDays(days: i64) struct { year: i64, month: i64, day: i64 } {
     return .{ .year = year, .month = month, .day = day };
 }
 
-test "access policy times normalize offsets and preserve service precision" {
+test "access policy times accept every documented ISO 8601 form" {
     const cases = [_]struct { input: []const u8, expected: []const u8 }{
+        .{ .input = "2026-07-26", .expected = "2026-07-26T00:00:00Z" },
+        .{ .input = "2026-07-26T18:32Z", .expected = "2026-07-26T18:32:00Z" },
+        .{ .input = "2026-07-26T20:02+01:30", .expected = "2026-07-26T18:32:00Z" },
         .{ .input = "2026-07-26T18:32:16Z", .expected = "2026-07-26T18:32:16Z" },
         .{ .input = "2026-07-26T20:02:16.1234567+01:30", .expected = "2026-07-26T18:32:16.1234567Z" },
         .{ .input = "2026-07-25T23:32:16.120-19:00", .expected = "2026-07-26T18:32:16.120Z" },
@@ -375,13 +436,59 @@ test "access policy times normalize offsets and preserve service precision" {
         var buffer: [32]u8 = undefined;
         try std.testing.expectEqualStrings(case.expected, try parsed.format(&buffer));
     }
+}
+
+test "access policy times normalize timezone and calendar boundaries" {
+    const cases = [_]struct { input: []const u8, expected: []const u8 }{
+        .{ .input = "0001-01-01", .expected = "0001-01-01T00:00:00Z" },
+        .{ .input = "9999-12-31", .expected = "9999-12-31T00:00:00Z" },
+        .{ .input = "2024-02-29T00:15+00:30", .expected = "2024-02-28T23:45:00Z" },
+        .{ .input = "2026-01-01T00:00:00+23:59", .expected = "2025-12-31T00:01:00Z" },
+        .{ .input = "2026-12-31T23:59:59-23:59", .expected = "2027-01-01T23:58:59Z" },
+    };
+    for (cases) |case| {
+        const parsed = try AccessPolicyTime.parse(case.input);
+        var buffer: [32]u8 = undefined;
+        try std.testing.expectEqualStrings(case.expected, try parsed.format(&buffer));
+    }
     try std.testing.expectError(
-        error.AccessPolicyTimePrecisionLoss,
-        AccessPolicyTime.parse("2026-07-26T18:32:16.12345678Z"),
+        error.InvalidAccessPolicyTime,
+        AccessPolicyTime.parse("0001-01-01T00:00+00:01"),
     );
     try std.testing.expectError(
         error.InvalidAccessPolicyTime,
-        AccessPolicyTime.parse("2026-02-29T18:32:16Z"),
+        AccessPolicyTime.parse("9999-12-31T23:59-00:01"),
+    );
+}
+
+test "access policy times reject malformed and unsupported precision" {
+    const malformed = [_][]const u8{
+        "",
+        "2026-07",
+        "2026-07-26Z",
+        "2026-07-26T18",
+        "2026-07-26T18:32",
+        "2026-07-26T18:32:16",
+        "2026-07-26T18:32.1Z",
+        "2026-07-26T18:32:1Z",
+        "2026-07-26T18:32:16.Z",
+        "2026-07-26T18:32:16+01",
+        "2026-07-26T18:32:16+24:00",
+        "2026-07-26T18:32:16+01:60",
+        "2026-02-29",
+        "2024-04-31",
+        "0000-01-01",
+        "10000-01-01",
+    };
+    for (malformed) |value| {
+        try std.testing.expectError(
+            error.InvalidAccessPolicyTime,
+            AccessPolicyTime.parse(value),
+        );
+    }
+    try std.testing.expectError(
+        error.AccessPolicyTimePrecisionLoss,
+        AccessPolicyTime.parse("2026-07-26T18:32:16.12345678Z"),
     );
 }
 
@@ -412,4 +519,47 @@ test "wire conversion preserves empty and populated generated models" {
     try std.testing.expectEqualStrings("ru", source[0].access_policy.permissions.string(&permission_buffer));
     try std.testing.expectEqualStrings("2026-07-26T18:32:16.1234567Z", wire.identifiers[0].access_policy.start);
     try std.testing.expectEqualStrings("ru", wire.identifiers[0].access_policy.permission);
+}
+
+test "set policy validation matches SAS identifiers and permission order" {
+    const valid = [_]SignedIdentifier{
+        .{ .id = "a", .access_policy = .{ .permissions = .{ .raw = "" } } },
+        .{ .id = "policy & two", .access_policy = .{ .permissions = .{ .raw = "raud" } } },
+        .{ .id = "雪", .access_policy = .{ .permissions = .{ .raw = "rd" } } },
+    };
+    try validateForSet(&valid);
+
+    const invalid_permissions = [_][]const u8{ "rx", "rr", "ar", "R", "raudd" };
+    for (invalid_permissions) |permission| {
+        try std.testing.expectError(
+            error.InvalidAccessPolicyPermissions,
+            validateForSet(&.{.{
+                .id = "policy",
+                .access_policy = .{ .permissions = .{ .raw = permission } },
+            }}),
+        );
+    }
+    try std.testing.expectError(
+        error.InvalidSignedIdentifier,
+        validateForSet(&.{.{ .id = "", .access_policy = .{} }}),
+    );
+    try std.testing.expectError(
+        error.InvalidSignedIdentifier,
+        validateForSet(&.{.{ .id = "x" ** 65, .access_policy = .{} }}),
+    );
+    try std.testing.expectError(
+        error.InvalidSignedIdentifier,
+        validateForSet(&.{.{ .id = "\xff", .access_policy = .{} }}),
+    );
+    try std.testing.expectError(
+        error.DuplicateSignedIdentifier,
+        validateForSet(&.{
+            .{ .id = "case-sensitive", .access_policy = .{} },
+            .{ .id = "case-sensitive", .access_policy = .{} },
+        }),
+    );
+    try validateForSet(&.{
+        .{ .id = "case-sensitive", .access_policy = .{} },
+        .{ .id = "Case-Sensitive", .access_policy = .{} },
+    });
 }

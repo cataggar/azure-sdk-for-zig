@@ -401,8 +401,7 @@ pub const ProtocolClient = struct {
     ) !responses.TableResult(responses.SdkResponse(SetAccessPolicyResponse)) {
         try request.validateTableName(table_name);
         try request.validateProtocolOptions(set_options.protocol);
-        if (identifiers.len > service_models.max_stored_access_policies)
-            return error.TooManyStoredAccessPolicies;
+        try service_models.validateForSet(identifiers);
         const arena = try allocator.create(std.heap.ArenaAllocator);
         errdefer allocator.destroy(arena);
         arena.* = .init(allocator);

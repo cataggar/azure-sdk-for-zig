@@ -2297,7 +2297,7 @@ test "stored access policies use generated XML and preserve response metadata" {
             },
             .{
                 .id = "future",
-                .access_policy = .{ .permissions = .{ .raw = "rx" } },
+                .access_policy = .{ .permissions = .{ .raw = "ad" } },
             },
         },
         .{ .protocol = .{ .client_request_id = "temporary-id", .timeout = 17 } },
@@ -2318,7 +2318,7 @@ test "stored access policies use generated XML and preserve response metadata" {
         transport.last_headers.get("Content-Type").?,
     );
     try std.testing.expectEqualStrings(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><SignedIdentifiers><SignedIdentifier><Id>read&lt;&amp;&gt;</Id><AccessPolicy><Start>2026-07-26T18:32:16.1234567Z</Start><Expiry>2026-07-27T18:32:16.120Z</Expiry><Permission>ru</Permission></AccessPolicy></SignedIdentifier><SignedIdentifier><Id>future</Id><AccessPolicy><Start></Start><Expiry></Expiry><Permission>rx</Permission></AccessPolicy></SignedIdentifier></SignedIdentifiers>",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><SignedIdentifiers><SignedIdentifier><Id>read&lt;&amp;&gt;</Id><AccessPolicy><Start>2026-07-26T18:32:16.1234567Z</Start><Expiry>2026-07-27T18:32:16.120Z</Expiry><Permission>ru</Permission></AccessPolicy></SignedIdentifier><SignedIdentifier><Id>future</Id><AccessPolicy><Start></Start><Expiry></Expiry><Permission>ad</Permission></AccessPolicy></SignedIdentifier></SignedIdentifiers>",
         transport.last_body.?,
     );
 
@@ -2392,10 +2392,54 @@ test "stored access policy limits preserve empty zero and five lists" {
         .{ .id = "two", .access_policy = .{} },
         .{ .id = "three", .access_policy = .{} },
         .{ .id = "four", .access_policy = .{} },
-        .{ .id = "five", .access_policy = .{} },
+        .{ .id = "x" ** 64, .access_policy = .{} },
     };
     var five_set = try table_client.setAccessPolicy(allocator, &five, .{});
     five_set.deinit();
+    try std.testing.expectEqual(@as(usize, 2), transport.call_count);
+    try std.testing.expectEqual(
+        @as(usize, 5),
+        std.mem.count(u8, transport.last_body.?, "<Start></Start><Expiry></Expiry><Permission></Permission>"),
+    );
+
+    try std.testing.expectError(
+        error.InvalidSignedIdentifier,
+        table_client.setAccessPolicyResult(
+            std.testing.failing_allocator,
+            &.{.{ .id = "x" ** 65, .access_policy = .{} }},
+            .{},
+        ),
+    );
+    try std.testing.expectError(
+        error.InvalidSignedIdentifier,
+        table_client.setAccessPolicyResult(
+            std.testing.failing_allocator,
+            &.{.{ .id = "\xff", .access_policy = .{} }},
+            .{},
+        ),
+    );
+    try std.testing.expectError(
+        error.DuplicateSignedIdentifier,
+        table_client.setAccessPolicyResult(
+            std.testing.failing_allocator,
+            &.{
+                .{ .id = "duplicate", .access_policy = .{} },
+                .{ .id = "duplicate", .access_policy = .{} },
+            },
+            .{},
+        ),
+    );
+    try std.testing.expectError(
+        error.InvalidAccessPolicyPermissions,
+        table_client.setAccessPolicyResult(
+            std.testing.failing_allocator,
+            &.{.{
+                .id = "permissions",
+                .access_policy = .{ .permissions = .{ .raw = "rx" } },
+            }},
+            .{},
+        ),
+    );
     try std.testing.expectEqual(@as(usize, 2), transport.call_count);
 
     const six = five ++ [_]service_models.SignedIdentifier{
@@ -2562,7 +2606,7 @@ fn testAccessPolicyAllocationFailures(allocator: std.mem.Allocator) !void {
             .id = "read",
             .access_policy = .{
                 .start = try service_models.AccessPolicyTime.parse("2026-07-26T18:32:16Z"),
-                .permissions = .{ .raw = "rx" },
+                .permissions = .{ .raw = "rd" },
             },
         }},
         .{ .protocol = .{ .client_request_id = "temporary" } },
