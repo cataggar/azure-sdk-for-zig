@@ -99,13 +99,19 @@ fn copyListOptions(
     allocator: std.mem.Allocator,
     source: options.ListTablesOptions,
 ) !options.ListTablesOptions {
-    var result = source;
-    result.select = null;
-    result.filter = null;
-    result.continuation_token = null;
-    result.protocol.client_request_id = null;
-    result.protocol.policies = &.{};
-    result.protocol.metadata = null;
+    var result: options.ListTablesOptions = .{
+        .protocol = .{
+            .metadata = null,
+            .client_request_id = null,
+            .timeout = source.protocol.timeout,
+            .operation_timeout_ms = source.protocol.operation_timeout_ms,
+            .policies = &.{},
+        },
+        .top = source.top,
+        .select = null,
+        .filter = null,
+        .continuation_token = null,
+    };
     errdefer deinitListOptions(allocator, &result);
 
     if (source.select) |value| result.select = try allocator.dupe(u8, value);
