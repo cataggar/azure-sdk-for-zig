@@ -12,6 +12,10 @@
             .url = "git+https://github.com/cataggar/serde.zig#7012f58c7ddf490125852e1d22006b552a1693c7",
             .hash = "serde-1.0.1-1DszT-e9DABp6u1PoDvGFzeGaST2hRp2KGtGn_CkIl0J",
         },
+        .azure_rest_data_tables = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#67d001426e73385a944a1bacde8d482b81dbf5ae",
+            .hash = "azure_rest_data_tables-0.1.0-CqXnR3B2AQBJhSOC2e17bpbGPj5hN9RjLcpQ01OfFGkf",
+        },
     },
     .paths = .{
         ".gitignore",
@@ -33,6 +37,7 @@
         "options.zig",
         "pager.zig",
         "pipeline.zig",
+        "protocol_client.zig",
         "request.zig",
         "responses.zig",
         "sas.zig",

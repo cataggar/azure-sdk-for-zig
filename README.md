@@ -32,10 +32,23 @@ re-read `Data.Tables.Versions`, choose the newest stable member, and record an
 immutable upstream commit every time it is regenerated. A generic Storage
 `x-ms-version` is not a substitute for a Tables contract version.
 
-After the generated package is published, this SDK will pin it by immutable Git
-commit and Zig package hash and re-export its public root as `protocol`.
-`protocol` is reserved now so application imports do not change. Generated
-declarations must not absorb SDK policy, convenience, or ownership behavior.
+The SDK pins generated package commit
+`67d001426e73385a944a1bacde8d482b81dbf5ae` and Zig package hash
+`azure_rest_data_tables-0.1.0-CqXnR3B2AQBJhSOC2e17bpbGPj5hN9RjLcpQ01OfFGkf`,
+and re-exports its public root as `protocol`. Its provenance records upstream
+spec commit `0744f52a86919d243ba2225e55bdb9c87bf521a5`, generator commit
+`f5dde2c7aa95e7a5ac496793b5527c9a212d642c`, and stable API version
+`2019-02-02`.
+
+`ProtocolClient` is the shared validated bridge to generated calls. It
+normalizes endpoint paths while preserving SAS query bytes, maps metadata,
+request ID, server timeout, client timeout, and per-call policy options, and
+adapts generated values with allocator-owned raw response headers. Generated
+models remain the only wire models.
+
+The canonical TypeSpec does not model `$batch`; the generated provenance and
+operation inventory test prove that gap. This layer does not hand-write a
+replacement: the later transaction issue owns its documented implementation.
 
 ## Checked feature-parity contract
 
