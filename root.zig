@@ -37,8 +37,19 @@ pub const AppendBlob = clients.AppendBlob;
 pub const BlockBlob = clients.BlockBlob;
 pub const PageBlob = clients.PageBlob;
 
+// ─────────────────────── Convenience helpers ──────────────────
+// Hand-written high-level helpers layered on the generated clients (existence
+// checks, auto-chunking block-blob upload, and a download-to-writer sink).
+// Kept in a separate module because `src/clients.zig` is emitter-owned.
+pub const convenience = @import("convenience.zig");
+pub const blobExists = convenience.blobExists;
+pub const containerExists = convenience.containerExists;
+pub const uploadBlockBlob = convenience.uploadBlockBlob;
+pub const downloadInto = convenience.downloadInto;
+
 test {
     std.testing.refAllDecls(sas);
+    _ = @import("convenience.zig");
     inline for (.{
         clients.BlobClient,
         clients.Service,
