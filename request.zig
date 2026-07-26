@@ -8,41 +8,14 @@ pub const NormalizedEndpoint = struct {
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, endpoint: []const u8) !NormalizedEndpoint {
-        if (endpoint.len == 0) return error.InvalidEndpoint;
-        for (endpoint) |byte| {
-            if (byte <= 0x20 or byte == 0x7f) return error.InvalidEndpoint;
-        }
-        if (std.mem.indexOfScalar(u8, endpoint, '#') != null) return error.InvalidEndpoint;
+        const parsed = try parseEndpoint(endpoint);
 
-        const query_index = std.mem.indexOfScalar(u8, endpoint, '?');
-        const base_input = if (query_index) |index| endpoint[0..index] else endpoint;
-        const raw_query = if (query_index) |index| endpoint[index + 1 ..] else "";
-
-        const uri = std.Uri.parse(base_input) catch return error.InvalidEndpoint;
-        if (!std.ascii.eqlIgnoreCase(uri.scheme, "https") and
-            !std.ascii.eqlIgnoreCase(uri.scheme, "http"))
-        {
-            return error.InvalidEndpointScheme;
-        }
-        if (uri.host == null or uri.user != null or uri.password != null or uri.fragment != null)
-            return error.InvalidEndpoint;
-        var host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
-        const host = uri.getHost(&host_buffer) catch return error.InvalidEndpoint;
-        if (host.bytes.len == 0) return error.InvalidEndpoint;
-
-        var end = base_input.len;
-        const authority_start = (std.mem.indexOf(u8, base_input, "://") orelse
-            return error.InvalidEndpoint) + 3;
-        const authority_end = std.mem.indexOfScalarPos(u8, base_input, authority_start, '/') orelse
-            base_input.len;
-        while (end > authority_end and base_input[end - 1] == '/') end -= 1;
-
-        const owned_base = try allocator.dupe(u8, base_input[0..end]);
+        const owned_base = try allocator.dupe(u8, parsed.base_input[0..parsed.end]);
         errdefer allocator.free(owned_base);
         return .{
             .base_url = owned_base,
-            .raw_query = try allocator.dupe(u8, raw_query),
-            .has_query = query_index != null,
+            .raw_query = try allocator.dupe(u8, parsed.raw_query),
+            .has_query = parsed.has_query,
             .allocator = allocator,
         };
     }
@@ -53,6 +26,60 @@ pub const NormalizedEndpoint = struct {
         self.* = undefined;
     }
 };
+
+const ParsedEndpoint = struct {
+    base_input: []const u8,
+    raw_query: []const u8,
+    has_query: bool,
+    end: usize,
+    scheme: []const u8,
+};
+
+fn parseEndpoint(endpoint: []const u8) !ParsedEndpoint {
+    if (endpoint.len == 0) return error.InvalidEndpoint;
+    for (endpoint) |byte| {
+        if (byte <= 0x20 or byte == 0x7f) return error.InvalidEndpoint;
+    }
+    if (std.mem.indexOfScalar(u8, endpoint, '#') != null) return error.InvalidEndpoint;
+
+    const query_index = std.mem.indexOfScalar(u8, endpoint, '?');
+    const base_input = if (query_index) |index| endpoint[0..index] else endpoint;
+    const raw_query = if (query_index) |index| endpoint[index + 1 ..] else "";
+
+    const uri = std.Uri.parse(base_input) catch return error.InvalidEndpoint;
+    if (!std.ascii.eqlIgnoreCase(uri.scheme, "https") and
+        !std.ascii.eqlIgnoreCase(uri.scheme, "http"))
+    {
+        return error.InvalidEndpointScheme;
+    }
+    if (uri.host == null or uri.user != null or uri.password != null or uri.fragment != null)
+        return error.InvalidEndpoint;
+    var host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
+    const host = uri.getHost(&host_buffer) catch return error.InvalidEndpoint;
+    if (host.bytes.len == 0) return error.InvalidEndpoint;
+
+    var end = base_input.len;
+    const authority_start = (std.mem.indexOf(u8, base_input, "://") orelse
+        return error.InvalidEndpoint) + 3;
+    const authority_end = std.mem.indexOfScalarPos(u8, base_input, authority_start, '/') orelse
+        base_input.len;
+    while (end > authority_end and base_input[end - 1] == '/') end -= 1;
+
+    return .{
+        .base_input = base_input,
+        .raw_query = raw_query,
+        .has_query = query_index != null,
+        .end = end,
+        .scheme = uri.scheme,
+    };
+}
+
+/// Token-authenticated clients must never use a cleartext endpoint.
+pub fn validateTokenEndpoint(endpoint: []const u8) !void {
+    const parsed = try parseEndpoint(endpoint);
+    if (!std.ascii.eqlIgnoreCase(parsed.scheme, "https"))
+        return error.TokenAuthenticationRequiresHttps;
+}
 
 pub fn validateTableName(name: []const u8) !void {
     if (name.len < 3 or name.len > 63 or !std.ascii.isAlphabetic(name[0]))
@@ -222,4 +249,16 @@ test "endpoint table key and property validation rejects invalid inputs" {
     try std.testing.expectError(error.InvalidEntityKey, validateEntityKey("bad/key"));
     try std.testing.expectError(error.ReservedPropertyName, entity.validatePropertyName("PartitionKey"));
     try std.testing.expectError(error.InvalidPropertyName, entity.validatePropertyName("bad/name"));
+}
+
+test "normalized endpoints retain HTTP support for non-token authentication" {
+    var normalized = try NormalizedEndpoint.init(
+        std.testing.allocator,
+        "http://127.0.0.1:10002/devstoreaccount1/",
+    );
+    defer normalized.deinit();
+    try std.testing.expectEqualStrings(
+        "http://127.0.0.1:10002/devstoreaccount1",
+        normalized.base_url,
+    );
 }
