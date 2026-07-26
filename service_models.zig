@@ -206,7 +206,7 @@ pub const AccessPolicy = struct {
 };
 
 /// Borrowed input model. SET identifiers use the same nonempty, valid UTF-8,
-/// 64-byte limit as table SAS. A response owns the identifier and raw
+/// 64-Unicode-scalar limit as table SAS. A response owns the identifier and raw
 /// permission slices in its response arena.
 pub const SignedIdentifier = struct {
     id: []const u8,
@@ -546,6 +546,11 @@ test "set policy validation matches SAS identifiers and permission order" {
     try std.testing.expectError(
         error.InvalidSignedIdentifier,
         validateForSet(&.{.{ .id = "x" ** 65, .access_policy = .{} }}),
+    );
+    try validateForSet(&.{.{ .id = "雪" ** 64, .access_policy = .{} }});
+    try std.testing.expectError(
+        error.InvalidSignedIdentifier,
+        validateForSet(&.{.{ .id = "雪" ** 65, .access_policy = .{} }}),
     );
     try std.testing.expectError(
         error.InvalidSignedIdentifier,

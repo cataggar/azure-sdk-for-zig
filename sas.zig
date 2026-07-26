@@ -544,7 +544,9 @@ fn formatIPRange(buffer: *[31]u8, value: IPRange) []const u8 {
 }
 
 pub fn validateIdentifier(value: []const u8) !void {
-    if (value.len == 0 or value.len > 64 or !std.unicode.utf8ValidateSlice(value))
+    if (value.len == 0 or !std.unicode.utf8ValidateSlice(value))
+        return error.InvalidSasIdentifier;
+    if ((std.unicode.utf8CountCodepoints(value) catch unreachable) > 64)
         return error.InvalidSasIdentifier;
     for (value) |byte| {
         if (byte < 0x20 or byte == 0x7f)
@@ -607,6 +609,34 @@ test "comptime mappings emit service-required order" {
         (AccountResourceTypes{ .object = true, .service = true, .container = true })
             .string(&resource_buffer),
     );
+}
+
+test "stored SAS identifiers count Unicode scalar values" {
+    const allocator = std.testing.allocator;
+    var credential = try vectorCredential(allocator);
+    defer credential.deinit();
+
+    var ascii = try (TableSignatureValues{
+        .tableName = "People",
+        .accessPolicy = .{ .stored = "a" ** 64 },
+    }).sign(allocator, &credential);
+    ascii.deinit();
+    var multibyte = try (TableSignatureValues{
+        .tableName = "People",
+        .accessPolicy = .{ .stored = "雪" ** 64 },
+    }).sign(allocator, &credential);
+    multibyte.deinit();
+
+    const invalid = [_][]const u8{ "a" ** 65, "雪" ** 65, "\xff" };
+    for (invalid) |identifier| {
+        try std.testing.expectError(
+            error.InvalidSasIdentifier,
+            (TableSignatureValues{
+                .tableName = "People",
+                .accessPolicy = .{ .stored = identifier },
+            }).sign(allocator, &credential),
+        );
+    }
 }
 
 fn vectorCredential(allocator: std.mem.Allocator) !auth.SharedKeyCredential {

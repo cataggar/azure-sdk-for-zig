@@ -533,6 +533,8 @@ pub const TableClient = struct {
                 } };
             },
         };
+    }
+
     pub fn getAccessPolicyResult(
         self: *TableClient,
         allocator: std.mem.Allocator,
@@ -2406,7 +2408,7 @@ test "stored access policy limits preserve empty zero and five lists" {
         error.InvalidSignedIdentifier,
         table_client.setAccessPolicyResult(
             std.testing.failing_allocator,
-            &.{.{ .id = "x" ** 65, .access_policy = .{} }},
+            &.{.{ .id = "雪" ** 65, .access_policy = .{} }},
             .{},
         ),
     );
