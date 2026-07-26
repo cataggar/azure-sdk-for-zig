@@ -79,10 +79,25 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     data_tables_test_mod.addImport("codemodel", codemodel_mod);
+    data_tables_test_mod.addImport("emit", emit_mod);
     const data_tables_test = b.addTest(.{
         .root_module = data_tables_test_mod,
     });
     test_step.dependOn(&b.addRunArtifact(data_tables_test).step);
+
+    const data_tables_generator_mod = b.createModule(.{
+        .root_source_file = b.path("../fixtures/generate_data_tables_package.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    data_tables_generator_mod.addImport("emit", emit_mod);
+    const data_tables_generator = b.addExecutable(.{
+        .name = "generate-data-tables-package",
+        .root_module = data_tables_generator_mod,
+    });
+    const generate_data_tables_fixture = b.addRunArtifact(data_tables_generator);
+    const generated_data_tables_dir =
+        generate_data_tables_fixture.addOutputDirectoryArg("data-tables-package");
 
     const fixture_generator_mod = b.createModule(.{
         .root_source_file = b.path("../fixtures/generate_container_registry_package.zig"),
@@ -167,6 +182,19 @@ pub fn build(b: *std.Build) void {
         .target = host_target,
         .optimize = optimize,
     });
+    const generated_data_tables_mod = b.createModule(.{
+        .root_source_file = generated_data_tables_dir.path(b, "src/root.zig"),
+        .target = host_target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "azure_sdk_core", .module = azure_sdk_core_dep.module("azure_sdk_core") },
+            .{ .name = "serde", .module = serde_dep.module("serde") },
+        },
+    });
+    const generated_data_tables_test = b.addTest(.{
+        .root_module = generated_data_tables_mod,
+    });
+    test_step.dependOn(&b.addRunArtifact(generated_data_tables_test).step);
     const generated_fixture_mod = b.createModule(.{
         .root_source_file = generated_fixture_dir.path(b, "src/root.zig"),
         .target = host_target,

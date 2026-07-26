@@ -79,6 +79,11 @@ contains 14 operations. It has no `$batch` route; transactions remain outside
 the generated REST contract unless a future upstream fixture records that
 operation as present.
 
+`cd codegen/cli && zig build test` renders and compiles this fixture as
+`azure_rest_data_tables`. Its focused assertions cover open OData records and
+dotted names, headers and status alternatives, XML serde metadata, literal
+query routes, and quoted OData path escaping.
+
 Regenerate the tracked, entirely generator-owned ACR protocol package
 from that fixture into a checkout of its package branch:
 

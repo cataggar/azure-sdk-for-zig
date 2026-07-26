@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const cm = @import("codemodel");
+const emitter = @import("emit");
 
 const ProvenanceDocument = struct {
     provenance: struct {
@@ -74,6 +75,10 @@ fn expectMethodSet(methods: []const cm.Method, expected: []const []const u8) !vo
 fn expectStatus(status: std.json.Value, expected: i64) !void {
     try std.testing.expect(status == .integer);
     try std.testing.expectEqual(expected, status.integer);
+}
+
+fn expectContains(haystack: []const u8, needle: []const u8) !void {
+    try std.testing.expect(std.mem.indexOf(u8, haystack, needle) != null);
 }
 
 test "Tables fixture pins canonical provenance and newest stable version" {
@@ -281,6 +286,21 @@ test "Tables fixture preserves statuses headers routes and continuations" {
     for (route_expectations) |item| {
         try testing.expectEqualStrings(item.path, findMethod(model, item.name).?.path);
     }
+
+    try testing.expectEqualStrings(
+        "odata-string",
+        findMethod(model, "delete").?.path_parameters[0].path_encoding.?,
+    );
+    for ([_][]const u8{
+        "query_entity_with_partition_and_row_key",
+        "update_entity",
+        "merge_entity",
+        "delete_entity",
+    }) |name| {
+        const method = findMethod(model, name).?;
+        try testing.expectEqualStrings("odata-string", method.path_parameters[1].path_encoding.?);
+        try testing.expectEqualStrings("odata-string", method.path_parameters[2].path_encoding.?);
+    }
 }
 
 test "Tables fixture preserves JSON open records OData XML and customizations" {
@@ -409,4 +429,140 @@ test "Tables fixture preserves JSON open records OData XML and customizations" {
         "IncludeAPIs",
         findField(findModel(model, "Metrics").?, "include_apis").?.xml.?.name,
     );
+}
+
+test "Tables emitter preserves open records and dotted OData names" {
+    const testing = std.testing;
+    var parsed = try std.json.parseFromSlice(
+        cm.CodeModel,
+        testing.allocator,
+        @embedFile("data_tables.json"),
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed.deinit();
+
+    const models = try emitter.renderModels(testing.allocator, parsed.value);
+    defer testing.allocator.free(models);
+    const clients = try emitter.renderClients(testing.allocator, parsed.value);
+    defer testing.allocator.free(clients);
+
+    try expectContains(models, "value: ?[]const std.json.ArrayHashMap(JsonValue) = null");
+    try expectContains(clients, "body: std.json.ArrayHashMap(models.JsonValue)");
+    try expectContains(models, ".odata_type = \"odata.type\"");
+    try expectContains(models, ".odata_id = \"odata.id\"");
+    try expectContains(models, ".odata_edit_link = \"odata.editLink\"");
+    try expectContains(models, ".odata_metadata = \"odata.metadata\"");
+}
+
+test "Tables emitter preserves request and response headers and exact alternatives" {
+    const testing = std.testing;
+    var parsed = try std.json.parseFromSlice(
+        cm.CodeModel,
+        testing.allocator,
+        @embedFile("data_tables.json"),
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed.deinit();
+
+    const clients = try emitter.renderClients(testing.allocator, parsed.value);
+    defer testing.allocator.free(clients);
+
+    for (parsed.value.clients) |client| {
+        for (client.methods) |method| {
+            for (method.header_parameters) |header| {
+                const needle = try std.fmt.allocPrint(
+                    testing.allocator,
+                    "setHeader(\"{s}\"",
+                    .{header.wire_name},
+                );
+                defer testing.allocator.free(needle);
+                try expectContains(clients, needle);
+            }
+            for (method.responses) |response| {
+                for (response.headers) |header| {
+                    const needle = try std.fmt.allocPrint(
+                        testing.allocator,
+                        "getHeader(\"{s}\")",
+                        .{header.wire_name},
+                    );
+                    defer testing.allocator.free(needle);
+                    try expectContains(clients, needle);
+                }
+            }
+        }
+    }
+
+    try expectContains(clients, "try req.setHeader(\"DataServiceVersion\", \"3.0\")");
+    try expectContains(clients, "try req.setHeader(\"x-ms-version\", self.api_version)");
+    try expectContains(clients, "try req.setHeader(\"x-ms-client-request-id\", value)");
+    try expectContains(clients, "try req.setHeader(\"Prefer\", value.toWire())");
+    try expectContains(clients, "try req.setHeader(\"If-Match\", value)");
+    try expectContains(clients, "application/json;odata=minimalmetadata");
+    for ([_][]const u8{
+        "resp.getHeader(\"ETag\")",
+        "resp.getHeader(\"x-ms-request-id\")",
+        "resp.getHeader(\"x-ms-client-request-id\")",
+        "resp.getHeader(\"Preference-Applied\")",
+        "resp.getHeader(\"x-ms-continuation-NextTableName\")",
+        "resp.getHeader(\"x-ms-continuation-NextPartitionKey\")",
+        "resp.getHeader(\"x-ms-continuation-NextRowKey\")",
+    }) |header| {
+        try expectContains(clients, header);
+    }
+    try expectContains(clients, "pub const CreateResult = union(enum)");
+    try expectContains(clients, "status_201: struct");
+    try expectContains(clients, "body: models.TableResponse");
+    try expectContains(clients, "status_204: struct");
+    try expectContains(clients, "body: void");
+}
+
+test "Tables emitter preserves XML metadata and literal query routes" {
+    const testing = std.testing;
+    var parsed = try std.json.parseFromSlice(
+        cm.CodeModel,
+        testing.allocator,
+        @embedFile("data_tables.json"),
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed.deinit();
+
+    const models = try emitter.renderModels(testing.allocator, parsed.value);
+    defer testing.allocator.free(models);
+    const clients = try emitter.renderClients(testing.allocator, parsed.value);
+    defer testing.allocator.free(clients);
+
+    try expectContains(models, ".xml_root = \"SignedIdentifiers\"");
+    try expectContains(models, ".xml_root = \"StorageServiceProperties\"");
+    try expectContains(models, ".xml_root = \"StorageServiceStats\"");
+    try expectContains(models, ".include_apis = \"IncludeAPIs\"");
+    try expectContains(models, ".identifiers = \"SignedIdentifier\"");
+    try expectContains(clients, "serde.xml.toSlice(alloc, table_acl)");
+    try expectContains(clients, "serde.xml.toSlice(alloc, table_service_properties)");
+    try expectContains(clients, "serde.xml.fromSlice(models.SignedIdentifiers");
+    try expectContains(clients, "serde.xml.fromSlice(models.TableServiceProperties");
+    try expectContains(clients, "serde.xml.fromSlice(models.TableServiceStats");
+    try expectContains(clients, "{s}?restype=service&comp=properties");
+    try expectContains(clients, "{s}?restype=service&comp=stats");
+    try expectContains(clients, "var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null");
+}
+
+test "Tables emitter safely escapes quoted OData path values" {
+    const testing = std.testing;
+    var parsed = try std.json.parseFromSlice(
+        cm.CodeModel,
+        testing.allocator,
+        @embedFile("data_tables.json"),
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed.deinit();
+
+    const clients = try emitter.renderClients(testing.allocator, parsed.value);
+    defer testing.allocator.free(clients);
+
+    try expectContains(clients, "fn encodeODataStringLiteral");
+    try expectContains(clients, "if (byte == '\\'') try escaped.append(allocator, '\\'')");
+    try expectContains(clients, "return core.url.encodePathSegment(allocator, escaped.items)");
+    try expectContains(clients, "encodeODataStringLiteral(alloc, partition_key)");
+    try expectContains(clients, "encodeODataStringLiteral(alloc, row_key)");
+    try expectContains(clients, "encodeODataStringLiteral(alloc, table)");
 }

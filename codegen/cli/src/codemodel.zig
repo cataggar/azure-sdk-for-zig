@@ -111,7 +111,7 @@ pub const WireParameter = struct {
     style: ?[]const u8 = null,
     explode: ?bool = null,
     allow_reserved: ?bool = null,
-    /// "segment" | "repository" | "greedy" for path parameters.
+    /// "segment" | "repository" | "greedy" | "odata-string".
     path_encoding: ?[]const u8 = null,
 };
 
