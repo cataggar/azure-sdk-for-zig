@@ -98,6 +98,18 @@ pub fn build(b: *std.Build) void {
     const generate_data_tables_fixture = b.addRunArtifact(data_tables_generator);
     const generated_data_tables_dir =
         generate_data_tables_fixture.addOutputDirectoryArg("data-tables-package");
+    const generate_data_tables = b.addRunArtifact(data_tables_generator);
+    generate_data_tables.setCwd(b.path("."));
+    generate_data_tables.has_side_effects = true;
+    const data_tables_output = b.option(
+        []const u8,
+        "data-tables-output",
+        "Azure Tables package output directory",
+    );
+    generate_data_tables.addArg(
+        data_tables_output orelse
+            "../../.release/data_tables/generated-rest",
+    );
 
     const fixture_generator_mod = b.createModule(.{
         .root_source_file = b.path("../fixtures/generate_container_registry_package.zig"),
@@ -146,7 +158,7 @@ pub fn build(b: *std.Build) void {
             .{},
         );
     }
-    if (container_registry_output != null and
+    if ((container_registry_output != null or data_tables_output != null) and
         azure_sdk_core_commit == null and
         azure_sdk_core_path == null)
     {
@@ -162,8 +174,18 @@ pub fn build(b: *std.Build) void {
             "--azure-sdk-core-hash",
             azure_sdk_core_hash.?,
         });
+        generate_data_tables.addArgs(&.{
+            "--azure-sdk-core-commit",
+            commit,
+            "--azure-sdk-core-hash",
+            azure_sdk_core_hash.?,
+        });
     } else {
         generate_container_registry.addArgs(&.{
+            "--azure-sdk-core-path",
+            azure_sdk_core_path orelse "../../../sdk/core",
+        });
+        generate_data_tables.addArgs(&.{
             "--azure-sdk-core-path",
             azure_sdk_core_path orelse "../../../sdk/core",
         });
@@ -173,6 +195,11 @@ pub fn build(b: *std.Build) void {
         "Regenerate Container Registry into an external package worktree",
     );
     generate_container_registry_step.dependOn(&generate_container_registry.step);
+    const generate_data_tables_step = b.step(
+        "generate-data-tables-package",
+        "Regenerate Azure Tables into an external package worktree",
+    );
+    generate_data_tables_step.dependOn(&generate_data_tables.step);
 
     const azure_sdk_core_dep = b.dependency("azure_sdk_core", .{
         .target = host_target,
