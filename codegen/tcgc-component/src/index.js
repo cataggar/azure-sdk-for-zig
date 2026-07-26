@@ -476,6 +476,7 @@ function normalizeStatusCodes(statusCodes) {
 function pathEncoding(path, parameter) {
   if (parameter.allowReserved) return "greedy";
   const wireName = parameter.serializedName ?? parameter.name;
+  if (path.includes(`'{${wireName}}'`)) return "odata-string";
   if (
     wireName === "name" &&
     (path.startsWith("/v2/") || path.startsWith("/acr/v1/"))

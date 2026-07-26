@@ -728,7 +728,7 @@
               "style": "simple",
               "explode": false,
               "allow_reserved": false,
-              "path_encoding": "segment"
+              "path_encoding": "odata-string"
             }
           ],
           "query_parameters": [],
@@ -1354,7 +1354,7 @@
               "style": "simple",
               "explode": false,
               "allow_reserved": false,
-              "path_encoding": "segment"
+              "path_encoding": "odata-string"
             },
             {
               "wire_name": "rowKey",
@@ -1366,7 +1366,7 @@
               "style": "simple",
               "explode": false,
               "allow_reserved": false,
-              "path_encoding": "segment"
+              "path_encoding": "odata-string"
             }
           ],
           "query_parameters": [
@@ -1718,7 +1718,7 @@
               "style": "simple",
               "explode": false,
               "allow_reserved": false,
-              "path_encoding": "segment"
+              "path_encoding": "odata-string"
             },
             {
               "wire_name": "rowKey",
@@ -1730,7 +1730,7 @@
               "style": "simple",
               "explode": false,
               "allow_reserved": false,
-              "path_encoding": "segment"
+              "path_encoding": "odata-string"
             }
           ],
           "query_parameters": [
@@ -2043,7 +2043,7 @@
               "style": "simple",
               "explode": false,
               "allow_reserved": false,
-              "path_encoding": "segment"
+              "path_encoding": "odata-string"
             },
             {
               "wire_name": "rowKey",
@@ -2055,7 +2055,7 @@
               "style": "simple",
               "explode": false,
               "allow_reserved": false,
-              "path_encoding": "segment"
+              "path_encoding": "odata-string"
             }
           ],
           "query_parameters": [
@@ -2355,7 +2355,7 @@
               "style": "simple",
               "explode": false,
               "allow_reserved": false,
-              "path_encoding": "segment"
+              "path_encoding": "odata-string"
             },
             {
               "wire_name": "rowKey",
@@ -2367,7 +2367,7 @@
               "style": "simple",
               "explode": false,
               "allow_reserved": false,
-              "path_encoding": "segment"
+              "path_encoding": "odata-string"
             }
           ],
           "query_parameters": [

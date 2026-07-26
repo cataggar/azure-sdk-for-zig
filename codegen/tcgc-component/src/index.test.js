@@ -147,6 +147,52 @@ test("path adapter selects ACR repository and segment encoding", () => {
   assert.deepEqual(method.response.status_codes, [200, 206]);
 });
 
+test("path adapter identifies quoted OData string parameters", () => {
+  const partitionKey = {
+    kind: "method",
+    name: "partitionKey",
+    type: stringType,
+    optional: false,
+  };
+  const rowKey = {
+    kind: "method",
+    name: "rowKey",
+    type: stringType,
+    optional: false,
+  };
+  const method = adaptMethod(
+    {
+      name: "getEntity",
+      kind: "basic",
+      parameters: [partitionKey, rowKey],
+      operation: {
+        verb: "GET",
+        path: "/items(PartitionKey='{partitionKey}',RowKey='{rowKey}')",
+        parameters: [
+          {
+            ...partitionKey,
+            kind: "path",
+            serializedName: "partitionKey",
+            methodParameterSegments: [[partitionKey]],
+          },
+          {
+            ...rowKey,
+            kind: "path",
+            serializedName: "rowKey",
+            methodParameterSegments: [[rowKey]],
+          },
+        ],
+        responses: [{ statusCodes: 200 }],
+      },
+      response: {},
+    },
+    new Set(),
+  );
+
+  assert.equal(method.path_parameters[0].path_encoding, "odata-string");
+  assert.equal(method.path_parameters[1].path_encoding, "odata-string");
+});
+
 test("model adapter preserves multipart fields and open records", () => {
   const multipart = adaptModel({
     name: "MultipartBodyParameter",
