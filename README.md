@@ -179,3 +179,11 @@ requests are signed on every attempt.
 git ls-files -z -- '*.zig' 'build.zig.zon' | xargs -0 zig fmt --check
 zig build test --summary all
 ```
+
+## Errors and results
+
+`*Result` APIs return `TableResult(T)`: local failures remain Zig errors while
+HTTP failures retain a `TableError` with status, service code, message, request
+ID, and optional batch operation index. Call `deinit` on a result that is not
+consumed by a simple-method adapter. `TableError` formatting redacts
+Authorization values and complete URL query strings, including SAS.

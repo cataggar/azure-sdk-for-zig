@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const core = @import("azure_sdk_core");
+const errors = @import("errors.zig");
 
 pub const Header = struct {
     name: []const u8,
@@ -92,4 +93,156 @@ pub fn SdkResponse(comptime T: type) type {
             self.* = undefined;
         }
     };
+}
+
+/// A typed operation outcome. Local failures remain in the outer Zig error
+/// union; non-successful HTTP responses are `failure` values.
+pub fn TableResult(comptime T: type) type {
+    return union(enum) {
+        success: T,
+        failure: errors.TableError,
+
+        const Self = @This();
+
+        /// Releases the active branch, including a payload's `deinit` method
+        /// when one is declared at comptime.
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            switch (self.*) {
+                .success => |*value| deinitPayload(T, allocator, value),
+                .failure => |*table_error| table_error.deinit(),
+            }
+            self.* = undefined;
+        }
+
+        /// Consumes a result for simple methods which intentionally do not
+        /// retain structured service errors. `failure` never becomes a
+        /// success-shaped fallback value.
+        pub fn unwrap(self: Self) error{TableServiceError}!T {
+            return switch (self) {
+                .success => |value| value,
+                .failure => |table_error| {
+                    var owned_error = table_error;
+                    owned_error.deinit();
+                    return error.TableServiceError;
+                },
+            };
+        }
+
+        /// Builds a failure branch from a non-2xx response. This boundary
+        /// prevents an HTTP failure from being represented as `success`.
+        pub fn fromHttpFailure(
+            allocator: std.mem.Allocator,
+            status: u16,
+            content_type: ?[]const u8,
+            request_id: ?[]const u8,
+            operation_index: ?usize,
+            body: []const u8,
+        ) !Self {
+            return .{
+                .failure = try errors.TableError.fromResponse(
+                    allocator,
+                    status,
+                    content_type,
+                    request_id,
+                    operation_index,
+                    body,
+                ),
+            };
+        }
+    };
+}
+
+/// Consumes a result for a future `getEntity` simple method.
+pub fn unwrapGetEntity(comptime T: type, result: TableResult(T)) error{GetEntityFailed}!T {
+    return switch (result) {
+        .success => |value| value,
+        .failure => |table_error| {
+            var owned_error = table_error;
+            owned_error.deinit();
+            return error.GetEntityFailed;
+        },
+    };
+}
+
+/// Consumes a result for a future `createEntity` simple method.
+pub fn unwrapCreateEntity(comptime T: type, result: TableResult(T)) error{CreateEntityFailed}!T {
+    return switch (result) {
+        .success => |value| value,
+        .failure => |table_error| {
+            var owned_error = table_error;
+            owned_error.deinit();
+            return error.CreateEntityFailed;
+        },
+    };
+}
+
+fn deinitPayload(comptime T: type, allocator: std.mem.Allocator, value: *T) void {
+    switch (@typeInfo(T)) {
+        .@"struct", .@"union", .@"enum", .@"opaque" => {},
+        else => return,
+    }
+    if (!@hasDecl(T, "deinit")) return;
+
+    const function_info = @typeInfo(@TypeOf(T.deinit)).@"fn";
+    if (function_info.params.len == 1) {
+        value.deinit();
+    } else if (function_info.params.len == 2) {
+        value.deinit(allocator);
+    } else {
+        @compileError("TableResult payload deinit must accept self or self and allocator");
+    }
+}
+
+test "TableResult cleanup detects payload deinit at comptime" {
+    const OwnedPayload = struct {
+        bytes: []u8,
+
+        pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+            allocator.free(self.bytes);
+        }
+    };
+
+    var result: TableResult(OwnedPayload) = .{
+        .success = .{ .bytes = try std.testing.allocator.dupe(u8, "owned") },
+    };
+    result.deinit(std.testing.allocator);
+}
+
+test "TableResult cleanup frees error branch and unwrap never succeeds on failure" {
+    var table_error = try errors.TableError.init(
+        std.testing.allocator,
+        404,
+        errors.TableErrorCode.table_not_found,
+        null,
+        null,
+        null,
+    );
+    var result: TableResult(u8) = .{ .failure = table_error };
+    try std.testing.expectError(error.TableServiceError, result.unwrap());
+
+    table_error = try errors.TableError.init(
+        std.testing.allocator,
+        404,
+        errors.TableErrorCode.table_not_found,
+        null,
+        null,
+        null,
+    );
+    result = .{ .failure = table_error };
+    try std.testing.expectError(error.GetEntityFailed, unwrapGetEntity(u8, result));
+}
+
+test "non-2xx response result cannot become successful payload" {
+    var result = try TableResult(u8).fromHttpFailure(std.testing.allocator, 404, "application/json", "request-id", null,
+        \\{"code":"EntityNotFound","message":"missing"}
+    );
+    defer result.deinit(std.testing.allocator);
+
+    switch (result) {
+        .failure => |table_error| {
+            try std.testing.expectEqual(@as(u16, 404), table_error.status);
+            try std.testing.expectEqualStrings(errors.TableErrorCode.entity_not_found, table_error.code);
+        },
+        .success => return error.TestUnexpectedResult,
+    }
 }
