@@ -17,7 +17,10 @@ pub const SharedKeyCredential = struct {
         account_key: []const u8,
     ) !SharedKeyCredential {
         try validateAccountName(account_name);
-        const key = core.base64.decode(allocator, account_key) catch return error.InvalidAccountKey;
+        const key = core.base64.decode(allocator, account_key) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => return error.InvalidAccountKey,
+        };
         errdefer allocator.free(key);
         if (key.len == 0) return error.InvalidAccountKey;
         return .{
@@ -35,12 +38,27 @@ pub const SharedKeyCredential = struct {
 
     /// Replaces the key only after decoding the complete new Base64 value.
     pub fn updateKey(self: *SharedKeyCredential, account_key: []const u8) !void {
-        const replacement = core.base64.decode(self.allocator, account_key) catch
-            return error.InvalidAccountKey;
+        const replacement = core.base64.decode(self.allocator, account_key) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => return error.InvalidAccountKey,
+        };
         errdefer self.allocator.free(replacement);
         if (replacement.len == 0) return error.InvalidAccountKey;
         self.allocator.free(self.key);
         self.key = replacement;
+    }
+
+    pub fn accountName(self: *const SharedKeyCredential) []const u8 {
+        return self.account_name;
+    }
+
+    /// Signs an exact canonical byte sequence with the decoded account key.
+    pub fn sign(
+        self: *const SharedKeyCredential,
+        allocator: std.mem.Allocator,
+        canonical: []const u8,
+    ) ![]u8 {
+        return core.base64.hmacSha256Base64(allocator, self.key, canonical);
     }
 
     pub fn format(_: SharedKeyCredential, writer: anytype) !void {
@@ -92,11 +110,7 @@ pub const SharedKeyLitePolicy = struct {
             .{ date_value, canonical },
         );
         defer request.allocator.free(to_sign);
-        const signature = try core.base64.hmacSha256Base64(
-            request.allocator,
-            self.credential.key,
-            to_sign,
-        );
+        const signature = try self.credential.sign(request.allocator, to_sign);
         defer request.allocator.free(signature);
         const authorization = try std.fmt.allocPrint(
             request.allocator,

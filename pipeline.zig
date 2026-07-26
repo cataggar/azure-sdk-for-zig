@@ -163,6 +163,13 @@ pub const PipelineState = struct {
     pub fn usesSas(self: *const PipelineState) bool {
         return self.authentication == .none;
     }
+
+    pub fn sharedKeyCredential(self: *PipelineState) ?*auth.SharedKeyCredential {
+        return switch (self.authentication) {
+            .shared_key => |*policy| policy.credential,
+            else => null,
+        };
+    }
 };
 
 const NoAuthenticationPolicy = struct {

@@ -7,6 +7,7 @@ const options = @import("options.zig");
 const pipeline = @import("pipeline.zig");
 const protocol_client = @import("protocol_client.zig");
 const request = @import("request.zig");
+const sas_types = @import("sas.zig");
 
 /// Client for Azure Table Storage REST operations.
 ///
@@ -87,7 +88,13 @@ pub const TableClient = struct {
         try request.validateSasEndpoint(complete_sas_url);
         const state = try pipeline.PipelineState.createNoAuth(allocator, transport, init_options);
         errdefer state.deinit();
-        return initWithState(allocator, complete_sas_url, table_name, init_options.api_version, state, true);
+        const service_endpoint = try serviceEndpointFromSasUrl(
+            allocator,
+            complete_sas_url,
+            table_name,
+        );
+        defer allocator.free(service_endpoint);
+        return initWithState(allocator, service_endpoint, table_name, init_options.api_version, state, true);
     }
 
     /// Parses a Storage or Azurite connection string and constructs the
@@ -174,6 +181,32 @@ pub const TableClient = struct {
     /// Formats a query-redacted endpoint so SAS signatures never enter logs.
     pub fn format(self: TableClient, writer: anytype) !void {
         try writer.print("TableClient({s})", .{self.protocol.endpoint.base_url});
+    }
+
+    /// Generates a full table SAS URL. This is available only on a Shared Key
+    /// client; the returned URL is secret and must be released by the caller.
+    pub fn getTableSasUrl(
+        self: *TableClient,
+        allocator: std.mem.Allocator,
+        signature_values: sas_types.TableSignatureValues,
+    ) ![]u8 {
+        const credential = self.pipeline_state.sharedKeyCredential() orelse
+            return error.SasRequiresSharedKeyCredential;
+        var values = signature_values;
+        if (values.tableName.len == 0) {
+            values.tableName = self.table_name;
+        } else if (!std.ascii.eqlIgnoreCase(values.tableName, self.table_name)) {
+            return error.SasTableNameMismatch;
+        }
+        var parameters = try values.sign(allocator, credential);
+        defer parameters.deinit();
+        const table_url = try std.fmt.allocPrint(
+            allocator,
+            "{s}/{s}",
+            .{ self.protocol.endpoint.base_url, self.table_name },
+        );
+        defer allocator.free(table_url);
+        return parameters.appendToUrl(allocator, table_url);
     }
 
     /// GET `{endpoint}/{tableName}(PartitionKey='{pk}',RowKey='{rk}')`.
@@ -265,6 +298,28 @@ pub const TableClient = struct {
         return self.protocol.send(&req, .{});
     }
 };
+
+/// No-credential table clients accept both an account SAS URL and the full
+/// table SAS URL returned by `getTableSasUrl`.
+fn serviceEndpointFromSasUrl(
+    allocator: std.mem.Allocator,
+    complete_sas_url: []const u8,
+    table_name: []const u8,
+) ![]u8 {
+    var normalized = try request.NormalizedEndpoint.init(allocator, complete_sas_url);
+    defer normalized.deinit();
+    const suffix = try std.fmt.allocPrint(allocator, "/{s}", .{table_name});
+    defer allocator.free(suffix);
+    const base = if (std.mem.endsWith(u8, normalized.base_url, suffix))
+        normalized.base_url[0 .. normalized.base_url.len - suffix.len]
+    else
+        normalized.base_url;
+    return std.fmt.allocPrint(
+        allocator,
+        "{s}?{s}",
+        .{ base, normalized.raw_query },
+    );
+}
 
 const TestCredential = struct {
     calls: usize = 0,
@@ -469,4 +524,79 @@ test "SAS operation allocation failure paths are leak-free" {
         testSasOperationAllocationFailures,
         .{},
     );
+}
+
+test "table SAS URL is exact and full URL initializes a credential-free client" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 200, "{}");
+    defer transport.deinit();
+    var credential = try auth.SharedKeyCredential.init(
+        allocator,
+        "fakeaccount",
+        "ZmFrZS1rZXk=",
+    );
+    defer credential.deinit();
+    var shared = try TableClient.initWithSharedKey(
+        allocator,
+        "https://fakeaccount.table.core.windows.net",
+        "People",
+        &credential,
+        transport.asTransport(),
+        .{},
+    );
+    defer shared.deinit();
+    const sas_url = try shared.getTableSasUrl(allocator, .{
+        .permissions = .{ .read = true },
+        .startTime = .fromUnixSeconds(1_699_455_845),
+        .expiryTime = .fromUnixSeconds(1_699_459_445),
+        .startPartitionKey = "A",
+        .startRowKey = "0",
+        .endPartitionKey = "Z",
+        .endRowKey = "9",
+    });
+    defer allocator.free(sas_url);
+    try std.testing.expectEqualStrings(
+        "https://fakeaccount.table.core.windows.net/People?epk=Z&erk=9&se=2023-11-08T16%3A04%3A05Z&sig=de3WKX%2BV7n%2BdT7OWKCwFJ%2BNDUwN7F6My1aWUKN2M%2B6Q%3D&sp=r&spk=A&spr=https&srk=0&st=2023-11-08T15%3A04%3A05Z&sv=2019-02-02&tn=people",
+        sas_url,
+    );
+
+    var anonymous = try TableClient.initWithSasUrl(
+        allocator,
+        sas_url,
+        "People",
+        transport.asTransport(),
+        .{},
+    );
+    defer anonymous.deinit();
+    try std.testing.expectEqualStrings(
+        "https://fakeaccount.table.core.windows.net",
+        anonymous.protocol.endpoint.base_url,
+    );
+    try std.testing.expectError(
+        error.SasRequiresSharedKeyCredential,
+        anonymous.getTableSasUrl(allocator, .{
+            .permissions = .{ .read = true },
+            .expiryTime = .fromUnixSeconds(1_699_459_445),
+        }),
+    );
+    var formatted: std.Io.Writer.Allocating = .init(allocator);
+    defer formatted.deinit();
+    try formatted.writer.print("{f}", .{anonymous});
+    try std.testing.expectEqualStrings(
+        "TableClient(https://fakeaccount.table.core.windows.net)",
+        formatted.written(),
+    );
+    var response = try anonymous.getEntity(allocator, "A", "0");
+    response.deinit();
+    try std.testing.expect(transport.last_headers.get("Authorization") == null);
+    try std.testing.expect(std.mem.startsWith(
+        u8,
+        transport.last_url.?,
+        "https://fakeaccount.table.core.windows.net/People(PartitionKey='A',RowKey='0')?",
+    ));
+    try std.testing.expect(std.mem.endsWith(
+        u8,
+        transport.last_url.?,
+        sas_url[(std.mem.indexOfScalar(u8, sas_url, '?').? + 1)..],
+    ));
 }
