@@ -8,6 +8,7 @@ pub const errors = @import("errors.zig");
 pub const options = @import("options.zig");
 pub const pager = @import("pager.zig");
 pub const pipeline = @import("pipeline.zig");
+pub const protocol_client = @import("protocol_client.zig");
 pub const request = @import("request.zig");
 pub const responses = @import("responses.zig");
 pub const sas = @import("sas.zig");
@@ -15,9 +16,9 @@ pub const service_client = @import("service_client.zig");
 pub const service_models = @import("service_models.zig");
 pub const transaction = @import("transaction.zig");
 
-/// Generated Azure Tables wire declarations will be re-exported here after
-/// `azure_rest_data_tables` is generated and pinned.
-pub const protocol = struct {};
+/// Generated Azure Tables wire declarations pinned from `rest/data_tables`.
+pub const protocol = @import("azure_rest_data_tables");
+pub const ProtocolClient = protocol_client.ProtocolClient;
 
 // Compatibility exports for the original 0.1.0 package surface.
 pub const TableEntity = entity.TableEntity;
@@ -44,6 +45,7 @@ test {
     _ = options;
     _ = pager;
     _ = pipeline;
+    _ = protocol_client;
     _ = request;
     _ = responses;
     _ = sas;
@@ -51,6 +53,7 @@ test {
     _ = service_models;
     _ = transaction;
     _ = protocol;
+    _ = ProtocolClient;
     _ = TableEntity;
     _ = TableClient;
     _ = TableServiceClient;

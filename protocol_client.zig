@@ -1,0 +1,252 @@
+const std = @import("std");
+const core = @import("azure_sdk_core");
+const protocol = @import("azure_rest_data_tables");
+const options = @import("options.zig");
+const pipeline_mod = @import("pipeline.zig");
+const request = @import("request.zig");
+const responses = @import("responses.zig");
+
+const ProtocolTable = @typeInfo(@TypeOf(protocol.TablesClient.table)).@"fn".return_type.?;
+
+/// Validated bridge from SDK options to the generated Tables protocol client.
+pub const ProtocolClient = struct {
+    allocator: std.mem.Allocator,
+    endpoint: request.NormalizedEndpoint,
+    api_version: []u8,
+    pipeline: core.pipeline.HttpPipeline,
+
+    pub const InitOptions = struct {
+        api_version: []const u8 = options.latest_api_version,
+    };
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        endpoint: []const u8,
+        http_pipeline: core.pipeline.HttpPipeline,
+        init_options: InitOptions,
+    ) !ProtocolClient {
+        try request.validateApiVersion(init_options.api_version);
+        var normalized = try request.NormalizedEndpoint.init(allocator, endpoint);
+        errdefer normalized.deinit();
+        return .{
+            .allocator = allocator,
+            .endpoint = normalized,
+            .api_version = try allocator.dupe(u8, init_options.api_version),
+            .pipeline = http_pipeline,
+        };
+    }
+
+    pub fn deinit(self: *ProtocolClient) void {
+        self.endpoint.deinit();
+        self.allocator.free(self.api_version);
+        self.* = undefined;
+    }
+
+    pub fn queryEntity(
+        self: *ProtocolClient,
+        allocator: std.mem.Allocator,
+        table_name: []const u8,
+        partition_key: []const u8,
+        row_key: []const u8,
+        query_options: options.QueryEntityOptions,
+    ) !responses.SdkResponse(ProtocolTable.QueryEntityWithPartitionAndRowKeyResult) {
+        try request.validateTableName(table_name);
+        try request.validateEntityKey(partition_key);
+        try request.validateEntityKey(row_key);
+        try request.validateProtocolOptions(query_options.protocol);
+
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena);
+        arena.* = .init(allocator);
+        errdefer arena.deinit();
+        const arena_allocator = arena.allocator();
+
+        var call = try self.beginCall(arena_allocator, query_options.protocol);
+        defer call.deinit();
+        var generated = protocol.TablesClient.initWithPipeline(
+            arena_allocator,
+            call.pipeline,
+            .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version },
+        );
+        var table = generated.table();
+        const value = try table.queryEntityWithPartitionAndRowKey(
+            arena_allocator,
+            query_options.protocol.client_request_id,
+            table_name,
+            query_options.protocol.timeout,
+            query_options.protocol.metadata,
+            query_options.select,
+            query_options.filter,
+            partition_key,
+            row_key,
+        );
+        const metadata = try call.takeResponse();
+        return .{
+            .value = value,
+            .status = metadata.status,
+            .headers = metadata.headers,
+            .arena = arena,
+            .allocator = allocator,
+        };
+    }
+
+    pub fn queryEntities(
+        self: *ProtocolClient,
+        allocator: std.mem.Allocator,
+        table_name: []const u8,
+        query_options: options.QueryEntitiesOptions,
+    ) !responses.SdkResponse(ProtocolTable.QueryEntitiesResult) {
+        try request.validateTableName(table_name);
+        try request.validateProtocolOptions(query_options.protocol);
+        if (query_options.top) |top| {
+            if (top <= 0) return error.InvalidTop;
+        }
+
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena);
+        arena.* = .init(allocator);
+        errdefer arena.deinit();
+        const arena_allocator = arena.allocator();
+
+        var call = try self.beginCall(arena_allocator, query_options.protocol);
+        defer call.deinit();
+        var generated = protocol.TablesClient.initWithPipeline(
+            arena_allocator,
+            call.pipeline,
+            .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version },
+        );
+        var table = generated.table();
+        const value = try table.queryEntities(
+            arena_allocator,
+            query_options.protocol.client_request_id,
+            table_name,
+            query_options.protocol.metadata,
+            query_options.top,
+            query_options.select,
+            query_options.filter,
+            query_options.protocol.timeout,
+            query_options.next_partition_key,
+            query_options.next_row_key,
+        );
+        const metadata = try call.takeResponse();
+        return .{
+            .value = value,
+            .status = metadata.status,
+            .headers = metadata.headers,
+            .arena = arena,
+            .allocator = allocator,
+        };
+    }
+
+    fn beginCall(
+        self: *ProtocolClient,
+        allocator: std.mem.Allocator,
+        call_options: options.ProtocolOptions,
+    ) !pipeline_mod.CallContext {
+        return pipeline_mod.CallContext.init(
+            allocator,
+            self.pipeline,
+            if (self.endpoint.has_query) self.endpoint.raw_query else null,
+            call_options.operation_timeout_ms,
+            call_options.policies,
+        );
+    }
+};
+
+const HeaderPolicy = struct {
+    policy: core.pipeline.HttpPolicy = .{ .processFn = &process },
+
+    fn process(
+        policy: *core.pipeline.HttpPolicy,
+        req: *core.http.Request,
+        next: []*core.pipeline.HttpPolicy,
+        transport: *core.http.HttpTransport,
+    ) anyerror!core.http.Response {
+        _ = policy;
+        try req.setHeader("x-test-policy", "applied");
+        if (next.len == 0) return transport.send(req);
+        return next[0].process(req, next[1..], transport);
+    }
+};
+
+test "generated query receives SDK options and preserves SAS bytes" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200, "{}");
+    defer mock.deinit();
+    mock.response_headers_list = &.{
+        .{ .name = "ETag", .value = "etag-value" },
+        .{ .name = "x-ms-version", .value = "2020-test" },
+        .{ .name = "Date", .value = "Sun, 26 Jul 2026 00:00:00 GMT" },
+        .{ .name = "Content-Type", .value = "application/json" },
+        .{ .name = "x-extra", .value = "first" },
+        .{ .name = "x-extra", .value = "second" },
+    };
+    const base_pipeline: core.pipeline.HttpPipeline = .{
+        .policies = &.{},
+        .transport_impl = mock.asTransport(),
+    };
+    var client = try ProtocolClient.init(
+        allocator,
+        "https://account.table.core.windows.net/?sv=1%2F2&sig=a+b%3D&sp=r",
+        base_pipeline,
+        .{ .api_version = "2020-test" },
+    );
+    defer client.deinit();
+    var header_policy = HeaderPolicy{};
+    var response = try client.queryEntity(
+        allocator,
+        "Table123",
+        "O'Brien",
+        "雪 & row",
+        .{
+            .protocol = .{
+                .metadata = .full_metadata,
+                .client_request_id = "client-id",
+                .timeout = 30,
+                .operation_timeout_ms = 5000,
+                .policies = &.{&header_policy.policy},
+            },
+            .select = "Name,Price",
+        },
+    );
+    defer response.deinit();
+
+    try std.testing.expectEqualStrings(
+        "https://account.table.core.windows.net/Table123(PartitionKey='O%27%27Brien',RowKey='%E9%9B%AA%20%26%20row')?sv=1%2F2&sig=a+b%3D&sp=r&timeout=30&$format=application%2Fjson%3Bodata%3Dfullmetadata&$select=Name%2CPrice",
+        mock.last_url.?,
+    );
+    try std.testing.expectEqualStrings("2020-test", mock.last_headers.get("x-ms-version").?);
+    try std.testing.expectEqualStrings("client-id", mock.last_headers.get("x-ms-client-request-id").?);
+    try std.testing.expectEqualStrings("applied", mock.last_headers.get("x-test-policy").?);
+    try std.testing.expectEqual(@as(?u64, 5000), mock.last_operation_timeout_ms);
+    try std.testing.expectEqual(@as(u16, 200), response.status);
+    try std.testing.expectEqualStrings("etag-value", response.headers.getFirst("ETag").?);
+    try std.testing.expectEqual(@as(usize, 6), response.headers.entries.items.len);
+}
+
+test "invalid generated call inputs fail before transport" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200, "{}");
+    defer mock.deinit();
+    const base_pipeline: core.pipeline.HttpPipeline = .{
+        .policies = &.{},
+        .transport_impl = mock.asTransport(),
+    };
+    var client = try ProtocolClient.init(
+        allocator,
+        "https://account.table.core.windows.net",
+        base_pipeline,
+        .{},
+    );
+    defer client.deinit();
+    try std.testing.expectEqualStrings(options.latest_api_version, client.api_version);
+    try std.testing.expectError(
+        error.InvalidTableName,
+        client.queryEntity(allocator, "bad-name", "pk", "rk", .{}),
+    );
+    try std.testing.expectError(
+        error.InvalidEntityKey,
+        client.queryEntity(allocator, "Table123", "bad/key", "rk", .{}),
+    );
+    try std.testing.expectEqual(@as(usize, 0), mock.call_count);
+}
