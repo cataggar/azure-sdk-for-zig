@@ -61,6 +61,11 @@ pub const TablePager = pager.TablePager;
 pub const ListTablesPage = pager.ListTablesPage;
 pub const CreateTableResponse = responses.SdkResponse(protocol_client.CreateTableResponse);
 pub const DeleteTableResponse = responses.SdkResponse(protocol_client.DeleteTableResponse);
+pub const EntityResponse = responses.EntityResponse;
+pub const DeleteEntityResponse = responses.DeleteEntityResponse;
+pub const AddEntityOptions = options.AddEntityOptions;
+pub const GetEntityOptions = options.GetEntityOptions;
+pub const DeleteEntityOptions = options.DeleteEntityOptions;
 pub const unwrapGetEntity = responses.unwrapGetEntity;
 pub const unwrapCreateEntity = responses.unwrapCreateEntity;
 
@@ -124,6 +129,11 @@ test {
     _ = ListTablesPage;
     _ = CreateTableResponse;
     _ = DeleteTableResponse;
+    _ = EntityResponse;
+    _ = DeleteEntityResponse;
+    _ = AddEntityOptions;
+    _ = GetEntityOptions;
+    _ = DeleteEntityOptions;
     _ = unwrapGetEntity;
     _ = unwrapCreateEntity;
 }

@@ -111,6 +111,21 @@ The canonical TypeSpec does not model `$batch`; the generated provenance and
 operation inventory test prove that gap. This layer does not hand-write a
 replacement: the later transaction issue owns its documented implementation.
 
+## Entity CRUD
+
+`TableClient.addEntity` accepts either a comptime-validated caller struct or a
+`DynamicEntity`; `getEntityAs(T, ...)` decodes either form. The matching
+`*Result` methods retain structured service failures, while simple methods map
+them to operation errors. `EntityResponse(T)` owns its decoded value, ETag,
+OData metadata, selected and raw headers in an arena; call `deinit`.
+
+`DeleteEntityOptions.if_match` defaults to `"*"` and accepts an ETag for a
+conditional delete through `deleteEntityWithOptions`. The original
+`getEntity(allocator, pk, rk)`, `createEntity`, and
+`deleteEntity(allocator, pk, rk)` raw-response calls retain exact source
+compatibility; explicit `getEntityRaw` and `deleteEntityRaw` aliases are also
+available.
+
 ## Checked feature-parity contract
 
 `[x]` means the Go capability has been reviewed and assigned a Zig API owner;
@@ -139,8 +154,8 @@ it does **not** claim that a later roadmap phase is already implemented.
 | [x] | Table client `Delete` convenience | `TableClient.deleteTable` / `deleteTableResult` |
 | [x] | `NewListTablesPager` with filter, select, top, format, and continuation | `TableServiceClient.listTables` returning `TablePager` |
 | [x] | `AddEntity` | generic `TableClient.addEntity` / `addEntityResult` |
-| [x] | `GetEntity` | generic `TableClient.getEntity` / `getEntityResult` |
-| [x] | `DeleteEntity` with `IfMatch` | `TableClient.deleteEntity` / `deleteEntityResult` |
+| [x] | `GetEntity` | generic `TableClient.getEntityAs` / `getEntityResult`; raw-compatible `getEntity` |
+| [x] | `DeleteEntity` with `IfMatch` | `TableClient.deleteEntityWithOptions` / `deleteEntityResult`; raw-compatible `deleteEntity` |
 | [x] | `UpdateEntity` merge and replace with ETags | `TableClient.updateEntity` / `updateEntityResult` plus `UpdateMode` |
 | [x] | `UpsertEntity` merge and replace | `TableClient.upsertEntity` / `upsertEntityResult` |
 | [x] | `NewListEntitiesPager` with filter, select, top, format, and two continuation keys | generic `TableClient.listEntities` returning `EntityPager(T)` |

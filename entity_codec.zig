@@ -12,6 +12,7 @@ pub const DynamicEntity = entity.DynamicEntity;
 /// Returns a codec specialized for `T`. Instantiating this function validates
 /// the complete entity schema at compile time.
 pub fn EntityCodec(comptime T: type) type {
+    @setEvalBranchQuota(2_000_000);
     comptime validateEntity(T);
 
     return struct {
@@ -147,16 +148,26 @@ pub fn dynamicFromJson(allocator: std.mem.Allocator, json: []const u8) !DynamicE
     while (it.next()) |entry| {
         const name = entry.key_ptr.*;
         if (std.mem.eql(u8, name, "PartitionKey") or std.mem.eql(u8, name, "RowKey") or
-            std.mem.eql(u8, name, "Timestamp") or std.mem.endsWith(u8, name, "@odata.type")) continue;
+            std.mem.eql(u8, name, "Timestamp") or std.mem.endsWith(u8, name, "@odata.type") or
+            isEntityMetadataAnnotation(name)) continue;
         const annotation = getAnnotation(object, name);
         const property = try decodeEdmValue(allocator, entry.value_ptr.*, annotation);
         defer {
             var owned_property = property;
             owned_property.deinit(allocator);
         }
+
         try result.put(name, property);
     }
     return result;
+}
+
+fn isEntityMetadataAnnotation(name: []const u8) bool {
+    return std.mem.eql(u8, name, "odata.metadata") or
+        std.mem.eql(u8, name, "odata.type") or
+        std.mem.eql(u8, name, "odata.id") or
+        std.mem.eql(u8, name, "odata.etag") or
+        std.mem.eql(u8, name, "odata.editLink");
 }
 
 fn validateEntity(comptime T: type) void {
@@ -166,6 +177,10 @@ fn validateEntity(comptime T: type) void {
     const row_field = findField(T, "row_key") orelse @compileError("EntityCodec requires a string row_key field");
     if (!isString(partition_field.type)) @compileError("EntityCodec partition_key must be []const u8 or []u8");
     if (!isString(row_field.type)) @compileError("EntityCodec row_key must be []const u8 or []u8");
+
+    if (customPropertyCount(T) > entity.max_custom_properties) {
+        @compileError("EntityCodec supports at most 252 custom properties");
+    }
 
     inline for (fields) |field| {
         if (std.mem.eql(u8, field.name, "timestamp")) {
@@ -196,6 +211,20 @@ fn validateEntity(comptime T: type) void {
             }
         }
     }
+}
+
+fn customPropertyCount(comptime T: type) usize {
+    var count: usize = 0;
+    inline for (std.meta.fields(T)) |field| {
+        if (!isSystemField(field.name)) count += 1;
+    }
+    return count;
+}
+
+fn isSystemField(comptime name: []const u8) bool {
+    return std.mem.eql(u8, name, "partition_key") or
+        std.mem.eql(u8, name, "row_key") or
+        std.mem.eql(u8, name, "timestamp");
 }
 
 fn findField(comptime T: type, comptime name: []const u8) ?std.builtin.Type.StructField {
@@ -416,6 +445,49 @@ fn decodeEdmValue(allocator: std.mem.Allocator, value: std.json.Value, annotatio
         .string => |inner| .{ .string = try allocator.dupe(u8, inner) },
         else => error.InvalidPropertyType,
     };
+}
+
+fn propertyBoundaryEntity(
+    comptime custom_count: usize,
+    comptime include_timestamp: bool,
+) type {
+    const field_count = 2 + custom_count + @intFromBool(include_timestamp);
+    var names: [field_count][:0]const u8 = undefined;
+    var types: [field_count]type = undefined;
+    const attributes: [field_count]std.builtin.Type.StructField.Attributes = @splat(.{});
+    names[0] = "partition_key";
+    types[0] = []const u8;
+    names[1] = "row_key";
+    types[1] = []const u8;
+    inline for (0..custom_count) |index| {
+        names[2 + index] = std.fmt.comptimePrint("property_{d}", .{index});
+        types[2 + index] = ?bool;
+    }
+    if (include_timestamp) {
+        names[field_count - 1] = "timestamp";
+        types[field_count - 1] = ?edm.EdmDateTime;
+    }
+    return @Struct(.auto, null, &names, &types, &attributes);
+}
+
+test "typed entity permits exactly 252 custom optional properties" {
+    @setEvalBranchQuota(2_000_000);
+    _ = EntityCodec(propertyBoundaryEntity(entity.max_custom_properties, false));
+    _ = EntityCodec(propertyBoundaryEntity(entity.max_custom_properties, true));
+}
+
+test "typed custom property count is unchanged by rename and optional timestamp" {
+    const RenamedEntity = struct {
+        partition_key: []const u8,
+        row_key: []const u8,
+        optional_value: ?bool,
+        ordinary_value: i32,
+        timestamp: ?edm.EdmDateTime,
+
+        pub const table = .{ .rename = .{ .optional_value = "RenamedValue" } };
+    };
+    try std.testing.expectEqual(@as(usize, 2), comptime customPropertyCount(RenamedEntity));
+    _ = EntityCodec(RenamedEntity);
 }
 
 test "typed entity codec writes annotations and round trips owned values" {

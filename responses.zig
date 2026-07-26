@@ -86,6 +86,7 @@ pub fn SdkResponse(comptime T: type) type {
         value: T,
         status: u16,
         headers: RawHeaders,
+        body: ?[]const u8 = null,
         arena: *std.heap.ArenaAllocator,
         allocator: std.mem.Allocator,
 
@@ -96,6 +97,62 @@ pub fn SdkResponse(comptime T: type) type {
         }
     };
 }
+
+/// Frequently used Tables response headers. Slices are owned by the enclosing
+/// response and remain valid until its `deinit`.
+pub const EntityHeaders = struct {
+    request_id: ?[]const u8 = null,
+    client_request_id: ?[]const u8 = null,
+    date: ?[]const u8 = null,
+    api_version: ?[]const u8 = null,
+    content_type: ?[]const u8 = null,
+    preference_applied: ?[]const u8 = null,
+};
+
+/// OData entity annotations emitted by full and minimal metadata responses.
+/// No-metadata responses leave every field null.
+pub const EntityMetadata = struct {
+    metadata: ?[]const u8 = null,
+    type_name: ?[]const u8 = null,
+    id: ?[]const u8 = null,
+    etag: ?[]const u8 = null,
+    edit_link: ?[]const u8 = null,
+};
+
+/// An arena-owned decoded entity response.
+pub fn EntityResponse(comptime T: type) type {
+    return struct {
+        value: T,
+        etag: []const u8,
+        status: u16,
+        headers: EntityHeaders,
+        metadata: EntityMetadata,
+        raw_headers: RawHeaders,
+        arena: *std.heap.ArenaAllocator,
+        allocator: std.mem.Allocator,
+
+        pub fn deinit(self: *@This()) void {
+            self.arena.deinit();
+            self.allocator.destroy(self.arena);
+            self.* = undefined;
+        }
+    };
+}
+
+/// Arena-owned response from an entity deletion.
+pub const DeleteEntityResponse = struct {
+    status: u16,
+    headers: EntityHeaders,
+    raw_headers: RawHeaders,
+    arena: *std.heap.ArenaAllocator,
+    allocator: std.mem.Allocator,
+
+    pub fn deinit(self: *DeleteEntityResponse) void {
+        self.arena.deinit();
+        self.allocator.destroy(self.arena);
+        self.* = undefined;
+    }
+};
 
 /// A typed operation outcome. Local failures remain in the outer Zig error
 /// union; non-successful HTTP responses are `failure` values.

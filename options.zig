@@ -49,6 +49,19 @@ pub const ListTablesOptions = struct {
     continuation_token: ?[]const u8 = null,
 };
 
+pub const AddEntityOptions = struct {
+    protocol: ProtocolOptions = .{},
+};
+
+pub const GetEntityOptions = QueryEntityOptions;
+
+pub const DeleteEntityOptions = struct {
+    protocol: ProtocolOptions = .{},
+    /// `"*"` performs an unconditional delete; an entity ETag makes it
+    /// conditional.
+    if_match: []const u8 = "*",
+};
+
 pub const RetryOptions = struct {
     max_retries: u32 = 3,
     initial_delay_ms: u64 = 800,

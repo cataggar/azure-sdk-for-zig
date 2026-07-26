@@ -153,6 +153,13 @@ pub fn validateProtocolOptions(options: anytype) !void {
     }
 }
 
+pub fn validateIfMatch(value: []const u8) !void {
+    if (value.len == 0) return error.InvalidIfMatch;
+    for (value) |byte| {
+        if (byte < 0x20 or byte == 0x7f) return error.InvalidIfMatch;
+    }
+}
+
 /// Doubles apostrophes for an OData literal, then encodes the raw bytes once.
 pub fn encodeODataStringLiteral(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
     try validateEntityKey(value);

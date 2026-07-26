@@ -3,6 +3,7 @@ const core = @import("azure_sdk_core");
 const auth = @import("auth.zig");
 const connection_string = @import("connection_string.zig");
 const entity = @import("entity.zig");
+const entity_codec = @import("entity_codec.zig");
 const options = @import("options.zig");
 const pipeline = @import("pipeline.zig");
 const protocol_client = @import("protocol_client.zig");
@@ -248,8 +249,156 @@ pub const TableClient = struct {
         );
     }
 
-    /// GET `{endpoint}/{tableName}(PartitionKey='{pk}',RowKey='{rk}')`.
-    pub fn getEntity(
+    /// Adds a typed or dynamic entity and returns the service echo.
+    pub fn addEntity(
+        self: *TableClient,
+        allocator: std.mem.Allocator,
+        value: anytype,
+        add_options: options.AddEntityOptions,
+    ) !responses.EntityResponse(@TypeOf(value)) {
+        const result = try self.addEntityResult(allocator, value, add_options);
+        return switch (result) {
+            .success => |response| response,
+            .failure => |table_error| {
+                var owned_error = table_error;
+                owned_error.deinit();
+                return error.AddEntityFailed;
+            },
+        };
+    }
+
+    /// Result-preserving add operation. HTTP failures are values; malformed
+    /// success payloads, transport failures, and allocation failures are Zig
+    /// errors.
+    pub fn addEntityResult(
+        self: *TableClient,
+        allocator: std.mem.Allocator,
+        value: anytype,
+        add_options: options.AddEntityOptions,
+    ) !responses.TableResult(responses.EntityResponse(@TypeOf(value))) {
+        const T = @TypeOf(value);
+        try validateEntityValue(T, value);
+        const json = if (T == entity.DynamicEntity)
+            try entity_codec.dynamicToJson(allocator, value)
+        else
+            try entity_codec.EntityCodec(T).toJson(allocator, value);
+        defer allocator.free(json);
+        if (json.len > 1024 * 1024) return error.EntityTooLarge;
+
+        const protocol_result = try self.protocol.insertEntityResult(
+            allocator,
+            self.table_name,
+            json,
+            add_options,
+        );
+        return switch (protocol_result) {
+            .failure => |table_error| .{ .failure = table_error },
+            .success => |raw_value| blk: {
+                var raw = raw_value;
+                errdefer raw.deinit();
+                break :blk .{ .success = try adaptEntityResponse(T, &raw) };
+            },
+        };
+    }
+
+    /// Retrieves and decodes one typed or dynamic entity.
+    pub fn getEntityAs(
+        self: *TableClient,
+        comptime T: type,
+        allocator: std.mem.Allocator,
+        partition_key: []const u8,
+        row_key: []const u8,
+        get_options: options.GetEntityOptions,
+    ) !responses.EntityResponse(T) {
+        const result = try self.getEntityResult(T, allocator, partition_key, row_key, get_options);
+        return switch (result) {
+            .success => |response| response,
+            .failure => |table_error| {
+                var owned_error = table_error;
+                owned_error.deinit();
+                return error.GetEntityFailed;
+            },
+        };
+    }
+
+    pub fn getEntityResult(
+        self: *TableClient,
+        comptime T: type,
+        allocator: std.mem.Allocator,
+        partition_key: []const u8,
+        row_key: []const u8,
+        get_options: options.GetEntityOptions,
+    ) !responses.TableResult(responses.EntityResponse(T)) {
+        if (T != entity.DynamicEntity) _ = entity_codec.EntityCodec(T);
+        const protocol_result = try self.protocol.queryEntityResult(
+            allocator,
+            self.table_name,
+            partition_key,
+            row_key,
+            get_options,
+        );
+        return switch (protocol_result) {
+            .failure => |table_error| .{ .failure = table_error },
+            .success => |raw_value| blk: {
+                var raw = raw_value;
+                errdefer raw.deinit();
+                break :blk .{ .success = try adaptEntityResponse(T, &raw) };
+            },
+        };
+    }
+
+    /// Deletes an entity unconditionally (`if_match = "*"`) or conditionally
+    /// with a service ETag.
+    pub fn deleteEntityWithOptions(
+        self: *TableClient,
+        allocator: std.mem.Allocator,
+        partition_key: []const u8,
+        row_key: []const u8,
+        delete_options: options.DeleteEntityOptions,
+    ) !responses.DeleteEntityResponse {
+        const result = try self.deleteEntityResult(allocator, partition_key, row_key, delete_options);
+        return switch (result) {
+            .success => |response| response,
+            .failure => |table_error| {
+                var owned_error = table_error;
+                owned_error.deinit();
+                return error.DeleteEntityFailed;
+            },
+        };
+    }
+
+    pub fn deleteEntityResult(
+        self: *TableClient,
+        allocator: std.mem.Allocator,
+        partition_key: []const u8,
+        row_key: []const u8,
+        delete_options: options.DeleteEntityOptions,
+    ) !responses.TableResult(responses.DeleteEntityResponse) {
+        const protocol_result = try self.protocol.deleteEntityResult(
+            allocator,
+            self.table_name,
+            partition_key,
+            row_key,
+            delete_options,
+        );
+        return switch (protocol_result) {
+            .failure => |table_error| .{ .failure = table_error },
+            .success => |raw_value| blk: {
+                var raw = raw_value;
+                const etag_headers = entityHeaders(&raw.headers);
+                break :blk .{ .success = .{
+                    .status = raw.status,
+                    .headers = etag_headers,
+                    .raw_headers = raw.headers,
+                    .arena = raw.arena,
+                    .allocator = raw.allocator,
+                } };
+            },
+        };
+    }
+
+    /// Compatibility escape hatch for the original raw GET operation.
+    pub fn getEntityRaw(
         self: *TableClient,
         allocator: std.mem.Allocator,
         partition_key: []const u8,
@@ -271,6 +420,16 @@ pub const TableClient = struct {
         return self.protocol.send(&req, .{});
     }
 
+    /// Original 0.1.0 raw-response GET retained with its exact signature.
+    pub fn getEntity(
+        self: *TableClient,
+        allocator: std.mem.Allocator,
+        partition_key: []const u8,
+        row_key: []const u8,
+    ) !core.http.Response {
+        return self.getEntityRaw(allocator, partition_key, row_key);
+    }
+
     /// POST `{endpoint}/{tableName}` with JSON entity body.
     pub fn createEntity(
         self: *TableClient,
@@ -287,9 +446,9 @@ pub const TableClient = struct {
         );
         defer allocator.free(url);
 
-        var body_buf: std.ArrayList(u8) = .empty;
-        defer body_buf.deinit(allocator);
-        const writer = body_buf.writer(allocator);
+        var body_buf: std.Io.Writer.Allocating = .init(allocator);
+        defer body_buf.deinit();
+        const writer = &body_buf.writer;
         try writer.writeAll("{\"PartitionKey\":\"");
         try request.writeJsonEscaped(writer, table_entity.partition_key);
         try writer.writeAll("\",\"RowKey\":\"");
@@ -310,12 +469,12 @@ pub const TableClient = struct {
         try req.setHeader("Content-Type", "application/json");
         try req.setHeader("Accept", "application/json;odata=nometadata");
         try req.setHeader("x-ms-version", self.protocol.api_version);
-        req.body = body_buf.items;
+        req.body = body_buf.written();
         return self.protocol.send(&req, .{});
     }
 
-    /// DELETE `{endpoint}/{tableName}(PartitionKey='{pk}',RowKey='{rk}')`.
-    pub fn deleteEntity(
+    /// Compatibility escape hatch for the original raw DELETE operation.
+    pub fn deleteEntityRaw(
         self: *TableClient,
         allocator: std.mem.Allocator,
         partition_key: []const u8,
@@ -335,6 +494,17 @@ pub const TableClient = struct {
         try req.setHeader("If-Match", "*");
         try req.setHeader("x-ms-version", self.protocol.api_version);
         return self.protocol.send(&req, .{});
+    }
+
+    /// Original 0.1.0 unconditional raw-response DELETE retained with its
+    /// exact signature.
+    pub fn deleteEntity(
+        self: *TableClient,
+        allocator: std.mem.Allocator,
+        partition_key: []const u8,
+        row_key: []const u8,
+    ) !core.http.Response {
+        return self.deleteEntityRaw(allocator, partition_key, row_key);
     }
 };
 
@@ -439,6 +609,150 @@ fn queryHexDigit(byte: u8) ?u8 {
     return null;
 }
 
+fn validateEntityValue(comptime T: type, value: T) !void {
+    if (T == entity.DynamicEntity) {
+        try request.validateEntityKey(value.partition_key);
+        try request.validateEntityKey(value.row_key);
+        if (value.properties.count() > entity.max_custom_properties)
+            return error.TooManyProperties;
+        var iterator = value.properties.iterator();
+        while (iterator.next()) |entry| try entity.validatePropertyName(entry.key_ptr.*);
+        return;
+    }
+    _ = entity_codec.EntityCodec(T);
+    try request.validateEntityKey(@field(value, "partition_key"));
+    try request.validateEntityKey(@field(value, "row_key"));
+}
+
+fn adaptEntityResponse(comptime T: type, raw: anytype) !responses.EntityResponse(T) {
+    const arena_allocator = raw.arena.allocator();
+    const body = raw.body orelse return error.MissingRawResponseBody;
+    const decoded: T = if (T == entity.DynamicEntity)
+        try entity_codec.dynamicFromJson(arena_allocator, body)
+    else
+        try entity_codec.EntityCodec(T).deserialize(arena_allocator, body);
+    const etag = raw.headers.getFirst("ETag") orelse return error.MissingResponseHeader;
+    return .{
+        .value = decoded,
+        .etag = etag,
+        .status = raw.status,
+        .headers = entityHeaders(&raw.headers),
+        .metadata = try entityMetadata(arena_allocator, body),
+        .raw_headers = raw.headers,
+        .arena = raw.arena,
+        .allocator = raw.allocator,
+    };
+}
+
+fn entityHeaders(headers: *const responses.RawHeaders) responses.EntityHeaders {
+    return .{
+        .request_id = headers.getFirst("x-ms-request-id"),
+        .client_request_id = headers.getFirst("x-ms-client-request-id"),
+        .date = headers.getFirst("Date"),
+        .api_version = headers.getFirst("x-ms-version"),
+        .content_type = headers.getFirst("Content-Type"),
+        .preference_applied = headers.getFirst("Preference-Applied"),
+    };
+}
+
+fn entityMetadata(
+    allocator: std.mem.Allocator,
+    body: []const u8,
+) !responses.EntityMetadata {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{
+        .allocate = .alloc_always,
+    });
+    defer parsed.deinit();
+    const object = switch (parsed.value) {
+        .object => |value| value,
+        else => return error.ExpectedObject,
+    };
+    return .{
+        .metadata = try copyJsonString(allocator, object.get("odata.metadata")),
+        .type_name = try copyJsonString(allocator, object.get("odata.type")),
+        .id = try copyJsonString(allocator, object.get("odata.id")),
+        .etag = try copyJsonString(allocator, object.get("odata.etag")),
+        .edit_link = try copyJsonString(allocator, object.get("odata.editLink")),
+    };
+}
+
+fn copyJsonString(allocator: std.mem.Allocator, value: ?std.json.Value) !?[]const u8 {
+    const item = value orelse return null;
+    return switch (item) {
+        .string => |string| try allocator.dupe(u8, string),
+        else => error.InvalidODataMetadata,
+    };
+}
+
+const AllocationSizeLimiter = struct {
+    child: std.mem.Allocator,
+    max_allocation: usize,
+    rejected_allocations: usize = 0,
+
+    fn allocator(self: *AllocationSizeLimiter) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &.{
+            .alloc = alloc,
+            .resize = resize,
+            .remap = remap,
+            .free = free,
+        } };
+    }
+
+    fn alloc(
+        context: *anyopaque,
+        len: usize,
+        alignment: std.mem.Alignment,
+        return_address: usize,
+    ) ?[*]u8 {
+        const self: *AllocationSizeLimiter = @ptrCast(@alignCast(context));
+        if (len > self.max_allocation) {
+            self.rejected_allocations += 1;
+            return null;
+        }
+        return self.child.rawAlloc(len, alignment, return_address);
+    }
+
+    fn resize(
+        context: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        return_address: usize,
+    ) bool {
+        const self: *AllocationSizeLimiter = @ptrCast(@alignCast(context));
+        if (new_len > self.max_allocation) {
+            self.rejected_allocations += 1;
+            return false;
+        }
+        return self.child.rawResize(memory, alignment, new_len, return_address);
+    }
+
+    fn remap(
+        context: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        return_address: usize,
+    ) ?[*]u8 {
+        const self: *AllocationSizeLimiter = @ptrCast(@alignCast(context));
+        if (new_len > self.max_allocation) {
+            self.rejected_allocations += 1;
+            return null;
+        }
+        return self.child.rawRemap(memory, alignment, new_len, return_address);
+    }
+
+    fn free(
+        context: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        return_address: usize,
+    ) void {
+        const self: *AllocationSizeLimiter = @ptrCast(@alignCast(context));
+        self.child.rawFree(memory, alignment, return_address);
+    }
+};
+
 const TestCredential = struct {
     calls: usize = 0,
     credential: core.credentials.TokenCredential = .{ .getTokenFn = &getToken },
@@ -462,6 +776,397 @@ const TestCredential = struct {
 
 fn moveClient(client: TableClient) TableClient {
     return client;
+}
+
+const TestEntity = struct {
+    partition_key: []const u8,
+    row_key: []const u8,
+    name: []const u8,
+    active: bool,
+    count: edm.EdmInt64,
+    small_count: i32,
+    ratio: f64,
+    data: edm.EdmBinary,
+    created: edm.EdmDateTime,
+    id: edm.EdmGuid,
+    timestamp: ?edm.EdmDateTime = null,
+};
+
+const edm = @import("edm.zig");
+
+const entity_response_headers = &[_]core.http.MockTransport.HeaderPair{
+    .{ .name = "ETag", .value = "W/\"datetime'2026-07-26T00%3A00%3A00Z'\"" },
+    .{ .name = "x-ms-version", .value = "2019-02-02" },
+    .{ .name = "x-ms-request-id", .value = "request-id" },
+    .{ .name = "x-ms-client-request-id", .value = "client-id" },
+    .{ .name = "Date", .value = "Sun, 26 Jul 2026 00:00:00 GMT" },
+    .{ .name = "Content-Type", .value = "application/json" },
+    .{ .name = "Preference-Applied", .value = "return-content" },
+};
+
+const typed_entity_json =
+    \\{"odata.metadata":"https://account/$metadata#Table123/@Element","odata.type":"account.Table123","odata.id":"https://account/Table123(PartitionKey='p',RowKey='r')","odata.etag":"W/\"tag\"","odata.editLink":"Table123(PartitionKey='p',RowKey='r')","PartitionKey":"p","RowKey":"r","name":"widget","active":true,"count":"9223372036854775807","count@odata.type":"Edm.Int64","small_count":7,"ratio":1.5,"data":"aGk=","data@odata.type":"Edm.Binary","created":"2026-07-26T00:00:00Z","created@odata.type":"Edm.DateTime","id":"01234567-89ab-cdef-0123-456789abcdef","id@odata.type":"Edm.Guid","Timestamp":"2026-07-26T00:00:01Z"}
+;
+
+fn testEntityValue() !TestEntity {
+    return .{
+        .partition_key = "p",
+        .row_key = "r",
+        .name = "widget",
+        .active = true,
+        .count = .{ .value = std.math.maxInt(i64) },
+        .small_count = 7,
+        .ratio = 1.5,
+        .data = .{ .bytes = "hi" },
+        .created = try edm.EdmDateTime.init("2026-07-26T00:00:00Z"),
+        .id = try edm.EdmGuid.init("01234567-89ab-cdef-0123-456789abcdef"),
+    };
+}
+
+test "typed and dynamic add share EDM wire behavior and preserve metadata" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 201, typed_entity_json);
+    defer mock.deinit();
+    mock.response_headers_list = entity_response_headers;
+    var client = try TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=secret",
+        "Table123",
+        mock.asTransport(),
+        .{},
+    );
+    defer client.deinit();
+
+    var typed = try client.addEntity(allocator, try testEntityValue(), .{
+        .protocol = .{ .metadata = .full_metadata, .client_request_id = "client-id" },
+    });
+    defer typed.deinit();
+    try std.testing.expectEqual(@as(u16, 201), typed.status);
+    try std.testing.expectEqualStrings("widget", typed.value.name);
+    try std.testing.expectEqual(std.math.maxInt(i64), typed.value.count.value);
+    try std.testing.expectEqualStrings("hi", typed.value.data.bytes);
+    try std.testing.expectEqualStrings(entity_response_headers[0].value, typed.etag);
+    try std.testing.expectEqualStrings("account.Table123", typed.metadata.type_name.?);
+    try std.testing.expectEqualStrings("request-id", typed.headers.request_id.?);
+    try std.testing.expect(std.mem.indexOf(u8, mock.last_body.?, "\"count@odata.type\":\"Edm.Int64\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "odata%3Dfullmetadata") != null);
+
+    var dynamic = try entity.DynamicEntity.init(allocator, "p", "r");
+    defer dynamic.deinit();
+    try dynamic.put("name", .{ .string = "widget" });
+    try dynamic.put("count", .{ .int64 = .{ .value = std.math.maxInt(i64) } });
+    mock.response_body = typed_entity_json;
+    var dynamic_response = try client.addEntity(allocator, dynamic, .{});
+    defer dynamic_response.deinit();
+    try std.testing.expectEqualStrings("widget", dynamic_response.value.properties.get("name").?.string);
+    try std.testing.expectEqual(std.math.maxInt(i64), dynamic_response.value.properties.get("count").?.int64.value);
+    try std.testing.expect(std.mem.indexOf(u8, mock.last_body.?, "\"count@odata.type\":\"Edm.Int64\"") != null);
+}
+
+test "get supports full minimal and no metadata responses" {
+    const SimpleEntity = struct {
+        partition_key: []const u8,
+        row_key: []const u8,
+        name: []const u8,
+        timestamp: ?edm.EdmDateTime = null,
+    };
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200,
+        \\{"odata.metadata":"meta","odata.type":"type","PartitionKey":"p","RowKey":"r","name":"full"}
+    );
+    defer mock.deinit();
+    mock.response_headers_list = entity_response_headers;
+    var client = try TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=secret",
+        "Table123",
+        mock.asTransport(),
+        .{},
+    );
+    defer client.deinit();
+
+    var full = try client.getEntityAs(SimpleEntity, allocator, "p", "r", .{
+        .protocol = .{ .metadata = .full_metadata },
+    });
+    defer full.deinit();
+    try std.testing.expectEqualStrings("meta", full.metadata.metadata.?);
+    try std.testing.expectEqualStrings("type", full.metadata.type_name.?);
+
+    mock.response_body =
+        \\{"odata.metadata":"meta","PartitionKey":"p","RowKey":"r","name":"minimal"}
+    ;
+    var minimal = try client.getEntityAs(SimpleEntity, allocator, "p", "r", .{
+        .protocol = .{ .metadata = .minimal_metadata },
+    });
+    defer minimal.deinit();
+    try std.testing.expectEqualStrings("minimal", minimal.value.name);
+    try std.testing.expect(minimal.metadata.type_name == null);
+
+    mock.response_body =
+        \\{"PartitionKey":"p","RowKey":"r","name":"none"}
+    ;
+    var none = try client.getEntityAs(SimpleEntity, allocator, "p", "r", .{
+        .protocol = .{ .metadata = .no_metadata },
+    });
+    defer none.deinit();
+    try std.testing.expectEqualStrings("none", none.value.name);
+    try std.testing.expect(none.metadata.metadata == null);
+}
+
+test "conditional delete preserves service failure and wildcard success" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 412,
+        \\{"code":"UpdateConditionNotSatisfied","message":"etag mismatch"}
+    );
+    defer mock.deinit();
+    mock.response_headers_list = &.{
+        .{ .name = "Content-Type", .value = "application/json" },
+        .{ .name = "x-ms-request-id", .value = "condition-request" },
+    };
+    var client = try TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=secret",
+        "Table123",
+        mock.asTransport(),
+        .{},
+    );
+    defer client.deinit();
+
+    var failure = try client.deleteEntityResult(allocator, "p", "r", .{ .if_match = "W/\"old\"" });
+    defer failure.deinit(allocator);
+    switch (failure) {
+        .failure => |table_error| {
+            try std.testing.expectEqual(@as(u16, 412), table_error.status);
+            try std.testing.expectEqualStrings("UpdateConditionNotSatisfied", table_error.code);
+        },
+        .success => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqualStrings("W/\"old\"", mock.last_headers.get("If-Match").?);
+
+    mock.response_status = 204;
+    mock.response_body = "";
+    mock.response_headers_list = &.{
+        .{ .name = "x-ms-version", .value = "2019-02-02" },
+        .{ .name = "Date", .value = "Sun, 26 Jul 2026 00:00:00 GMT" },
+    };
+    var success = try client.deleteEntityWithOptions(allocator, "p", "r", .{});
+    defer success.deinit();
+    try std.testing.expectEqual(@as(u16, 204), success.status);
+    try std.testing.expectEqualStrings("*", mock.last_headers.get("If-Match").?);
+}
+
+test "entity constraints and malformed success fail locally" {
+    const SimpleEntity = struct {
+        partition_key: []const u8,
+        row_key: []const u8,
+        name: []const u8,
+    };
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200, "{");
+    defer mock.deinit();
+    mock.response_headers_list = entity_response_headers;
+    var client = try TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=secret",
+        "Table123",
+        mock.asTransport(),
+        .{},
+    );
+    defer client.deinit();
+
+    try std.testing.expectError(
+        error.InvalidEntityKey,
+        client.addEntityResult(allocator, SimpleEntity{
+            .partition_key = "bad/key",
+            .row_key = "r",
+            .name = "invalid",
+        }, .{}),
+    );
+    try std.testing.expectError(
+        error.InvalidIfMatch,
+        client.deleteEntityResult(allocator, "p", "r", .{ .if_match = "" }),
+    );
+    try std.testing.expectEqual(@as(usize, 0), mock.call_count);
+
+    if (client.getEntityResult(SimpleEntity, allocator, "p", "r", .{})) |result| {
+        var unexpected = result;
+        unexpected.deinit(allocator);
+        return error.TestExpectedMalformedPayload;
+    } else |_| {}
+    try std.testing.expectEqual(@as(usize, 1), mock.call_count);
+}
+
+test "dynamic entity enforces 252 custom properties regardless of timestamp" {
+    const allocator = std.testing.allocator;
+    var value = try entity.DynamicEntity.init(allocator, "p", "r");
+    defer value.deinit();
+    try value.setTimestamp(try edm.EdmDateTime.init("2026-07-26T00:00:00Z"));
+
+    var name_buffer: [32]u8 = undefined;
+    for (0..entity.max_custom_properties) |index| {
+        const name = try std.fmt.bufPrint(&name_buffer, "property_{d}", .{index});
+        try value.put(name, .null);
+    }
+    try validateEntityValue(entity.DynamicEntity, value);
+
+    try value.put("overflow_property", .null);
+    try std.testing.expectError(
+        error.TooManyProperties,
+        validateEntityValue(entity.DynamicEntity, value),
+    );
+}
+
+test "original raw entity method signatures remain source compatible" {
+    const RawKeyMethod = fn (
+        *TableClient,
+        std.mem.Allocator,
+        []const u8,
+        []const u8,
+    ) anyerror!core.http.Response;
+    const RawCreateMethod = fn (
+        *TableClient,
+        std.mem.Allocator,
+        entity.TableEntity,
+    ) anyerror!core.http.Response;
+    const get_fn: *const RawKeyMethod = &TableClient.getEntity;
+    const delete_fn: *const RawKeyMethod = &TableClient.deleteEntity;
+    const create_fn: *const RawCreateMethod = &TableClient.createEntity;
+
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200, "{}");
+    defer mock.deinit();
+    var client = try TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=compatibility-secret",
+        "Table123",
+        mock.asTransport(),
+        .{},
+    );
+    defer client.deinit();
+
+    var get_response = try get_fn(&client, allocator, "p", "r");
+    get_response.deinit();
+    try std.testing.expectEqual(core.http.Method.GET, mock.last_method.?);
+
+    mock.response_status = 201;
+    var old_entity = entity.TableEntity.init(allocator, "p", "r");
+    defer old_entity.deinit();
+    try old_entity.put("Name", "old");
+    var create_response = try create_fn(&client, allocator, old_entity);
+    create_response.deinit();
+    try std.testing.expectEqual(core.http.Method.POST, mock.last_method.?);
+    try std.testing.expect(std.mem.indexOf(u8, mock.last_body.?, "\"Name\":\"old\"") != null);
+
+    mock.response_status = 204;
+    var delete_response = try delete_fn(&client, allocator, "p", "r");
+    delete_response.deinit();
+    try std.testing.expectEqual(core.http.Method.DELETE, mock.last_method.?);
+    try std.testing.expectEqualStrings("*", mock.last_headers.get("If-Match").?);
+}
+
+test "raw calls do not copy large response bodies while typed adapters capture" {
+    const SimpleEntity = struct {
+        partition_key: []const u8,
+        row_key: []const u8,
+        name: []const u8,
+    };
+    const allocator = std.testing.allocator;
+    const large_body = try allocator.alloc(u8, 512 * 1024);
+    defer allocator.free(large_body);
+    @memset(large_body, 'x');
+
+    var mock = core.http.MockTransport.init(allocator, 200, large_body);
+    defer mock.deinit();
+    var client = try TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=no-copy-secret",
+        "Table123",
+        mock.asTransport(),
+        .{},
+    );
+    defer client.deinit();
+    var limiter = AllocationSizeLimiter{
+        .child = allocator,
+        .max_allocation = 128 * 1024,
+    };
+    const limited = limiter.allocator();
+
+    var get_response = try client.getEntity(limited, "p", "r");
+    defer get_response.deinit();
+    try std.testing.expectEqual(@as(usize, large_body.len), get_response.body.len);
+    try std.testing.expectEqual(@as(usize, 0), limiter.rejected_allocations);
+
+    mock.response_status = 500;
+    var old_entity = entity.TableEntity.init(allocator, "p", "r");
+    defer old_entity.deinit();
+    var create_response = try client.createEntity(limited, old_entity);
+    defer create_response.deinit();
+    try std.testing.expectEqual(@as(u16, 500), create_response.status_code);
+    try std.testing.expectEqualSlices(u8, large_body, create_response.body);
+    try std.testing.expectEqual(@as(usize, 0), limiter.rejected_allocations);
+
+    var delete_response = try client.deleteEntity(limited, "p", "r");
+    defer delete_response.deinit();
+    try std.testing.expectEqual(@as(u16, 500), delete_response.status_code);
+    try std.testing.expectEqualSlices(u8, large_body, delete_response.body);
+    try std.testing.expectEqual(@as(usize, 0), limiter.rejected_allocations);
+
+    mock.response_status = 200;
+    mock.response_headers_list = entity_response_headers;
+    try std.testing.expectError(
+        error.OutOfMemory,
+        client.getEntityResult(SimpleEntity, limited, "p", "r", .{}),
+    );
+    try std.testing.expect(limiter.rejected_allocations > 0);
+
+    mock.response_status = 412;
+    mock.response_body =
+        \\{"code":"UpdateConditionNotSatisfied","message":"etag mismatch"}
+    ;
+    mock.response_headers_list = &.{
+        .{ .name = "Content-Type", .value = "application/json" },
+        .{ .name = "x-ms-request-id", .value = "captured-error" },
+    };
+    var result = try client.deleteEntityResult(limited, "p", "r", .{ .if_match = "W/\"old\"" });
+    defer result.deinit(limited);
+    switch (result) {
+        .failure => |table_error| {
+            try std.testing.expectEqualStrings("UpdateConditionNotSatisfied", table_error.code);
+            try std.testing.expectEqualStrings("captured-error", table_error.request_id.?);
+        },
+        .success => return error.TestUnexpectedResult,
+    }
+}
+
+fn testEntityCrudAllocationFailures(allocator: std.mem.Allocator) !void {
+    const SimpleEntity = struct {
+        partition_key: []const u8,
+        row_key: []const u8,
+        name: []const u8,
+    };
+    var mock = core.http.MockTransport.init(allocator, 200,
+        \\{"PartitionKey":"p","RowKey":"r","name":"owned"}
+    );
+    defer mock.deinit();
+    mock.response_headers_list = entity_response_headers;
+    var client = try TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=allocation-secret",
+        "Table123",
+        mock.asTransport(),
+        .{},
+    );
+    defer client.deinit();
+    var response = try client.getEntityAs(SimpleEntity, allocator, "p", "r", .{});
+    response.deinit();
+}
+
+test "entity CRUD allocation failure paths are leak-free" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        testEntityCrudAllocationFailures,
+        .{},
+    );
 }
 
 test "token client survives moves and applies all client options" {
@@ -488,7 +1193,7 @@ test "token client survives moves and applies all client options" {
     table_client = moveClient(table_client);
     try std.testing.expect(table_client.pipeline_state == stable_address);
 
-    var response = try table_client.getEntity(allocator, "pk1", "rk1");
+    var response = try table_client.getEntityRaw(allocator, "pk1", "rk1");
     defer response.deinit();
     try std.testing.expectEqual(@as(u16, 200), response.status_code);
     try std.testing.expect(mock.last_headers.get("Authorization") != null);
@@ -598,7 +1303,7 @@ test "Shared Key and SAS constructors have isolated authentication behavior" {
         .{},
     );
     defer shared.deinit();
-    var shared_response = try shared.getEntity(allocator, "pk", "rk");
+    var shared_response = try shared.getEntityRaw(allocator, "pk", "rk");
     shared_response.deinit();
     try std.testing.expect(std.mem.startsWith(
         u8,
@@ -615,7 +1320,7 @@ test "Shared Key and SAS constructors have isolated authentication behavior" {
         .{},
     );
     defer sas.deinit();
-    var sas_response = try sas.getEntity(allocator, "pk", "rk");
+    var sas_response = try sas.getEntityRaw(allocator, "pk", "rk");
     sas_response.deinit();
     try std.testing.expect(mock.last_headers.get("Authorization") == null);
     try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "sv=1%2F2&sig=a+b%3D&sp=r") != null);
@@ -632,7 +1337,7 @@ fn testSasOperationAllocationFailures(allocator: std.mem.Allocator) !void {
         .{},
     );
     defer sas.deinit();
-    var response = try sas.getEntity(allocator, "pk", "rk");
+    var response = try sas.getEntityRaw(allocator, "pk", "rk");
     response.deinit();
 }
 
