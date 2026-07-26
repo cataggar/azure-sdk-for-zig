@@ -43,6 +43,7 @@
         "responses.zig",
         "sas.zig",
         "service_client.zig",
+        "service_admin_models.zig",
         "service_models.zig",
         "transaction.zig",
         "README.md",
