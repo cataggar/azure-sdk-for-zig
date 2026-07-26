@@ -23,6 +23,15 @@ pub const protocol = struct {};
 pub const TableEntity = entity.TableEntity;
 pub const TableClient = client.TableClient;
 pub const TableServiceClient = service_client.TableServiceClient;
+pub const EdmBinary = edm.EdmBinary;
+pub const EdmDateTime = edm.EdmDateTime;
+pub const EdmGuid = edm.EdmGuid;
+pub const EdmInt64 = edm.EdmInt64;
+pub const EdmValue = entity.EdmValue;
+pub const DynamicEntity = entity.DynamicEntity;
+pub const EntityCodec = entity_codec.EntityCodec;
+pub const dynamicToJson = entity_codec.dynamicToJson;
+pub const dynamicFromJson = entity_codec.dynamicFromJson;
 
 test {
     _ = auth;
@@ -45,4 +54,13 @@ test {
     _ = TableEntity;
     _ = TableClient;
     _ = TableServiceClient;
+    _ = EdmBinary;
+    _ = EdmDateTime;
+    _ = EdmGuid;
+    _ = EdmInt64;
+    _ = EdmValue;
+    _ = DynamicEntity;
+    _ = EntityCodec;
+    _ = dynamicToJson;
+    _ = dynamicFromJson;
 }

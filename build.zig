@@ -38,4 +38,23 @@ pub fn build(b: *std.Build) void {
     });
     const test_step = b.step("test", "Run Data Tables tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
+
+    const negative_tests = b.addSystemCommand(&.{
+        "sh",
+        "-c",
+        \\set -eu
+        \\for fixture in entity_codec_compile_fail_*.zig; do
+        \\  if output=$("$0" test --dep serde -Mroot="$fixture" --dep compat -Mserde=zig-pkg/serde-1.0.1-1DszT-e9DABp6u1PoDvGFzeGaST2hRp2KGtGn_CkIl0J/src/root.zig -Mcompat=zig-pkg/serde-1.0.1-1DszT-e9DABp6u1PoDvGFzeGaST2hRp2KGtGn_CkIl0J/src/compat_0_16.zig 2>&1); then
+        \\    echo "expected $fixture to fail compilation" >&2
+        \\    exit 1
+        \\  fi
+        \\  case "$output" in
+        \\    *EntityCodec*) ;;
+        \\    *) echo "$fixture did not fail with an EntityCodec diagnostic" >&2; exit 1 ;;
+        \\  esac
+        \\done
+        ,
+        b.graph.zig_exe,
+    });
+    test_step.dependOn(&negative_tests.step);
 }
