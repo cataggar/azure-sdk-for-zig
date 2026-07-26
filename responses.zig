@@ -154,6 +154,22 @@ pub const DeleteEntityResponse = struct {
     }
 };
 
+/// Arena-owned response from an entity update or upsert.
+pub const MutationEntityResponse = struct {
+    etag: []const u8,
+    status: u16,
+    headers: EntityHeaders,
+    raw_headers: RawHeaders,
+    arena: *std.heap.ArenaAllocator,
+    allocator: std.mem.Allocator,
+
+    pub fn deinit(self: *MutationEntityResponse) void {
+        self.arena.deinit();
+        self.allocator.destroy(self.arena);
+        self.* = undefined;
+    }
+};
+
 /// A typed operation outcome. Local failures remain in the outer Zig error
 /// union; non-successful HTTP responses are `failure` values.
 pub fn TableResult(comptime T: type) type {

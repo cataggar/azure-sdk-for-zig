@@ -39,7 +39,10 @@ pub fn EntityCodec(comptime T: type) type {
         pub fn toJson(allocator: std.mem.Allocator, value: T) ![]u8 {
             var output: std.Io.Writer.Allocating = .init(allocator);
             errdefer output.deinit();
-            try Self.serialize(value, &output.writer);
+            Self.serialize(value, &output.writer) catch |err| {
+                if (err == error.WriteFailed) return error.OutOfMemory;
+                return err;
+            };
             return output.toOwnedSlice();
         }
 
@@ -96,7 +99,14 @@ pub fn EntityCodec(comptime T: type) type {
 pub fn dynamicToJson(allocator: std.mem.Allocator, value: DynamicEntity) ![]u8 {
     var output: std.Io.Writer.Allocating = .init(allocator);
     errdefer output.deinit();
-    const writer = &output.writer;
+    serializeDynamic(value, &output.writer) catch |err| {
+        if (err == error.WriteFailed) return error.OutOfMemory;
+        return err;
+    };
+    return output.toOwnedSlice();
+}
+
+fn serializeDynamic(value: DynamicEntity, writer: anytype) !void {
     var first = true;
     try writer.writeByte('{');
     try writePropertyPrefix(writer, &first, "PartitionKey");
@@ -115,12 +125,9 @@ pub fn dynamicToJson(allocator: std.mem.Allocator, value: DynamicEntity) ![]u8 {
             try writeJsonString(writer, annotation);
         }
     }
-    if (value.timestamp) |timestamp| {
-        try writePropertyPrefix(writer, &first, "Timestamp");
-        try writeJsonString(writer, timestamp.value);
-    }
+    // Timestamp is decoded for response metadata but is managed by the
+    // service and must never be sent in entity mutation bodies.
     try writer.writeByte('}');
-    return output.toOwnedSlice();
 }
 
 /// Decodes a runtime-schema entity. The returned entity owns its keys and
@@ -536,9 +543,11 @@ test "dynamic entity codec preserves annotations and ownership" {
     defer value.deinit();
     try value.put("Blob", .{ .binary = .{ .bytes = "hello" } });
     try value.put("Id", .{ .guid = try edm.EdmGuid.init("01234567-89ab-cdef-0123-456789abcdef") });
+    try value.setTimestamp(try edm.EdmDateTime.init("2026-07-26T00:00:00Z"));
     const json = try dynamicToJson(allocator, value);
     defer allocator.free(json);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"Blob@odata.type\":\"Edm.Binary\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"Timestamp\"") == null);
     var decoded = try dynamicFromJson(allocator, json);
     defer decoded.deinit();
     try std.testing.expectEqualStrings("hello", decoded.properties.get("Blob").?.binary.bytes);
