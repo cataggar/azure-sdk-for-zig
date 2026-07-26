@@ -152,9 +152,13 @@ nonempty group of at most 100 unique targets in one partition and enforces the
 
 `TableClient.submitTransactionResult` returns ordered inner status/ETag
 results or a `TableError` whose `operation_index` is zero-based. Batch POSTs
-retry only failures known to occur before transport entry. Any failure after
-transport dispatch is `error.TransactionOutcomeUnknown`, because blindly
-replaying an atomic transaction could apply it twice.
+retry only failures known to occur before transport entry. After dispatch, a
+transport failure, any successful outer status other than `202 Accepted`, or a
+missing, truncated, malformed, or wrong-count `202` multipart response returns
+`error.TransactionOutcomeUnknown`. Do not retry in that case: the atomic
+transaction may already have committed. A fully parsed inner HTTP failure still
+returns its precise indexed `TableError`; pretransport validation failures
+remain deterministic local errors.
 
 ## Checked feature-parity contract
 

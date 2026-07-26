@@ -508,15 +508,18 @@ pub fn submitResult(
             response.body,
         ) };
     }
-    if (response.status_code != 202) return error.InvalidTransactionResponseStatus;
+    // A successful batch response must be 202 with a complete multipart
+    // response. Any other 2xx or parse failure leaves the atomic outcome
+    // indeterminate, so callers must not retry the transaction.
+    if (response.status_code != 202) return error.TransactionOutcomeUnknown;
     return parseResponse(
         allocator,
         response.status_code,
-        content_type orelse return error.MissingMultipartContentType,
+        content_type orelse return error.TransactionOutcomeUnknown,
         request_id,
         response.body,
         builder.operations.items.len,
-    );
+    ) catch return error.TransactionOutcomeUnknown;
 }
 
 fn randomBoundaries(batch: *[38]u8, changeset: *[42]u8) !Boundaries {
@@ -543,6 +546,9 @@ test "generated multipart boundaries are valid and distinct" {
     try validateBoundary(boundaries.changeset);
 }
 
+/// Parses a complete `202 Accepted` batch response. `submitResult` maps any
+/// error from this parser to `TransactionOutcomeUnknown` because the atomic
+/// outcome cannot then be determined safely.
 pub fn parseResponse(
     allocator: std.mem.Allocator,
     status: u16,
@@ -1013,17 +1019,12 @@ test "nested transaction response preserves order and ETags" {
 }
 
 test "inner transaction error exposes service error and zero-based index" {
-    const body =
-        "--batchresponse\r\nContent-Type: multipart/mixed; boundary=changesetresponse\r\n\r\n" ++
-        "--changesetresponse\r\nContent-Type: application/http\r\nContent-Transfer-Encoding: binary\r\n\r\nHTTP/1.1 400 Bad Request\r\nContent-ID: 4\r\nContent-Type: application/json\r\n\r\n" ++
-        "{\"odata.error\":{\"code\":\"InvalidInput\",\"message\":{\"value\":\"3:bad action\"}}}\r\n" ++
-        "--changesetresponse--\r\n--batchresponse--\r\n";
     var result = try parseResponse(
         std.testing.allocator,
         202,
         "multipart/mixed; boundary=batchresponse",
         "outer-id",
-        body,
+        one_failure_body,
         6,
     );
     defer result.deinit(std.testing.allocator);
@@ -1062,10 +1063,113 @@ const one_success_body =
     "HTTP/1.1 204 No Content\r\nContent-ID: 1\r\nETag: W/\"one\"\r\n\r\n\r\n" ++
     "--changesetresponse--\r\n--batchresponse--\r\n";
 
+const one_failure_body =
+    "--batchresponse\r\nContent-Type: multipart/mixed; boundary=changesetresponse\r\n\r\n" ++
+    "--changesetresponse\r\nContent-Type: application/http\r\nContent-Transfer-Encoding: binary\r\n\r\nHTTP/1.1 400 Bad Request\r\nContent-ID: 4\r\nContent-Type: application/json\r\n\r\n" ++
+    "{\"odata.error\":{\"code\":\"InvalidInput\",\"message\":{\"value\":\"3:bad action\"}}}\r\n" ++
+    "--changesetresponse--\r\n--batchresponse--\r\n";
+
 const transaction_response_headers = &[_]core.http.MockTransport.HeaderPair{
     .{ .name = "Content-Type", .value = "multipart/mixed; boundary=batchresponse" },
     .{ .name = "x-ms-request-id", .value = "outer-request" },
 };
+
+fn expectIndeterminateTransactionResponse(
+    status: u16,
+    headers: []const core.http.MockTransport.HeaderPair,
+    body: []const u8,
+    action_count: usize,
+) !void {
+    const client_mod = @import("client.zig");
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, status, body);
+    defer mock.deinit();
+    mock.response_headers_list = headers;
+    var client = try client_mod.TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=SECRET&sp=a",
+        "People",
+        mock.asTransport(),
+        .{},
+    );
+    defer client.deinit();
+    var builder = TransactionBuilder.init(allocator);
+    defer builder.deinit();
+    for (0..action_count) |index| {
+        var row_buffer: [20]u8 = undefined;
+        const row = try std.fmt.bufPrint(&row_buffer, "r{d}", .{index});
+        try builder.delete("p", row, "*");
+    }
+    try std.testing.expectError(
+        error.TransactionOutcomeUnknown,
+        client.submitTransactionResult(allocator, &builder, .{
+            .boundaries = .{ .batch = "batch", .changeset = "changeset" },
+        }),
+    );
+}
+
+test "transaction indeterminate post-202 responses are not retry-safe" {
+    const no_headers = &[_]core.http.MockTransport.HeaderPair{};
+    const wrong_content_type = &[_]core.http.MockTransport.HeaderPair{
+        .{ .name = "Content-Type", .value = "application/json" },
+    };
+    try expectIndeterminateTransactionResponse(
+        204,
+        transaction_response_headers,
+        one_success_body,
+        1,
+    );
+    try expectIndeterminateTransactionResponse(
+        201,
+        transaction_response_headers,
+        one_success_body,
+        1,
+    );
+    try expectIndeterminateTransactionResponse(202, no_headers, one_success_body, 1);
+    try expectIndeterminateTransactionResponse(
+        202,
+        wrong_content_type,
+        one_success_body,
+        1,
+    );
+    try expectIndeterminateTransactionResponse(
+        202,
+        transaction_response_headers,
+        one_success_body[0 .. one_success_body.len - 1],
+        1,
+    );
+    try expectIndeterminateTransactionResponse(202, transaction_response_headers, "", 1);
+    try expectIndeterminateTransactionResponse(202, transaction_response_headers, one_success_body, 2);
+}
+
+test "submitted transaction inner failure remains a precise indexed TableError" {
+    const client_mod = @import("client.zig");
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 202, one_failure_body);
+    defer mock.deinit();
+    mock.response_headers_list = transaction_response_headers;
+    var client = try client_mod.TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=SECRET&sp=a",
+        "People",
+        mock.asTransport(),
+        .{},
+    );
+    defer client.deinit();
+    var builder = TransactionBuilder.init(allocator);
+    defer builder.deinit();
+    for (0..6) |index| {
+        var row_buffer: [20]u8 = undefined;
+        const row = try std.fmt.bufPrint(&row_buffer, "r{d}", .{index});
+        try builder.delete("p", row, "*");
+    }
+    var result = try client.submitTransactionResult(allocator, &builder, .{
+        .boundaries = .{ .batch = "batch", .changeset = "changeset" },
+    });
+    defer result.deinit(allocator);
+    try std.testing.expectEqualStrings("InvalidInput", result.failure.code);
+    try std.testing.expectEqual(@as(?usize, 3), result.failure.operation_index);
+}
 
 const TestCredential = struct {
     credential: core.credentials.TokenCredential,
