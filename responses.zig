@@ -317,6 +317,39 @@ pub fn unwrapQueryEntities(comptime T: type, result: TableResult(T)) error{Query
     };
 }
 
+pub fn unwrapSetServiceProperties(comptime T: type, result: TableResult(T)) error{SetServicePropertiesFailed}!T {
+    return switch (result) {
+        .success => |value| value,
+        .failure => |table_error| {
+            var owned_error = table_error;
+            owned_error.deinit();
+            return error.SetServicePropertiesFailed;
+        },
+    };
+}
+
+pub fn unwrapGetServiceProperties(comptime T: type, result: TableResult(T)) error{GetServicePropertiesFailed}!T {
+    return switch (result) {
+        .success => |value| value,
+        .failure => |table_error| {
+            var owned_error = table_error;
+            owned_error.deinit();
+            return error.GetServicePropertiesFailed;
+        },
+    };
+}
+
+pub fn unwrapGetStatistics(comptime T: type, result: TableResult(T)) error{GetStatisticsFailed}!T {
+    return switch (result) {
+        .success => |value| value,
+        .failure => |table_error| {
+            var owned_error = table_error;
+            owned_error.deinit();
+            return error.GetStatisticsFailed;
+        },
+    };
+}
+
 fn deinitPayload(comptime T: type, allocator: std.mem.Allocator, value: *T) void {
     switch (@typeInfo(T)) {
         .@"struct", .@"union", .@"enum", .@"opaque" => {},

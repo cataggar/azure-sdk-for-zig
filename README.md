@@ -195,7 +195,7 @@ it does **not** claim that a later roadmap phase is already implemented.
 | [x] | `NewListEntitiesPager` with filter, select, top, format, and two continuation keys | generic `TableClient.listEntities` returning `EntityPager(T)` |
 | [x] | `GetAccessPolicy` / `SetAccessPolicy` | `TableClient.getAccessPolicies` / `setAccessPolicies` and result variants |
 | [x] | `SubmitTransaction` and all six action kinds | `TransactionBuilder` and `TableClient.submitTransactionResult` |
-| [x] | `GetProperties` / `SetProperties` | `TableServiceClient.getProperties` / `setProperties` and result variants |
+| [x] | `GetProperties` / `SetProperties` | `TableServiceClient.getProperties` / `setProperties` (or explicit `*ServiceProperties` spellings) and result variants |
 | [x] | `GetStatistics` | `TableServiceClient.getStatistics` / `getStatisticsResult` |
 
 ### SAS and model families
@@ -286,6 +286,22 @@ themselves are borrowed and must remain stable and outlive the pager.
 The pipeline policy order is request ID, telemetry, retry, then authentication.
 Putting authentication after retry ensures date-sensitive SharedKeyLite
 requests are signed on every attempt.
+
+## Service administration
+
+`TableServiceClient.setServiceProperties` and `getServiceProperties` use the
+generated XML operations. `ServiceProperties`, `Logging`, `Metrics`,
+`RetentionPolicy`, and `CorsRule` are generated-wire aliases; validation
+rejects invalid retention periods, analytics versions, CORS limits, and
+unsupported methods before transport. Use their `*Result` variants to retain
+HTTP status, raw headers, request IDs, and structured `TableError` values.
+
+`getStatistics` is available only for conventional
+`{account}-secondary.table...` geo-replication endpoints. It returns generated
+`ServiceStatistics` / `GeoReplication` values; its open
+`GeoReplicationStatus` preserves future service status strings. Last-sync
+timestamps must be UTC (`Z`) times. All three allocating responses own an
+arena and must be released with `deinit`.
 
 ## Module ownership
 

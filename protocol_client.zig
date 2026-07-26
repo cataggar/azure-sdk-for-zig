@@ -10,6 +10,7 @@ const responses = @import("responses.zig");
 const service_models = @import("service_models.zig");
 
 const ProtocolTable = @typeInfo(@TypeOf(protocol.TablesClient.table)).@"fn".return_type.?;
+const ProtocolService = @typeInfo(@TypeOf(protocol.TablesClient.service)).@"fn".return_type.?;
 
 pub const QueryTablesResponse = ProtocolTable.QueryResult;
 pub const QueryEntitiesResponse = ProtocolTable.QueryEntitiesResult;
@@ -17,6 +18,9 @@ pub const CreateTableResponse = ProtocolTable.CreateResult;
 pub const DeleteTableResponse = ProtocolTable.DeleteResult;
 pub const GetAccessPolicyResponse = []const service_models.SignedIdentifier;
 pub const SetAccessPolicyResponse = ProtocolTable.SetAccessPolicyResult;
+pub const SetServicePropertiesResponse = ProtocolService.SetPropertiesResult;
+pub const GetServicePropertiesResponse = ProtocolService.GetPropertiesResult;
+pub const GetStatisticsResponse = ProtocolService.GetStatisticsResult;
 
 /// Validated bridge from SDK options to the generated Tables protocol client.
 pub const ProtocolClient = struct {
@@ -782,6 +786,94 @@ pub const ProtocolClient = struct {
             null,
             call_options.policies,
         );
+    }
+
+    pub fn setServiceProperties(
+        self: *ProtocolClient,
+        allocator: std.mem.Allocator,
+        properties: service_models.ServiceProperties,
+        call_options: options.ProtocolOptions,
+    ) !responses.TableResult(responses.SdkResponse(SetServicePropertiesResponse)) {
+        try request.validateProtocolOptions(call_options);
+        try service_models.validateServiceProperties(properties);
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena);
+        arena.* = .init(allocator);
+        errdefer arena.deinit();
+        const arena_allocator = arena.allocator();
+        var call = try self.beginCall(arena_allocator, call_options, null);
+        errdefer call.deinit();
+        var generated = protocol.TablesClient.initWithPipeline(arena_allocator, call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
+        var service = generated.service();
+        const value = service.setProperties(arena_allocator, call_options.client_request_id, call_options.timeout, properties) catch |err| {
+            const table_error = try self.tableErrorFromGeneratedFailure(allocator, &call, err);
+            call.deinit();
+            arena.deinit();
+            allocator.destroy(arena);
+            return .{ .failure = table_error };
+        };
+        const metadata = try call.takeResponse();
+        call.deinit();
+        return .{ .success = .{ .value = value, .status = metadata.status, .headers = metadata.headers, .arena = arena, .allocator = allocator } };
+    }
+
+    pub fn getServiceProperties(
+        self: *ProtocolClient,
+        allocator: std.mem.Allocator,
+        call_options: options.ProtocolOptions,
+    ) !responses.TableResult(responses.SdkResponse(GetServicePropertiesResponse)) {
+        try request.validateProtocolOptions(call_options);
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena);
+        arena.* = .init(allocator);
+        errdefer arena.deinit();
+        const arena_allocator = arena.allocator();
+        var call = try self.beginCall(arena_allocator, call_options, null);
+        errdefer call.deinit();
+        var generated = protocol.TablesClient.initWithPipeline(arena_allocator, call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
+        var service = generated.service();
+        const value = service.getProperties(arena_allocator, call_options.client_request_id, call_options.timeout) catch |err| {
+            const table_error = try self.tableErrorFromGeneratedFailure(allocator, &call, err);
+            call.deinit();
+            arena.deinit();
+            allocator.destroy(arena);
+            return .{ .failure = table_error };
+        };
+        const metadata = try call.takeResponse();
+        call.deinit();
+        return .{ .success = .{ .value = value, .status = metadata.status, .headers = metadata.headers, .arena = arena, .allocator = allocator } };
+    }
+
+    pub fn getStatistics(
+        self: *ProtocolClient,
+        allocator: std.mem.Allocator,
+        call_options: options.ProtocolOptions,
+    ) !responses.TableResult(responses.SdkResponse(GetStatisticsResponse)) {
+        try request.validateProtocolOptions(call_options);
+        if (!request.isSecondaryStorageEndpoint(self.endpoint.base_url))
+            return error.StatisticsRequireSecondaryEndpoint;
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena);
+        arena.* = .init(allocator);
+        errdefer arena.deinit();
+        const arena_allocator = arena.allocator();
+        var call = try self.beginCall(arena_allocator, call_options, null);
+        errdefer call.deinit();
+        var generated = protocol.TablesClient.initWithPipeline(arena_allocator, call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
+        var service = generated.service();
+        const value = service.getStatistics(arena_allocator, call_options.client_request_id, call_options.timeout) catch |err| {
+            const table_error = try self.tableErrorFromGeneratedFailure(allocator, &call, err);
+            call.deinit();
+            arena.deinit();
+            allocator.destroy(arena);
+            return .{ .failure = table_error };
+        };
+        switch (value) {
+            .status_200 => |response| try service_models.validateServiceStatistics(response.body),
+        }
+        const metadata = try call.takeResponse();
+        call.deinit();
+        return .{ .success = .{ .value = value, .status = metadata.status, .headers = metadata.headers, .arena = arena, .allocator = allocator } };
     }
 
     pub fn send(

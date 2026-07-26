@@ -160,6 +160,16 @@ pub fn validateIfMatch(value: []const u8) !void {
     }
 }
 
+/// Returns whether an Azure Storage endpoint is the conventional read-access
+/// geo-redundant secondary endpoint (`{account}-secondary.table...`).
+pub fn isSecondaryStorageEndpoint(endpoint: []const u8) bool {
+    const uri = std.Uri.parse(endpoint) catch return false;
+    var host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
+    const host = uri.getHost(&host_buffer) catch return false;
+    const first_label_end = std.mem.indexOfScalar(u8, host.bytes, '.') orelse return false;
+    return std.ascii.endsWithIgnoreCase(host.bytes[0..first_label_end], "-secondary");
+}
+
 /// Doubles apostrophes for an OData literal, then encodes the raw bytes once.
 pub fn encodeODataStringLiteral(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
     try validateEntityKey(value);
