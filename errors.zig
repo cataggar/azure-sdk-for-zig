@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const protocol = @import("azure_rest_data_tables");
+const serde = @import("serde");
 
 /// Documented Azure Tables service error codes.
 ///
@@ -156,7 +157,8 @@ pub const TableError = struct {
         return init(allocator, status, code, normalized_message, request_id, operation_index);
     }
 
-    /// Parses the generated Tables XML service error envelope.
+    /// Parses the generated Tables XML service error envelope through the
+    /// generated model, preserving serde's XML syntax and entity handling.
     pub fn fromXml(
         allocator: std.mem.Allocator,
         status: u16,
@@ -164,10 +166,10 @@ pub const TableError = struct {
         operation_index: ?usize,
         body: []const u8,
     ) !TableError {
-        if (!isXmlErrorEnvelope(body)) return error.InvalidErrorPayload;
-        const code = try xmlElement(body, "Code");
-        const message = try xmlElement(body, "Message");
-        return init(allocator, status, code, message, request_id, operation_index);
+        try validateXmlSyntax(allocator, body);
+        var source = try serde.xml.fromSlice(protocol.models.TablesServiceError, allocator, body);
+        defer deinitGeneratedXmlError(allocator, &source);
+        return fromGeneratedXml(allocator, status, request_id, operation_index, source);
     }
 
     /// Selects a service-error parser based on content type. Unknown content
@@ -232,21 +234,57 @@ fn jsonMessage(value: ?std.json.Value) !?[]const u8 {
     return jsonString(object.get("value") orelse object.get("Value")) orelse error.InvalidErrorPayload;
 }
 
-fn isXmlErrorEnvelope(body: []const u8) bool {
-    const opening = std.mem.indexOf(u8, body, "<Error") orelse return false;
-    const opening_end = std.mem.indexOfPos(u8, body, opening, ">") orelse return false;
-    return opening_end > opening and std.mem.indexOfPos(u8, body, opening_end, "</Error>") != null;
+fn deinitGeneratedXmlError(
+    allocator: std.mem.Allocator,
+    source: *protocol.models.TablesServiceError,
+) void {
+    if (source.error_code) |value| allocator.free(value);
+    if (source.code) |value| allocator.free(value);
+    if (source.message) |value| allocator.free(value);
 }
 
-fn xmlElement(body: []const u8, comptime name: []const u8) !?[]const u8 {
-    const opening = "<" ++ name ++ ">";
-    const closing = "</" ++ name ++ ">";
-    const start = std.mem.indexOf(u8, body, opening) orelse return null;
-    const value_start = start + opening.len;
-    const end = std.mem.indexOfPos(u8, body, value_start, closing) orelse return error.InvalidErrorPayload;
-    const value = body[value_start..end];
-    if (std.mem.indexOfScalar(u8, value, '<') != null) return error.InvalidErrorPayload;
-    return value;
+fn validateXmlSyntax(allocator: std.mem.Allocator, body: []const u8) !void {
+    var scanner = serde.xml.Scanner{ .input = body };
+    var elements: std.ArrayList([]const u8) = .empty;
+    defer elements.deinit(allocator);
+    var root_seen = false;
+    var root_closed = false;
+
+    while (true) {
+        switch (try scanner.next()) {
+            .element_open => |name| {
+                if (root_closed) return error.MalformedXml;
+                if (!root_seen) {
+                    if (!std.mem.eql(u8, name, "Error")) return error.MalformedXml;
+                    root_seen = true;
+                }
+                try elements.append(allocator, name);
+            },
+            .self_closing => |name| {
+                if (root_closed) return error.MalformedXml;
+                if (!root_seen) {
+                    if (!std.mem.eql(u8, name, "Error")) return error.MalformedXml;
+                    root_seen = true;
+                    root_closed = true;
+                }
+            },
+            .element_close => |name| {
+                const expected = elements.pop() orelse return error.MalformedXml;
+                if (!std.mem.eql(u8, expected, name)) return error.MalformedXml;
+                if (elements.items.len == 0) root_closed = true;
+            },
+            .text, .cdata => {
+                if (elements.items.len == 0) return error.MalformedXml;
+            },
+            .attribute, .tag_end => {
+                if (elements.items.len == 0) return error.MalformedXml;
+            },
+            .eof => {
+                if (!root_seen or !root_closed or elements.items.len != 0) return error.UnexpectedEof;
+                return;
+            },
+        }
+    }
 }
 
 fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
@@ -266,6 +304,18 @@ fn writeRedacted(writer: *std.Io.Writer, value: []const u8) std.Io.Writer.Error!
             while (index < value.len and !std.ascii.isWhitespace(value[index]) and value[index] != '"' and value[index] != '\'') : (index += 1) {}
             continue;
         }
+        if (startsWithIgnoreCase(value[index..], "SharedAccessSignature")) {
+            try writer.writeAll("SharedAccessSignature=[REDACTED]");
+            index += "SharedAccessSignature".len;
+            while (index < value.len and (value[index] == '=' or std.ascii.isWhitespace(value[index]))) : (index += 1) {}
+            while (index < value.len and value[index] != ';' and value[index] != '\n') : (index += 1) {}
+            continue;
+        }
+        if (isSasParameterAt(value, index)) {
+            try writer.writeAll("[REDACTED SAS]");
+            while (index < value.len and !std.ascii.isWhitespace(value[index]) and value[index] != '"' and value[index] != '\'' and value[index] != ';') : (index += 1) {}
+            continue;
+        }
         if (index + "Authorization".len <= value.len and
             std.ascii.eqlIgnoreCase(value[index .. index + "Authorization".len], "Authorization"))
         {
@@ -278,6 +328,28 @@ fn writeRedacted(writer: *std.Io.Writer, value: []const u8) std.Io.Writer.Error!
         try writer.writeByte(value[index]);
         index += 1;
     }
+}
+
+fn startsWithIgnoreCase(value: []const u8, prefix: []const u8) bool {
+    return value.len >= prefix.len and std.ascii.eqlIgnoreCase(value[0..prefix.len], prefix);
+}
+
+fn isSasParameterAt(value: []const u8, index: usize) bool {
+    if (index != 0 and !isSasSeparator(value[index - 1])) return false;
+    const end = std.mem.indexOfScalarPos(u8, value, index, '=') orelse return false;
+    const name = value[index..end];
+    return std.ascii.eqlIgnoreCase(name, "sig") or std.ascii.eqlIgnoreCase(name, "sv") or
+        std.ascii.eqlIgnoreCase(name, "se") or std.ascii.eqlIgnoreCase(name, "sp") or
+        std.ascii.eqlIgnoreCase(name, "sr") or std.ascii.eqlIgnoreCase(name, "st") or
+        std.ascii.eqlIgnoreCase(name, "sip") or std.ascii.eqlIgnoreCase(name, "spr") or
+        std.ascii.eqlIgnoreCase(name, "srt") or std.ascii.eqlIgnoreCase(name, "ss") or
+        std.ascii.eqlIgnoreCase(name, "skoid") or std.ascii.eqlIgnoreCase(name, "sktid") or
+        std.ascii.eqlIgnoreCase(name, "skt") or std.ascii.eqlIgnoreCase(name, "ske") or
+        std.ascii.eqlIgnoreCase(name, "sks") or std.ascii.eqlIgnoreCase(name, "skv");
+}
+
+fn isSasSeparator(value: u8) bool {
+    return value == '?' or value == '&' or value == ';' or std.ascii.isWhitespace(value);
 }
 
 test "JSON OData error retains unknown code and request metadata" {
@@ -293,18 +365,18 @@ test "JSON OData error retains unknown code and request metadata" {
     try std.testing.expectEqual(@as(?usize, 3), table_error.operation_index);
 }
 
-test "XML error retains generated service shape" {
+test "XML error retains generated service shape and decodes entities" {
     var table_error = try TableError.fromXml(
         std.testing.allocator,
         404,
         "request-id",
         null,
-        "<Error><Code>TableNotFound</Code><Message>table does not exist</Message></Error>",
+        "<Error><Code>TableNotFound</Code><Message>table &amp; entity does not exist</Message></Error>",
     );
     defer table_error.deinit();
 
     try std.testing.expectEqualStrings(TableErrorCode.table_not_found, table_error.code);
-    try std.testing.expectEqualStrings("table does not exist", table_error.message.?);
+    try std.testing.expectEqualStrings("table & entity does not exist", table_error.message.?);
 }
 
 test "generated JSON and XML adapters retain fields" {
@@ -344,7 +416,7 @@ test "malformed error payloads return local errors" {
         TableError.fromJson(std.testing.allocator, 400, null, null, "{"),
     );
     try std.testing.expectError(
-        error.InvalidErrorPayload,
+        error.UnexpectedEof,
         TableError.fromXml(std.testing.allocator, 400, null, null, "<Error><Code>Bad</Code>"),
     );
 }
@@ -376,8 +448,28 @@ test "formatted errors redact authorization and complete query strings" {
 
     var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer output.deinit();
-    try output.writer.print("{}", .{table_error});
+    try output.writer.print("{f}", .{table_error});
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "secret") == null);
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "sv=") == null);
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "sig=") == null);
+}
+
+test "formatted errors redact standalone SAS and connection-string values" {
+    var table_error = try TableError.init(
+        std.testing.allocator,
+        403,
+        "Request failed: sv=2024-01-01&sig=standalone-secret&sp=r",
+        "SharedAccessSignature=sv=2024-01-01&sig=connection-secret&sp=r;AccountName=example",
+        null,
+        null,
+    );
+    defer table_error.deinit();
+
+    var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer output.deinit();
+    try output.writer.print("{f}", .{table_error});
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "standalone-secret") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "connection-secret") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "sv=2024-01-01") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "AccountName=example") != null);
 }
