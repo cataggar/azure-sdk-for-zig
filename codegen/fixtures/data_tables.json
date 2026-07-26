@@ -1,0 +1,5168 @@
+{
+  "package_name": "data_tables",
+  "package_version": "0.1.0",
+  "target_kind": "client",
+  "service_kind": "azure-dataplane",
+  "clients": [
+    {
+      "name": "TablesClient",
+      "namespace": "Data.Tables",
+      "doc": null,
+      "is_root": true,
+      "parent_name": null,
+      "init_parameters": [],
+      "api_version_default": "2019-02-02",
+      "endpoint": {
+        "name": "endpoint",
+        "default_value": null
+      },
+      "methods": [],
+      "sub_clients": [
+        {
+          "accessor_camel": "table",
+          "accessor_snake": "table",
+          "client_name": "Table"
+        },
+        {
+          "accessor_camel": "service",
+          "accessor_snake": "service",
+          "client_name": "Service"
+        }
+      ],
+      "credential_scopes": [
+        "https://storage.azure.com/.default"
+      ]
+    },
+    {
+      "name": "Table",
+      "namespace": "Data.Tables.Table",
+      "doc": null,
+      "is_root": false,
+      "parent_name": "TablesClient",
+      "init_parameters": [],
+      "api_version_default": "2019-02-02",
+      "endpoint": {
+        "name": "endpoint",
+        "default_value": null
+      },
+      "methods": [
+        {
+          "name": "query",
+          "name_camel": "query",
+          "doc": "Queries tables under the given account.",
+          "http_method": "get",
+          "path": "/Tables",
+          "uri_template": "/Tables{?%24format,%24top,%24select,%24filter,NextTableName}",
+          "user_parameters": [
+            {
+              "name": "client_request_id",
+              "method_name": "clientRequestId",
+              "doc": "An opaque, globally-unique, client-generated string identifier for the request.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "$format",
+              "method_name": "$format",
+              "doc": "Specifies the metadata format for the response.",
+              "param_type": {
+                "kind": "Enum",
+                "value": "OdataMetadataFormat"
+              },
+              "optional": true
+            },
+            {
+              "name": "$top",
+              "method_name": "$top",
+              "doc": "Specifies the maximum number of records to return.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "int32"
+              },
+              "optional": true
+            },
+            {
+              "name": "$select",
+              "method_name": "$select",
+              "doc": "Select expression using OData notation. Limits the columns on each record to just those requested.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "$filter",
+              "method_name": "$filter",
+              "doc": "OData filter expression.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "next_table_name",
+              "method_name": "nextTableName",
+              "doc": "A table query continuation token from a previous call.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            }
+          ],
+          "path_parameters": [],
+          "query_parameters": [
+            {
+              "wire_name": "$format",
+              "source": {
+                "kind": "user",
+                "name": "$format"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "$top",
+              "source": {
+                "kind": "user",
+                "name": "$top"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "$select",
+              "source": {
+                "kind": "user",
+                "name": "$select"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "$filter",
+              "source": {
+                "kind": "user",
+                "name": "$filter"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "NextTableName",
+              "source": {
+                "kind": "user",
+                "name": "next_table_name"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "DataServiceVersion",
+              "source": {
+                "kind": "constant",
+                "value": "3.0"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "x-ms-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "x-ms-client-request-id",
+              "source": {
+                "kind": "user",
+                "name": "client_request_id"
+              },
+              "optional": true,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/json;odata=minimalmetadata"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "body_parameter": null,
+          "response": {
+            "response_type": {
+              "kind": "Array",
+              "value": {
+                "kind": "Model",
+                "value": "TableProperties"
+              }
+            },
+            "status_codes": [
+              200
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                200
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "TableQueryResponse"
+              },
+              "headers": [
+                {
+                  "name": "next_table_name",
+                  "wire_name": "x-ms-continuation-NextTableName",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "api_version",
+                  "wire_name": "x-ms-version",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "request_id",
+                  "wire_name": "x-ms-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "client_request_id",
+                  "wire_name": "x-ms-client-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "date",
+                  "wire_name": "Date",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "datetime"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "content_type",
+                  "wire_name": "Content-Type",
+                  "header_type": {
+                    "kind": "Constant",
+                    "value": "application/json;odata=minimalmetadata"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [
+                "application/json;odata=minimalmetadata"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "TablesError"
+              },
+              "headers": [
+                {
+                  "name": "error_code",
+                  "wire_name": "x-ms-error-code",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "content_type",
+                  "wire_name": "Content-Type",
+                  "header_type": {
+                    "kind": "Constant",
+                    "value": "application/json"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": {
+            "items_segments": [
+              "value"
+            ],
+            "next_link_segments": [],
+            "next_link_verb": "GET",
+            "next_link_operation": null,
+            "envelope": null,
+            "item_type": {
+              "kind": "Model",
+              "value": "TableProperties"
+            }
+          },
+          "long_running": null,
+          "kind": "paging"
+        },
+        {
+          "name": "create",
+          "name_camel": "create",
+          "doc": "Creates a new table under the given account.",
+          "http_method": "post",
+          "path": "/Tables",
+          "uri_template": "/Tables{?%24format}",
+          "user_parameters": [
+            {
+              "name": "client_request_id",
+              "method_name": "clientRequestId",
+              "doc": "An opaque, globally-unique, client-generated string identifier for the request.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "$format",
+              "method_name": "$format",
+              "doc": "Specifies the metadata format for the response.",
+              "param_type": {
+                "kind": "Enum",
+                "value": "OdataMetadataFormat"
+              },
+              "optional": true
+            },
+            {
+              "name": "table_properties",
+              "method_name": "tableProperties",
+              "doc": "The table properties to create.",
+              "param_type": {
+                "kind": "Model",
+                "value": "TableProperties"
+              },
+              "optional": false
+            },
+            {
+              "name": "prefer",
+              "method_name": "prefer",
+              "doc": "Specifies whether the response should include the created table in the\npayload. Possible values are return-no-content and return-content.",
+              "param_type": {
+                "kind": "Enum",
+                "value": "ResponseFormat"
+              },
+              "optional": true
+            }
+          ],
+          "path_parameters": [],
+          "query_parameters": [
+            {
+              "wire_name": "$format",
+              "source": {
+                "kind": "user",
+                "name": "$format"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "Content-Type",
+              "source": {
+                "kind": "constant",
+                "value": "application/json"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "DataServiceVersion",
+              "source": {
+                "kind": "constant",
+                "value": "3.0"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "x-ms-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "x-ms-client-request-id",
+              "source": {
+                "kind": "user",
+                "name": "client_request_id"
+              },
+              "optional": true,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "Prefer",
+              "source": {
+                "kind": "user",
+                "name": "prefer"
+              },
+              "optional": true,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/json;odata=minimalmetadata"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "body_parameter": {
+            "user_param_name": "table_properties",
+            "content_type": "application/json",
+            "content_types": [
+              "application/json"
+            ],
+            "body_type": {
+              "kind": "Model",
+              "value": "TableProperties"
+            },
+            "serialization_kind": "json"
+          },
+          "response": {
+            "response_type": {
+              "kind": "Model",
+              "value": "TableResponse"
+            },
+            "status_codes": [
+              201,
+              204
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                201
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "TableResponse"
+              },
+              "headers": [
+                {
+                  "name": "preference_applied",
+                  "wire_name": "Preference-Applied",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "api_version",
+                  "wire_name": "x-ms-version",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "request_id",
+                  "wire_name": "x-ms-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "client_request_id",
+                  "wire_name": "x-ms-client-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "date",
+                  "wire_name": "Date",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "datetime"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "content_type",
+                  "wire_name": "Content-Type",
+                  "header_type": {
+                    "kind": "Constant",
+                    "value": "application/json;odata=minimalmetadata"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [
+                "application/json;odata=minimalmetadata"
+              ],
+              "body_kind": "json"
+            },
+            {
+              "status_codes": [
+                204
+              ],
+              "response_type": null,
+              "headers": [
+                {
+                  "name": "preference_applied",
+                  "wire_name": "Preference-Applied",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "api_version",
+                  "wire_name": "x-ms-version",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "request_id",
+                  "wire_name": "x-ms-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "client_request_id",
+                  "wire_name": "x-ms-client-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "date",
+                  "wire_name": "Date",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "datetime"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [],
+              "body_kind": "none"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "TablesError"
+              },
+              "headers": [
+                {
+                  "name": "error_code",
+                  "wire_name": "x-ms-error-code",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "content_type",
+                  "wire_name": "Content-Type",
+                  "header_type": {
+                    "kind": "Constant",
+                    "value": "application/json"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "delete",
+          "name_camel": "delete",
+          "doc": "Deletes an existing table.",
+          "http_method": "delete",
+          "path": "/Tables('{table}')",
+          "uri_template": "/Tables('{table}')",
+          "user_parameters": [
+            {
+              "name": "client_request_id",
+              "method_name": "clientRequestId",
+              "doc": "An opaque, globally-unique, client-generated string identifier for the request.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "table",
+              "method_name": "table",
+              "doc": "The name of the table.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "table",
+              "source": {
+                "kind": "user",
+                "name": "table"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false,
+              "path_encoding": "segment"
+            }
+          ],
+          "query_parameters": [],
+          "header_parameters": [
+            {
+              "wire_name": "x-ms-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "x-ms-client-request-id",
+              "source": {
+                "kind": "user",
+                "name": "client_request_id"
+              },
+              "optional": true,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/json"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "body_parameter": null,
+          "response": {
+            "response_type": null,
+            "status_codes": [
+              204
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                204
+              ],
+              "response_type": null,
+              "headers": [
+                {
+                  "name": "api_version",
+                  "wire_name": "x-ms-version",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "request_id",
+                  "wire_name": "x-ms-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "client_request_id",
+                  "wire_name": "x-ms-client-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "date",
+                  "wire_name": "Date",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "datetime"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [],
+              "body_kind": "none"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "TablesError"
+              },
+              "headers": [
+                {
+                  "name": "error_code",
+                  "wire_name": "x-ms-error-code",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "content_type",
+                  "wire_name": "Content-Type",
+                  "header_type": {
+                    "kind": "Constant",
+                    "value": "application/json"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "query_entities",
+          "name_camel": "queryEntities",
+          "doc": "Queries entities under the given table.",
+          "http_method": "get",
+          "path": "/{table}()",
+          "uri_template": "/{table}(){?%24format,%24top,%24select,%24filter,timeout,NextPartitionKey,NextRowKey}",
+          "user_parameters": [
+            {
+              "name": "client_request_id",
+              "method_name": "clientRequestId",
+              "doc": "An opaque, globally-unique, client-generated string identifier for the request.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "table",
+              "method_name": "table",
+              "doc": "The name of the table.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "$format",
+              "method_name": "$format",
+              "doc": "Specifies the metadata format for the response.",
+              "param_type": {
+                "kind": "Enum",
+                "value": "OdataMetadataFormat"
+              },
+              "optional": true
+            },
+            {
+              "name": "$top",
+              "method_name": "$top",
+              "doc": "Specifies the maximum number of records to return.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "int32"
+              },
+              "optional": true
+            },
+            {
+              "name": "$select",
+              "method_name": "$select",
+              "doc": "Select expression using OData notation. Limits the columns on each record to just those requested.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "$filter",
+              "method_name": "$filter",
+              "doc": "OData filter expression.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "timeout",
+              "method_name": "timeout",
+              "doc": "The timeout parameter is expressed in seconds.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "int32"
+              },
+              "optional": true
+            },
+            {
+              "name": "next_partition_key",
+              "method_name": "nextPartitionKey",
+              "doc": "An entity partition key query continuation token from a previous call.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "next_row_key",
+              "method_name": "nextRowKey",
+              "doc": "An entity row key query continuation token from a previous call.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "table",
+              "source": {
+                "kind": "user",
+                "name": "table"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false,
+              "path_encoding": "segment"
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "$format",
+              "source": {
+                "kind": "user",
+                "name": "$format"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "$top",
+              "source": {
+                "kind": "user",
+                "name": "$top"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "$select",
+              "source": {
+                "kind": "user",
+                "name": "$select"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "$filter",
+              "source": {
+                "kind": "user",
+                "name": "$filter"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "timeout",
+              "source": {
+                "kind": "user",
+                "name": "timeout"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "NextPartitionKey",
+              "source": {
+                "kind": "user",
+                "name": "next_partition_key"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "NextRowKey",
+              "source": {
+                "kind": "user",
+                "name": "next_row_key"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "DataServiceVersion",
+              "source": {
+                "kind": "constant",
+                "value": "3.0"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "x-ms-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "x-ms-client-request-id",
+              "source": {
+                "kind": "user",
+                "name": "client_request_id"
+              },
+              "optional": true,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/json;odata=minimalmetadata"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "body_parameter": null,
+          "response": {
+            "response_type": {
+              "kind": "Model",
+              "value": "TableEntityQueryResponse"
+            },
+            "status_codes": [
+              200
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                200
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "TableEntityQueryResponse"
+              },
+              "headers": [
+                {
+                  "name": "next_partition_key",
+                  "wire_name": "x-ms-continuation-NextPartitionKey",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "next_row_key",
+                  "wire_name": "x-ms-continuation-NextRowKey",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "api_version",
+                  "wire_name": "x-ms-version",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "request_id",
+                  "wire_name": "x-ms-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "client_request_id",
+                  "wire_name": "x-ms-client-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "date",
+                  "wire_name": "Date",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "datetime"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "content_type",
+                  "wire_name": "Content-Type",
+                  "header_type": {
+                    "kind": "Constant",
+                    "value": "application/json;odata=minimalmetadata"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [
+                "application/json;odata=minimalmetadata"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "TablesError"
+              },
+              "headers": [
+                {
+                  "name": "error_code",
+                  "wire_name": "x-ms-error-code",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "content_type",
+                  "wire_name": "Content-Type",
+                  "header_type": {
+                    "kind": "Constant",
+                    "value": "application/json"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "query_entity_with_partition_and_row_key",
+          "name_camel": "queryEntityWithPartitionAndRowKey",
+          "doc": "Retrieve a single entity.",
+          "http_method": "get",
+          "path": "/{table}(PartitionKey='{partitionKey}',RowKey='{rowKey}')",
+          "uri_template": "/{table}(PartitionKey='{partitionKey}',RowKey='{rowKey}'){?timeout,%24format,%24select,%24filter}",
+          "user_parameters": [
+            {
+              "name": "client_request_id",
+              "method_name": "clientRequestId",
+              "doc": "An opaque, globally-unique, client-generated string identifier for the request.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "table",
+              "method_name": "table",
+              "doc": "The name of the table.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "timeout",
+              "method_name": "timeout",
+              "doc": "The timeout parameter is expressed in seconds.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "int32"
+              },
+              "optional": true
+            },
+            {
+              "name": "$format",
+              "method_name": "$format",
+              "doc": "Specifies the metadata format for the response.",
+              "param_type": {
+                "kind": "Enum",
+                "value": "OdataMetadataFormat"
+              },
+              "optional": true
+            },
+            {
+              "name": "$select",
+              "method_name": "$select",
+              "doc": "Select expression using OData notation. Limits the columns on each record to just those requested.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "$filter",
+              "method_name": "$filter",
+              "doc": "OData filter expression.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "partition_key",
+              "method_name": "partitionKey",
+              "doc": "The partition key of the entity.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "row_key",
+              "method_name": "rowKey",
+              "doc": "The row key of the entity.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "table",
+              "source": {
+                "kind": "user",
+                "name": "table"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false,
+              "path_encoding": "segment"
+            },
+            {
+              "wire_name": "partitionKey",
+              "source": {
+                "kind": "user",
+                "name": "partition_key"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false,
+              "path_encoding": "segment"
+            },
+            {
+              "wire_name": "rowKey",
+              "source": {
+                "kind": "user",
+                "name": "row_key"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false,
+              "path_encoding": "segment"
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "timeout",
+              "source": {
+                "kind": "user",
+                "name": "timeout"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "$format",
+              "source": {
+                "kind": "user",
+                "name": "$format"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "$select",
+              "source": {
+                "kind": "user",
+                "name": "$select"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "$filter",
+              "source": {
+                "kind": "user",
+                "name": "$filter"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "DataServiceVersion",
+              "source": {
+                "kind": "constant",
+                "value": "3.0"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "x-ms-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "x-ms-client-request-id",
+              "source": {
+                "kind": "user",
+                "name": "client_request_id"
+              },
+              "optional": true,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/json;odata=minimalmetadata"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "body_parameter": null,
+          "response": {
+            "response_type": {
+              "kind": "Map",
+              "value": {
+                "kind": "Scalar",
+                "value": "unknown"
+              }
+            },
+            "status_codes": [
+              200
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                200
+              ],
+              "response_type": {
+                "kind": "Map",
+                "value": {
+                  "kind": "Scalar",
+                  "value": "unknown"
+                }
+              },
+              "headers": [
+                {
+                  "name": "e_tag",
+                  "wire_name": "ETag",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "next_partition_key",
+                  "wire_name": "x-ms-continuation-NextPartitionKey",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "next_row_key",
+                  "wire_name": "x-ms-continuation-NextRowKey",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "api_version",
+                  "wire_name": "x-ms-version",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "request_id",
+                  "wire_name": "x-ms-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "client_request_id",
+                  "wire_name": "x-ms-client-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "date",
+                  "wire_name": "Date",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "datetime"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "content_type",
+                  "wire_name": "Content-Type",
+                  "header_type": {
+                    "kind": "Constant",
+                    "value": "application/json;odata=minimalmetadata"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [
+                "application/json;odata=minimalmetadata"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "TablesError"
+              },
+              "headers": [
+                {
+                  "name": "error_code",
+                  "wire_name": "x-ms-error-code",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "content_type",
+                  "wire_name": "Content-Type",
+                  "header_type": {
+                    "kind": "Constant",
+                    "value": "application/json"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "update_entity",
+          "name_camel": "updateEntity",
+          "doc": "Update entity in a table.",
+          "http_method": "put",
+          "path": "/{table}(PartitionKey='{partitionKey}',RowKey='{rowKey}')",
+          "uri_template": "/{table}(PartitionKey='{partitionKey}',RowKey='{rowKey}'){?timeout}",
+          "user_parameters": [
+            {
+              "name": "client_request_id",
+              "method_name": "clientRequestId",
+              "doc": "An opaque, globally-unique, client-generated string identifier for the request.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "table",
+              "method_name": "table",
+              "doc": "The name of the table.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "timeout",
+              "method_name": "timeout",
+              "doc": "The timeout parameter is expressed in seconds.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "int32"
+              },
+              "optional": true
+            },
+            {
+              "name": "if_match",
+              "method_name": "ifMatch",
+              "doc": "Match condition for an entity to be deleted. If specified and a matching entity\nis not found, an error will be raised. To force an unconditional delete, set to\nthe wildcard character (*).",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "partition_key",
+              "method_name": "partitionKey",
+              "doc": "The partition key of the entity.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "row_key",
+              "method_name": "rowKey",
+              "doc": "The row key of the entity.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "table_entity_properties",
+              "method_name": "tableEntityProperties",
+              "doc": "The properties for the table entity.",
+              "param_type": {
+                "kind": "Map",
+                "value": {
+                  "kind": "Scalar",
+                  "value": "unknown"
+                }
+              },
+              "optional": true
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "table",
+              "source": {
+                "kind": "user",
+                "name": "table"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false,
+              "path_encoding": "segment"
+            },
+            {
+              "wire_name": "partitionKey",
+              "source": {
+                "kind": "user",
+                "name": "partition_key"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false,
+              "path_encoding": "segment"
+            },
+            {
+              "wire_name": "rowKey",
+              "source": {
+                "kind": "user",
+                "name": "row_key"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false,
+              "path_encoding": "segment"
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "timeout",
+              "source": {
+                "kind": "user",
+                "name": "timeout"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "DataServiceVersion",
+              "source": {
+                "kind": "constant",
+                "value": "3.0"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "x-ms-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "x-ms-client-request-id",
+              "source": {
+                "kind": "user",
+                "name": "client_request_id"
+              },
+              "optional": true,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "Content-Type",
+              "source": {
+                "kind": "constant",
+                "value": "application/json"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/json"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "If-Match",
+              "source": {
+                "kind": "user",
+                "name": "if_match"
+              },
+              "optional": true,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "body_parameter": {
+            "user_param_name": "table_entity_properties",
+            "content_type": "application/json",
+            "content_types": [
+              "application/json"
+            ],
+            "body_type": {
+              "kind": "Map",
+              "value": {
+                "kind": "Scalar",
+                "value": "unknown"
+              }
+            },
+            "serialization_kind": "json"
+          },
+          "response": {
+            "response_type": null,
+            "status_codes": [
+              204
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                204
+              ],
+              "response_type": null,
+              "headers": [
+                {
+                  "name": "e_tag",
+                  "wire_name": "ETag",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "api_version",
+                  "wire_name": "x-ms-version",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "request_id",
+                  "wire_name": "x-ms-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "client_request_id",
+                  "wire_name": "x-ms-client-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "date",
+                  "wire_name": "Date",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "datetime"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [],
+              "body_kind": "none"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "TablesError"
+              },
+              "headers": [
+                {
+                  "name": "error_code",
+                  "wire_name": "x-ms-error-code",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "content_type",
+                  "wire_name": "Content-Type",
+                  "header_type": {
+                    "kind": "Constant",
+                    "value": "application/json"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "merge_entity",
+          "name_camel": "mergeEntity",
+          "doc": "Merge entity in a table.",
+          "http_method": "patch",
+          "path": "/{table}(PartitionKey='{partitionKey}',RowKey='{rowKey}')",
+          "uri_template": "/{table}(PartitionKey='{partitionKey}',RowKey='{rowKey}'){?timeout}",
+          "user_parameters": [
+            {
+              "name": "client_request_id",
+              "method_name": "clientRequestId",
+              "doc": "An opaque, globally-unique, client-generated string identifier for the request.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "table",
+              "method_name": "table",
+              "doc": "The name of the table.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "timeout",
+              "method_name": "timeout",
+              "doc": "The timeout parameter is expressed in seconds.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "int32"
+              },
+              "optional": true
+            },
+            {
+              "name": "if_match",
+              "method_name": "ifMatch",
+              "doc": "Match condition for an entity to be deleted. If specified and a matching entity\nis not found, an error will be raised. To force an unconditional delete, set to\nthe wildcard character (*).",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "partition_key",
+              "method_name": "partitionKey",
+              "doc": "The partition key of the entity.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "row_key",
+              "method_name": "rowKey",
+              "doc": "The row key of the entity.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "table_entity_properties",
+              "method_name": "tableEntityProperties",
+              "doc": "The properties for the table entity.",
+              "param_type": {
+                "kind": "Map",
+                "value": {
+                  "kind": "Scalar",
+                  "value": "unknown"
+                }
+              },
+              "optional": true
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "table",
+              "source": {
+                "kind": "user",
+                "name": "table"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false,
+              "path_encoding": "segment"
+            },
+            {
+              "wire_name": "partitionKey",
+              "source": {
+                "kind": "user",
+                "name": "partition_key"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false,
+              "path_encoding": "segment"
+            },
+            {
+              "wire_name": "rowKey",
+              "source": {
+                "kind": "user",
+                "name": "row_key"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false,
+              "path_encoding": "segment"
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "timeout",
+              "source": {
+                "kind": "user",
+                "name": "timeout"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "DataServiceVersion",
+              "source": {
+                "kind": "constant",
+                "value": "3.0"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "x-ms-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "x-ms-client-request-id",
+              "source": {
+                "kind": "user",
+                "name": "client_request_id"
+              },
+              "optional": true,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "Content-Type",
+              "source": {
+                "kind": "constant",
+                "value": "application/json"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/json"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "If-Match",
+              "source": {
+                "kind": "user",
+                "name": "if_match"
+              },
+              "optional": true,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "body_parameter": {
+            "user_param_name": "table_entity_properties",
+            "content_type": "application/json",
+            "content_types": [
+              "application/json"
+            ],
+            "body_type": {
+              "kind": "Map",
+              "value": {
+                "kind": "Scalar",
+                "value": "unknown"
+              }
+            },
+            "serialization_kind": "json"
+          },
+          "response": {
+            "response_type": null,
+            "status_codes": [
+              204
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                204
+              ],
+              "response_type": null,
+              "headers": [
+                {
+                  "name": "e_tag",
+                  "wire_name": "ETag",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "api_version",
+                  "wire_name": "x-ms-version",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "request_id",
+                  "wire_name": "x-ms-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "client_request_id",
+                  "wire_name": "x-ms-client-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "date",
+                  "wire_name": "Date",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "datetime"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [],
+              "body_kind": "none"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "TablesError"
+              },
+              "headers": [
+                {
+                  "name": "error_code",
+                  "wire_name": "x-ms-error-code",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "content_type",
+                  "wire_name": "Content-Type",
+                  "header_type": {
+                    "kind": "Constant",
+                    "value": "application/json"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "delete_entity",
+          "name_camel": "deleteEntity",
+          "doc": "Deletes the specified entity in a table.",
+          "http_method": "delete",
+          "path": "/{table}(PartitionKey='{partitionKey}',RowKey='{rowKey}')",
+          "uri_template": "/{table}(PartitionKey='{partitionKey}',RowKey='{rowKey}'){?timeout}",
+          "user_parameters": [
+            {
+              "name": "client_request_id",
+              "method_name": "clientRequestId",
+              "doc": "An opaque, globally-unique, client-generated string identifier for the request.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "table",
+              "method_name": "table",
+              "doc": "The name of the table.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "timeout",
+              "method_name": "timeout",
+              "doc": "The timeout parameter is expressed in seconds.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "int32"
+              },
+              "optional": true
+            },
+            {
+              "name": "if_match",
+              "method_name": "ifMatch",
+              "doc": "Match condition for an entity to be deleted. If specified and a matching entity\nis not found, an error will be raised. To force an unconditional delete, set to\nthe wildcard character (*).",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "partition_key",
+              "method_name": "partitionKey",
+              "doc": "The partition key of the entity.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "row_key",
+              "method_name": "rowKey",
+              "doc": "The row key of the entity.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "table",
+              "source": {
+                "kind": "user",
+                "name": "table"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false,
+              "path_encoding": "segment"
+            },
+            {
+              "wire_name": "partitionKey",
+              "source": {
+                "kind": "user",
+                "name": "partition_key"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false,
+              "path_encoding": "segment"
+            },
+            {
+              "wire_name": "rowKey",
+              "source": {
+                "kind": "user",
+                "name": "row_key"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false,
+              "path_encoding": "segment"
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "timeout",
+              "source": {
+                "kind": "user",
+                "name": "timeout"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "DataServiceVersion",
+              "source": {
+                "kind": "constant",
+                "value": "3.0"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "x-ms-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "x-ms-client-request-id",
+              "source": {
+                "kind": "user",
+                "name": "client_request_id"
+              },
+              "optional": true,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "If-Match",
+              "source": {
+                "kind": "user",
+                "name": "if_match"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/json"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "body_parameter": null,
+          "response": {
+            "response_type": null,
+            "status_codes": [
+              204
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                204
+              ],
+              "response_type": null,
+              "headers": [
+                {
+                  "name": "api_version",
+                  "wire_name": "x-ms-version",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "request_id",
+                  "wire_name": "x-ms-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "client_request_id",
+                  "wire_name": "x-ms-client-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "date",
+                  "wire_name": "Date",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "datetime"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [],
+              "body_kind": "none"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "TablesError"
+              },
+              "headers": [
+                {
+                  "name": "error_code",
+                  "wire_name": "x-ms-error-code",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "content_type",
+                  "wire_name": "Content-Type",
+                  "header_type": {
+                    "kind": "Constant",
+                    "value": "application/json"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "insert_entity",
+          "name_camel": "insertEntity",
+          "doc": "Insert entity in a table.",
+          "http_method": "post",
+          "path": "/{table}",
+          "uri_template": "/{table}{?timeout,%24format}",
+          "user_parameters": [
+            {
+              "name": "table",
+              "method_name": "table",
+              "doc": "The name of the table.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "timeout",
+              "method_name": "timeout",
+              "doc": "The timeout parameter is expressed in seconds.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "int32"
+              },
+              "optional": true
+            },
+            {
+              "name": "$format",
+              "method_name": "$format",
+              "doc": "Specifies the metadata format for the response.",
+              "param_type": {
+                "kind": "Enum",
+                "value": "OdataMetadataFormat"
+              },
+              "optional": true
+            },
+            {
+              "name": "client_request_id",
+              "method_name": "clientRequestId",
+              "doc": "An opaque, globally-unique, client-generated string identifier for the request.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "prefer",
+              "method_name": "prefer",
+              "doc": "Specifies whether the response should include the inserted entity in the\npayload. Possible values are return-no-content and return-content.",
+              "param_type": {
+                "kind": "Enum",
+                "value": "ResponseFormat"
+              },
+              "optional": true
+            },
+            {
+              "name": "table_entity_properties",
+              "method_name": "tableEntityProperties",
+              "doc": "The entity properties to insert.",
+              "param_type": {
+                "kind": "Map",
+                "value": {
+                  "kind": "Scalar",
+                  "value": "unknown"
+                }
+              },
+              "optional": true
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "table",
+              "source": {
+                "kind": "user",
+                "name": "table"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false,
+              "path_encoding": "segment"
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "timeout",
+              "source": {
+                "kind": "user",
+                "name": "timeout"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "$format",
+              "source": {
+                "kind": "user",
+                "name": "$format"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "Content-Type",
+              "source": {
+                "kind": "constant",
+                "value": "application/json"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "DataServiceVersion",
+              "source": {
+                "kind": "constant",
+                "value": "3.0"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "x-ms-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "x-ms-client-request-id",
+              "source": {
+                "kind": "user",
+                "name": "client_request_id"
+              },
+              "optional": true,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "Prefer",
+              "source": {
+                "kind": "user",
+                "name": "prefer"
+              },
+              "optional": true,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/json;odata=minimalmetadata"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "body_parameter": {
+            "user_param_name": "table_entity_properties",
+            "content_type": "application/json",
+            "content_types": [
+              "application/json"
+            ],
+            "body_type": {
+              "kind": "Map",
+              "value": {
+                "kind": "Scalar",
+                "value": "unknown"
+              }
+            },
+            "serialization_kind": "json"
+          },
+          "response": {
+            "response_type": {
+              "kind": "Map",
+              "value": {
+                "kind": "Scalar",
+                "value": "unknown"
+              }
+            },
+            "status_codes": [
+              201,
+              204
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                201
+              ],
+              "response_type": {
+                "kind": "Map",
+                "value": {
+                  "kind": "Scalar",
+                  "value": "unknown"
+                }
+              },
+              "headers": [
+                {
+                  "name": "preference_applied",
+                  "wire_name": "Preference-Applied",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "api_version",
+                  "wire_name": "x-ms-version",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "request_id",
+                  "wire_name": "x-ms-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "client_request_id",
+                  "wire_name": "x-ms-client-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "date",
+                  "wire_name": "Date",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "datetime"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "e_tag",
+                  "wire_name": "ETag",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "content_type",
+                  "wire_name": "Content-Type",
+                  "header_type": {
+                    "kind": "Constant",
+                    "value": "application/json;odata=minimalmetadata"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [
+                "application/json;odata=minimalmetadata"
+              ],
+              "body_kind": "json"
+            },
+            {
+              "status_codes": [
+                204
+              ],
+              "response_type": null,
+              "headers": [
+                {
+                  "name": "preference_applied",
+                  "wire_name": "Preference-Applied",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "api_version",
+                  "wire_name": "x-ms-version",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "request_id",
+                  "wire_name": "x-ms-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "client_request_id",
+                  "wire_name": "x-ms-client-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "date",
+                  "wire_name": "Date",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "datetime"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "e_tag",
+                  "wire_name": "ETag",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [],
+              "body_kind": "none"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "TablesError"
+              },
+              "headers": [
+                {
+                  "name": "error_code",
+                  "wire_name": "x-ms-error-code",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "content_type",
+                  "wire_name": "Content-Type",
+                  "header_type": {
+                    "kind": "Constant",
+                    "value": "application/json"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [
+                "application/json"
+              ],
+              "body_kind": "json"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "get_access_policy",
+          "name_camel": "getAccessPolicy",
+          "doc": "Retrieves details about any stored access policies specified on the table that\nmay be used with Shared Access Signatures.",
+          "http_method": "get",
+          "path": "/{table}?comp=acl",
+          "uri_template": "/{table}?comp=acl{?timeout}",
+          "user_parameters": [
+            {
+              "name": "client_request_id",
+              "method_name": "clientRequestId",
+              "doc": "An opaque, globally-unique, client-generated string identifier for the request.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "table",
+              "method_name": "table",
+              "doc": "The name of the table.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "timeout",
+              "method_name": "timeout",
+              "doc": "The timeout parameter is expressed in seconds.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "int32"
+              },
+              "optional": true
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "table",
+              "source": {
+                "kind": "user",
+                "name": "table"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false,
+              "path_encoding": "segment"
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "timeout",
+              "source": {
+                "kind": "user",
+                "name": "timeout"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "x-ms-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "x-ms-client-request-id",
+              "source": {
+                "kind": "user",
+                "name": "client_request_id"
+              },
+              "optional": true,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/xml"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "body_parameter": null,
+          "response": {
+            "response_type": {
+              "kind": "Model",
+              "value": "SignedIdentifiers"
+            },
+            "status_codes": [
+              200
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                200
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "SignedIdentifiers"
+              },
+              "headers": [
+                {
+                  "name": "date",
+                  "wire_name": "Date",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "datetime"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "api_version",
+                  "wire_name": "x-ms-version",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "request_id",
+                  "wire_name": "x-ms-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "client_request_id",
+                  "wire_name": "x-ms-client-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "content_type",
+                  "wire_name": "Content-Type",
+                  "header_type": {
+                    "kind": "Constant",
+                    "value": "application/xml"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [
+                "application/xml"
+              ],
+              "body_kind": "xml"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "TablesServiceError"
+              },
+              "headers": [
+                {
+                  "name": "error_code",
+                  "wire_name": "x-ms-error-code",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                }
+              ],
+              "content_types": [
+                "application/xml"
+              ],
+              "body_kind": "xml"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "set_access_policy",
+          "name_camel": "setAccessPolicy",
+          "doc": "Sets stored access policies for the table that may be used with Shared Access\nSignatures.",
+          "http_method": "put",
+          "path": "/{table}?comp=acl",
+          "uri_template": "/{table}?comp=acl{?timeout}",
+          "user_parameters": [
+            {
+              "name": "client_request_id",
+              "method_name": "clientRequestId",
+              "doc": "An opaque, globally-unique, client-generated string identifier for the request.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "table",
+              "method_name": "table",
+              "doc": "The name of the table.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "table_acl",
+              "method_name": "tableAcl",
+              "doc": "The access control list for the table.",
+              "param_type": {
+                "kind": "Model",
+                "value": "SignedIdentifiers"
+              },
+              "optional": false
+            },
+            {
+              "name": "timeout",
+              "method_name": "timeout",
+              "doc": "The timeout parameter is expressed in seconds.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "int32"
+              },
+              "optional": true
+            }
+          ],
+          "path_parameters": [
+            {
+              "wire_name": "table",
+              "source": {
+                "kind": "user",
+                "name": "table"
+              },
+              "optional": false,
+              "style": "simple",
+              "explode": false,
+              "allow_reserved": false,
+              "path_encoding": "segment"
+            }
+          ],
+          "query_parameters": [
+            {
+              "wire_name": "timeout",
+              "source": {
+                "kind": "user",
+                "name": "timeout"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "x-ms-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "x-ms-client-request-id",
+              "source": {
+                "kind": "user",
+                "name": "client_request_id"
+              },
+              "optional": true,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "Content-Type",
+              "source": {
+                "kind": "constant",
+                "value": "application/xml"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/xml"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "body_parameter": {
+            "user_param_name": "table_acl",
+            "content_type": "application/xml",
+            "content_types": [
+              "application/xml"
+            ],
+            "body_type": {
+              "kind": "Model",
+              "value": "SignedIdentifiers"
+            },
+            "serialization_kind": "xml"
+          },
+          "response": {
+            "response_type": null,
+            "status_codes": [
+              204
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                204
+              ],
+              "response_type": null,
+              "headers": [
+                {
+                  "name": "date",
+                  "wire_name": "Date",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "datetime"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "api_version",
+                  "wire_name": "x-ms-version",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "request_id",
+                  "wire_name": "x-ms-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "client_request_id",
+                  "wire_name": "x-ms-client-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                }
+              ],
+              "content_types": [],
+              "body_kind": "none"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "TablesServiceError"
+              },
+              "headers": [
+                {
+                  "name": "error_code",
+                  "wire_name": "x-ms-error-code",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                }
+              ],
+              "content_types": [
+                "application/xml"
+              ],
+              "body_kind": "xml"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        }
+      ],
+      "sub_clients": [],
+      "credential_scopes": [
+        "https://storage.azure.com/.default"
+      ]
+    },
+    {
+      "name": "Service",
+      "namespace": "Data.Tables.Service",
+      "doc": null,
+      "is_root": false,
+      "parent_name": "TablesClient",
+      "init_parameters": [],
+      "api_version_default": "2019-02-02",
+      "endpoint": {
+        "name": "endpoint",
+        "default_value": null
+      },
+      "methods": [
+        {
+          "name": "set_properties",
+          "name_camel": "setProperties",
+          "doc": "Sets properties for an account's Table service endpoint, including properties\nfor Analytics and CORS (Cross-Origin Resource Sharing) rules.",
+          "http_method": "put",
+          "path": "?restype=service&comp=properties",
+          "uri_template": "?restype=service&comp=properties{?timeout}",
+          "user_parameters": [
+            {
+              "name": "client_request_id",
+              "method_name": "clientRequestId",
+              "doc": "An opaque, globally-unique, client-generated string identifier for the request.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "timeout",
+              "method_name": "timeout",
+              "doc": "The timeout parameter is expressed in seconds.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "int32"
+              },
+              "optional": true
+            },
+            {
+              "name": "table_service_properties",
+              "method_name": "tableServiceProperties",
+              "doc": "The table service properties to set.",
+              "param_type": {
+                "kind": "Model",
+                "value": "TableServiceProperties"
+              },
+              "optional": false
+            }
+          ],
+          "path_parameters": [],
+          "query_parameters": [
+            {
+              "wire_name": "timeout",
+              "source": {
+                "kind": "user",
+                "name": "timeout"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "x-ms-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "x-ms-client-request-id",
+              "source": {
+                "kind": "user",
+                "name": "client_request_id"
+              },
+              "optional": true,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "Content-Type",
+              "source": {
+                "kind": "constant",
+                "value": "application/xml"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/xml"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "body_parameter": {
+            "user_param_name": "table_service_properties",
+            "content_type": "application/xml",
+            "content_types": [
+              "application/xml"
+            ],
+            "body_type": {
+              "kind": "Model",
+              "value": "TableServiceProperties"
+            },
+            "serialization_kind": "xml"
+          },
+          "response": {
+            "response_type": null,
+            "status_codes": [
+              202
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                202
+              ],
+              "response_type": null,
+              "headers": [
+                {
+                  "name": "api_version",
+                  "wire_name": "x-ms-version",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "request_id",
+                  "wire_name": "x-ms-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "client_request_id",
+                  "wire_name": "x-ms-client-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                }
+              ],
+              "content_types": [],
+              "body_kind": "none"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "TablesServiceError"
+              },
+              "headers": [
+                {
+                  "name": "error_code",
+                  "wire_name": "x-ms-error-code",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                }
+              ],
+              "content_types": [
+                "application/xml"
+              ],
+              "body_kind": "xml"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "get_properties",
+          "name_camel": "getProperties",
+          "doc": "Gets the properties of an account's Table service, including properties for\nAnalytics and CORS (Cross-Origin Resource Sharing) rules.",
+          "http_method": "get",
+          "path": "?restype=service&comp=properties",
+          "uri_template": "?restype=service&comp=properties{?timeout}",
+          "user_parameters": [
+            {
+              "name": "client_request_id",
+              "method_name": "clientRequestId",
+              "doc": "An opaque, globally-unique, client-generated string identifier for the request.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "timeout",
+              "method_name": "timeout",
+              "doc": "The timeout parameter is expressed in seconds.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "int32"
+              },
+              "optional": true
+            }
+          ],
+          "path_parameters": [],
+          "query_parameters": [
+            {
+              "wire_name": "timeout",
+              "source": {
+                "kind": "user",
+                "name": "timeout"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "x-ms-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "x-ms-client-request-id",
+              "source": {
+                "kind": "user",
+                "name": "client_request_id"
+              },
+              "optional": true,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/xml"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "body_parameter": null,
+          "response": {
+            "response_type": {
+              "kind": "Model",
+              "value": "TableServiceProperties"
+            },
+            "status_codes": [
+              200
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                200
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "TableServiceProperties"
+              },
+              "headers": [
+                {
+                  "name": "api_version",
+                  "wire_name": "x-ms-version",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "request_id",
+                  "wire_name": "x-ms-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "client_request_id",
+                  "wire_name": "x-ms-client-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "content_type",
+                  "wire_name": "Content-Type",
+                  "header_type": {
+                    "kind": "Constant",
+                    "value": "application/xml"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [
+                "application/xml"
+              ],
+              "body_kind": "xml"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "TablesServiceError"
+              },
+              "headers": [
+                {
+                  "name": "error_code",
+                  "wire_name": "x-ms-error-code",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                }
+              ],
+              "content_types": [
+                "application/xml"
+              ],
+              "body_kind": "xml"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        },
+        {
+          "name": "get_statistics",
+          "name_camel": "getStatistics",
+          "doc": "Retrieves statistics related to replication for the Table service. It is only\navailable on the secondary location endpoint when read-access geo-redundant\nreplication is enabled for the account.",
+          "http_method": "get",
+          "path": "?restype=service&comp=stats",
+          "uri_template": "?restype=service&comp=stats{?timeout}",
+          "user_parameters": [
+            {
+              "name": "client_request_id",
+              "method_name": "clientRequestId",
+              "doc": "An opaque, globally-unique, client-generated string identifier for the request.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "timeout",
+              "method_name": "timeout",
+              "doc": "The timeout parameter is expressed in seconds.",
+              "param_type": {
+                "kind": "Scalar",
+                "value": "int32"
+              },
+              "optional": true
+            }
+          ],
+          "path_parameters": [],
+          "query_parameters": [
+            {
+              "wire_name": "timeout",
+              "source": {
+                "kind": "user",
+                "name": "timeout"
+              },
+              "optional": true,
+              "style": null,
+              "explode": false,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "header_parameters": [
+            {
+              "wire_name": "x-ms-version",
+              "source": {
+                "kind": "client",
+                "name": "api_version"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "x-ms-client-request-id",
+              "source": {
+                "kind": "user",
+                "name": "client_request_id"
+              },
+              "optional": true,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            },
+            {
+              "wire_name": "Accept",
+              "source": {
+                "kind": "constant",
+                "value": "application/xml"
+              },
+              "optional": false,
+              "style": null,
+              "explode": null,
+              "allow_reserved": null,
+              "path_encoding": null
+            }
+          ],
+          "body_parameter": null,
+          "response": {
+            "response_type": {
+              "kind": "Model",
+              "value": "TableServiceStats"
+            },
+            "status_codes": [
+              200
+            ]
+          },
+          "responses": [
+            {
+              "status_codes": [
+                200
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "TableServiceStats"
+              },
+              "headers": [
+                {
+                  "name": "date",
+                  "wire_name": "Date",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "datetime"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "api_version",
+                  "wire_name": "x-ms-version",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "request_id",
+                  "wire_name": "x-ms-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "client_request_id",
+                  "wire_name": "x-ms-client-request-id",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "content_type",
+                  "wire_name": "Content-Type",
+                  "header_type": {
+                    "kind": "Constant",
+                    "value": "application/xml"
+                  },
+                  "optional": false
+                }
+              ],
+              "content_types": [
+                "application/xml"
+              ],
+              "body_kind": "xml"
+            }
+          ],
+          "exceptions": [
+            {
+              "status_codes": [
+                "*"
+              ],
+              "response_type": {
+                "kind": "Model",
+                "value": "TablesServiceError"
+              },
+              "headers": [
+                {
+                  "name": "error_code",
+                  "wire_name": "x-ms-error-code",
+                  "header_type": {
+                    "kind": "Scalar",
+                    "value": "string"
+                  },
+                  "optional": true
+                }
+              ],
+              "content_types": [
+                "application/xml"
+              ],
+              "body_kind": "xml"
+            }
+          ],
+          "paging": null,
+          "long_running": null,
+          "kind": "basic"
+        }
+      ],
+      "sub_clients": [],
+      "credential_scopes": [
+        "https://storage.azure.com/.default"
+      ]
+    }
+  ],
+  "models": [
+    {
+      "name": "TableQueryResponse",
+      "namespace": "Data.Tables",
+      "doc": "The properties for the table query response.",
+      "fields": [
+        {
+          "name": "odata_metadata",
+          "serialized_name": "odata.metadata",
+          "doc": "The metadata response of the table.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": null
+        },
+        {
+          "name": "value",
+          "serialized_name": "value",
+          "doc": "The requested list of tables.",
+          "field_type": {
+            "kind": "Array",
+            "value": {
+              "kind": "Model",
+              "value": "TableProperties"
+            }
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": true,
+      "arm_resource_kind": null,
+      "additional_properties": null,
+      "is_xml": false,
+      "xml_name": null
+    },
+    {
+      "name": "TableProperties",
+      "namespace": "Data.Tables",
+      "doc": "The properties for the table response.",
+      "fields": [
+        {
+          "name": "table_name",
+          "serialized_name": "TableName",
+          "doc": "The name of the table.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": null
+        },
+        {
+          "name": "odata_type",
+          "serialized_name": "odata.type",
+          "doc": "The odata type of the table.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": null
+        },
+        {
+          "name": "odata_id",
+          "serialized_name": "odata.id",
+          "doc": "The id of the table.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": null
+        },
+        {
+          "name": "odata_edit_link",
+          "serialized_name": "odata.editLink",
+          "doc": "The edit link of the table.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": true,
+      "is_output": true,
+      "arm_resource_kind": null,
+      "additional_properties": null,
+      "is_xml": false,
+      "xml_name": null
+    },
+    {
+      "name": "TablesError",
+      "namespace": "Data.Tables",
+      "doc": "Table JSON error.",
+      "fields": [
+        {
+          "name": "content_type",
+          "serialized_name": "contentType",
+          "doc": "Content-Type header",
+          "field_type": {
+            "kind": "Constant",
+            "value": "application/json"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": null
+        },
+        {
+          "name": "error_code",
+          "serialized_name": "errorCode",
+          "doc": "The error code.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": null
+        },
+        {
+          "name": "message",
+          "serialized_name": "Message",
+          "doc": "The error message.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null,
+      "is_xml": false,
+      "xml_name": null
+    },
+    {
+      "name": "TableResponse",
+      "namespace": "Data.Tables",
+      "doc": "The table properties as returned in an echo response.",
+      "fields": [
+        {
+          "name": "table_name",
+          "serialized_name": "TableName",
+          "doc": "The name of the table.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": null
+        },
+        {
+          "name": "odata_type",
+          "serialized_name": "odata.type",
+          "doc": "The odata type of the table.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": null
+        },
+        {
+          "name": "odata_id",
+          "serialized_name": "odata.id",
+          "doc": "The id of the table.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": null
+        },
+        {
+          "name": "odata_edit_link",
+          "serialized_name": "odata.editLink",
+          "doc": "The edit link of the table.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": null
+        },
+        {
+          "name": "odata_metadata",
+          "serialized_name": "odata.metadata",
+          "doc": "The metadata response of the table.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": true,
+      "arm_resource_kind": null,
+      "additional_properties": null,
+      "is_xml": false,
+      "xml_name": null
+    },
+    {
+      "name": "TableEntityQueryResponse",
+      "namespace": "Data.Tables",
+      "doc": "The properties for the table entity query response.",
+      "fields": [
+        {
+          "name": "odata_metadata",
+          "serialized_name": "odata.metadata",
+          "doc": "The metadata response of the table.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": null
+        },
+        {
+          "name": "value",
+          "serialized_name": "value",
+          "doc": "List of table entities.",
+          "field_type": {
+            "kind": "Array",
+            "value": {
+              "kind": "Map",
+              "value": {
+                "kind": "Scalar",
+                "value": "unknown"
+              }
+            }
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": null
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": true,
+      "arm_resource_kind": null,
+      "additional_properties": null,
+      "is_xml": false,
+      "xml_name": null
+    },
+    {
+      "name": "SignedIdentifiers",
+      "namespace": "Data.Tables",
+      "doc": "Table signed identifiers.",
+      "fields": [
+        {
+          "name": "identifiers",
+          "serialized_name": "identifiers",
+          "doc": "An array of signed identifiers",
+          "field_type": {
+            "kind": "Array",
+            "value": {
+              "kind": "Model",
+              "value": "SignedIdentifier"
+            }
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "SignedIdentifier",
+            "attribute": false,
+            "unwrapped": true,
+            "items_name": "SignedIdentifier",
+            "ns": null
+          }
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": true,
+      "is_output": true,
+      "arm_resource_kind": null,
+      "additional_properties": null,
+      "is_xml": true,
+      "xml_name": "SignedIdentifiers"
+    },
+    {
+      "name": "SignedIdentifier",
+      "namespace": "Data.Tables",
+      "doc": "The signed identifier.",
+      "fields": [
+        {
+          "name": "id",
+          "serialized_name": "id",
+          "doc": "The unique ID for the signed identifier.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "Id",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        },
+        {
+          "name": "access_policy",
+          "serialized_name": "accessPolicy",
+          "doc": "The access policy for the signed identifier.",
+          "field_type": {
+            "kind": "Model",
+            "value": "AccessPolicy"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "AccessPolicy",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": true,
+      "is_output": true,
+      "arm_resource_kind": null,
+      "additional_properties": null,
+      "is_xml": true,
+      "xml_name": "SignedIdentifier"
+    },
+    {
+      "name": "AccessPolicy",
+      "namespace": "Data.Tables",
+      "doc": "An access policy.",
+      "fields": [
+        {
+          "name": "start",
+          "serialized_name": "start",
+          "doc": "The date-time the policy is active.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "datetime"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "Start",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        },
+        {
+          "name": "expiry",
+          "serialized_name": "expiry",
+          "doc": "The date-time the policy expires.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "datetime"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "Expiry",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        },
+        {
+          "name": "permission",
+          "serialized_name": "permission",
+          "doc": "The permissions for acl the policy.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "Permission",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": true,
+      "is_output": true,
+      "arm_resource_kind": null,
+      "additional_properties": null,
+      "is_xml": true,
+      "xml_name": "AccessPolicy"
+    },
+    {
+      "name": "TablesServiceError",
+      "namespace": "Data.Tables",
+      "doc": "The Tables service XML error.",
+      "fields": [
+        {
+          "name": "error_code",
+          "serialized_name": "errorCode",
+          "doc": "The error code.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "errorCode",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        },
+        {
+          "name": "code",
+          "serialized_name": "code",
+          "doc": "The error code.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "Code",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        },
+        {
+          "name": "message",
+          "serialized_name": "message",
+          "doc": "The error message.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "Message",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": false,
+      "arm_resource_kind": null,
+      "additional_properties": null,
+      "is_xml": true,
+      "xml_name": "TablesServiceError"
+    },
+    {
+      "name": "TableServiceProperties",
+      "namespace": "Data.Tables",
+      "doc": "The service properties.",
+      "fields": [
+        {
+          "name": "logging",
+          "serialized_name": "logging",
+          "doc": "The logging properties.",
+          "field_type": {
+            "kind": "Model",
+            "value": "Logging"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "Logging",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        },
+        {
+          "name": "hour_metrics",
+          "serialized_name": "hourMetrics",
+          "doc": "The hour metrics properties.",
+          "field_type": {
+            "kind": "Model",
+            "value": "Metrics"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "HourMetrics",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        },
+        {
+          "name": "minute_metrics",
+          "serialized_name": "minuteMetrics",
+          "doc": "The minute metrics properties.",
+          "field_type": {
+            "kind": "Model",
+            "value": "Metrics"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "MinuteMetrics",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        },
+        {
+          "name": "cors",
+          "serialized_name": "cors",
+          "doc": "The CORS properties.",
+          "field_type": {
+            "kind": "Array",
+            "value": {
+              "kind": "Model",
+              "value": "CorsRule"
+            }
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "Cors",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": "CorsRule",
+            "ns": null
+          }
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": true,
+      "is_output": true,
+      "arm_resource_kind": null,
+      "additional_properties": null,
+      "is_xml": true,
+      "xml_name": "StorageServiceProperties"
+    },
+    {
+      "name": "Logging",
+      "namespace": "Data.Tables",
+      "doc": "Azure Analytics Logging settings.",
+      "fields": [
+        {
+          "name": "version",
+          "serialized_name": "version",
+          "doc": "The version of the logging properties.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "Version",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        },
+        {
+          "name": "delete",
+          "serialized_name": "delete",
+          "doc": "Whether delete operation is logged.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "bool"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "Delete",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        },
+        {
+          "name": "read",
+          "serialized_name": "read",
+          "doc": "Whether read operation is logged.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "bool"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "Read",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        },
+        {
+          "name": "write",
+          "serialized_name": "write",
+          "doc": "Whether write operation is logged.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "bool"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "Write",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        },
+        {
+          "name": "retention_policy",
+          "serialized_name": "retentionPolicy",
+          "doc": "The retention policy of the logs.",
+          "field_type": {
+            "kind": "Model",
+            "value": "RetentionPolicy"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "RetentionPolicy",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": true,
+      "is_output": true,
+      "arm_resource_kind": null,
+      "additional_properties": null,
+      "is_xml": true,
+      "xml_name": "Logging"
+    },
+    {
+      "name": "RetentionPolicy",
+      "namespace": "Data.Tables",
+      "doc": "The retention policy.",
+      "fields": [
+        {
+          "name": "enabled",
+          "serialized_name": "enabled",
+          "doc": "Whether to enable the retention policy.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "bool"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "Enabled",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        },
+        {
+          "name": "days",
+          "serialized_name": "days",
+          "doc": "Indicates the number of days that metrics or logging or soft-deleted data\nshould be retained. All data older than this value will be deleted.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "int32"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "Days",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": true,
+      "is_output": true,
+      "arm_resource_kind": null,
+      "additional_properties": null,
+      "is_xml": true,
+      "xml_name": "RetentionPolicy"
+    },
+    {
+      "name": "Metrics",
+      "namespace": "Data.Tables",
+      "doc": "The metrics properties.",
+      "fields": [
+        {
+          "name": "version",
+          "serialized_name": "version",
+          "doc": "The version of the metrics properties.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "Version",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        },
+        {
+          "name": "enabled",
+          "serialized_name": "enabled",
+          "doc": "Indicates whether metrics are enabled for the Table service.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "bool"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "Enabled",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        },
+        {
+          "name": "include_apis",
+          "serialized_name": "includeApis",
+          "doc": "Indicates whether metrics should generate summary statistics for called API\noperations.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "bool"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "IncludeAPIs",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        },
+        {
+          "name": "retention_policy",
+          "serialized_name": "retentionPolicy",
+          "doc": "The retention policy of the metrics.",
+          "field_type": {
+            "kind": "Model",
+            "value": "RetentionPolicy"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "RetentionPolicy",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": true,
+      "is_output": true,
+      "arm_resource_kind": null,
+      "additional_properties": null,
+      "is_xml": true,
+      "xml_name": "Metrics"
+    },
+    {
+      "name": "CorsRule",
+      "namespace": "Data.Tables",
+      "doc": "CORS is an HTTP feature that enables a web application running under one domain to access resources in another domain. Web browsers implement a security restriction known as same-origin policy that prevents a web page from calling APIs in a different domain; CORS provides a secure way to allow one domain (the origin domain) to call APIs in another domain",
+      "fields": [
+        {
+          "name": "allowed_origins",
+          "serialized_name": "allowedOrigins",
+          "doc": "The origin domains that are permitted to make a request against the service via\nCORS. The origin domain is the domain from which the request originates. Note\nthat the origin must be an exact case-sensitive match with the origin that the\nuser age sends to the service. You can also use the wildcard character '*' to\nallow all origin domains to make requests via CORS.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "AllowedOrigins",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        },
+        {
+          "name": "allowed_methods",
+          "serialized_name": "allowedMethods",
+          "doc": "The methods (HTTP request verbs) that the origin domain may use for a CORS\nrequest.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "AllowedMethods",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        },
+        {
+          "name": "allowed_headers",
+          "serialized_name": "allowedHeaders",
+          "doc": "The request headers that the origin domain may specify on the CORS request.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "AllowedHeaders",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        },
+        {
+          "name": "exposed_headers",
+          "serialized_name": "exposedHeaders",
+          "doc": "The response headers that may be sent in the response to the CORS request and\nexposed by the browser to the request issuer.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "string"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "ExposedHeaders",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        },
+        {
+          "name": "max_age_in_seconds",
+          "serialized_name": "maxAgeInSeconds",
+          "doc": "The maximum amount time that a browser should cache the preflight OPTIONS\nrequest.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "int32"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "MaxAgeInSeconds",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": true,
+      "is_output": true,
+      "arm_resource_kind": null,
+      "additional_properties": null,
+      "is_xml": true,
+      "xml_name": "CorsRule"
+    },
+    {
+      "name": "TableServiceStats",
+      "namespace": "Data.Tables",
+      "doc": "Stats for the table service.",
+      "fields": [
+        {
+          "name": "geo_replication",
+          "serialized_name": "geoReplication",
+          "doc": "Geo-Replication information for the Secondary Storage Service.",
+          "field_type": {
+            "kind": "Model",
+            "value": "GeoReplication"
+          },
+          "optional": true,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "GeoReplication",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": true,
+      "arm_resource_kind": null,
+      "additional_properties": null,
+      "is_xml": true,
+      "xml_name": "StorageServiceStats"
+    },
+    {
+      "name": "GeoReplication",
+      "namespace": "Data.Tables",
+      "doc": "Geo-Replication information for the Secondary Storage Service",
+      "fields": [
+        {
+          "name": "status",
+          "serialized_name": "status",
+          "doc": "The status of the secondary location",
+          "field_type": {
+            "kind": "Enum",
+            "value": "GeoReplicationStatusType"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "Status",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        },
+        {
+          "name": "last_sync_time",
+          "serialized_name": "lastSyncTime",
+          "doc": "A GMT date/time value, to the second. All primary writes preceding this value are guaranteed to be available for read operations at the secondary. Primary writes after this point in time may or may not be available for reads.",
+          "field_type": {
+            "kind": "Scalar",
+            "value": "datetime"
+          },
+          "optional": false,
+          "read_only": false,
+          "flatten": false,
+          "multipart": null,
+          "xml": {
+            "name": "LastSyncTime",
+            "attribute": false,
+            "unwrapped": false,
+            "items_name": null,
+            "ns": null
+          }
+        }
+      ],
+      "parents": [],
+      "discriminator": null,
+      "is_input": false,
+      "is_output": true,
+      "arm_resource_kind": null,
+      "additional_properties": null,
+      "is_xml": true,
+      "xml_name": "GeoReplication"
+    }
+  ],
+  "enums": [
+    {
+      "name": "OdataMetadataFormat",
+      "namespace": "Data.Tables",
+      "doc": "Specifies the level of metadata to be returned with the response.",
+      "values": [
+        {
+          "name": "NoMetadata",
+          "value": "application/json;odata=nometadata",
+          "doc": "No metadata."
+        },
+        {
+          "name": "MinimalMetadata",
+          "value": "application/json;odata=minimalmetadata",
+          "doc": "Minimal metadata. This is the default and the minimum required for full deserialization."
+        },
+        {
+          "name": "FullMetadata",
+          "value": "application/json;odata=fullmetadata",
+          "doc": "Full metadata."
+        }
+      ],
+      "value_type": "string",
+      "extensible": true,
+      "is_union": true
+    },
+    {
+      "name": "ResponseFormat",
+      "namespace": "Data.Tables",
+      "doc": "Specifies whether the response should echo the created content.",
+      "values": [
+        {
+          "name": "ReturnNoContent",
+          "value": "return-no-content",
+          "doc": "Do not echo the created content."
+        },
+        {
+          "name": "ReturnContent",
+          "value": "return-content",
+          "doc": "Echo the created content."
+        }
+      ],
+      "value_type": "string",
+      "extensible": true,
+      "is_union": true
+    },
+    {
+      "name": "GeoReplicationStatusType",
+      "namespace": "Data.Tables",
+      "doc": "The status of the secondary location.",
+      "values": [
+        {
+          "name": "Live",
+          "value": "live",
+          "doc": "The geo replication is live."
+        },
+        {
+          "name": "Bootstrap",
+          "value": "bootstrap",
+          "doc": "The geo replication is bootstrap."
+        },
+        {
+          "name": "Unavailable",
+          "value": "unavailable",
+          "doc": "The geo replication is unavailable."
+        }
+      ],
+      "value_type": "string",
+      "extensible": true,
+      "is_union": true
+    },
+    {
+      "name": "Versions",
+      "namespace": "Data.Tables",
+      "doc": "The Azure Tables service versions.",
+      "values": [
+        {
+          "name": "v2019_02_02",
+          "value": "2019-02-02",
+          "doc": "The 2019-02-02 version of the Azure.Data.Tables service."
+        }
+      ],
+      "value_type": "string",
+      "extensible": false,
+      "is_union": false
+    }
+  ],
+  "unions": [],
+  "provenance": {
+    "source_repository": "https://github.com/Azure/azure-rest-api-specs",
+    "source_path": "specification/cosmos-db/data-plane/Tables/tspconfig.yaml",
+    "source_commit": "0744f52a86919d243ba2225e55bdb9c87bf521a5",
+    "stable_api_versions": [
+      "2019-02-02"
+    ],
+    "selected_api_version": "2019-02-02",
+    "batch_operation": "absent"
+  }
+}

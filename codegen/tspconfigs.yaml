@@ -977,8 +977,8 @@
   zig: "contoso_widgetmanager"
 
 "specification/cosmos-db/data-plane/Tables/tspconfig.yaml":
-  js: ""
-  zig: ""
+  js: "@azure/data-tables"
+  zig: "data_tables"
 
 "specification/cosmos-db/resource-manager/Microsoft.DocumentDB/DocumentDB/tspconfig.yaml":
   js: "@azure/arm-cosmosdb"

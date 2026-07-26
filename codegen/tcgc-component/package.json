@@ -12,6 +12,7 @@
     "clean": "rm -rf dist tcgc.wasm tcgc-stub.wasm",
     "dev": "node src/cli.js",
     "fixture:container-registry": "node scripts/generate-container-registry-fixture.mjs",
+    "fixture:data-tables": "node scripts/generate-data-tables-fixture.mjs",
     "test": "node --test src/*.test.js"
   },
   "dependencies": {

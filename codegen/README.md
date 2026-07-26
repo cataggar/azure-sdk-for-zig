@@ -64,6 +64,21 @@ AZURE_REST_API_SPECS=/path/to/azure-rest-api-specs \
   npm run fixture:container-registry
 ```
 
+`fixtures/data_tables.json` pins the canonical Azure Tables contract,
+including its upstream commit and the newest stable `Data.Tables.Versions`
+member selected at generation time. Regenerate it with:
+
+```bash
+cd codegen/tcgc-component
+AZURE_REST_API_SPECS=/path/to/azure-rest-api-specs \
+  npm run fixture:data-tables
+```
+
+The pinned contract currently selects stable API version `2019-02-02` and
+contains 14 operations. It has no `$batch` route; transactions remain outside
+the generated REST contract unless a future upstream fixture records that
+operation as present.
+
 Regenerate the tracked, entirely generator-owned ACR protocol package
 from that fixture into a checkout of its package branch:
 

@@ -73,6 +73,17 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(fixture_test).step);
 
+    const data_tables_test_mod = b.createModule(.{
+        .root_source_file = b.path("../fixtures/data_tables_test.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    data_tables_test_mod.addImport("codemodel", codemodel_mod);
+    const data_tables_test = b.addTest(.{
+        .root_module = data_tables_test_mod,
+    });
+    test_step.dependOn(&b.addRunArtifact(data_tables_test).step);
+
     const fixture_generator_mod = b.createModule(.{
         .root_source_file = b.path("../fixtures/generate_container_registry_package.zig"),
         .target = host_target,
