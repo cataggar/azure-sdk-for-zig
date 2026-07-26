@@ -11,6 +11,7 @@ const responses = @import("responses.zig");
 const ProtocolTable = @typeInfo(@TypeOf(protocol.TablesClient.table)).@"fn".return_type.?;
 
 pub const QueryTablesResponse = ProtocolTable.QueryResult;
+pub const QueryEntitiesResponse = ProtocolTable.QueryEntitiesResult;
 pub const CreateTableResponse = ProtocolTable.CreateResult;
 pub const DeleteTableResponse = ProtocolTable.DeleteResult;
 
@@ -126,7 +127,7 @@ pub const ProtocolClient = struct {
         allocator: std.mem.Allocator,
         table_name: []const u8,
         query_options: options.QueryEntitiesOptions,
-    ) !responses.SdkResponse(ProtocolTable.QueryEntitiesResult) {
+    ) !responses.TableResult(responses.SdkResponse(ProtocolTable.QueryEntitiesResult)) {
         try request.validateTableName(table_name);
         try request.validateProtocolOptions(query_options.protocol);
         if (query_options.top) |top| {
@@ -139,15 +140,15 @@ pub const ProtocolClient = struct {
         errdefer arena.deinit();
         const arena_allocator = arena.allocator();
 
-        var call = try self.beginCall(arena_allocator, query_options.protocol, null);
-        defer call.deinit();
+        var call = try self.beginEntityCall(arena_allocator, query_options.protocol);
+        errdefer call.deinit();
         var generated = protocol.TablesClient.initWithPipeline(
             arena_allocator,
             call.pipeline,
             .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version },
         );
         var table = generated.table();
-        const value = try table.queryEntities(
+        const value = table.queryEntities(
             arena_allocator,
             query_options.protocol.client_request_id,
             table_name,
@@ -158,15 +159,26 @@ pub const ProtocolClient = struct {
             query_options.protocol.timeout,
             query_options.next_partition_key,
             query_options.next_row_key,
-        );
+        ) catch |operation_error| {
+            if (operation_error != error.AzureRequestFailed) return operation_error;
+            var metadata = try call.takeResponse();
+            const table_error = try errorsFromMetadata(allocator, &metadata);
+            metadata.deinit();
+            call.deinit();
+            arena.deinit();
+            allocator.destroy(arena);
+            return .{ .failure = table_error };
+        };
         const metadata = try call.takeResponse();
-        return .{
+        call.deinit();
+        return .{ .success = .{
             .value = value,
             .status = metadata.status,
             .headers = metadata.headers,
+            .body = metadata.body,
             .arena = arena,
             .allocator = allocator,
-        };
+        } };
     }
 
     pub fn queryTables(self: *ProtocolClient, allocator: std.mem.Allocator, query_options: options.ListTablesOptions) !responses.TableResult(responses.SdkResponse(QueryTablesResponse)) {
@@ -448,7 +460,9 @@ pub const ProtocolClient = struct {
             if (self.endpoint.has_query) self.endpoint.raw_query else null,
             self.endpoint_query_is_sas,
             call_options.operation_timeout_ms,
-            call_options.timeout,
+            // Generated entity operations write the `timeout` query parameter.
+            // Adding it through the shared pipeline would duplicate it.
+            null,
             call_options.policies,
         );
     }
