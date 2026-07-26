@@ -517,14 +517,14 @@ test "table lifecycle uses Shared Key and SAS pipeline authentication" {
         "SharedKeyLite account:",
     ));
 
-    var sas = try TableServiceClient.initWithSasUrl(
+    var sas_client = try TableServiceClient.initWithSasUrl(
         allocator,
         "https://account.table.core.windows.net?sv=1%2F2&sig=secret%3D&sp=r",
         transport.asTransport(),
         .{},
     );
-    defer sas.deinit();
-    var deleted = try sas.deleteTable(allocator, "Table123", .{});
+    defer sas_client.deinit();
+    var deleted = try sas_client.deleteTable(allocator, "Table123", .{});
     deleted.deinit();
     try std.testing.expect(transport.last_headers.get("Authorization") == null);
     try std.testing.expect(std.mem.indexOf(
