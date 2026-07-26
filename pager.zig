@@ -57,7 +57,9 @@ pub const TablePager = struct {
         const result = try self.protocol.queryTables(self.allocator, query);
         switch (result) {
             .failure => |failure| return .{ .failure = failure },
-            .success => |page| {
+            .success => |fetched_page| {
+                var page = fetched_page;
+                errdefer page.deinit();
                 const next_token = try continuationFromPage(self.allocator, &page);
                 errdefer if (next_token) |token| self.allocator.free(token);
 
@@ -137,6 +139,7 @@ test "table pager carries options and exact continuation bytes across pages" {
         .protocol = .{
             .metadata = .full_metadata,
             .client_request_id = "list-request",
+            .timeout = 40,
         },
     });
     defer table_pager.deinit();
@@ -151,7 +154,7 @@ test "table pager carries options and exact continuation bytes across pages" {
         .status_200 => |value| value.body.value.?[0].table_name.?,
     });
     try std.testing.expectEqualStrings(
-        "https://account.table.core.windows.net/Tables?$format=application%2Fjson%3Bodata%3Dfullmetadata&$top=3&$select=TableName&$filter=TableName%20ge%20%27A%27&NextTableName=Initial%20table%2F%3F%3F",
+        "https://account.table.core.windows.net/Tables?$format=application%2Fjson%3Bodata%3Dfullmetadata&$top=3&$select=TableName&$filter=TableName%20ge%20%27A%27&NextTableName=Initial%20table%2F%3F%3F&timeout=40",
         transport.captured_urls[0][0..transport.captured_url_lengths[0]],
     );
 
@@ -161,7 +164,7 @@ test "table pager carries options and exact continuation bytes across pages" {
         .status_200 => |value| value.body.odata_metadata.?,
     });
     try std.testing.expectEqualStrings(
-        "https://account.table.core.windows.net/Tables?$format=application%2Fjson%3Bodata%3Dfullmetadata&$top=3&$select=TableName&$filter=TableName%20ge%20%27A%27&NextTableName=Second%20table%2F%3F",
+        "https://account.table.core.windows.net/Tables?$format=application%2Fjson%3Bodata%3Dfullmetadata&$top=3&$select=TableName&$filter=TableName%20ge%20%27A%27&NextTableName=Second%20table%2F%3F&timeout=40",
         transport.captured_urls[1][0..transport.captured_url_lengths[1]],
     );
     try std.testing.expect((try table_pager.next()) == null);
@@ -209,4 +212,41 @@ test "table pager represents each OData metadata format" {
         try std.testing.expect((try table_pager.next()) != null);
         try std.testing.expect(std.mem.indexOf(u8, transport.last_url.?, case.expected) != null);
     }
+}
+
+fn testPagerAllocationFailures(allocator: std.mem.Allocator) !void {
+    var transport = core.http.MockTransport.init(
+        allocator,
+        200,
+        "{\"value\":[{\"TableName\":\"Allocated\"}]}",
+    );
+    defer transport.deinit();
+    transport.response_headers_list = &.{
+        .{ .name = "x-ms-version", .value = "2019-02-02" },
+        .{ .name = "Date", .value = "Sun, 26 Jul 2026 00:00:00 GMT" },
+        .{ .name = "Content-Type", .value = "application/json" },
+        .{ .name = "x-ms-continuation-NextTableName", .value = "Continuation" },
+    };
+    const base_pipeline: core.pipeline.HttpPipeline = .{
+        .policies = &.{},
+        .transport_impl = transport.asTransport(),
+    };
+    var protocol = try protocol_client.ProtocolClient.init(
+        allocator,
+        "https://account.table.core.windows.net",
+        base_pipeline,
+        .{},
+    );
+    defer protocol.deinit();
+    var table_pager = try TablePager.init(allocator, &protocol, .{});
+    defer table_pager.deinit();
+    try std.testing.expect((try table_pager.next()) != null);
+}
+
+test "table pager allocation failures release an unfetched page" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        testPagerAllocationFailures,
+        .{},
+    );
 }

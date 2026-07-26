@@ -69,7 +69,7 @@ pub const ProtocolClient = struct {
         errdefer arena.deinit();
         const arena_allocator = arena.allocator();
 
-        var call = try self.beginCall(arena_allocator, query_options.protocol);
+        var call = try self.beginCall(arena_allocator, query_options.protocol, null);
         defer call.deinit();
         var generated = protocol.TablesClient.initWithPipeline(
             arena_allocator,
@@ -116,7 +116,7 @@ pub const ProtocolClient = struct {
         errdefer arena.deinit();
         const arena_allocator = arena.allocator();
 
-        var call = try self.beginCall(arena_allocator, query_options.protocol);
+        var call = try self.beginCall(arena_allocator, query_options.protocol, null);
         defer call.deinit();
         var generated = protocol.TablesClient.initWithPipeline(
             arena_allocator,
@@ -154,7 +154,11 @@ pub const ProtocolClient = struct {
         arena.* = .init(allocator);
         errdefer arena.deinit();
         const arena_allocator = arena.allocator();
-        var call = try self.beginCall(arena_allocator, query_options.protocol);
+        var call = try self.beginCall(
+            arena_allocator,
+            query_options.protocol,
+            query_options.protocol.timeout,
+        );
         errdefer call.deinit();
         var generated = protocol.TablesClient.initWithPipeline(arena_allocator, call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
         var table = generated.table();
@@ -178,7 +182,7 @@ pub const ProtocolClient = struct {
         arena.* = .init(allocator);
         errdefer arena.deinit();
         const arena_allocator = arena.allocator();
-        var call = try self.beginCall(arena_allocator, create_options.protocol);
+        var call = try self.beginCall(arena_allocator, create_options.protocol, create_options.protocol.timeout);
         errdefer call.deinit();
         var generated = protocol.TablesClient.initWithPipeline(arena_allocator, call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
         var table = generated.table();
@@ -202,7 +206,7 @@ pub const ProtocolClient = struct {
         arena.* = .init(allocator);
         errdefer arena.deinit();
         const arena_allocator = arena.allocator();
-        var call = try self.beginCall(arena_allocator, delete_options.protocol);
+        var call = try self.beginCall(arena_allocator, delete_options.protocol, delete_options.protocol.timeout);
         errdefer call.deinit();
         var generated = protocol.TablesClient.initWithPipeline(arena_allocator, call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
         var table = generated.table();
@@ -223,7 +227,7 @@ pub const ProtocolClient = struct {
         req: *core.http.Request,
         call_options: options.ProtocolOptions,
     ) !core.http.Response {
-        var call = try self.beginCall(req.allocator, call_options);
+        var call = try self.beginCall(req.allocator, call_options, null);
         defer call.deinit();
         return call.pipeline.send(req);
     }
@@ -240,6 +244,7 @@ pub const ProtocolClient = struct {
         self: *ProtocolClient,
         allocator: std.mem.Allocator,
         call_options: options.ProtocolOptions,
+        server_timeout: ?i32,
     ) !pipeline_mod.CallContext {
         return pipeline_mod.CallContext.init(
             allocator,
@@ -247,6 +252,7 @@ pub const ProtocolClient = struct {
             if (self.endpoint.has_query) self.endpoint.raw_query else null,
             self.endpoint_query_is_sas,
             call_options.operation_timeout_ms,
+            server_timeout,
             call_options.policies,
         );
     }
