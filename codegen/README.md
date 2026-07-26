@@ -64,6 +64,26 @@ AZURE_REST_API_SPECS=/path/to/azure-rest-api-specs \
   npm run fixture:container-registry
 ```
 
+`fixtures/data_tables.json` pins the canonical Azure Tables contract,
+including its upstream commit and the newest stable `Data.Tables.Versions`
+member selected at generation time. Regenerate it with:
+
+```bash
+cd codegen/tcgc-component
+AZURE_REST_API_SPECS=/path/to/azure-rest-api-specs \
+  npm run fixture:data-tables
+```
+
+The pinned contract currently selects stable API version `2019-02-02` and
+contains 14 operations. It has no `$batch` route; transactions remain outside
+the generated REST contract unless a future upstream fixture records that
+operation as present.
+
+`cd codegen/cli && zig build test` renders and compiles this fixture as
+`azure_rest_data_tables`. Its focused assertions cover open OData records and
+dotted names, headers and status alternatives, XML serde metadata, literal
+query routes, and quoted OData path escaping.
+
 Regenerate the tracked, entirely generator-owned ACR protocol package
 from that fixture into a checkout of its package branch:
 
@@ -182,6 +202,23 @@ and source file is owned by
 `fixtures/generate_container_registry_package.zig`. Use the dedicated
 `generate-container-registry-package` step above rather than `sync.sh`;
 do not patch its generated files manually.
+
+Azure Tables follows the same fixture-owned model. Generate a new
+`rest/data_tables` package worktree with an immutable Core release pin:
+
+```bash
+cd codegen/cli
+zig build \
+  -Ddata-tables-output=/path/to/rest-data-tables \
+  -Dazure-sdk-core-commit=<release-commit> \
+  -Dazure-sdk-core-hash=<zig-package-hash> \
+  generate-data-tables-package
+```
+
+Use `scripts/verify-data-tables-regeneration.sh --rest-package-root
+/path/to/rest-data-tables` to verify it remains deterministic. The generated
+package has no Cosmos-specific runtime behavior; `$batch` remains excluded
+while absent from the canonical Tables TypeSpec.
 
 The generator accepts `-Dcontainer-registry-output`, and deterministic
 verification can compare separate package worktrees:

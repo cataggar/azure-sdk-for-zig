@@ -255,6 +255,20 @@ pub fn renderClients(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
         \\}
         \\
     );
+    if (hasODataStringPathParameter(model)) {
+        try w.writeAll(
+            \\fn encodeODataStringLiteral(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+            \\    var escaped: std.ArrayList(u8) = .empty;
+            \\    defer escaped.deinit(allocator);
+            \\    for (value) |byte| {
+            \\        try escaped.append(allocator, byte);
+            \\        if (byte == '\'') try escaped.append(allocator, '\'');
+            \\    }
+            \\    return core.url.encodePathSegment(allocator, escaped.items);
+            \\}
+            \\
+        );
+    }
 
     // Per-family constants (endpoint default, api-version default, auth
     // scopes) emitted next to the root client so callers can override
@@ -269,6 +283,19 @@ pub fn renderClients(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
         try w.writeAll("\n");
     }
     return try aw.toOwnedSlice();
+}
+
+fn hasODataStringPathParameter(model: cm.CodeModel) bool {
+    for (model.clients) |client| {
+        for (client.methods) |method| {
+            for (method.path_parameters) |parameter| {
+                if (std.mem.eql(u8, parameter.path_encoding orelse "", "odata-string")) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
 }
 
 fn renderRootConstants(w: *std.Io.Writer, c: cm.Client) !void {
@@ -805,6 +832,12 @@ fn renderUrlBuild(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method,
         } else if (std.mem.eql(u8, encoding, "repository")) {
             try w.print(
                 \\        const encoded_path_{d} = try core.url.encodeRepositoryName(alloc, {s});
+                \\        defer alloc.free(encoded_path_{d});
+                \\
+            , .{ index, source, index });
+        } else if (std.mem.eql(u8, encoding, "odata-string")) {
+            try w.print(
+                \\        const encoded_path_{d} = try encodeODataStringLiteral(alloc, {s});
                 \\        defer alloc.free(encoded_path_{d});
                 \\
             , .{ index, source, index });
