@@ -1064,6 +1064,80 @@ test "original raw entity method signatures remain source compatible" {
     try std.testing.expectEqualStrings("*", mock.last_headers.get("If-Match").?);
 }
 
+test "raw calls do not copy large response bodies while typed adapters capture" {
+    const SimpleEntity = struct {
+        partition_key: []const u8,
+        row_key: []const u8,
+        name: []const u8,
+    };
+    const allocator = std.testing.allocator;
+    const large_body = try allocator.alloc(u8, 512 * 1024);
+    defer allocator.free(large_body);
+    @memset(large_body, 'x');
+
+    var mock = core.http.MockTransport.init(allocator, 200, large_body);
+    defer mock.deinit();
+    var client = try TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=no-copy-secret",
+        "Table123",
+        mock.asTransport(),
+        .{},
+    );
+    defer client.deinit();
+    var limiter = AllocationSizeLimiter{
+        .child = allocator,
+        .max_allocation = 128 * 1024,
+    };
+    const limited = limiter.allocator();
+
+    var get_response = try client.getEntity(limited, "p", "r");
+    defer get_response.deinit();
+    try std.testing.expectEqual(@as(usize, large_body.len), get_response.body.len);
+    try std.testing.expectEqual(@as(usize, 0), limiter.rejected_allocations);
+
+    mock.response_status = 500;
+    var old_entity = entity.TableEntity.init(allocator, "p", "r");
+    defer old_entity.deinit();
+    var create_response = try client.createEntity(limited, old_entity);
+    defer create_response.deinit();
+    try std.testing.expectEqual(@as(u16, 500), create_response.status_code);
+    try std.testing.expectEqualSlices(u8, large_body, create_response.body);
+    try std.testing.expectEqual(@as(usize, 0), limiter.rejected_allocations);
+
+    var delete_response = try client.deleteEntity(limited, "p", "r");
+    defer delete_response.deinit();
+    try std.testing.expectEqual(@as(u16, 500), delete_response.status_code);
+    try std.testing.expectEqualSlices(u8, large_body, delete_response.body);
+    try std.testing.expectEqual(@as(usize, 0), limiter.rejected_allocations);
+
+    mock.response_status = 200;
+    mock.response_headers_list = entity_response_headers;
+    try std.testing.expectError(
+        error.OutOfMemory,
+        client.getEntityResult(SimpleEntity, limited, "p", "r", .{}),
+    );
+    try std.testing.expect(limiter.rejected_allocations > 0);
+
+    mock.response_status = 412;
+    mock.response_body =
+        \\{"code":"UpdateConditionNotSatisfied","message":"etag mismatch"}
+    ;
+    mock.response_headers_list = &.{
+        .{ .name = "Content-Type", .value = "application/json" },
+        .{ .name = "x-ms-request-id", .value = "captured-error" },
+    };
+    var result = try client.deleteEntityResult(limited, "p", "r", .{ .if_match = "W/\"old\"" });
+    defer result.deinit(limited);
+    switch (result) {
+        .failure => |table_error| {
+            try std.testing.expectEqualStrings("UpdateConditionNotSatisfied", table_error.code);
+            try std.testing.expectEqualStrings("captured-error", table_error.request_id.?);
+        },
+        .success => return error.TestUnexpectedResult,
+    }
+}
+
 fn testEntityCrudAllocationFailures(allocator: std.mem.Allocator) !void {
     const SimpleEntity = struct {
         partition_key: []const u8,

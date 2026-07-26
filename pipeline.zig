@@ -369,7 +369,7 @@ pub const CallContext = struct {
 
         const policies = try allocator.alloc(
             *HttpPolicy,
-            2 + @intFromBool(capture != null) + custom_policies.len + base.policies.len,
+            2 + @as(usize, @intFromBool(capture != null)) + custom_policies.len + base.policies.len,
         );
         errdefer allocator.free(policies);
         policies[0] = config.asPolicy();
