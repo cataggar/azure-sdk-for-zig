@@ -55,6 +55,11 @@ pub const all = [_]PackageHistory{
         .mappings = current_only.mappings("rest/container_registry"),
     },
     .{
+        .package = "azure_rest_data_tables",
+        .branch = "rest/data_tables",
+        .mappings = current_only.mappings("rest/data_tables"),
+    },
+    .{
         .package = "azure_sdk_container_registry",
         .branch = "sdk/container_registry",
         .mappings = current_only.mappings("sdk/container_registry"),
@@ -266,7 +271,7 @@ fn validatePath(path: []const u8, allow_empty: bool) !void {
 
 test "history map covers every branch-owned package" {
     try validate(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 21), all.len);
+    try std.testing.expectEqual(@as(usize, 22), all.len);
     try std.testing.expectEqual(@as(usize, 5), rejected_paths.len);
     try std.testing.expect(find("azure_sdk_storage_blobs") != null);
     try std.testing.expect(find("azure_sdk_core") != null);

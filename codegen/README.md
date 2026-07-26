@@ -203,6 +203,23 @@ and source file is owned by
 `generate-container-registry-package` step above rather than `sync.sh`;
 do not patch its generated files manually.
 
+Azure Tables follows the same fixture-owned model. Generate a new
+`rest/data_tables` package worktree with an immutable Core release pin:
+
+```bash
+cd codegen/cli
+zig build \
+  -Ddata-tables-output=/path/to/rest-data-tables \
+  -Dazure-sdk-core-commit=<release-commit> \
+  -Dazure-sdk-core-hash=<zig-package-hash> \
+  generate-data-tables-package
+```
+
+Use `scripts/verify-data-tables-regeneration.sh --rest-package-root
+/path/to/rest-data-tables` to verify it remains deterministic. The generated
+package has no Cosmos-specific runtime behavior; `$batch` remains excluded
+while absent from the canonical Tables TypeSpec.
+
 The generator accepts `-Dcontainer-registry-output`, and deterministic
 verification can compare separate package worktrees:
 

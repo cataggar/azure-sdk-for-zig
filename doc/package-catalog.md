@@ -11,6 +11,7 @@ its source lives at the root of the named branch.
 | `azure_rest_arm_avs` | Branch | — | [`rest/arm_avs`](https://github.com/cataggar/azure-sdk-for-zig/tree/rest/arm_avs) | `azure_sdk_core` |
 | `azure_rest_keyvault_secrets` | Branch | — | [`rest/keyvault_secrets`](https://github.com/cataggar/azure-sdk-for-zig/tree/rest/keyvault_secrets) | `azure_sdk_core` |
 | `azure_rest_container_registry` | Branch | — | [`rest/container_registry`](https://github.com/cataggar/azure-sdk-for-zig/tree/rest/container_registry) | `azure_sdk_core` |
+| `azure_rest_data_tables` | Branch | — | [`rest/data_tables`](https://github.com/cataggar/azure-sdk-for-zig/tree/rest/data_tables) | `azure_sdk_core` |
 | `azure_sdk_container_registry` | Branch | — | [`sdk/container_registry`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/container_registry) | `azure_sdk_core`, `azure_rest_container_registry` |
 | `azure_sdk_storage_common` | Branch | — | [`sdk/storage_common`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/storage_common) | `azure_sdk_core` |
 | `azure_sdk_storage_blobs` | Branch | — | [`sdk/storage_blobs`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/storage_blobs) | `azure_sdk_core`, `azure_sdk_storage_common` |
