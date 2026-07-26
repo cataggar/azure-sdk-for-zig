@@ -31,6 +31,7 @@ pub const TableClient = struct {
         init_options: Options,
     ) !TableClient {
         try request.validateTableName(table_name);
+        try request.validateTokenEndpoint(endpoint);
         const state = try pipeline.PipelineState.create(
             allocator,
             credential,
@@ -277,4 +278,49 @@ test "token client construction failure paths are leak-free" {
         testAllocationFailures,
         .{},
     );
+}
+
+test "token client rejects HTTP before credential and transport use" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200, "{}");
+    defer mock.deinit();
+    var credential = TestCredential{};
+
+    try std.testing.expectError(
+        error.TokenAuthenticationRequiresHttps,
+        TableClient.initWithToken(
+            allocator,
+            "http://127.0.0.1:10002/devstoreaccount1",
+            "MyTable",
+            credential.asCredential(),
+            mock.asTransport(),
+            .{},
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 0), credential.calls);
+    try std.testing.expectEqual(@as(usize, 0), mock.call_count);
+}
+
+test "token client accepts HTTPS custom private endpoint" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200, "{}");
+    defer mock.deinit();
+    var credential = TestCredential{};
+
+    var table_client = try TableClient.initWithToken(
+        allocator,
+        "HTTPS://tables.internal.example:8443/private/path",
+        "MyTable",
+        credential.asCredential(),
+        mock.asTransport(),
+        .{},
+    );
+    defer table_client.deinit();
+
+    try std.testing.expectEqualStrings(
+        "HTTPS://tables.internal.example:8443/private/path",
+        table_client.protocol.endpoint.base_url,
+    );
+    try std.testing.expectEqual(@as(usize, 0), credential.calls);
+    try std.testing.expectEqual(@as(usize, 0), mock.call_count);
 }

@@ -53,7 +53,9 @@ Create owning token-authenticated clients with
 their endpoint, API version, telemetry application ID, default client request
 ID, and policy pointer list. The credential, transport, and policy objects
 remain borrowed and must outlive the client. The bearer policy requests
-`https://storage.azure.com/.default`.
+`https://storage.azure.com/.default`. Token-authenticated constructors require
+HTTPS, including for custom and private endpoint hosts. HTTP remains available
+to future explicit emulator Shared Key and no-token constructors.
 
 `TableServiceClient.getTableClient` creates a table client that owns its table
 name and protocol configuration while borrowing the service client's stable

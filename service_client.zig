@@ -4,6 +4,7 @@ const client = @import("client.zig");
 const options = @import("options.zig");
 const pipeline = @import("pipeline.zig");
 const protocol_client = @import("protocol_client.zig");
+const request = @import("request.zig");
 
 /// Client for Azure Table Service operations (list/create/delete tables).
 ///
@@ -25,6 +26,7 @@ pub const TableServiceClient = struct {
         transport: *core.http.HttpTransport,
         init_options: Options,
     ) !TableServiceClient {
+        try request.validateTokenEndpoint(endpoint);
         const state = try pipeline.PipelineState.create(
             allocator,
             credential,
@@ -141,4 +143,47 @@ test "derived clients share token cache and transport and borrow pipeline state"
 
     try std.testing.expectEqual(@as(usize, 1), credential.calls);
     try std.testing.expectEqual(@as(usize, 2), transport.call_count);
+}
+
+test "token service client rejects HTTP before credential and transport use" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 200, "{}");
+    defer transport.deinit();
+    var credential = CountingCredential{};
+
+    try std.testing.expectError(
+        error.TokenAuthenticationRequiresHttps,
+        TableServiceClient.initWithToken(
+            allocator,
+            "http://tables.private.example:10002/account",
+            credential.asCredential(),
+            transport.asTransport(),
+            .{},
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 0), credential.calls);
+    try std.testing.expectEqual(@as(usize, 0), transport.call_count);
+}
+
+test "token service client accepts HTTPS custom private endpoint" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 200, "{}");
+    defer transport.deinit();
+    var credential = CountingCredential{};
+
+    var service = try TableServiceClient.initWithToken(
+        allocator,
+        "https://tables.private.example:8443/account/path/",
+        credential.asCredential(),
+        transport.asTransport(),
+        .{},
+    );
+    defer service.deinit();
+
+    try std.testing.expectEqualStrings(
+        "https://tables.private.example:8443/account/path",
+        service.protocol.endpoint.base_url,
+    );
+    try std.testing.expectEqual(@as(usize, 0), credential.calls);
+    try std.testing.expectEqual(@as(usize, 0), transport.call_count);
 }
