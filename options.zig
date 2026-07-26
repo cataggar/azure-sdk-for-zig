@@ -31,6 +31,24 @@ pub const QueryEntityOptions = struct {
     filter: ?[]const u8 = null,
 };
 
+pub const CreateTableOptions = struct {
+    protocol: ProtocolOptions = .{},
+    prefer: ?protocol.enums.ResponseFormat = null,
+};
+
+pub const DeleteTableOptions = struct {
+    protocol: ProtocolOptions = .{},
+};
+
+pub const ListTablesOptions = struct {
+    protocol: ProtocolOptions = .{},
+    top: ?i32 = null,
+    select: ?[]const u8 = null,
+    filter: ?[]const u8 = null,
+    /// Opaque value from `x-ms-continuation-NextTableName`.
+    continuation_token: ?[]const u8 = null,
+};
+
 pub const RetryOptions = struct {
     max_retries: u32 = 3,
     initial_delay_ms: u64 = 800,

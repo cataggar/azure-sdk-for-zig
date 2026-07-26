@@ -8,6 +8,7 @@ const pipeline = @import("pipeline.zig");
 const protocol_client = @import("protocol_client.zig");
 const request = @import("request.zig");
 const sas_types = @import("sas.zig");
+const responses = @import("responses.zig");
 
 /// Client for Azure Table Storage REST operations.
 ///
@@ -207,6 +208,44 @@ pub const TableClient = struct {
         );
         defer allocator.free(table_url);
         return parameters.appendToUrl(allocator, table_url);
+    }
+
+    pub fn createTableResult(
+        self: *TableClient,
+        allocator: std.mem.Allocator,
+        create_options: options.CreateTableOptions,
+    ) !responses.TableResult(responses.SdkResponse(protocol_client.CreateTableResponse)) {
+        return self.protocol.createTable(allocator, self.table_name, create_options);
+    }
+
+    pub fn createTable(
+        self: *TableClient,
+        allocator: std.mem.Allocator,
+        create_options: options.CreateTableOptions,
+    ) !responses.SdkResponse(protocol_client.CreateTableResponse) {
+        return responses.unwrapCreateTable(
+            responses.SdkResponse(protocol_client.CreateTableResponse),
+            try self.createTableResult(allocator, create_options),
+        );
+    }
+
+    pub fn deleteTableResult(
+        self: *TableClient,
+        allocator: std.mem.Allocator,
+        delete_options: options.DeleteTableOptions,
+    ) !responses.TableResult(responses.SdkResponse(protocol_client.DeleteTableResponse)) {
+        return self.protocol.deleteTable(allocator, self.table_name, delete_options);
+    }
+
+    pub fn deleteTable(
+        self: *TableClient,
+        allocator: std.mem.Allocator,
+        delete_options: options.DeleteTableOptions,
+    ) !responses.SdkResponse(protocol_client.DeleteTableResponse) {
+        return responses.unwrapDeleteTable(
+            responses.SdkResponse(protocol_client.DeleteTableResponse),
+            try self.deleteTableResult(allocator, delete_options),
+        );
     }
 
     /// GET `{endpoint}/{tableName}(PartitionKey='{pk}',RowKey='{rk}')`.

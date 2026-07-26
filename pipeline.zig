@@ -282,6 +282,7 @@ pub const CallContext = struct {
         raw_endpoint_query: ?[]const u8,
         endpoint_query_is_sas: bool,
         operation_timeout_ms: ?u64,
+        server_timeout: ?i32,
         custom_policies: []const *HttpPolicy,
     ) !CallContext {
         const config = try allocator.create(ConfigPolicy);
@@ -289,6 +290,7 @@ pub const CallContext = struct {
         config.* = ConfigPolicy.init(
             if (endpoint_query_is_sas) null else raw_endpoint_query,
             operation_timeout_ms,
+            server_timeout,
         );
         const capture = try allocator.create(CapturePolicy);
         errdefer allocator.destroy(capture);
@@ -337,12 +339,18 @@ pub const CallContext = struct {
 const ConfigPolicy = struct {
     raw_query: ?[]const u8,
     operation_timeout_ms: ?u64,
+    server_timeout: ?i32,
     policy: HttpPolicy,
 
-    fn init(raw_query: ?[]const u8, operation_timeout_ms: ?u64) ConfigPolicy {
+    fn init(
+        raw_query: ?[]const u8,
+        operation_timeout_ms: ?u64,
+        server_timeout: ?i32,
+    ) ConfigPolicy {
         return .{
             .raw_query = raw_query,
             .operation_timeout_ms = operation_timeout_ms,
+            .server_timeout = server_timeout,
             .policy = .{ .processFn = &process },
         };
     }
@@ -362,13 +370,27 @@ const ConfigPolicy = struct {
         request.operation_timeout_ms = self.operation_timeout_ms;
         defer request.operation_timeout_ms = old_timeout;
 
-        const raw_query = self.raw_query orelse return callNext(request, next, transport);
         const old_url = request.url;
-        const url = try appendEndpointQuery(request.allocator, request.url, raw_query);
-        request.url = url;
+        var url = old_url;
+        var owned_url: ?[]u8 = null;
+        errdefer if (owned_url) |value| request.allocator.free(value);
+        if (self.raw_query) |raw_query| {
+            owned_url = try appendEndpointQuery(request.allocator, url, raw_query);
+            url = owned_url.?;
+        }
+        if (self.server_timeout) |timeout| {
+            const timeout_url = try appendServerTimeout(request.allocator, url, timeout);
+            if (owned_url) |value| request.allocator.free(value);
+            owned_url = timeout_url;
+            url = timeout_url;
+        }
+        if (owned_url == null) return callNext(request, next, transport);
+        const final_url = owned_url.?;
+        owned_url = null;
+        request.url = final_url;
         defer {
             request.url = old_url;
-            request.allocator.free(url);
+            request.allocator.free(final_url);
         }
         return callNext(request, next, transport);
     }
@@ -438,6 +460,20 @@ fn appendEndpointQuery(
         std.fmt.allocPrint(allocator, "{s}?{s}", .{ url, raw_query });
 }
 
+/// Appends the validated decimal Azure Tables `timeout` query option without
+/// re-encoding generated query parameters or opaque endpoint query bytes.
+fn appendServerTimeout(
+    allocator: std.mem.Allocator,
+    url: []const u8,
+    timeout: i32,
+) ![]u8 {
+    const separator: []const u8 = if (std.mem.indexOfScalar(u8, url, '?')) |_| blk: {
+        if (url.len > 0 and (url[url.len - 1] == '?' or url[url.len - 1] == '&')) break :blk "";
+        break :blk "&";
+    } else "?";
+    return std.fmt.allocPrint(allocator, "{s}{s}timeout={d}", .{ url, separator, timeout });
+}
+
 const CapturePolicy = struct {
     allocator: std.mem.Allocator,
     metadata: ?responses.ResponseMetadata = null,
@@ -465,6 +501,12 @@ const CapturePolicy = struct {
         errdefer response.deinit();
         if (self.metadata) |*old| old.deinit();
         self.metadata = try responses.ResponseMetadata.fromResponse(self.allocator, &response);
+        errdefer {
+            self.metadata.?.deinit();
+            self.metadata = null;
+        }
+        if (response.status_code < 200 or response.status_code >= 300)
+            self.metadata.?.body = try self.allocator.dupe(u8, response.body);
         return response;
     }
 
@@ -472,6 +514,53 @@ const CapturePolicy = struct {
         if (self.metadata) |*metadata| metadata.deinit();
     }
 };
+
+fn testLargeSuccessCapture(allocator: std.mem.Allocator) !void {
+    var body: [64 * 1024]u8 = undefined;
+    @memset(&body, 'x');
+    var transport = core.http.MockTransport.init(allocator, 200, &body);
+    defer transport.deinit();
+    const base: core.pipeline.HttpPipeline = .{
+        .policies = &.{},
+        .transport_impl = transport.asTransport(),
+    };
+    var call = try CallContext.init(allocator, base, null, false, null, null, &.{});
+    defer call.deinit();
+    var request = Request.init(allocator, .GET, "https://example.test/Tables");
+    defer request.deinit();
+    var response = try call.pipeline.send(&request);
+    defer response.deinit();
+    var metadata = try call.takeResponse();
+    defer metadata.deinit();
+    try std.testing.expect(metadata.body == null);
+}
+
+test "capture does not duplicate large successful response bodies" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        testLargeSuccessCapture,
+        .{},
+    );
+}
+
+test "capture retains a non-success body for structured error adaptation" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 409, "failure body");
+    defer transport.deinit();
+    const base: core.pipeline.HttpPipeline = .{
+        .policies = &.{},
+        .transport_impl = transport.asTransport(),
+    };
+    var call = try CallContext.init(allocator, base, null, false, null, null, &.{});
+    defer call.deinit();
+    var request = Request.init(allocator, .GET, "https://example.test/Tables");
+    defer request.deinit();
+    var response = try call.pipeline.send(&request);
+    defer response.deinit();
+    var metadata = try call.takeResponse();
+    defer metadata.deinit();
+    try std.testing.expectEqualStrings("failure body", metadata.body.?);
+}
 
 fn callNext(
     request: *Request,
@@ -615,6 +704,7 @@ test "stable policy order authenticates every retry and runs caller policies" {
         null,
         false,
         null,
+        null,
         &.{&per_call.policy},
     );
     defer call.deinit();
@@ -659,7 +749,7 @@ test "core logging and tracing never observe SAS while retries send exact opaque
     const clean_url = "https://account.table.core.windows.net/Table123?timeout=30&$filter=x%20y";
     const raw_sas = "sv=1%2F2&sig=opaque+SECRET%2Fbytes%3D&sp=r";
     const exact_sas_url = "https://account.table.core.windows.net/Table123?sv=1%2F2&sig=opaque+SECRET%2Fbytes%3D&sp=r&timeout=30&$filter=x%20y";
-    var call = try CallContext.init(allocator, state.pipeline, raw_sas, true, null, &.{});
+    var call = try CallContext.init(allocator, state.pipeline, raw_sas, true, null, null, &.{});
     defer call.deinit();
     var request = Request.init(allocator, .GET, clean_url);
     defer request.deinit();
@@ -706,6 +796,7 @@ test "SAS transport errors restore the credential-free URL and redirect policy" 
         "sig=transport-error-SECRET%3D&sv=1",
         true,
         null,
+        null,
         &.{},
     );
     defer call.deinit();
@@ -738,6 +829,7 @@ test "SAS URL allocation errors leave the request untouched" {
         base,
         "sig=allocation-SECRET&sv=1",
         true,
+        null,
         null,
         &.{},
     );
@@ -778,7 +870,7 @@ test "Shared Key core observability records no credential material in URLs" {
         .{ .policies = &.{ logging.asPolicy(), tracing.asPolicy() } },
     );
     defer state.deinit();
-    var call = try CallContext.init(allocator, state.pipeline, null, false, null, &.{});
+    var call = try CallContext.init(allocator, state.pipeline, null, false, null, null, &.{});
     defer call.deinit();
     const clean_url = "https://account.table.core.windows.net/Table123?comp=acl";
     var request = Request.init(allocator, .GET, clean_url);

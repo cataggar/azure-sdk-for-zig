@@ -217,6 +217,21 @@ continues to borrow its keys and values.
   map bookkeeping is owned, but partition key, row key, property keys, and
   property values are borrowed. Call `deinit` to release the map.
 
+## Table lifecycle
+
+`TableServiceClient.createTable` and `deleteTable` operate on a supplied
+validated name; `TableClient` provides the same methods for its bound name.
+Their `*Result` variants retain non-2xx service failures as `TableError`.
+`listTables` returns a `TablePager`; configure `$filter`, `$select`, `$top`,
+metadata format, and an initial continuation through `ListTablesOptions`.
+Each page exposes the generated table wire response plus status and raw
+headers. Page values are borrowed from the pager until its next successful
+request or `deinit`. A pager owns an immutable protocol configuration copy,
+but borrows the service client's heap-stable pipeline state; deinitialize it
+before its parent service client. `ListTablesOptions` strings and policy
+pointer-list storage are copied at pager creation, but the policy objects
+themselves are borrowed and must remain stable and outlive the pager.
+
 The pipeline policy order is request ID, telemetry, retry, then authentication.
 Putting authentication after retry ensures date-sensitive SharedKeyLite
 requests are signed on every attempt.
