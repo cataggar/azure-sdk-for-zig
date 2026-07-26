@@ -2,5 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export PYTHONDONTWRITEBYTECODE=1
-exec python3 "$ROOT/eng/release/release.py" "$@"
+BIN_DIR="$(mktemp -d)"
+trap 'rm -rf "$BIN_DIR"' EXIT
+zig build-exe "$ROOT/eng/release/main.zig" -femit-bin="$BIN_DIR/package-release" >/dev/null
+exec "$BIN_DIR/package-release" "$@"

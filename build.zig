@@ -214,11 +214,18 @@ fn addRepositoryValidationSteps(b: *std.Build) void {
     );
     docs_check_step.dependOn(&docs_check.step);
 
-    const release_self_test = b.addSystemCommand(&.{
-        "bash",
-        "scripts/package-release.sh",
-        "self-test",
+    const release_tool = b.addExecutable(.{
+        .name = "package-release",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("eng/release/main.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
     });
+    const release_self_test = b.addRunArtifact(release_tool);
+    release_self_test.addArg("self-test");
+    release_self_test.setCwd(b.path("."));
+    release_self_test.has_side_effects = true;
     const release_self_test_step = b.step(
         "release-self-test",
         "Run the offline generic package release regression suite",
