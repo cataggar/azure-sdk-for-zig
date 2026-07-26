@@ -159,6 +159,10 @@ pub const PipelineState = struct {
         allocator.free(self.owned_api_version);
         allocator.destroy(self);
     }
+
+    pub fn usesSas(self: *const PipelineState) bool {
+        return self.authentication == .none;
+    }
 };
 
 const NoAuthenticationPolicy = struct {
@@ -261,6 +265,7 @@ pub const CallContext = struct {
     allocator: std.mem.Allocator,
     config_policy: *ConfigPolicy,
     capture_policy: *CapturePolicy,
+    sas_policy: *SasAuthPolicy,
     policy_ptrs: []*HttpPolicy,
     pipeline: core.pipeline.HttpPipeline,
 
@@ -268,29 +273,39 @@ pub const CallContext = struct {
         allocator: std.mem.Allocator,
         base: core.pipeline.HttpPipeline,
         raw_endpoint_query: ?[]const u8,
+        endpoint_query_is_sas: bool,
         operation_timeout_ms: ?u64,
         custom_policies: []const *HttpPolicy,
     ) !CallContext {
         const config = try allocator.create(ConfigPolicy);
         errdefer allocator.destroy(config);
-        config.* = ConfigPolicy.init(raw_endpoint_query, operation_timeout_ms);
+        config.* = ConfigPolicy.init(
+            if (endpoint_query_is_sas) null else raw_endpoint_query,
+            operation_timeout_ms,
+        );
         const capture = try allocator.create(CapturePolicy);
         errdefer allocator.destroy(capture);
         capture.* = CapturePolicy.init(allocator);
+        const sas = try allocator.create(SasAuthPolicy);
+        errdefer allocator.destroy(sas);
+        sas.* = SasAuthPolicy.init(if (endpoint_query_is_sas) raw_endpoint_query else null);
 
         const policies = try allocator.alloc(
             *HttpPolicy,
-            2 + custom_policies.len + base.policies.len,
+            3 + custom_policies.len + base.policies.len,
         );
         errdefer allocator.free(policies);
         policies[0] = config.asPolicy();
         policies[1] = capture.asPolicy();
         @memcpy(policies[2 .. 2 + base.policies.len], base.policies);
-        @memcpy(policies[2 + base.policies.len ..], custom_policies);
+        const custom_start = 2 + base.policies.len;
+        @memcpy(policies[custom_start .. custom_start + custom_policies.len], custom_policies);
+        policies[policies.len - 1] = sas.asPolicy();
         return .{
             .allocator = allocator,
             .config_policy = config,
             .capture_policy = capture,
+            .sas_policy = sas,
             .policy_ptrs = policies,
             .pipeline = .{ .policies = policies, .transport_impl = base.transport_impl },
         };
@@ -307,6 +322,7 @@ pub const CallContext = struct {
         self.allocator.free(self.policy_ptrs);
         self.allocator.destroy(self.capture_policy);
         self.allocator.destroy(self.config_policy);
+        self.allocator.destroy(self.sas_policy);
         self.* = undefined;
     }
 };
@@ -339,30 +355,81 @@ const ConfigPolicy = struct {
         request.operation_timeout_ms = self.operation_timeout_ms;
         defer request.operation_timeout_ms = old_timeout;
 
+        const raw_query = self.raw_query orelse return callNext(request, next, transport);
         const old_url = request.url;
-        var owned_url: ?[]u8 = null;
-        defer if (owned_url) |url| request.allocator.free(url);
-        if (self.raw_query) |raw_query| {
-            const question = std.mem.indexOfScalar(u8, request.url, '?');
-            owned_url = if (question) |index|
-                try std.fmt.allocPrint(
-                    request.allocator,
-                    "{s}?{s}{s}{s}",
-                    .{
-                        request.url[0..index],
-                        raw_query,
-                        if (raw_query.len > 0 and index + 1 < request.url.len) "&" else "",
-                        request.url[index + 1 ..],
-                    },
-                )
-            else
-                try std.fmt.allocPrint(request.allocator, "{s}?{s}", .{ request.url, raw_query });
-            request.url = owned_url.?;
+        const url = try appendEndpointQuery(request.allocator, request.url, raw_query);
+        request.url = url;
+        defer {
+            request.url = old_url;
+            request.allocator.free(url);
         }
-        defer request.url = old_url;
         return callNext(request, next, transport);
     }
 };
+
+/// Appends an opaque SAS query only for the transport call. It is always the
+/// final policy, inside retry, so caller observability sees a credential-free
+/// URL and every attempt gets the exact original query bytes.
+const SasAuthPolicy = struct {
+    raw_query: ?[]const u8,
+    policy: HttpPolicy,
+
+    fn init(raw_query: ?[]const u8) SasAuthPolicy {
+        return .{
+            .raw_query = raw_query,
+            .policy = .{ .processFn = &process },
+        };
+    }
+
+    fn asPolicy(self: *SasAuthPolicy) *HttpPolicy {
+        return &self.policy;
+    }
+
+    fn process(
+        policy: *HttpPolicy,
+        request: *Request,
+        next: []*HttpPolicy,
+        transport: *HttpTransport,
+    ) anyerror!Response {
+        const self: *SasAuthPolicy = @alignCast(@fieldParentPtr("policy", policy));
+        const raw_query = self.raw_query orelse return callNext(request, next, transport);
+        if (next.len != 0) return error.InvalidSasPolicyOrder;
+
+        const signed_url = try appendEndpointQuery(request.allocator, request.url, raw_query);
+
+        const old_url = request.url;
+        const old_redirect_policy = request.redirect_policy;
+        request.url = signed_url;
+        request.redirect_policy = .not_allowed;
+        defer {
+            request.url = old_url;
+            request.redirect_policy = old_redirect_policy;
+            request.allocator.free(signed_url);
+        }
+        return transport.send(request);
+    }
+};
+
+fn appendEndpointQuery(
+    allocator: std.mem.Allocator,
+    url: []const u8,
+    raw_query: []const u8,
+) ![]u8 {
+    const question = std.mem.indexOfScalar(u8, url, '?');
+    return if (question) |index|
+        std.fmt.allocPrint(
+            allocator,
+            "{s}?{s}{s}{s}",
+            .{
+                url[0..index],
+                raw_query,
+                if (raw_query.len > 0 and index + 1 < url.len) "&" else "",
+                url[index + 1 ..],
+            },
+        )
+    else
+        std.fmt.allocPrint(allocator, "{s}?{s}", .{ url, raw_query });
+}
 
 const CapturePolicy = struct {
     allocator: std.mem.Allocator,
@@ -482,6 +549,30 @@ const RetryOncePolicy = struct {
     }
 };
 
+const FailingTransport = struct {
+    transport: HttpTransport = .{ .sendFn = &send },
+    captured_url: [512]u8 = undefined,
+    captured_url_len: usize = 0,
+    saw_redirects_disabled: bool = false,
+
+    fn asTransport(self: *FailingTransport) *HttpTransport {
+        return &self.transport;
+    }
+
+    fn send(transport: *HttpTransport, request: *Request) anyerror!Response {
+        const self: *FailingTransport = @alignCast(@fieldParentPtr("transport", transport));
+        if (request.url.len > self.captured_url.len) return error.TestUrlTooLong;
+        @memcpy(self.captured_url[0..request.url.len], request.url);
+        self.captured_url_len = request.url.len;
+        self.saw_redirects_disabled = request.redirect_policy == .not_allowed;
+        return error.InjectedTransportFailure;
+    }
+
+    fn capturedUrl(self: *const FailingTransport) []const u8 {
+        return self.captured_url[0..self.captured_url_len];
+    }
+};
+
 test "stable policy order authenticates every retry and runs caller policies" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 200, "{}");
@@ -515,6 +606,7 @@ test "stable policy order authenticates every retry and runs caller policies" {
         allocator,
         state.pipeline,
         null,
+        false,
         null,
         &.{&per_call.policy},
     );
@@ -528,6 +620,170 @@ test "stable policy order authenticates every retry and runs caller policies" {
     try std.testing.expectEqual(@as(usize, 2), configured.calls);
     try std.testing.expectEqual(@as(usize, 2), per_call.calls);
     try std.testing.expectEqual(@as(usize, 1), mock.call_count);
+}
+
+test "core logging and tracing never observe SAS while retries send exact opaque bytes" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.SequenceMockTransport.init(allocator, &.{
+        .{ .status = 500, .body = "{}" },
+        .{ .status = 200, .body = "{}" },
+    });
+    var recording_tracer = core.tracing.RecordingTracer.init(allocator);
+    defer recording_tracer.deinit();
+    var logging = core.pipeline.LoggingPolicy.init();
+    var tracing = core.pipeline.TracingPolicy.init(
+        recording_tracer.asTracer(),
+        "Microsoft.Storage",
+    );
+    const state = try PipelineState.createNoAuth(
+        allocator,
+        transport.asTransport(),
+        .{
+            .retry = .{
+                .max_retries = 1,
+                .initial_delay_ms = 0,
+                .max_delay_ms = 0,
+            },
+            .policies = &.{ logging.asPolicy(), tracing.asPolicy() },
+        },
+    );
+    defer state.deinit();
+
+    const clean_url = "https://account.table.core.windows.net/Table123?timeout=30&$filter=x%20y";
+    const raw_sas = "sv=1%2F2&sig=opaque+SECRET%2Fbytes%3D&sp=r";
+    const exact_sas_url = "https://account.table.core.windows.net/Table123?sv=1%2F2&sig=opaque+SECRET%2Fbytes%3D&sp=r&timeout=30&$filter=x%20y";
+    var call = try CallContext.init(allocator, state.pipeline, raw_sas, true, null, &.{});
+    defer call.deinit();
+    var request = Request.init(allocator, .GET, clean_url);
+    defer request.deinit();
+
+    var response = try call.pipeline.send(&request);
+    defer response.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), transport.call_count);
+    try std.testing.expectEqualStrings(exact_sas_url, transport.capturedUrl(0));
+    try std.testing.expectEqualStrings(exact_sas_url, transport.capturedUrl(1));
+    try std.testing.expectEqualStrings(clean_url, request.url);
+    try std.testing.expectEqual(core.http.RedirectPolicy.follow, request.redirect_policy);
+    const observed_url = recording_tracer.last_span.?.attributes.get("url.full").?;
+    try std.testing.expectEqualStrings(clean_url, observed_url);
+    try std.testing.expect(std.mem.indexOf(u8, observed_url, "sig=") == null);
+    try std.testing.expect(std.mem.indexOf(u8, observed_url, "SECRET") == null);
+}
+
+test "SAS transport errors restore the credential-free URL and redirect policy" {
+    const allocator = std.testing.allocator;
+    var transport = FailingTransport{};
+    var recording_tracer = core.tracing.RecordingTracer.init(allocator);
+    defer recording_tracer.deinit();
+    var logging = core.pipeline.LoggingPolicy.init();
+    var tracing = core.pipeline.TracingPolicy.init(
+        recording_tracer.asTracer(),
+        "Microsoft.Storage",
+    );
+    const state = try PipelineState.createNoAuth(
+        allocator,
+        transport.asTransport(),
+        .{
+            .retry = .{ .max_retries = 0 },
+            .policies = &.{ logging.asPolicy(), tracing.asPolicy() },
+        },
+    );
+    defer state.deinit();
+
+    const clean_url = "https://account.table.core.windows.net/Table123";
+    const exact_sas_url = "https://account.table.core.windows.net/Table123?sig=transport-error-SECRET%3D&sv=1";
+    var call = try CallContext.init(
+        allocator,
+        state.pipeline,
+        "sig=transport-error-SECRET%3D&sv=1",
+        true,
+        null,
+        &.{},
+    );
+    defer call.deinit();
+    var request = Request.init(allocator, .GET, clean_url);
+    defer request.deinit();
+
+    try std.testing.expectError(
+        error.InjectedTransportFailure,
+        call.pipeline.send(&request),
+    );
+    try std.testing.expectEqualStrings(exact_sas_url, transport.capturedUrl());
+    try std.testing.expect(transport.saw_redirects_disabled);
+    try std.testing.expectEqualStrings(clean_url, request.url);
+    try std.testing.expectEqual(core.http.RedirectPolicy.follow, request.redirect_policy);
+    const observed_url = recording_tracer.last_span.?.attributes.get("url.full").?;
+    try std.testing.expectEqualStrings(clean_url, observed_url);
+    try std.testing.expect(std.mem.indexOf(u8, observed_url, "SECRET") == null);
+}
+
+test "SAS URL allocation errors leave the request untouched" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 200, "{}");
+    defer transport.deinit();
+    const base: core.pipeline.HttpPipeline = .{
+        .policies = &.{},
+        .transport_impl = transport.asTransport(),
+    };
+    var call = try CallContext.init(
+        allocator,
+        base,
+        "sig=allocation-SECRET&sv=1",
+        true,
+        null,
+        &.{},
+    );
+    defer call.deinit();
+
+    var buffer: [1]u8 = undefined;
+    var fixed = std.heap.FixedBufferAllocator.init(&buffer);
+    const clean_url = "https://account.table.core.windows.net/Table123";
+    var request = Request.init(fixed.allocator(), .GET, clean_url);
+    defer request.deinit();
+    try std.testing.expectError(error.OutOfMemory, call.pipeline.send(&request));
+    try std.testing.expectEqualStrings(clean_url, request.url);
+    try std.testing.expectEqual(core.http.RedirectPolicy.follow, request.redirect_policy);
+    try std.testing.expectEqual(@as(usize, 0), transport.call_count);
+}
+
+test "Shared Key core observability records no credential material in URLs" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 200, "{}");
+    defer transport.deinit();
+    var credential = try auth.SharedKeyCredential.init(
+        allocator,
+        "account",
+        "YWNjb3VudC1rZXk=",
+    );
+    defer credential.deinit();
+    var recording_tracer = core.tracing.RecordingTracer.init(allocator);
+    defer recording_tracer.deinit();
+    var logging = core.pipeline.LoggingPolicy.init();
+    var tracing = core.pipeline.TracingPolicy.init(
+        recording_tracer.asTracer(),
+        "Microsoft.Storage",
+    );
+    const state = try PipelineState.createSharedKey(
+        allocator,
+        &credential,
+        transport.asTransport(),
+        .{ .policies = &.{ logging.asPolicy(), tracing.asPolicy() } },
+    );
+    defer state.deinit();
+    var call = try CallContext.init(allocator, state.pipeline, null, false, null, &.{});
+    defer call.deinit();
+    const clean_url = "https://account.table.core.windows.net/Table123?comp=acl";
+    var request = Request.init(allocator, .GET, clean_url);
+    defer request.deinit();
+    var response = try call.pipeline.send(&request);
+    defer response.deinit();
+
+    try std.testing.expect(transport.last_headers.get("Authorization") != null);
+    const observed_url = recording_tracer.last_span.?.attributes.get("url.full").?;
+    try std.testing.expectEqualStrings(clean_url, observed_url);
+    try std.testing.expect(std.mem.indexOf(u8, observed_url, "SharedKeyLite") == null);
+    try std.testing.expect(std.mem.indexOf(u8, observed_url, "account-key") == null);
 }
 
 test "Shared Key policy retains an owned API version across caller mutation and policy moves" {

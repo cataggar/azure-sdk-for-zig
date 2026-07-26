@@ -54,7 +54,8 @@ pub const TableClientOptions = struct {
     client_request_id: ?[]const u8 = null,
     /// Default end-to-end budget. Per-operation budgets take precedence.
     operation_timeout_ms: ?u64 = null,
-    /// Policies run after authentication and therefore once per retry.
+    /// Policies run once per retry. SAS query authentication is appended only
+    /// after these policies, immediately before the transport.
     policies: []const *core.pipeline.HttpPolicy = &.{},
 };
 

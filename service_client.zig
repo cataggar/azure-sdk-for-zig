@@ -41,7 +41,10 @@ pub const TableServiceClient = struct {
             allocator,
             endpoint,
             state.pipeline,
-            .{ .api_version = init_options.api_version },
+            .{
+                .api_version = init_options.api_version,
+                .endpoint_query_is_sas = state.usesSas(),
+            },
         );
         return .{
             .allocator = allocator,
@@ -66,7 +69,10 @@ pub const TableServiceClient = struct {
             allocator,
             endpoint,
             state.pipeline,
-            .{ .api_version = init_options.api_version },
+            .{
+                .api_version = init_options.api_version,
+                .endpoint_query_is_sas = state.usesSas(),
+            },
         );
         return .{ .allocator = allocator, .protocol = protocol, .pipeline_state = state };
     }
@@ -85,7 +91,10 @@ pub const TableServiceClient = struct {
             allocator,
             complete_sas_url,
             state.pipeline,
-            .{ .api_version = init_options.api_version },
+            .{
+                .api_version = init_options.api_version,
+                .endpoint_query_is_sas = state.usesSas(),
+            },
         );
         return .{ .allocator = allocator, .protocol = protocol, .pipeline_state = state };
     }

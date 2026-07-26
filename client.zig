@@ -144,7 +144,10 @@ pub const TableClient = struct {
             allocator,
             endpoint,
             state.pipeline,
-            .{ .api_version = api_version },
+            .{
+                .api_version = api_version,
+                .endpoint_query_is_sas = state.usesSas(),
+            },
         );
         errdefer protocol.deinit();
         return .{
@@ -180,11 +183,9 @@ pub const TableClient = struct {
         partition_key: []const u8,
         row_key: []const u8,
     ) !core.http.Response {
-        const endpoint = try self.endpointWithQuery(allocator);
-        defer allocator.free(endpoint);
         const url = try request.buildEntityUrl(
             allocator,
-            endpoint,
+            self.protocol.endpoint.base_url,
             self.table_name,
             partition_key,
             row_key,
@@ -195,7 +196,7 @@ pub const TableClient = struct {
         defer req.deinit();
         try req.setHeader("Accept", "application/json;odata=nometadata");
         try req.setHeader("x-ms-version", self.protocol.api_version);
-        return self.protocol.pipeline.send(&req);
+        return self.protocol.send(&req, .{});
     }
 
     /// POST `{endpoint}/{tableName}` with JSON entity body.
@@ -206,12 +207,10 @@ pub const TableClient = struct {
     ) !core.http.Response {
         const url = try std.fmt.allocPrint(
             allocator,
-            "{s}/{s}{s}{s}",
+            "{s}/{s}",
             .{
                 self.protocol.endpoint.base_url,
                 self.table_name,
-                if (self.protocol.endpoint.has_query) "?" else "",
-                self.protocol.endpoint.raw_query,
             },
         );
         defer allocator.free(url);
@@ -240,7 +239,7 @@ pub const TableClient = struct {
         try req.setHeader("Accept", "application/json;odata=nometadata");
         try req.setHeader("x-ms-version", self.protocol.api_version);
         req.body = body_buf.items;
-        return self.protocol.pipeline.send(&req);
+        return self.protocol.send(&req, .{});
     }
 
     /// DELETE `{endpoint}/{tableName}(PartitionKey='{pk}',RowKey='{rk}')`.
@@ -250,11 +249,9 @@ pub const TableClient = struct {
         partition_key: []const u8,
         row_key: []const u8,
     ) !core.http.Response {
-        const endpoint = try self.endpointWithQuery(allocator);
-        defer allocator.free(endpoint);
         const url = try request.buildEntityUrl(
             allocator,
-            endpoint,
+            self.protocol.endpoint.base_url,
             self.table_name,
             partition_key,
             row_key,
@@ -265,17 +262,7 @@ pub const TableClient = struct {
         defer req.deinit();
         try req.setHeader("If-Match", "*");
         try req.setHeader("x-ms-version", self.protocol.api_version);
-        return self.protocol.pipeline.send(&req);
-    }
-
-    fn endpointWithQuery(self: *TableClient, allocator: std.mem.Allocator) ![]u8 {
-        if (!self.protocol.endpoint.has_query)
-            return allocator.dupe(u8, self.protocol.endpoint.base_url);
-        return std.fmt.allocPrint(
-            allocator,
-            "{s}?{s}",
-            .{ self.protocol.endpoint.base_url, self.protocol.endpoint.raw_query },
-        );
+        return self.protocol.send(&req, .{});
     }
 };
 
@@ -459,4 +446,27 @@ test "Shared Key and SAS constructors have isolated authentication behavior" {
     sas_response.deinit();
     try std.testing.expect(mock.last_headers.get("Authorization") == null);
     try std.testing.expect(std.mem.indexOf(u8, mock.last_url.?, "sv=1%2F2&sig=a+b%3D&sp=r") != null);
+}
+
+fn testSasOperationAllocationFailures(allocator: std.mem.Allocator) !void {
+    var mock = core.http.MockTransport.init(allocator, 200, "{}");
+    defer mock.deinit();
+    var sas = try TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1%2F2&sig=allocation+SECRET%3D&sp=r",
+        "Table123",
+        mock.asTransport(),
+        .{},
+    );
+    defer sas.deinit();
+    var response = try sas.getEntity(allocator, "pk", "rk");
+    response.deinit();
+}
+
+test "SAS operation allocation failure paths are leak-free" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        testSasOperationAllocationFailures,
+        .{},
+    );
 }
