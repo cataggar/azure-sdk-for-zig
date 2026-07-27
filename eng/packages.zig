@@ -250,6 +250,7 @@ pub const all = [_]Package{
             "root.zig",
             "sas.zig",
             "convenience.zig",
+            "container_client.zig",
             "src",
             "examples",
             "README.md",
