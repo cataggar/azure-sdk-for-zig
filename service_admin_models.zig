@@ -34,6 +34,7 @@ pub fn serializeServicePropertiesXml(
     allocator: std.mem.Allocator,
     properties: ServiceProperties,
 ) ![]u8 {
+    try validateServiceProperties(properties);
     var xml: std.ArrayList(u8) = .empty;
     errdefer xml.deinit(allocator);
     try xml.appendSlice(allocator, "<?xml version=\"1.0\" encoding=\"UTF-8\"?><StorageServiceProperties>");
@@ -90,12 +91,10 @@ fn validateLogging(logging: Logging) !void {
 fn validateMetrics(metrics: Metrics) !void {
     const version = metrics.version orelse return error.MissingMetricsVersion;
     if (!std.mem.eql(u8, version, "1.0")) return error.InvalidAnalyticsVersion;
+    const retention = metrics.retention_policy orelse return error.MissingMetricsRetentionPolicy;
+    try validateRetentionPolicy(retention);
     if (metrics.enabled) {
         if (metrics.include_apis == null) return error.MissingIncludeApis;
-        const retention = metrics.retention_policy orelse return error.MissingMetricsRetentionPolicy;
-        try validateRetentionPolicy(retention);
-    } else if (metrics.retention_policy) |retention| {
-        try validateRetentionPolicy(retention);
     }
 }
 
@@ -218,12 +217,13 @@ fn appendMetrics(
     metrics: Metrics,
 ) !void {
     try openTag(xml, allocator, root);
-    try appendElement(xml, allocator, "Version", metrics.version.?);
+    const version = metrics.version orelse return error.MissingMetricsVersion;
+    const retention = metrics.retention_policy orelse return error.MissingMetricsRetentionPolicy;
+    try appendElement(xml, allocator, "Version", version);
     try appendBoolElement(xml, allocator, "Enabled", metrics.enabled);
     if (metrics.include_apis) |include_apis|
         try appendBoolElement(xml, allocator, "IncludeAPIs", include_apis);
-    if (metrics.retention_policy) |retention|
-        try appendRetentionPolicy(xml, allocator, retention);
+    try appendRetentionPolicy(xml, allocator, retention);
     try closeTag(xml, allocator, root);
 }
 
@@ -480,6 +480,19 @@ test "service-property XML omits absent roots and keeps empty CORS explicit" {
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?><StorageServiceProperties><HourMetrics><Version>1.0</Version><Enabled>false</Enabled><IncludeAPIs>false</IncludeAPIs><RetentionPolicy><Enabled>false</Enabled><Days>7</Days></RetentionPolicy></HourMetrics></StorageServiceProperties>",
         disabled_metrics,
     );
+}
+
+test "public service property serializer rejects incomplete metrics instead of panicking" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(error.MissingMetricsVersion, serializeServicePropertiesXml(allocator, .{
+        .hour_metrics = .{ .enabled = false, .retention_policy = .{ .enabled = false } },
+    }));
+    try std.testing.expectError(error.MissingMetricsRetentionPolicy, serializeServicePropertiesXml(allocator, .{
+        .hour_metrics = .{ .version = "1.0", .enabled = false },
+    }));
+    try std.testing.expectError(error.MissingIncludeApis, serializeServicePropertiesXml(allocator, .{
+        .hour_metrics = .{ .version = "1.0", .enabled = true, .retention_policy = .{ .enabled = false } },
+    }));
 }
 
 test "geo-replication last sync time is RFC 7231 and supports unavailable values" {
