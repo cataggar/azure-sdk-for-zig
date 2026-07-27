@@ -108,8 +108,9 @@ transport are mutable and not thread-safe. Callers may provide external
 synchronization when sharing a client or using multiple derived clients.
 
 The canonical TypeSpec does not model `$batch`; the generated provenance and
-operation inventory test prove that gap. This layer does not hand-write a
-replacement: the later transaction issue owns its documented implementation.
+operation inventory test prove that gap. `transaction.zig` therefore owns the
+isolated hand-written multipart implementation; regeneration must never move
+it into or overwrite the generated REST package.
 
 ## Entity CRUD
 
@@ -139,6 +140,25 @@ checking the effective operation deadline before every attempt and delay.
 Wildcard updates and upserts use normal retries because repeating the same
 payload is safe, but an exhausted transport failure is still classified as
 outcome-unknown.
+
+## Entity group transactions
+
+`TransactionBuilder` owns copied keys, ETags, and entity JSON. Typed `add`,
+`updateMerge`, `updateReplace`, `upsertMerge`, and `upsertReplace` methods
+serialize immediately; matching `*Dynamic` methods accept `DynamicEntity`.
+`delete` accepts keys and a required `If-Match` value. Submission validates a
+nonempty group of at most 100 unique targets in one partition and enforces the
+4 MiB complete MIME payload limit before transport.
+
+`TableClient.submitTransactionResult` returns ordered inner status/ETag
+results or a `TableError` whose `operation_index` is zero-based. Batch POSTs
+retry only failures known to occur before transport entry. After dispatch, a
+transport failure, any successful outer status other than `202 Accepted`, or a
+missing, truncated, malformed, or wrong-count `202` multipart response returns
+`error.TransactionOutcomeUnknown`. Do not retry in that case: the atomic
+transaction may already have committed. A fully parsed inner HTTP failure still
+returns its precise indexed `TableError`; pretransport validation failures
+remain deterministic local errors.
 
 ## Checked feature-parity contract
 

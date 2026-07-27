@@ -82,6 +82,13 @@ pub const UpdateEntityOptions = options.UpdateEntityOptions;
 pub const UpsertEntityOptions = options.UpsertEntityOptions;
 pub const GetAccessPolicyResponse = responses.SdkResponse(protocol_client.GetAccessPolicyResponse);
 pub const SetAccessPolicyResponse = responses.SdkResponse(protocol_client.SetAccessPolicyResponse);
+pub const TransactionOptions = options.TransactionOptions;
+pub const TransactionBoundaries = options.TransactionBoundaries;
+pub const TransactionBuilder = transaction.TransactionBuilder;
+pub const TransactionAction = transaction.Action;
+pub const TransactionResponse = transaction.TransactionResponse;
+pub const TransactionOperationResult = transaction.OperationResult;
+pub const TransactionResult = transaction.TransactionResult;
 pub const unwrapGetEntity = responses.unwrapGetEntity;
 pub const unwrapCreateEntity = responses.unwrapCreateEntity;
 
@@ -166,6 +173,13 @@ test {
     _ = UpsertEntityOptions;
     _ = GetAccessPolicyResponse;
     _ = SetAccessPolicyResponse;
+    _ = TransactionOptions;
+    _ = TransactionBoundaries;
+    _ = TransactionBuilder;
+    _ = TransactionAction;
+    _ = TransactionResponse;
+    _ = TransactionOperationResult;
+    _ = TransactionResult;
     _ = unwrapGetEntity;
     _ = unwrapCreateEntity;
 }
