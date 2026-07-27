@@ -1,7 +1,9 @@
-//! Stored access policies and service properties/statistics.
+//! Stored access policies, service properties, and optional geo statistics.
 //!
 //! `AZURE_DATA_TABLES_ALLOW_SERVICE_PROPERTIES_WRITE=1` is required before
 //! this example changes account-wide service properties.
+//! `AZURE_DATA_TABLES_SECONDARY_CONNECTION_STRING` is an optional complete
+//! connection string targeting a conventional read-access secondary endpoint.
 
 const std = @import("std");
 const core = @import("azure_sdk_core");
@@ -42,8 +44,22 @@ pub fn main(init: std.process.Init) !void {
 
     var properties = try service.getServiceProperties(allocator, .{});
     defer properties.deinit();
-    var statistics = try service.getStatistics(allocator, .{});
-    defer statistics.deinit();
+
+    // Statistics require an account-secondary endpoint. A separate complete
+    // connection string preserves the exact custom suffix/path and auth mode.
+    if (env.get("AZURE_DATA_TABLES_SECONDARY_CONNECTION_STRING")) |secondary_connection_string| {
+        if (secondary_connection_string.len != 0) {
+            var secondary = try tables.TableServiceClient.initFromConnectionString(
+                allocator,
+                secondary_connection_string,
+                transport.asTransport(),
+                .{},
+            );
+            defer secondary.deinit();
+            var statistics = try secondary.getStatistics(allocator, .{});
+            defer statistics.deinit();
+        }
+    }
 
     const update = tables.ServiceProperties{
         .minute_metrics = .{

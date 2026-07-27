@@ -143,13 +143,24 @@ zig build examples
 |---|---|---|
 | `authentication.zig` | Entra bearer, Shared Key, SAS URL, connection string, and Azurite constructors | It sends no request; set only the environment variables for the constructor to exercise. `AZURE_DATA_TABLES_AZURITE=1` selects `UseDevelopmentStorage=true`. |
 | `entities.zig` | Typed add/get, `DynamicEntity`, `EntityPager`, and conditional ETag update | `AZURE_DATA_TABLES_CONNECTION_STRING`, `AZURE_DATA_TABLES_TABLE`; use a disposable table. |
-| `administration.zig` | Stored access policies, service-property read/update shape, and statistics | Same connection string/table variables. Account-wide writes additionally require `AZURE_DATA_TABLES_ALLOW_SERVICE_PROPERTIES_WRITE=1`. |
+| `administration.zig` | Stored access policies, service-property read/update shape, and geo statistics | `AZURE_DATA_TABLES_CONNECTION_STRING`, `AZURE_DATA_TABLES_TABLE`; account-wide writes additionally require `AZURE_DATA_TABLES_ALLOW_SERVICE_PROPERTIES_WRITE=1`. Set `AZURE_DATA_TABLES_SECONDARY_CONNECTION_STRING` to actually call `getStatistics`; otherwise statistics are intentionally skipped. |
 | `transactions.zig` | Hand-written same-partition `$batch` transaction | Same connection string/table variables; the sample inserts two rows. |
 
 Examples deliberately use environment variables and never embed an account
 name, account key, bearer token, or complete SAS query. Treat a connection
 string and any URL returned by SAS generation as a secret; do not print or
 record them.
+
+`getStatistics` requires a conventional `{account}-secondary.table...`
+read-access endpoint. For a standard Azure account, set
+`AZURE_DATA_TABLES_SECONDARY_CONNECTION_STRING` to an independent string with
+the same account credentials (or a secondary-valid SAS) and explicit
+`TableEndpoint=https://{account}-secondary.table.core.windows.net`; omit
+`EndpointSuffix` when supplying that explicit endpoint. For a custom Azure
+Storage suffix or path, set `TableEndpoint` to that account's actual
+conventional `-secondary` Table endpoint; do not derive it by replacing
+unrelated host/path text. Azurite has no geo-replication secondary, so leave
+the variable unset and the example will not call statistics.
 
 ## Integration and live tests
 
