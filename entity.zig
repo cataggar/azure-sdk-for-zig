@@ -175,3 +175,19 @@ test "DynamicEntity owns copied property values" {
     try std.testing.expectEqual(@as(i64, 42), entity.properties.get("Count").?.int64.value);
     try std.testing.expectEqualStrings("Alice", entity.properties.get("Name").?.string);
 }
+
+fn testDynamicEntityAllocationFailures(allocator: std.mem.Allocator) !void {
+    var value = try DynamicEntity.init(allocator, "partition", "row");
+    defer value.deinit();
+    try value.put("Name", .{ .string = "example" });
+    try value.put("Payload", .{ .binary = .{ .bytes = "bytes" } });
+    try value.setTimestamp(try edm.EdmDateTime.init("2026-07-27T00:00:00Z"));
+}
+
+test "DynamicEntity allocation failures are leak-free" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        testDynamicEntityAllocationFailures,
+        .{},
+    );
+}

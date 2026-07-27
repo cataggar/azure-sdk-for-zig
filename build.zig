@@ -22,7 +22,7 @@ pub fn build(b: *std.Build) void {
     });
     const rest_mod = rest_dep.module("azure_rest_data_tables");
 
-    _ = b.addModule("azure_sdk_data_tables", .{
+    const sdk_mod = b.addModule("azure_sdk_data_tables", .{
         .root_source_file = b.path("root.zig"),
         .target = target,
         .imports = &.{
@@ -65,4 +65,75 @@ pub fn build(b: *std.Build) void {
         b.graph.zig_exe,
     });
     test_step.dependOn(&negative_tests.step);
+
+    const examples_step = b.step("examples", "Compile all Data Tables examples");
+    const example_sources = [_]struct {
+        name: []const u8,
+        source: []const u8,
+    }{
+        .{ .name = "data-tables-authentication", .source = "examples/authentication.zig" },
+        .{ .name = "data-tables-entities", .source = "examples/entities.zig" },
+        .{ .name = "data-tables-administration", .source = "examples/administration.zig" },
+        .{ .name = "data-tables-transactions", .source = "examples/transactions.zig" },
+    };
+    const example_support_mod = b.createModule(.{
+        .root_source_file = b.path("examples/support.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "azure_sdk_core", .module = core_mod },
+            .{ .name = "azure_sdk_data_tables", .module = sdk_mod },
+        },
+    });
+    for (example_sources) |example| {
+        const executable = b.addExecutable(.{
+            .name = example.name,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(example.source),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "azure_sdk_core", .module = core_mod },
+                    .{ .name = "azure_sdk_data_tables", .module = sdk_mod },
+                    .{ .name = "tables_example_support", .module = example_support_mod },
+                },
+            }),
+        });
+        examples_step.dependOn(&executable.step);
+        test_step.dependOn(&executable.step);
+    }
+
+    const azurite_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("integration_tests/azurite.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "azure_sdk_core", .module = core_mod },
+                .{ .name = "azure_sdk_data_tables", .module = sdk_mod },
+            },
+        }),
+    });
+    const azurite_test_step = b.step(
+        "azurite-test",
+        "Run opt-in Azurite Tables integration tests; unconfigured tests skip",
+    );
+    azurite_test_step.dependOn(&b.addRunArtifact(azurite_tests).step);
+
+    const live_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("live_tests/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "azure_sdk_core", .module = core_mod },
+                .{ .name = "azure_sdk_data_tables", .module = sdk_mod },
+            },
+        }),
+    });
+    const live_test_step = b.step(
+        "live-test",
+        "Run opt-in Azure Storage Tables live tests; unconfigured tests skip",
+    );
+    live_test_step.dependOn(&b.addRunArtifact(live_tests).step);
 }

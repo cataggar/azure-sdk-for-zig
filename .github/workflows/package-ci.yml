@@ -31,7 +31,9 @@ jobs:
         run: zig build test --summary all
       - name: Build examples
         shell: bash
-        run: echo "No examples configured"
+        run: zig build examples
       - name: Compile live tests
         shell: bash
-        run: echo "No live tests configured"
+        run: |
+          zig build azurite-test
+          zig build live-test

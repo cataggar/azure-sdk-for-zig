@@ -1870,7 +1870,7 @@ fn testEntityCrudAllocationFailures(allocator: std.mem.Allocator) !void {
         "https://account.table.core.windows.net?sv=1&sig=allocation-secret",
         "Table123",
         mock.asTransport(),
-        .{},
+        .{ .retry = .{ .max_retries = 0 } },
     );
     defer client.deinit();
     var response = try client.getEntityAs(SimpleEntity, allocator, "p", "r", .{});
@@ -1899,7 +1899,7 @@ fn testEntityMutationAllocationFailures(allocator: std.mem.Allocator) !void {
         "https://account.table.core.windows.net?sv=1&sig=allocation-secret",
         "Table123",
         mock.asTransport(),
-        .{},
+        .{ .retry = .{ .max_retries = 0 } },
     );
     defer client.deinit();
     var response = client.upsertEntity(allocator, SimpleEntity{
@@ -2088,7 +2088,7 @@ fn testSasOperationAllocationFailures(allocator: std.mem.Allocator) !void {
         "https://account.table.core.windows.net/Table123?sv=1%2F2&sig=allocation+SECRET%3D&sp=r&tn=Table123",
         "Table123",
         mock.asTransport(),
-        .{},
+        .{ .retry = .{ .max_retries = 0 } },
     );
     defer sas.deinit();
     var response = try sas.getEntityRaw(allocator, "pk", "rk");
@@ -2629,7 +2629,7 @@ fn testAccessPolicyAllocationFailures(allocator: std.mem.Allocator) !void {
         "People",
         credential.asCredential(),
         transport.asTransport(),
-        .{},
+        .{ .retry = .{ .max_retries = 0 } },
     );
     defer table_client.deinit();
     var get_result = try table_client.getAccessPolicyResult(allocator, .{});
