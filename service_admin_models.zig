@@ -221,8 +221,10 @@ fn appendMetrics(
     const retention = metrics.retention_policy orelse return error.MissingMetricsRetentionPolicy;
     try appendElement(xml, allocator, "Version", version);
     try appendBoolElement(xml, allocator, "Enabled", metrics.enabled);
-    if (metrics.include_apis) |include_apis|
-        try appendBoolElement(xml, allocator, "IncludeAPIs", include_apis);
+    if (metrics.enabled) {
+        if (metrics.include_apis) |include_apis|
+            try appendBoolElement(xml, allocator, "IncludeAPIs", include_apis);
+    }
     try appendRetentionPolicy(xml, allocator, retention);
     try closeTag(xml, allocator, root);
 }
@@ -477,7 +479,7 @@ test "service-property XML omits absent roots and keeps empty CORS explicit" {
     });
     defer allocator.free(disabled_metrics);
     try std.testing.expectEqualStrings(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><StorageServiceProperties><HourMetrics><Version>1.0</Version><Enabled>false</Enabled><IncludeAPIs>false</IncludeAPIs><RetentionPolicy><Enabled>false</Enabled><Days>7</Days></RetentionPolicy></HourMetrics></StorageServiceProperties>",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><StorageServiceProperties><HourMetrics><Version>1.0</Version><Enabled>false</Enabled><RetentionPolicy><Enabled>false</Enabled><Days>7</Days></RetentionPolicy></HourMetrics></StorageServiceProperties>",
         disabled_metrics,
     );
 }
