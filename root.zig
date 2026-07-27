@@ -50,9 +50,33 @@ pub const download = convenience.download;
 pub const DownloadResult = convenience.DownloadResult;
 pub const DownloadOptions = convenience.DownloadOptions;
 
+// ────────────────── Container and blob convenience ────────────
+// Hand-written container-scoped clients. The generated client models Azure
+// blob metadata as a single `x-ms-meta` header, which is not the wire format;
+// these clients emit one `x-ms-meta-{name}` header per entry and read them
+// back, which is what the Event Hubs checkpoint store needs.
+pub const container_client = @import("container_client.zig");
+pub const BlobContainerClient = container_client.BlobContainerClient;
+pub const auth_scopes = container_client.auth_scopes;
+pub const ListBlobsOptions = container_client.ListBlobsOptions;
+pub const ContainerBlobClient = container_client.BlobClient;
+pub const BlobProperties = container_client.BlobProperties;
+pub const BlobItem = container_client.BlobItem;
+pub const freeBlobItems = container_client.freeBlobItems;
+pub const Metadata = container_client.Metadata;
+pub const MetadataEntry = container_client.MetadataEntry;
+pub const isValidMetadataName = container_client.isValidMetadataName;
+pub const metadata_header_prefix = container_client.metadata_header_prefix;
+pub const UploadBlobOptions = container_client.UploadBlobOptions;
+pub const UploadBlobResult = container_client.UploadBlobResult;
+pub const SetMetadataOptions = container_client.SetMetadataOptions;
+pub const SetMetadataResult = container_client.SetMetadataResult;
+pub const DownloadBlobResult = container_client.DownloadBlobResult;
+
 test {
     std.testing.refAllDecls(sas);
     _ = @import("convenience.zig");
+    _ = @import("container_client.zig");
     inline for (.{
         clients.BlobClient,
         clients.Service,
