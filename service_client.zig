@@ -781,7 +781,7 @@ fn testLifecycleAllocationFailures(allocator: std.mem.Allocator) !void {
         "https://account.table.core.windows.net",
         credential.asCredential(),
         transport.asTransport(),
-        .{},
+        .{ .retry = .{ .max_retries = 0 } },
     );
     defer service.deinit();
     var result = try service.createTableResult(allocator, "Table123", .{});
@@ -1027,7 +1027,7 @@ fn testServiceAdminAllocationFailures(allocator: std.mem.Allocator) !void {
         "https://account.table.core.windows.net",
         credential.asCredential(),
         transport.asTransport(),
-        .{},
+        .{ .retry = .{ .max_retries = 0 } },
     );
     defer service.deinit();
     var response = try service.setServiceProperties(allocator, .{

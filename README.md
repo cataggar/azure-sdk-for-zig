@@ -24,11 +24,10 @@ contract. **Cosmos DB Table API runtime support is excluded.** Cosmos endpoint
 audiences, request transforms, compatibility policies, and emulator behavior
 belong in a separate Cosmos SDK.
 
-The contract was checked on 2026-07-26 at upstream commit
-`0744f52a86919d243ba2225e55bdb9c87bf521a5`; the Tables source was last changed
-at `9bec2c0a197179ccddec40f18c245e0817c25d62`. `Data.Tables.Versions` and the
-`stable/` directory contain only `2019-02-02`. Generation must nevertheless
-re-read `Data.Tables.Versions`, choose the newest stable member, and record an
+The contract was checked on 2026-07-27 at upstream `main` commit
+`0744f52a86919d243ba2225e55bdb9c87bf521a5`. `Data.Tables.Versions` contains
+only `2019-02-02`. Generation must nevertheless re-read
+`Data.Tables.Versions`, choose the newest stable member, and record an
 immutable upstream commit every time it is regenerated. A generic Storage
 `x-ms-version` is not a substitute for a Tables contract version.
 
@@ -45,6 +44,26 @@ normalizes endpoint paths while preserving SAS query bytes, maps metadata,
 request ID, server timeout, client timeout, and per-call policy options, and
 adapts generated values with allocator-owned raw response headers. Generated
 models remain the only wire models.
+
+### Release-time TypeSpec and regeneration checks
+
+Run these immediately before releasing either package:
+
+```bash
+./scripts/verify-typespec-version.sh
+./scripts/verify-rest-regeneration.sh <pinned-codegen-worktree> <rest/data_tables-worktree>
+```
+
+The first command requires the upstream `main` ref to equal the immutable
+source commit above, extracts all stable `Data.Tables.Versions` entries from
+`main.tsp`, verifies `2019-02-02` is the only one, and rejects a newly modeled
+`$batch`. If it reports a changed source, update the fixture and generator,
+regenerate `rest/data_tables`, update provenance and the SDK's immutable REST
+commit/hash together, then repeat the checks. The second command regenerates
+with generator commit `f5dde2c7aa95e7a5ac496793b5527c9a212d642c` and performs
+an exact diff against `rest/data_tables`; it removes only its generated output
+under the supplied codegen worktree. It never selects a generic Storage API
+version.
 
 ## Microsoft Entra authentication
 
@@ -111,6 +130,71 @@ The canonical TypeSpec does not model `$batch`; the generated provenance and
 operation inventory test prove that gap. `transaction.zig` therefore owns the
 isolated hand-written multipart implementation; regeneration must never move
 it into or overwrite the generated REST package.
+
+## Examples
+
+Compile all examples without credentials or network access:
+
+```bash
+zig build examples
+```
+
+| Example | Covers | Runtime configuration |
+|---|---|---|
+| `authentication.zig` | Entra bearer, Shared Key, SAS URL, connection string, and Azurite constructors | It sends no request; set only the environment variables for the constructor to exercise. `AZURE_DATA_TABLES_AZURITE=1` selects `UseDevelopmentStorage=true`. |
+| `entities.zig` | Typed add/get, `DynamicEntity`, `EntityPager`, and conditional ETag update | `AZURE_DATA_TABLES_CONNECTION_STRING`, `AZURE_DATA_TABLES_TABLE`; use a disposable table. |
+| `administration.zig` | Stored access policies, service-property read/update shape, and geo statistics | `AZURE_DATA_TABLES_CONNECTION_STRING`, `AZURE_DATA_TABLES_TABLE`; account-wide writes additionally require `AZURE_DATA_TABLES_ALLOW_SERVICE_PROPERTIES_WRITE=1`. Set `AZURE_DATA_TABLES_SECONDARY_CONNECTION_STRING` to actually call `getStatistics`; otherwise statistics are intentionally skipped. |
+| `transactions.zig` | Hand-written same-partition `$batch` transaction | Same connection string/table variables; the sample inserts two rows. |
+
+Examples deliberately use environment variables and never embed an account
+name, account key, bearer token, or complete SAS query. Treat a connection
+string and any URL returned by SAS generation as a secret; do not print or
+record them.
+
+`getStatistics` requires a conventional `{account}-secondary.table...`
+read-access endpoint. For a standard Azure account, set
+`AZURE_DATA_TABLES_SECONDARY_CONNECTION_STRING` to an independent string with
+the same account credentials (or a secondary-valid SAS) and explicit
+`TableEndpoint=https://{account}-secondary.table.core.windows.net`; omit
+`EndpointSuffix` when supplying that explicit endpoint. For a custom Azure
+Storage suffix or path, set `TableEndpoint` to that account's actual
+conventional `-secondary` Table endpoint; do not derive it by replacing
+unrelated host/path text. Azurite has no geo-replication secondary, so leave
+the variable unset and the example will not call statistics.
+
+## Integration and live tests
+
+`zig build azurite-test` is opt-in and returns a clean Zig test skip unless
+`AZURE_DATA_TABLES_AZURITE_TESTS=1`. A configured run requires a unique
+alphanumeric `AZURE_DATA_TABLES_AZURITE_TEST_RUN_ID`; it defaults to
+`UseDevelopmentStorage=true`, or accepts
+`AZURE_DATA_TABLES_AZURITE_CONNECTION_STRING`. It creates one test table,
+cleans it up, and covers lifecycle, typed CRUD, dynamic entities, entity
+query paging, conditional ETag rejection, and `$batch`. No default test makes
+a network request. The Linux CI job runs this test against the immutable
+Azurite `3.35.0` image manifest
+`sha256:dae2a5f96553962901304b94e72ef87e299d0825e4b679673bcc527a25076fe4`,
+waits for its Table endpoint, and stops its exact background process ID.
+
+`zig build live-test` is destructive and returns a clean skip unless
+`AZURE_DATA_TABLES_LIVE_TESTS=1`. A configured Azure Storage run requires:
+
+- `AZURE_DATA_TABLES_ENDPOINT` — HTTPS primary Table endpoint, without a
+  trailing slash;
+- `AZURE_DATA_TABLES_SECONDARY_ENDPOINT` — HTTPS read-access secondary Table
+  endpoint for `getStatistics`, without a trailing slash;
+- `AZURE_DATA_TABLES_LIVE_TEST_RUN_ID` — unique alphanumeric suffix;
+- `AZURE_TOKEN` — short-lived Entra token for
+  `https://storage.azure.com/.default`;
+- `AZURE_DATA_TABLES_ACCOUNT_NAME` and `AZURE_DATA_TABLES_SHARED_KEY` —
+  Shared Key credentials.
+
+The live flow checks Entra list paging, Shared Key operations, generated
+account SAS access, table ACL set/get, service properties, and statistics on
+the secondary endpoint. It creates and deletes only the run-specific table.
+It does not change account-wide service properties, and it uses no recording
+or playback; this prevents account names, keys, bearer tokens, and complete
+SAS queries from being committed.
 
 ## Entity CRUD
 
@@ -192,8 +276,8 @@ it does **not** claim that a later roadmap phase is already implemented.
 | [x] | `DeleteEntity` with `IfMatch` | `TableClient.deleteEntityWithOptions` / `deleteEntityResult`; raw-compatible `deleteEntity` |
 | [x] | `UpdateEntity` merge and replace with ETags | `TableClient.updateEntity` / `updateEntityResult` plus `UpdateMode` |
 | [x] | `UpsertEntity` merge and replace | `TableClient.upsertEntity` / `upsertEntityResult` |
-| [x] | `NewListEntitiesPager` with filter, select, top, format, and two continuation keys | generic `TableClient.listEntities` returning `EntityPager(T)` |
-| [x] | `GetAccessPolicy` / `SetAccessPolicy` | `TableClient.getAccessPolicies` / `setAccessPolicies` and result variants |
+| [x] | `NewListEntitiesPager` with filter, select, top, format, and two continuation keys | generic `TableClient.queryEntities` returning `EntityPager(T)` |
+| [x] | `GetAccessPolicy` / `SetAccessPolicy` | `TableClient.getAccessPolicy` / `setAccessPolicy` and result variants |
 | [x] | `SubmitTransaction` and all six action kinds | `TransactionBuilder` and `TableClient.submitTransactionResult` |
 | [x] | `GetProperties` / `SetProperties` | `TableServiceClient.getProperties` / `setProperties` (or explicit `*ServiceProperties` spellings) and result variants |
 | [x] | `GetStatistics` | `TableServiceClient.getStatistics` / `getStatisticsResult` |
@@ -212,7 +296,7 @@ it does **not** claim that a later roadmap phase is already implemented.
 | [x] | signed identifiers and access policies | `service_models.SignedIdentifier` / `AccessPolicy` |
 | [x] | geo-replication status and last-sync time | `service_models.GeoReplication` |
 | [x] | `TableErrorCode` and HTTP response errors | `errors.TableError`, known code constants, and unknown-code preservation |
-| [x] | paged table/entity responses | `TablePager`, `EntityPager(T)`, `ListTablesPage`, and `ListEntitiesPage(T)` |
+| [x] | paged table/entity responses | `TablePager`, `EntityPager(T)`, `ListTablesPage`, and `EntityPage(T)` |
 | [x] | transactional action and per-operation responses | `TransactionBuilder`, action types, and indexed transaction results |
 
 Typed Zig entities add compile-time schema checking while `DynamicEntity`
@@ -237,6 +321,19 @@ when decoding service responses but omitted by both typed and dynamic
 serialization because the service owns that field. The original
 string-only `TableEntity` remains available as a compatibility export and
 continues to borrow its keys and values.
+
+## Migrating from the prototype
+
+The 0.1.0 compatibility exports remain: `TableClient`,
+`TableServiceClient`, `TableEntity`, and the raw `getEntity`, `createEntity`,
+and `deleteEntity` calls keep their signatures. New code should select one
+explicit constructor (`initWithToken`, `initWithSharedKey`, `initWithSasUrl`,
+or `initFromConnectionString`) rather than assembling an unauthenticated
+prototype client. Replace `TableEntity` with a comptime-checked struct and
+`addEntity`/`getEntityAs(T, ...)` when the schema is known. For runtime
+schemas, use owning `DynamicEntity`. Replace manual continuation handling with
+`queryEntities(T, allocator, options)` and release its pager; replace raw
+conditional requests with `updateEntity(..., .{ .if_match = etag })`.
 
 ## Public API conventions
 
@@ -322,7 +419,18 @@ allocating responses own an arena and must be released with `deinit`.
 ```bash
 git ls-files -z -- '*.zig' 'build.zig.zon' | xargs -0 zig fmt --check
 zig build test --summary all
+zig build examples
+zig build azurite-test
+zig build live-test
 ```
+
+The package manifest pins immutable Core, REST, and serde commits/hashes.
+`package-ci.yml` runs formatting, package tests, examples, and the cleanly
+skipping live-test step on Linux, macOS, and Windows; its Linux Azurite job
+runs configured lifecycle/CRUD/query-paging/ETag/batch coverage. Validate
+`rest/data_tables` independently with `zig build test --summary all` before
+creating the normal immutable package-branch release tag after both package
+PRs are merged.
 
 ## Errors and results
 

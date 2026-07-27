@@ -31,7 +31,49 @@ jobs:
         run: zig build test --summary all
       - name: Build examples
         shell: bash
-        run: echo "No examples configured"
-      - name: Compile live tests
+        run: zig build examples
+      - name: Compile opt-in live tests
         shell: bash
-        run: echo "No live tests configured"
+        run: zig build live-test
+
+  azurite-integration:
+    name: azurite-integration (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Run configured Azurite Tables integration tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          readonly azurite_image='mcr.microsoft.com/azure-storage/azurite@sha256:dae2a5f96553962901304b94e72ef87e299d0825e4b679673bcc527a25076fe4'
+          docker pull "$azurite_image"
+          docker run --rm --init \
+            --publish 127.0.0.1:10002:10002 \
+            "$azurite_image" \
+            azurite-table --tableHost 0.0.0.0 --tablePort 10002 --silent &
+          azurite_pid=$!
+          cleanup() {
+            local status=$?
+            trap - EXIT
+            if kill -0 "$azurite_pid" 2>/dev/null; then
+              kill -TERM "$azurite_pid" 2>/dev/null || true
+            fi
+            wait "$azurite_pid" 2>/dev/null || true
+            exit "$status"
+          }
+          trap cleanup EXIT
+          for _ in $(seq 1 40); do
+            if curl --silent --show-error --output /dev/null \
+              --connect-timeout 1 http://127.0.0.1:10002/; then
+              break
+            fi
+            sleep 1
+          done
+          curl --silent --show-error --output /dev/null \
+            --connect-timeout 1 http://127.0.0.1:10002/
+          AZURE_DATA_TABLES_AZURITE_TESTS=1 \
+          AZURE_DATA_TABLES_AZURITE_TEST_RUN_ID="${GITHUB_RUN_ID}${GITHUB_RUN_ATTEMPT}" \
+            zig build azurite-test --summary all

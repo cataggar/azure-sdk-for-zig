@@ -170,6 +170,21 @@ pub fn isSecondaryStorageEndpoint(endpoint: []const u8) bool {
     return std.ascii.endsWithIgnoreCase(host.bytes[0..first_label_end], "-secondary");
 }
 
+test "statistics accepts conventional Azure and custom secondary hosts" {
+    try std.testing.expect(isSecondaryStorageEndpoint(
+        "https://account-secondary.table.core.windows.net",
+    ));
+    try std.testing.expect(isSecondaryStorageEndpoint(
+        "https://account-secondary.table.custom.example/root",
+    ));
+    try std.testing.expect(!isSecondaryStorageEndpoint(
+        "https://account.table.core.windows.net",
+    ));
+    try std.testing.expect(!isSecondaryStorageEndpoint(
+        "https://custom.example/account-secondary",
+    ));
+}
+
 /// Doubles apostrophes for an OData literal, then encodes the raw bytes once.
 pub fn encodeODataStringLiteral(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
     try validateEntityKey(value);
