@@ -46,6 +46,9 @@ pub const blobExists = convenience.blobExists;
 pub const containerExists = convenience.containerExists;
 pub const uploadBlockBlob = convenience.uploadBlockBlob;
 pub const downloadInto = convenience.downloadInto;
+pub const download = convenience.download;
+pub const DownloadResult = convenience.DownloadResult;
+pub const DownloadOptions = convenience.DownloadOptions;
 
 test {
     std.testing.refAllDecls(sas);
