@@ -11,6 +11,8 @@ pub const ConnectionStringProperties = messaging_common.ConnectionStringProperti
 pub const Checkpoint = checkpoint.Checkpoint;
 pub const PartitionOwnership = checkpoint.PartitionOwnership;
 pub const CheckpointStore = checkpoint.CheckpointStore;
+pub const freeCheckpoints = checkpoint.freeCheckpoints;
+pub const freeOwnerships = checkpoint.freeOwnerships;
 pub const checkpoint_store_blob = @import("checkpoint_store.zig");
 
 // ─────────────────────── Models ───────────────────────

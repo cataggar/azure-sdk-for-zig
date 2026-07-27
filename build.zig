@@ -71,7 +71,6 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "azure_sdk_core", .module = core_mod },
                 .{ .name = "azure_sdk_storage_blobs", .module = blobs_mod },
-                .{ .name = "serde", .module = serde_mod },
             },
         }),
     });
