@@ -160,7 +160,10 @@ alphanumeric `AZURE_DATA_TABLES_AZURITE_TEST_RUN_ID`; it defaults to
 `AZURE_DATA_TABLES_AZURITE_CONNECTION_STRING`. It creates one test table,
 cleans it up, and covers lifecycle, typed CRUD, dynamic entities, entity
 query paging, conditional ETag rejection, and `$batch`. No default test makes
-a network request.
+a network request. The Linux CI job runs this test against the immutable
+Azurite `3.35.0` image manifest
+`sha256:dae2a5f96553962901304b94e72ef87e299d0825e4b679673bcc527a25076fe4`,
+waits for its Table endpoint, and stops its exact background process ID.
 
 `zig build live-test` is destructive and returns a clean skip unless
 `AZURE_DATA_TABLES_LIVE_TESTS=1`. A configured Azure Storage run requires:
@@ -412,7 +415,8 @@ zig build live-test
 
 The package manifest pins immutable Core, REST, and serde commits/hashes.
 `package-ci.yml` runs formatting, package tests, examples, and the cleanly
-skipping opt-in test steps on Linux, macOS, and Windows. Validate
+skipping live-test step on Linux, macOS, and Windows; its Linux Azurite job
+runs configured lifecycle/CRUD/query-paging/ETag/batch coverage. Validate
 `rest/data_tables` independently with `zig build test --summary all` before
 creating the normal immutable package-branch release tag after both package
 PRs are merged.

@@ -289,6 +289,20 @@ pub fn serialize(
     table_name: []const u8,
     boundaries: Boundaries,
 ) !SerializedRequest {
+    return serializeWithEndpoint(builder, allocator, table_name, null, boundaries);
+}
+
+/// Azure Tables accepts relative batch sub-request targets, but Azurite
+/// requires fully qualified targets. Submission always supplies its validated
+/// endpoint while the public serializer preserves relative deterministic wire
+/// fixtures for callers.
+fn serializeWithEndpoint(
+    builder: *const TransactionBuilder,
+    allocator: std.mem.Allocator,
+    table_name: []const u8,
+    endpoint: ?[]const u8,
+    boundaries: Boundaries,
+) !SerializedRequest {
     try builder.validate();
     try request.validateTableName(table_name);
     try validateBoundary(boundaries.batch);
@@ -304,13 +318,13 @@ pub fn serialize(
 
     var count_buffer: [256]u8 = undefined;
     var counter: std.Io.Writer.Discarding = .init(&count_buffer);
-    try render(builder, allocator, table_name, boundaries, &counter.writer);
+    try render(builder, allocator, table_name, endpoint, boundaries, &counter.writer);
     const length = counter.fullCount();
     if (length > max_payload_size) return error.TransactionTooLarge;
 
     var output = try std.Io.Writer.Allocating.initCapacity(allocator, @intCast(length));
     errdefer output.deinit();
-    render(builder, allocator, table_name, boundaries, &output.writer) catch |err| {
+    render(builder, allocator, table_name, endpoint, boundaries, &output.writer) catch |err| {
         if (err == error.WriteFailed) return error.OutOfMemory;
         return err;
     };
@@ -332,6 +346,7 @@ fn render(
     builder: *const TransactionBuilder,
     allocator: std.mem.Allocator,
     table_name: []const u8,
+    endpoint: ?[]const u8,
     boundaries: Boundaries,
     writer: anytype,
 ) !void {
@@ -342,6 +357,11 @@ fn render(
     for (builder.operations.items, 0..) |operation, index| {
         const relative_url = try operationUrl(allocator, table_name, operation);
         defer allocator.free(relative_url);
+        const request_url = if (endpoint) |base|
+            try std.fmt.allocPrint(allocator, "{s}/{s}", .{ base, relative_url })
+        else
+            relative_url;
+        defer if (endpoint != null) allocator.free(request_url);
         try writer.print(
             "--{s}\r\n" ++
                 "Content-Type: application/http\r\n" ++
@@ -354,7 +374,7 @@ fn render(
                 boundaries.changeset,
                 index + 1,
                 method(operation.action),
-                relative_url,
+                request_url,
             },
         );
         if (operation.body != null)
@@ -460,7 +480,13 @@ pub fn submitResult(
     var changeset_boundary: [42]u8 = undefined;
     const boundaries = transaction_options.boundaries orelse
         try randomBoundaries(&batch_boundary, &changeset_boundary);
-    var serialized = try serialize(builder, allocator, table_name, boundaries);
+    var serialized = try serializeWithEndpoint(
+        builder,
+        allocator,
+        table_name,
+        protocol.endpoint.base_url,
+        boundaries,
+    );
     defer serialized.deinit();
 
     const url = try std.fmt.allocPrint(
@@ -817,6 +843,31 @@ test "all transaction actions have canonical golden wire shapes" {
         "--changeset_test\r\nContent-Type: application/http\r\nContent-Transfer-Encoding: binary\r\nContent-ID: 6\r\n\r\nPUT People(PartitionKey='p',RowKey='upsert-r') HTTP/1.1\r\nAccept: application/json;odata=nometadata\r\nDataServiceVersion: 3.0;\r\nContent-Type: application/json\r\n\r\n{\"PartitionKey\":\"p\",\"RowKey\":\"upsert-r\",\"value\":\"ur\"}\r\n" ++
         "--changeset_test--\r\n--batch_test--\r\n";
     try std.testing.expectEqualStrings(expected, serialized.body);
+}
+
+test "submitted transaction uses absolute sub-request targets" {
+    var builder = TransactionBuilder.init(std.testing.allocator);
+    defer builder.deinit();
+    try builder.add(TestEntity, .{
+        .partition_key = "p",
+        .row_key = "r",
+        .value = "value",
+    });
+    var serialized = try serializeWithEndpoint(
+        &builder,
+        std.testing.allocator,
+        "People",
+        "http://127.0.0.1:10002/devstoreaccount1",
+        .{ .batch = "batch_test", .changeset = "changeset_test" },
+    );
+    defer serialized.deinit();
+    try std.testing.expect(
+        std.mem.indexOf(
+            u8,
+            serialized.body,
+            "POST http://127.0.0.1:10002/devstoreaccount1/People HTTP/1.1",
+        ) != null,
+    );
 }
 
 test "transaction URLs escape quotes and Unicode once" {

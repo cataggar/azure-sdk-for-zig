@@ -41,7 +41,7 @@ trap 'rm -rf "$output"' EXIT HUP INT TERM
         -Dazure-sdk-core-hash="$core_hash" \
         generate-data-tables-package
 )
-for path in build.zig build.zig.zon LICENSE.txt README.md src; do
+for path in .gitignore build.zig build.zig.zon LICENSE.txt README.md src; do
     diff -ru "$rest_worktree/$path" "$output/$path"
 done
 printf '%s\n' "Azure Tables REST regeneration is deterministic."

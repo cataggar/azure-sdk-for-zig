@@ -86,10 +86,14 @@ test "live Entra, Shared Key, SAS, ACL, properties, and statistics" {
 
     var created = try service.createTable(allocator, table_name, .{});
     defer created.deinit();
-    defer cleanupTable(&service, allocator, table_name);
-    var table = try service.getTableClient(table_name);
-    defer table.deinit();
-    try aclSmoke(&table, allocator);
+    var cleanup_needed = true;
+    errdefer if (cleanup_needed)
+        cleanupTableBestEffort(&service, allocator, table_name);
+    {
+        var table = try service.getTableClient(table_name);
+        defer table.deinit();
+        try aclSmoke(&table, allocator);
+    }
     try sasSmoke(&service, allocator, &transport);
     try serviceAdministrationSmoke(
         allocator,
@@ -98,6 +102,10 @@ test "live Entra, Shared Key, SAS, ACL, properties, and statistics" {
         &shared_key,
         &transport,
     );
+    var deleted = try service.deleteTable(allocator, table_name, .{});
+    defer deleted.deinit();
+    try std.testing.expectEqual(@as(u16, 204), deleted.status);
+    cleanup_needed = false;
 }
 
 fn entraSmoke(
@@ -130,6 +138,12 @@ fn aclSmoke(client: *tables.TableClient, allocator: std.mem.Allocator) !void {
     defer set.deinit();
     var fetched = try client.getAccessPolicy(allocator, .{});
     defer fetched.deinit();
+    try std.testing.expectEqual(@as(usize, 1), fetched.value.len);
+    try std.testing.expectEqualStrings("live-read", fetched.value[0].id);
+    switch (fetched.value[0].access_policy.permissions) {
+        .raw => |permissions| try std.testing.expectEqualStrings("r", permissions),
+        .table => return error.UnexpectedNormalizedAccessPolicyPermissions,
+    }
 }
 
 fn sasSmoke(
@@ -175,27 +189,16 @@ fn serviceAdministrationSmoke(
         .{},
     );
     defer statistics_client.deinit();
-    var properties = try primary.getServicePropertiesResult(allocator, .{});
-    defer properties.deinit(allocator);
-    try expectSupported(properties);
+    var properties = try primary.getServiceProperties(allocator, .{});
+    defer properties.deinit();
 
-    var statistics = try statistics_client.getStatisticsResult(allocator, .{});
-    defer statistics.deinit(allocator);
-    try expectSupported(statistics);
+    var statistics = try statistics_client.getStatistics(allocator, .{});
+    defer statistics.deinit();
 }
 
-fn expectSupported(result: anytype) !void {
-    switch (result) {
-        .success => {},
-        .failure => |failure| {
-            if (failure.status == 404 or failure.status == 405 or failure.status == 501)
-                return;
-            return error.DataTablesServiceOperationFailed;
-        },
-    }
-}
-
-fn cleanupTable(
+/// Error unwinding preserves the original failure, but still tries to remove
+/// the test table. Normal cleanup above always propagates an HTTP failure.
+fn cleanupTableBestEffort(
     service: *tables.TableServiceClient,
     allocator: std.mem.Allocator,
     table_name: []const u8,

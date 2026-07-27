@@ -62,13 +62,22 @@ test "Azurite table lifecycle, CRUD, query paging, ETag, and batch" {
 
     var created = try service.createTable(allocator, table_name, .{});
     defer created.deinit();
-    defer cleanupTable(&service, allocator, table_name);
+    var cleanup_needed = true;
+    errdefer if (cleanup_needed)
+        cleanupTableBestEffort(&service, allocator, table_name);
 
-    var table = try service.getTableClient(table_name);
-    defer table.deinit();
-    try typedCrudAndEtag(&table, allocator);
-    try dynamicEntityAndPaging(&table, allocator);
-    try batch(&table, allocator);
+    {
+        var table = try service.getTableClient(table_name);
+        defer table.deinit();
+        try typedCrudAndEtag(&table, allocator);
+        try dynamicEntityAndPaging(&table, allocator);
+        try batch(&table, allocator);
+    }
+
+    var deleted = try service.deleteTable(allocator, table_name, .{});
+    defer deleted.deinit();
+    try std.testing.expectEqual(@as(u16, 204), deleted.status);
+    cleanup_needed = false;
 }
 
 fn typedCrudAndEtag(client: *tables.TableClient, allocator: std.mem.Allocator) !void {
@@ -169,12 +178,22 @@ fn batch(client: *tables.TableClient, allocator: std.mem.Allocator) !void {
         .name = "two",
         .count = 2,
     });
-    var response = try client.submitTransaction(allocator, &builder, .{});
-    defer response.deinit();
-    try std.testing.expectEqual(@as(usize, 2), response.operations.len);
+    var result = try client.submitTransactionResult(allocator, &builder, .{});
+    defer result.deinit(allocator);
+    switch (result) {
+        .success => |response| {
+            try std.testing.expectEqual(@as(usize, 2), response.operations.len);
+        },
+        .failure => |failure| {
+            std.debug.print("Azurite batch failed: {f}\n", .{failure});
+            return error.AzuriteBatchFailed;
+        },
+    }
 }
 
-fn cleanupTable(
+/// Error unwinding preserves the original failure, but still tries to remove
+/// the test table. Normal cleanup above always propagates an HTTP failure.
+fn cleanupTableBestEffort(
     service: *tables.TableServiceClient,
     allocator: std.mem.Allocator,
     table_name: []const u8,
