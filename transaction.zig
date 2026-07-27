@@ -471,6 +471,7 @@ pub fn submitResult(
     defer allocator.free(url);
     var req = core.http.Request.init(allocator, .POST, url);
     defer req.deinit();
+    req.redirect_policy = .not_allowed;
     req.body = serialized.body;
     try req.setHeader("Content-Type", serialized.content_type);
     try req.setHeader("Accept", "multipart/mixed");
@@ -1186,6 +1187,112 @@ const TestCredential = struct {
         return .{ .token = "transaction-token", .expires_on = std.math.maxInt(i64) };
     }
 };
+
+const TransactionAuthMode = enum {
+    bearer,
+    shared_key,
+    sas,
+};
+
+fn expectTransactionRedirectRejected(
+    status: u16,
+    auth_mode: TransactionAuthMode,
+) !void {
+    const auth = @import("auth.zig");
+    const client_mod = @import("client.zig");
+    const allocator = std.testing.allocator;
+    var transport = core.http.SequenceMockTransport.init(allocator, &.{
+        .{
+            .status = status,
+            .body = "",
+            .headers = &.{
+                .{
+                    .name = "Location",
+                    .value = "https://account.table.core.windows.net/redirect-target",
+                },
+            },
+        },
+        .{
+            .status = 202,
+            .body = one_success_body,
+            .headers = transaction_response_headers,
+        },
+    });
+    var test_credential = TestCredential.init();
+    var shared_credential = try auth.SharedKeyCredential.init(
+        allocator,
+        "account",
+        "ZmFrZS1rZXk=",
+    );
+    defer shared_credential.deinit();
+    var client = switch (auth_mode) {
+        .bearer => try client_mod.TableClient.initWithToken(
+            allocator,
+            "https://account.table.core.windows.net",
+            "People",
+            &test_credential.credential,
+            transport.asTransport(),
+            .{},
+        ),
+        .shared_key => try client_mod.TableClient.initWithSharedKey(
+            allocator,
+            "https://account.table.core.windows.net",
+            "People",
+            &shared_credential,
+            transport.asTransport(),
+            .{},
+        ),
+        .sas => try client_mod.TableClient.initWithSasUrl(
+            allocator,
+            "https://account.table.core.windows.net?sv=1&sig=SECRET&sp=a",
+            "People",
+            transport.asTransport(),
+            .{},
+        ),
+    };
+    defer client.deinit();
+    var builder = TransactionBuilder.init(allocator);
+    defer builder.deinit();
+    try builder.delete("p", "r", "*");
+
+    var result = try client.submitTransactionResult(allocator, &builder, .{
+        .boundaries = .{ .batch = "b", .changeset = "c" },
+    });
+    defer result.deinit(allocator);
+    switch (result) {
+        .success => return error.ExpectedRedirectRejection,
+        .failure => |failure| try std.testing.expectEqual(status, failure.status),
+    }
+    try std.testing.expectEqual(@as(usize, 1), transport.call_count);
+    try std.testing.expectEqual(core.http.Method.POST, transport.captured_methods[0].?);
+    try std.testing.expect(transport.captured_body_present[0]);
+    try std.testing.expect(transport.capturedBody(0).len > 0);
+    try std.testing.expect(!transport.captured_body_present[1]);
+    try std.testing.expectEqual(@as(usize, 0), transport.capturedBody(1).len);
+    switch (auth_mode) {
+        .bearer, .shared_key => try std.testing.expect(
+            transport.captured_authorization[0],
+        ),
+        .sas => {
+            try std.testing.expect(!transport.captured_authorization[0]);
+            try std.testing.expect(
+                std.mem.indexOf(u8, transport.capturedUrl(0), "sig=SECRET") != null,
+            );
+        },
+    }
+    try std.testing.expect(!transport.captured_authorization[1]);
+}
+
+test "transaction 307 and 308 redirects are rejected without replay for every auth mode" {
+    for ([_]u16{ 307, 308 }) |status| {
+        inline for (std.meta.fields(TransactionAuthMode)) |field| {
+            try expectTransactionRedirectRejected(
+                status,
+                @field(TransactionAuthMode, field.name),
+            );
+        }
+    }
+}
 
 const PreTransportOncePolicy = struct {
     calls: usize = 0,
