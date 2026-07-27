@@ -100,9 +100,9 @@ fn existsRequest(
     };
 }
 
-// ─────────────────────────── downloadInto ─────────────────────────
+// ─────────────────────────── download ─────────────────────────────
 
-pub const DownloadIntoOptions = struct {
+pub const DownloadOptions = struct {
     client_request_id: ?[]const u8 = null,
     lease_id: ?[]const u8 = null,
     snapshot: ?[]const u8 = null,
@@ -113,6 +113,51 @@ pub const DownloadIntoOptions = struct {
     if_match: ?[]const u8 = null,
     if_none_match: ?[]const u8 = null,
 };
+
+/// Alias kept for callers that used the original `downloadInto` option name.
+pub const DownloadIntoOptions = DownloadOptions;
+
+/// Full blob contents returned by `download`, owned by the caller.
+pub const DownloadResult = struct {
+    /// The downloaded bytes. Free with `deinit` (or `alloc.free(data)`).
+    data: []u8,
+    alloc: std.mem.Allocator,
+
+    pub fn deinit(self: *DownloadResult) void {
+        self.alloc.free(self.data);
+        self.* = undefined;
+    }
+};
+
+/// Downloads the blob and returns its full contents in a newly allocated,
+/// caller-owned buffer. Mirrors Rust `BlobClient::download`.
+///
+/// The caller owns the returned `DownloadResult` and must call `deinit` on it
+/// (or free `result.data`). To stream into a caller-provided sink without an
+/// intermediate owned copy, use `downloadInto` instead.
+pub fn download(
+    blob: *Blob,
+    alloc: std.mem.Allocator,
+    options: DownloadOptions,
+) !DownloadResult {
+    const url = try downloadUrl(alloc, blob, options);
+    defer alloc.free(url);
+
+    var pl = blob.pipeline;
+    var req = core.http.Request.init(alloc, .GET, url);
+    defer req.deinit();
+    try setDownloadHeaders(&req, blob, options);
+
+    var resp = try pl.send(&req);
+    defer resp.deinit();
+    switch (resp.status_code) {
+        200, 206 => return .{ .data = try alloc.dupe(u8, resp.body), .alloc = alloc },
+        else => {
+            core.pager.logHttpError("download", resp.status_code, resp.body);
+            return error.AzureRequestFailed;
+        },
+    }
+}
 
 /// Downloads the blob and writes its bytes to `writer`, returning the number
 /// of bytes written.
@@ -128,27 +173,15 @@ pub fn downloadInto(
     blob: *Blob,
     alloc: std.mem.Allocator,
     writer: *std.Io.Writer,
-    options: DownloadIntoOptions,
+    options: DownloadOptions,
 ) !u64 {
-    var url_buf: std.ArrayList(u8) = .empty;
-    defer url_buf.deinit(alloc);
-    try url_buf.appendSlice(alloc, blob.endpoint);
-    var has_query = false;
-    try appendQuery(alloc, &url_buf, &has_query, "snapshot", options.snapshot);
-    try appendQuery(alloc, &url_buf, &has_query, "versionid", options.version_id);
-    try appendQueryInt(alloc, &url_buf, &has_query, "timeout", options.timeout);
-    const url = try url_buf.toOwnedSlice(alloc);
+    const url = try downloadUrl(alloc, blob, options);
     defer alloc.free(url);
 
     var pl = blob.pipeline;
     var req = core.http.Request.init(alloc, .GET, url);
     defer req.deinit();
-    try req.setHeader("x-ms-version", blob.api_version);
-    if (options.client_request_id) |v| try req.setHeader("x-ms-client-request-id", v);
-    if (options.range) |v| try req.setHeader("Range", v);
-    if (options.lease_id) |v| try req.setHeader("x-ms-lease-id", v);
-    if (options.if_match) |v| try req.setHeader("If-Match", v);
-    if (options.if_none_match) |v| try req.setHeader("If-None-Match", v);
+    try setDownloadHeaders(&req, blob, options);
 
     var resp = try pl.send(&req);
     defer resp.deinit();
@@ -162,6 +195,29 @@ pub fn downloadInto(
             return error.AzureRequestFailed;
         },
     }
+}
+
+/// Builds the blob GET URL with the shared download query parameters. Caller
+/// owns the returned slice.
+fn downloadUrl(alloc: std.mem.Allocator, blob: *Blob, options: DownloadOptions) ![]u8 {
+    var url_buf: std.ArrayList(u8) = .empty;
+    errdefer url_buf.deinit(alloc);
+    try url_buf.appendSlice(alloc, blob.endpoint);
+    var has_query = false;
+    try appendQuery(alloc, &url_buf, &has_query, "snapshot", options.snapshot);
+    try appendQuery(alloc, &url_buf, &has_query, "versionid", options.version_id);
+    try appendQueryInt(alloc, &url_buf, &has_query, "timeout", options.timeout);
+    return url_buf.toOwnedSlice(alloc);
+}
+
+/// Applies the shared download request headers.
+fn setDownloadHeaders(req: *core.http.Request, blob: *Blob, options: DownloadOptions) !void {
+    try req.setHeader("x-ms-version", blob.api_version);
+    if (options.client_request_id) |v| try req.setHeader("x-ms-client-request-id", v);
+    if (options.range) |v| try req.setHeader("Range", v);
+    if (options.lease_id) |v| try req.setHeader("x-ms-lease-id", v);
+    if (options.if_match) |v| try req.setHeader("If-Match", v);
+    if (options.if_none_match) |v| try req.setHeader("If-None-Match", v);
 }
 
 // ────────────────────────── uploadBlockBlob ───────────────────────
@@ -468,6 +524,41 @@ test "downloadInto: writes buffered body and returns length" {
     try testing.expectEqual(@as(u64, payload.len), n);
     try testing.expectEqualStrings(payload, buf[0..@intCast(n)]);
     try testing.expectEqual(core.http.Method.GET, mock.calls.items[0].method);
+}
+
+test "download: returns owned body bytes" {
+    const alloc = testing.allocator;
+    const payload = "hello world";
+    var mock = MockTransport.init(alloc, 200, payload);
+    defer mock.deinit();
+    var blob = mock.blobClient();
+
+    var result = try download(&blob, alloc, .{});
+    defer result.deinit();
+
+    try testing.expectEqualStrings(payload, result.data);
+    try testing.expectEqual(core.http.Method.GET, mock.calls.items[0].method);
+}
+
+test "download: 206 partial content with range header" {
+    const alloc = testing.allocator;
+    const payload = "llo";
+    var mock = MockTransport.init(alloc, 206, payload);
+    defer mock.deinit();
+    var blob = mock.blobClient();
+
+    var result = try download(&blob, alloc, .{ .range = "bytes=2-4" });
+    defer result.deinit();
+
+    try testing.expectEqualStrings(payload, result.data);
+}
+
+test "download: 404 -> error" {
+    const alloc = testing.allocator;
+    var mock = MockTransport.init(alloc, 404, "");
+    defer mock.deinit();
+    var blob = mock.blobClient();
+    try testing.expectError(error.AzureRequestFailed, download(&blob, alloc, .{}));
 }
 
 test "uploadBlockBlob: small payload -> single Put Blob" {

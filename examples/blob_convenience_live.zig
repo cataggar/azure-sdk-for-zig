@@ -1,12 +1,15 @@
 //! Live smoke test for the hand-written convenience helpers against a real
 //! Azure Storage account, using AAD bearer-token auth.
 //!
-//! Exercises `blobExists`, `uploadBlockBlob` (auto-chunking), and
-//! `downloadInto` (buffered writer sink) as a round trip:
+//! Exercises `blobExists`, `uploadBlockBlob` (auto-chunking), `downloadInto`
+//! (buffered writer sink), and `download` (allocating, owned bytes) as a round
+//! trip:
 //!   1. assert the target blob does not exist,
 //!   2. upload a payload (a small block size forces the staged-block path),
 //!   3. assert it now exists,
-//!   4. download it back into a buffer and verify the bytes match.
+//!   4. download it back into a buffer and verify the bytes match,
+//!   5. `download()` the whole blob into an owned buffer and verify,
+//!   6. `download()` a byte range and verify the window.
 //!
 //! Compiled without credentials in CI; only runs when `AZURE_TOKEN` is set.
 //!
@@ -93,4 +96,17 @@ pub fn main(init: std.process.Init) !void {
 
     if (!std.mem.eql(u8, downloaded, payload)) return error.RoundTripMismatch;
     try out.print("round trip OK\n", .{});
+
+    // 5. Allocating download returns owned bytes for the whole blob.
+    var full = try blobs.download(&blob, allocator, .{});
+    defer full.deinit();
+    try out.print("download() {d} bytes: {s}\n", .{ full.data.len, full.data });
+    if (!std.mem.eql(u8, full.data, payload)) return error.RoundTripMismatch;
+
+    // 6. Ranged download returns just the requested window.
+    var head = try blobs.download(&blob, allocator, .{ .range = "bytes=0-4" });
+    defer head.deinit();
+    try out.print("download(range 0-4) {d} bytes: {s}\n", .{ head.data.len, head.data });
+    if (!std.mem.eql(u8, head.data, payload[0..5])) return error.RoundTripMismatch;
+    try out.print("allocating download OK\n", .{});
 }
