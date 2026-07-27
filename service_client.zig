@@ -10,6 +10,7 @@ const request = @import("request.zig");
 const sas = @import("sas.zig");
 const pager = @import("pager.zig");
 const responses = @import("responses.zig");
+const service_models = @import("service_models.zig");
 
 /// Client for Azure Table Service operations (list/create/delete tables).
 ///
@@ -234,12 +235,133 @@ pub const TableServiceClient = struct {
         );
     }
 
+    pub fn setServicePropertiesResult(
+        self: *TableServiceClient,
+        allocator: std.mem.Allocator,
+        properties: service_models.ServiceProperties,
+        set_options: options.SetServicePropertiesOptions,
+    ) !responses.TableResult(responses.SdkResponse(protocol_client.SetServicePropertiesResponse)) {
+        return self.protocol.setServiceProperties(allocator, properties, set_options.protocol);
+    }
+
+    pub fn setServiceProperties(
+        self: *TableServiceClient,
+        allocator: std.mem.Allocator,
+        properties: service_models.ServiceProperties,
+        set_options: options.SetServicePropertiesOptions,
+    ) !responses.SdkResponse(protocol_client.SetServicePropertiesResponse) {
+        return responses.unwrapSetServiceProperties(
+            responses.SdkResponse(protocol_client.SetServicePropertiesResponse),
+            try self.setServicePropertiesResult(allocator, properties, set_options),
+        );
+    }
+
+    /// Compatibility spelling for the Table service's service-properties API.
+    pub fn setPropertiesResult(
+        self: *TableServiceClient,
+        allocator: std.mem.Allocator,
+        properties: service_models.ServiceProperties,
+        set_options: options.SetServicePropertiesOptions,
+    ) !responses.TableResult(responses.SdkResponse(protocol_client.SetServicePropertiesResponse)) {
+        return self.setServicePropertiesResult(allocator, properties, set_options);
+    }
+
+    /// Compatibility spelling for the Table service's service-properties API.
+    pub fn setProperties(
+        self: *TableServiceClient,
+        allocator: std.mem.Allocator,
+        properties: service_models.ServiceProperties,
+        set_options: options.SetServicePropertiesOptions,
+    ) !responses.SdkResponse(protocol_client.SetServicePropertiesResponse) {
+        return self.setServiceProperties(allocator, properties, set_options);
+    }
+
+    pub fn getServicePropertiesResult(
+        self: *TableServiceClient,
+        allocator: std.mem.Allocator,
+        get_options: options.GetServicePropertiesOptions,
+    ) !responses.TableResult(responses.SdkResponse(protocol_client.GetServicePropertiesResponse)) {
+        return self.protocol.getServiceProperties(allocator, get_options.protocol);
+    }
+
+    pub fn getServiceProperties(
+        self: *TableServiceClient,
+        allocator: std.mem.Allocator,
+        get_options: options.GetServicePropertiesOptions,
+    ) !responses.SdkResponse(protocol_client.GetServicePropertiesResponse) {
+        return responses.unwrapGetServiceProperties(
+            responses.SdkResponse(protocol_client.GetServicePropertiesResponse),
+            try self.getServicePropertiesResult(allocator, get_options),
+        );
+    }
+
+    /// Compatibility spelling for the Table service's service-properties API.
+    pub fn getPropertiesResult(
+        self: *TableServiceClient,
+        allocator: std.mem.Allocator,
+        get_options: options.GetServicePropertiesOptions,
+    ) !responses.TableResult(responses.SdkResponse(protocol_client.GetServicePropertiesResponse)) {
+        return self.getServicePropertiesResult(allocator, get_options);
+    }
+
+    /// Compatibility spelling for the Table service's service-properties API.
+    pub fn getProperties(
+        self: *TableServiceClient,
+        allocator: std.mem.Allocator,
+        get_options: options.GetServicePropertiesOptions,
+    ) !responses.SdkResponse(protocol_client.GetServicePropertiesResponse) {
+        return self.getServiceProperties(allocator, get_options);
+    }
+
+    pub fn getStatisticsResult(
+        self: *TableServiceClient,
+        allocator: std.mem.Allocator,
+        get_options: options.GetStatisticsOptions,
+    ) !responses.TableResult(responses.SdkResponse(protocol_client.GetStatisticsResponse)) {
+        return self.protocol.getStatistics(allocator, get_options.protocol);
+    }
+
+    pub fn getStatistics(
+        self: *TableServiceClient,
+        allocator: std.mem.Allocator,
+        get_options: options.GetStatisticsOptions,
+    ) !responses.SdkResponse(protocol_client.GetStatisticsResponse) {
+        return responses.unwrapGetStatistics(
+            responses.SdkResponse(protocol_client.GetStatisticsResponse),
+            try self.getStatisticsResult(allocator, get_options),
+        );
+    }
+
     pub fn listTables(
         self: *TableServiceClient,
         allocator: std.mem.Allocator,
         list_options: options.ListTablesOptions,
     ) !pager.TablePager {
         return pager.TablePager.init(allocator, &self.protocol, list_options);
+    }
+};
+
+const BodyCapturePolicy = struct {
+    allocator: std.mem.Allocator,
+    body: ?[]u8 = null,
+    policy: core.pipeline.HttpPolicy = .{ .processFn = &process },
+
+    fn deinit(self: *BodyCapturePolicy) void {
+        if (self.body) |body| self.allocator.free(body);
+        self.* = undefined;
+    }
+
+    fn process(
+        policy: *core.pipeline.HttpPolicy,
+        req: *core.http.Request,
+        next: []*core.pipeline.HttpPolicy,
+        transport: *core.http.HttpTransport,
+    ) anyerror!core.http.Response {
+        const self: *BodyCapturePolicy = @alignCast(@fieldParentPtr("policy", policy));
+        const response = if (next.len == 0) try transport.send(req) else try next[0].process(req, next[1..], transport);
+        if (self.body) |body| self.allocator.free(body);
+        self.body = if (req.body) |body| try self.allocator.dupe(u8, body) else null;
+        return response;
     }
 };
 
@@ -670,6 +792,260 @@ test "table lifecycle result allocation failures are leak-free" {
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
         testLifecycleAllocationFailures,
+        .{},
+    );
+}
+
+test "service properties use generated XML and preserve response metadata" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 202, "");
+    defer transport.deinit();
+    transport.response_headers_list = &.{
+        .{ .name = "x-ms-version", .value = "2019-02-02" },
+        .{ .name = "x-ms-request-id", .value = "set-properties-id" },
+    };
+    var capture = BodyCapturePolicy{ .allocator = allocator };
+    defer capture.deinit();
+    var credential = CountingCredential{};
+    var service = try TableServiceClient.initWithToken(
+        allocator,
+        "https://account.table.core.windows.net",
+        credential.asCredential(),
+        transport.asTransport(),
+        .{ .policies = &.{&capture.policy} },
+    );
+    defer service.deinit();
+
+    var set_response = try service.setServiceProperties(allocator, .{
+        .logging = .{
+            .version = "1.0",
+            .delete = true,
+            .read = false,
+            .write = true,
+            .retention_policy = .{ .enabled = true, .days = 7 },
+        },
+        .hour_metrics = .{
+            .version = "1.0",
+            .enabled = true,
+            .include_apis = true,
+            .retention_policy = .{ .enabled = false },
+        },
+        .cors = .{ .items = &.{.{
+            .allowed_origins = "https://example.test",
+            .allowed_methods = "GET,PUT",
+            .allowed_headers = "x-ms-meta-*",
+            .exposed_headers = "x-ms-request-id",
+            .max_age_in_seconds = 60,
+        }} },
+    }, .{ .protocol = .{ .client_request_id = "set-client-id", .timeout = 30 } });
+    defer set_response.deinit();
+    try std.testing.expectEqual(@as(u16, 202), set_response.status);
+    try std.testing.expectEqualStrings("set-properties-id", set_response.headers.getFirst("x-ms-request-id").?);
+    try std.testing.expectEqualStrings(
+        "https://account.table.core.windows.net?restype=service&comp=properties&timeout=30",
+        transport.last_url.?,
+    );
+    try std.testing.expectEqualStrings("set-client-id", transport.last_headers.get("x-ms-client-request-id").?);
+    try std.testing.expect(std.mem.startsWith(u8, transport.last_headers.get("Authorization").?, "Bearer "));
+    try std.testing.expectEqualStrings(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><StorageServiceProperties><Logging><Version>1.0</Version><Delete>true</Delete><Read>false</Read><Write>true</Write><RetentionPolicy><Enabled>true</Enabled><Days>7</Days></RetentionPolicy></Logging><HourMetrics><Version>1.0</Version><Enabled>true</Enabled><IncludeAPIs>true</IncludeAPIs><RetentionPolicy><Enabled>false</Enabled></RetentionPolicy></HourMetrics><Cors><CorsRule><AllowedOrigins>https://example.test</AllowedOrigins><AllowedMethods>GET,PUT</AllowedMethods><AllowedHeaders>x-ms-meta-*</AllowedHeaders><ExposedHeaders>x-ms-request-id</ExposedHeaders><MaxAgeInSeconds>60</MaxAgeInSeconds></CorsRule></Cors></StorageServiceProperties>",
+        capture.body.?,
+    );
+
+    transport.response_status = 200;
+    transport.response_body =
+        "<StorageServiceProperties><Logging><Version>1.0</Version><Delete>true</Delete><Read>false</Read><Write>true</Write><RetentionPolicy><Enabled>true</Enabled><Days>7</Days></RetentionPolicy></Logging><HourMetrics><Version>1.0</Version><Enabled>false</Enabled><IncludeAPIs>false</IncludeAPIs><RetentionPolicy><Enabled>false</Enabled><Days>7</Days></RetentionPolicy></HourMetrics><Cors><CorsRule><AllowedOrigins>https://example.test</AllowedOrigins><AllowedMethods>GET</AllowedMethods><AllowedHeaders>*</AllowedHeaders><ExposedHeaders>x-ms-request-id</ExposedHeaders><MaxAgeInSeconds>60</MaxAgeInSeconds></CorsRule></Cors></StorageServiceProperties>";
+    transport.response_headers_list = &.{
+        .{ .name = "x-ms-version", .value = "2019-02-02" },
+        .{ .name = "x-ms-request-id", .value = "get-properties-id" },
+        .{ .name = "Content-Type", .value = "application/xml" },
+    };
+    var get_response = try service.getServiceProperties(allocator, .{});
+    defer get_response.deinit();
+    try std.testing.expectEqual(@as(u16, 200), get_response.status);
+    try std.testing.expectEqualStrings("get-properties-id", get_response.headers.getFirst("x-ms-request-id").?);
+    switch (get_response.value) {
+        .status_200 => |response| {
+            try std.testing.expectEqual(@as(usize, 1), response.body.cors.?.items.len);
+            try std.testing.expectEqualStrings("https://example.test", response.body.cors.?.items[0].allowed_origins);
+            try std.testing.expectEqual(@as(?i32, 7), response.body.logging.?.retention_policy.days);
+            try std.testing.expectEqual(false, response.body.hour_metrics.?.enabled);
+            try std.testing.expectEqual(@as(?bool, false), response.body.hour_metrics.?.include_apis);
+            try std.testing.expectEqual(@as(?i32, 7), response.body.hour_metrics.?.retention_policy.?.days);
+
+            transport.response_status = 202;
+            transport.response_body = "";
+            transport.response_headers_list = &.{
+                .{ .name = "x-ms-version", .value = "2019-02-02" },
+            };
+            var roundtrip = try service.setServiceProperties(allocator, response.body, .{});
+            defer roundtrip.deinit();
+            try std.testing.expectEqualStrings(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?><StorageServiceProperties><Logging><Version>1.0</Version><Delete>true</Delete><Read>false</Read><Write>true</Write><RetentionPolicy><Enabled>true</Enabled><Days>7</Days></RetentionPolicy></Logging><HourMetrics><Version>1.0</Version><Enabled>false</Enabled><RetentionPolicy><Enabled>false</Enabled><Days>7</Days></RetentionPolicy></HourMetrics><Cors><CorsRule><AllowedOrigins>https://example.test</AllowedOrigins><AllowedMethods>GET</AllowedMethods><AllowedHeaders>*</AllowedHeaders><ExposedHeaders>x-ms-request-id</ExposedHeaders><MaxAgeInSeconds>60</MaxAgeInSeconds></CorsRule></Cors></StorageServiceProperties>",
+                capture.body.?,
+            );
+        },
+    }
+}
+
+test "service administration validates before transport and returns structured failures" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 202, "");
+    defer transport.deinit();
+    transport.response_headers_list = &.{
+        .{ .name = "x-ms-version", .value = "2019-02-02" },
+    };
+    var credential = CountingCredential{};
+    var service = try TableServiceClient.initWithToken(
+        allocator,
+        "https://account.table.core.windows.net",
+        credential.asCredential(),
+        transport.asTransport(),
+        .{},
+    );
+    defer service.deinit();
+
+    try std.testing.expectError(
+        error.InvalidRetentionDays,
+        service.setServiceProperties(allocator, .{
+            .minute_metrics = .{
+                .version = "1.0",
+                .enabled = true,
+                .include_apis = false,
+                .retention_policy = .{ .enabled = true, .days = 0 },
+            },
+        }, .{}),
+    );
+    try std.testing.expectError(
+        error.InvalidTimeout,
+        service.getServiceProperties(allocator, .{ .protocol = .{ .timeout = 0 } }),
+    );
+    try std.testing.expectError(error.StatisticsRequireSecondaryEndpoint, service.getStatistics(allocator, .{}));
+    try std.testing.expectEqual(@as(usize, 0), transport.call_count);
+
+    transport.response_status = 400;
+    transport.response_body = "<Error><Code>InvalidXmlDocument</Code><Message>bad XML</Message></Error>";
+    transport.response_headers_list = &.{
+        .{ .name = "Content-Type", .value = "application/xml" },
+        .{ .name = "x-ms-request-id", .value = "bad-properties-id" },
+    };
+    var result = try service.getServicePropertiesResult(allocator, .{});
+    defer result.deinit(allocator);
+    switch (result) {
+        .failure => |failure| {
+            try std.testing.expectEqual(@as(u16, 400), failure.status);
+            try std.testing.expectEqualStrings("InvalidXmlDocument", failure.code);
+            try std.testing.expectEqualStrings("bad-properties-id", failure.request_id.?);
+        },
+        .success => return error.TestUnexpectedResult,
+    }
+}
+
+test "secondary statistics preserve unknown replication status and UTC time" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(
+        allocator,
+        200,
+        "<StorageServiceStats><GeoReplication><Status>future-status</Status><LastSyncTime>Wed, 23 Oct 2013 22:05:54 GMT</LastSyncTime></GeoReplication></StorageServiceStats>",
+    );
+    defer transport.deinit();
+    transport.response_headers_list = &.{
+        .{ .name = "Date", .value = "Sun, 26 Jul 2026 18:32:16 GMT" },
+        .{ .name = "x-ms-version", .value = "2019-02-02" },
+        .{ .name = "x-ms-request-id", .value = "stats-id" },
+        .{ .name = "Content-Type", .value = "application/xml" },
+    };
+    var credential = CountingCredential{};
+    var service = try TableServiceClient.initWithToken(
+        allocator,
+        "https://account-secondary.table.core.windows.net",
+        credential.asCredential(),
+        transport.asTransport(),
+        .{},
+    );
+    defer service.deinit();
+
+    var response = try service.getStatistics(allocator, .{ .protocol = .{ .timeout = 5 } });
+    defer response.deinit();
+    try std.testing.expectEqualStrings(
+        "https://account-secondary.table.core.windows.net?restype=service&comp=stats&timeout=5",
+        transport.last_url.?,
+    );
+    try std.testing.expectEqualStrings("stats-id", response.headers.getFirst("x-ms-request-id").?);
+    switch (response.value) {
+        .status_200 => |stats| switch (stats.body.geo_replication.?.status.?) {
+            .unrecognized => |value| try std.testing.expectEqualStrings("future-status", value),
+            else => return error.TestUnexpectedResult,
+        },
+    }
+
+    transport.response_body =
+        "<StorageServiceStats><GeoReplication><Status>bootstrap</Status><LastSyncTime></LastSyncTime></GeoReplication></StorageServiceStats>";
+    var unavailable = try service.getStatistics(allocator, .{});
+    defer unavailable.deinit();
+    switch (unavailable.value) {
+        .status_200 => |stats| {
+            try std.testing.expectEqual(@as(usize, 0), stats.body.geo_replication.?.last_sync_time.?.len);
+        },
+    }
+}
+
+test "malformed service properties XML is released on decode failure" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 200, "<StorageServiceProperties><Logging>");
+    defer transport.deinit();
+    transport.response_headers_list = &.{
+        .{ .name = "x-ms-version", .value = "2019-02-02" },
+        .{ .name = "Content-Type", .value = "application/xml" },
+    };
+    var credential = CountingCredential{};
+    var service = try TableServiceClient.initWithToken(
+        allocator,
+        "https://account.table.core.windows.net",
+        credential.asCredential(),
+        transport.asTransport(),
+        .{},
+    );
+    defer service.deinit();
+
+    if (service.getServiceProperties(allocator, .{})) |value| {
+        var response = value;
+        response.deinit();
+        return error.TestUnexpectedResult;
+    } else |_| {}
+}
+
+fn testServiceAdminAllocationFailures(allocator: std.mem.Allocator) !void {
+    var transport = core.http.MockTransport.init(allocator, 202, "");
+    defer transport.deinit();
+    transport.response_headers_list = &.{
+        .{ .name = "x-ms-version", .value = "2019-02-02" },
+    };
+    var credential = CountingCredential{};
+    var service = try TableServiceClient.initWithToken(
+        allocator,
+        "https://account.table.core.windows.net",
+        credential.asCredential(),
+        transport.asTransport(),
+        .{},
+    );
+    defer service.deinit();
+    var response = try service.setServiceProperties(allocator, .{
+        .logging = .{
+            .version = "1.0",
+            .delete = false,
+            .read = true,
+            .write = false,
+            .retention_policy = .{ .enabled = false },
+        },
+    }, .{});
+    response.deinit();
+}
+
+test "service administration allocation failures are leak-free" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        testServiceAdminAllocationFailures,
         .{},
     );
 }

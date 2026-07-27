@@ -4,8 +4,22 @@ const std = @import("std");
 const protocol = @import("azure_rest_data_tables");
 const sas = @import("sas.zig");
 const serde = @import("serde");
+const admin = @import("service_admin_models.zig");
 
 pub const max_stored_access_policies = 5;
+
+pub const ServiceProperties = admin.ServiceProperties;
+pub const Logging = admin.Logging;
+pub const Metrics = admin.Metrics;
+pub const RetentionPolicy = admin.RetentionPolicy;
+pub const CorsRule = admin.CorsRule;
+pub const ServiceStatistics = admin.ServiceStatistics;
+pub const GeoReplication = admin.GeoReplication;
+pub const GeoReplicationStatus = admin.GeoReplicationStatus;
+pub const LastSyncTime = admin.LastSyncTime;
+pub const validateServiceProperties = admin.validateServiceProperties;
+pub const serializeServicePropertiesXml = admin.serializeServicePropertiesXml;
+pub const validateServiceStatistics = admin.validateServiceStatistics;
 
 /// Azure Tables stores policy timestamps at 100-nanosecond precision.
 ///

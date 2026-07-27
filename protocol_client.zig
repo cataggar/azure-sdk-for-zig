@@ -10,6 +10,7 @@ const responses = @import("responses.zig");
 const service_models = @import("service_models.zig");
 
 const ProtocolTable = @typeInfo(@TypeOf(protocol.TablesClient.table)).@"fn".return_type.?;
+const ProtocolService = @typeInfo(@TypeOf(protocol.TablesClient.service)).@"fn".return_type.?;
 
 pub const QueryTablesResponse = ProtocolTable.QueryResult;
 pub const QueryEntitiesResponse = ProtocolTable.QueryEntitiesResult;
@@ -17,6 +18,9 @@ pub const CreateTableResponse = ProtocolTable.CreateResult;
 pub const DeleteTableResponse = ProtocolTable.DeleteResult;
 pub const GetAccessPolicyResponse = []const service_models.SignedIdentifier;
 pub const SetAccessPolicyResponse = ProtocolTable.SetAccessPolicyResult;
+pub const SetServicePropertiesResponse = ProtocolService.SetPropertiesResult;
+pub const GetServicePropertiesResponse = ProtocolService.GetPropertiesResult;
+pub const GetStatisticsResponse = ProtocolService.GetStatisticsResult;
 
 /// Validated bridge from SDK options to the generated Tables protocol client.
 pub const ProtocolClient = struct {
@@ -784,6 +788,108 @@ pub const ProtocolClient = struct {
         );
     }
 
+    pub fn setServiceProperties(
+        self: *ProtocolClient,
+        allocator: std.mem.Allocator,
+        properties: service_models.ServiceProperties,
+        call_options: options.ProtocolOptions,
+    ) !responses.TableResult(responses.SdkResponse(SetServicePropertiesResponse)) {
+        try request.validateProtocolOptions(call_options);
+        try service_models.validateServiceProperties(properties);
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena);
+        arena.* = .init(allocator);
+        errdefer arena.deinit();
+        const arena_allocator = arena.allocator();
+        const body_xml = try service_models.serializeServicePropertiesXml(arena_allocator, properties);
+        const body_policy = try arena_allocator.create(BodyOverridePolicy);
+        body_policy.* = .{ .body = body_xml };
+        const call_policies = try arena_allocator.alloc(
+            *core.pipeline.HttpPolicy,
+            call_options.policies.len + 1,
+        );
+        @memcpy(call_policies[0..call_options.policies.len], call_options.policies);
+        call_policies[call_policies.len - 1] = &body_policy.policy;
+        var body_options = call_options;
+        body_options.policies = call_policies;
+        var call = try self.beginCall(arena_allocator, body_options, null);
+        errdefer call.deinit();
+        var generated = protocol.TablesClient.initWithPipeline(arena_allocator, call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
+        var service = generated.service();
+        const value = service.setProperties(arena_allocator, call_options.client_request_id, call_options.timeout, properties) catch |err| {
+            // The generated XML serializer maps its allocation failure to
+            // WriteFailed before the body override policy can run.
+            if (err == error.WriteFailed) return error.OutOfMemory;
+            const table_error = try self.tableErrorFromGeneratedFailure(allocator, &call, err);
+            call.deinit();
+            arena.deinit();
+            allocator.destroy(arena);
+            return .{ .failure = table_error };
+        };
+        const metadata = try call.takeResponse();
+        call.deinit();
+        return .{ .success = .{ .value = value, .status = metadata.status, .headers = metadata.headers, .arena = arena, .allocator = allocator } };
+    }
+
+    pub fn getServiceProperties(
+        self: *ProtocolClient,
+        allocator: std.mem.Allocator,
+        call_options: options.ProtocolOptions,
+    ) !responses.TableResult(responses.SdkResponse(GetServicePropertiesResponse)) {
+        try request.validateProtocolOptions(call_options);
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena);
+        arena.* = .init(allocator);
+        errdefer arena.deinit();
+        const arena_allocator = arena.allocator();
+        var call = try self.beginCall(arena_allocator, call_options, null);
+        errdefer call.deinit();
+        var generated = protocol.TablesClient.initWithPipeline(arena_allocator, call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
+        var service = generated.service();
+        const value = service.getProperties(arena_allocator, call_options.client_request_id, call_options.timeout) catch |err| {
+            const table_error = try self.tableErrorFromGeneratedFailure(allocator, &call, err);
+            call.deinit();
+            arena.deinit();
+            allocator.destroy(arena);
+            return .{ .failure = table_error };
+        };
+        const metadata = try call.takeResponse();
+        call.deinit();
+        return .{ .success = .{ .value = value, .status = metadata.status, .headers = metadata.headers, .arena = arena, .allocator = allocator } };
+    }
+
+    pub fn getStatistics(
+        self: *ProtocolClient,
+        allocator: std.mem.Allocator,
+        call_options: options.ProtocolOptions,
+    ) !responses.TableResult(responses.SdkResponse(GetStatisticsResponse)) {
+        try request.validateProtocolOptions(call_options);
+        if (!request.isSecondaryStorageEndpoint(self.endpoint.base_url))
+            return error.StatisticsRequireSecondaryEndpoint;
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena);
+        arena.* = .init(allocator);
+        errdefer arena.deinit();
+        const arena_allocator = arena.allocator();
+        var call = try self.beginCall(arena_allocator, call_options, null);
+        errdefer call.deinit();
+        var generated = protocol.TablesClient.initWithPipeline(arena_allocator, call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
+        var service = generated.service();
+        const value = service.getStatistics(arena_allocator, call_options.client_request_id, call_options.timeout) catch |err| {
+            const table_error = try self.tableErrorFromGeneratedFailure(allocator, &call, err);
+            call.deinit();
+            arena.deinit();
+            allocator.destroy(arena);
+            return .{ .failure = table_error };
+        };
+        switch (value) {
+            .status_200 => |response| try service_models.validateServiceStatistics(response.body),
+        }
+        const metadata = try call.takeResponse();
+        call.deinit();
+        return .{ .success = .{ .value = value, .status = metadata.status, .headers = metadata.headers, .arena = arena, .allocator = allocator } };
+    }
+
     pub fn send(
         self: *ProtocolClient,
         req: *core.http.Request,
@@ -840,8 +946,8 @@ const BodyOverridePolicy = struct {
     body: []const u8,
     policy: core.pipeline.HttpPolicy = .{ .processFn = &process },
 
-    // The generated open JSON model cannot retain property annotations during
-    // serialization, so the SDK codec's validated bytes are authoritative.
+    // Generated serializers cannot represent all SDK wire adaptations, such
+    // as validated JSON annotations and omission-aware XML optionals.
     fn process(
         policy: *core.pipeline.HttpPolicy,
         req: *core.http.Request,
