@@ -457,6 +457,8 @@ pub const all = [_]Package{
             "build.zig.zon",
             "root.zig",
             "event_data.zig",
+            "batch.zig",
+            "sender.zig",
             "errors.zig",
             "checkpoint.zig",
             "checkpoint_store.zig",
