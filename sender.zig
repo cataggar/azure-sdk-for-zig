@@ -108,6 +108,42 @@ pub const SenderPool = struct {
         return sender;
     }
 
+    /// Detach the sender for `address` and forget it, so the next send
+    /// reattaches.
+    ///
+    /// `detach` is false when the session is already gone: writing a detach
+    /// into a dead connection would fail, and the link died with the session
+    /// regardless.
+    pub fn drop(self: *SenderPool, address: []const u8, detach: bool) void {
+        for (self.entries.items, 0..) |entry, i| {
+            if (!std.mem.eql(u8, entry.address, address)) continue;
+            if (detach) self.session.closeSender(entry.sender, self.deadline_ms);
+            self.allocator.free(entry.address);
+            _ = self.entries.orderedRemove(i);
+            self.last_rejection = null;
+            return;
+        }
+    }
+
+    /// Forget every sender.
+    pub fn dropAll(self: *SenderPool, detach: bool) void {
+        for (self.entries.items) |entry| {
+            if (detach) self.session.closeSender(entry.sender, self.deadline_ms);
+            self.allocator.free(entry.address);
+        }
+        self.entries.clearRetainingCapacity();
+        self.last_rejection = null;
+    }
+
+    /// Point the pool at a rebuilt session.
+    ///
+    /// The old session took its senders with it, so they are forgotten rather
+    /// than detached; detaching would write into a connection that is gone.
+    pub fn rebind(self: *SenderPool, session: *amqp.Session) void {
+        self.dropAll(false);
+        self.session = session;
+    }
+
     /// The largest transfer the broker will take on `address`, or null when it
     /// advertised no limit.
     pub fn maxMessageSize(self: *SenderPool, address: []const u8) !?u64 {
@@ -187,6 +223,22 @@ pub const SenderPool = struct {
         const rejection = self.last_rejection orelse return;
         attempt.condition = rejection.condition;
         attempt.description = rejection.description;
+    }
+
+    /// Describe why the send to `address` failed, so the retrier can classify
+    /// it.
+    ///
+    /// A rejection wins over a detach: the broker refused this specific
+    /// delivery, which is more precise than "the link went away".
+    pub fn recordFailure(self: *const SenderPool, address: []const u8, attempt: *errors.Attempt) void {
+        if (self.last_rejection != null) return self.recordCondition(attempt);
+        for (self.entries.items) |entry| {
+            if (!std.mem.eql(u8, entry.address, address)) continue;
+            const detached = entry.sender.detach_error orelse return;
+            attempt.condition = detached.condition;
+            attempt.description = detached.description;
+            return;
+        }
     }
 };
 

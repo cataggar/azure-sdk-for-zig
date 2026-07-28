@@ -205,9 +205,11 @@ pub const PartitionClient = struct {
         while (events.items.len < count) {
             const delivery = self.receiver.receive(self.deadline_ms) catch |err| {
                 self.recordDetach();
-                // Events already in hand are still valid; a quiet partition is
-                // not a failure. Anything else with nothing to show is.
-                if (events.items.len > 0 and err == error.Timeout) break;
+                // Events already in hand arrived and were accepted, so dropping
+                // them here would lose them outright. Hand back the short batch
+                // and let the next call surface the failure: the link is dead,
+                // so that call fails immediately with nothing to lose.
+                if (events.items.len > 0) break;
                 return err;
             };
 
@@ -279,6 +281,10 @@ pub const ReceiverPool = struct {
     /// Keyed by source address. The pool owns the keys; the session owns the
     /// links behind the clients.
     clients: std.StringHashMapUnmanaged(*PartitionClient) = .empty,
+    /// The selector each dropped client had reached, kept so a reattach
+    /// resumes instead of replaying from the configured start position. Keys
+    /// and values are both owned.
+    positions: std.StringHashMapUnmanaged([]u8) = .empty,
 
     pub const Options = struct {
         instance_id: []const u8,
@@ -297,17 +303,76 @@ pub const ReceiverPool = struct {
     }
 
     pub fn deinit(self: *ReceiverPool) void {
-        var it = self.clients.iterator();
-        while (it.next()) |entry| {
-            entry.value_ptr.*.deinit();
-            self.allocator.destroy(entry.value_ptr.*);
-            self.allocator.free(entry.key_ptr.*);
-        }
+        self.dropAll(false);
         self.clients.deinit(self.allocator);
+
+        var positions = self.positions.iterator();
+        while (positions.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.positions.deinit(self.allocator);
+    }
+
+    /// Detach the client for `source_address` and forget it, remembering where
+    /// it had read to.
+    ///
+    /// `detach` is false when the session is already gone: writing a detach
+    /// into a dead connection would fail, and the link died with the session
+    /// regardless.
+    pub fn drop(self: *ReceiverPool, source_address: []const u8, detach: bool) void {
+        const entry = self.clients.fetchRemove(source_address) orelse return;
+        const client = entry.value;
+
+        // Remembered before the client is torn down, so the reattach resumes
+        // rather than replaying everything already delivered.
+        self.remember(entry.key, client.filterExpression()) catch {};
+
+        if (detach) self.session.closeReceiver(client.receiver, self.deadline_ms);
+        client.deinit();
+        self.allocator.destroy(client);
+        self.allocator.free(entry.key);
+    }
+
+    /// Forget every client, remembering where each had read to.
+    pub fn dropAll(self: *ReceiverPool, detach: bool) void {
+        var addresses: std.ArrayList([]const u8) = .empty;
+        defer addresses.deinit(self.allocator);
+
+        var it = self.clients.keyIterator();
+        while (it.next()) |key| addresses.append(self.allocator, key.*) catch return;
+        for (addresses.items) |address| self.drop(address, detach);
+    }
+
+    /// Point the pool at a rebuilt session.
+    ///
+    /// The old session took its links with it, so they are forgotten rather
+    /// than detached; the remembered positions survive so the reattached
+    /// clients resume.
+    pub fn rebind(self: *ReceiverPool, session: *amqp.Session) void {
+        self.dropAll(false);
+        self.session = session;
+    }
+
+    fn remember(self: *ReceiverPool, source_address: []const u8, expression: []const u8) !void {
+        const owned = try self.allocator.dupe(u8, expression);
+        errdefer self.allocator.free(owned);
+
+        const gop = try self.positions.getOrPut(self.allocator, source_address);
+        if (gop.found_existing) {
+            self.allocator.free(gop.value_ptr.*);
+        } else {
+            gop.key_ptr.* = self.allocator.dupe(u8, source_address) catch |err| {
+                _ = self.positions.remove(source_address);
+                return err;
+            };
+        }
+        gop.value_ptr.* = owned;
     }
 
     /// The client for `source_address`, attaching one if this is the first
-    /// call. `filter_expression` applies only to a first attach.
+    /// call. `filter_expression` applies only to a first attach, and is
+    /// ignored once the pool has remembered a position for the address.
     pub fn clientFor(
         self: *ReceiverPool,
         source_address: []const u8,
@@ -315,13 +380,20 @@ pub const ReceiverPool = struct {
     ) !*PartitionClient {
         if (self.clients.get(source_address)) |existing| return existing;
 
+        // A remembered position wins: reapplying the original filter after a
+        // recovery would replay every event already delivered.
+        const resume_from: ?[]const u8 = if (self.positions.get(source_address)) |remembered|
+            remembered
+        else
+            filter_expression;
+
         const client = try self.allocator.create(PartitionClient);
         errdefer self.allocator.destroy(client);
         try client.open(self.allocator, self.session, .{
             .source_address = source_address,
             .instance_id = self.instance_id,
             .deadline_ms = self.deadline_ms,
-            .filter_expression = filter_expression,
+            .filter_expression = resume_from,
         }, self.options);
         errdefer client.deinit();
 
@@ -347,6 +419,19 @@ pub const ReceiverPool = struct {
     pub fn lastError(self: *ReceiverPool, source_address: []const u8) ?errors.EventHubsError {
         const client = self.clients.get(source_address) orelse return null;
         return client.last_error;
+    }
+
+    /// Describe why the receive from `source_address` failed, so the retrier
+    /// can classify it.
+    pub fn recordFailure(
+        self: *ReceiverPool,
+        source_address: []const u8,
+        attempt: *errors.Attempt,
+    ) void {
+        const client = self.clients.get(source_address) orelse return;
+        const detached = client.receiver.detach_error orelse return;
+        attempt.condition = detached.condition;
+        attempt.description = detached.description;
     }
 };
 
