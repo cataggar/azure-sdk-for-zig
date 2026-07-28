@@ -509,6 +509,79 @@ pub const MockAmqpTransport = struct {
     }
 };
 
+// ─────────────────────── Authentication ───────────────────────
+
+/// The AAD scope Event Hubs issues tokens for. Go and Rust both use it.
+pub const token_scope = "https://eventhubs.azure.net/.default";
+
+/// The audience a token is requested for, and the CBS `name` it is put under.
+///
+/// `messaging_common.audienceFor` always writes `amqps://`, but the emulator
+/// serves plaintext AMQP, so the scheme comes from the connection string here.
+/// Caller owns the result.
+pub fn audienceFor(
+    allocator: std.mem.Allocator,
+    scheme: []const u8,
+    fully_qualified_namespace: []const u8,
+    entity: ?[]const u8,
+) ![]u8 {
+    if (entity) |path| {
+        if (path.len > 0) {
+            return std.fmt.allocPrint(allocator, "{s}://{s}/{s}", .{ scheme, fully_qualified_namespace, path });
+        }
+    }
+    return std.fmt.allocPrint(allocator, "{s}://{s}/", .{ scheme, fully_qualified_namespace });
+}
+
+/// How a client proves its identity.
+///
+/// A SAS credential is held by value rather than by pointer because
+/// `SasCredential` recovers itself with `@fieldParentPtr`, so it has to live
+/// at a stable address. Storing a pointer taken before `fromConnectionString`
+/// returned would dangle the moment the client was moved.
+pub const Credential = union(enum) {
+    /// An AAD credential. The caller owns it and must outlive the client.
+    token: *core.credentials.TokenCredential,
+    /// Built from a connection string and owned by the client.
+    sas: messaging_common.SasCredential,
+
+    /// Resolve to the abstract credential. Takes a pointer so the SAS case
+    /// hands out an address that stays valid.
+    pub fn tokenCredential(self: *Credential) *core.credentials.TokenCredential {
+        return switch (self.*) {
+            .token => |c| c,
+            .sas => |*sas| sas.asCredential(),
+        };
+    }
+
+    /// The CBS `type` the broker expects for this credential.
+    pub fn cbsTokenType(self: Credential) []const u8 {
+        return switch (self) {
+            .token => messaging_common.cbs_token_type_jwt,
+            .sas => messaging_common.cbs_token_type_sas,
+        };
+    }
+
+    /// Whether a new token can be minted once the current one expires. A
+    /// pre-formed signature from a connection string cannot be re-signed.
+    pub fn isRefreshable(self: Credential) bool {
+        return switch (self) {
+            .token => true,
+            .sas => |sas| sas.isRefreshable(),
+        };
+    }
+
+    /// Acquire a token for `audience`, using the Event Hubs scope for AAD.
+    /// The SAS case ignores the scope and signs the audience it was built
+    /// with.
+    pub fn getToken(
+        self: *Credential,
+        ctx: core.context.Context,
+    ) !core.credentials.AccessToken {
+        return self.tokenCredential().getToken(.{ .scopes = &.{token_scope} }, ctx);
+    }
+};
+
 // ─────────────────────── Clients ───────────────────────
 
 pub const ProducerClientOptions = struct {
@@ -519,8 +592,12 @@ pub const ProducerClientOptions = struct {
 /// Sends events to an Event Hub.
 pub const ProducerClient = struct {
     options: ProducerClientOptions,
-    credential: ?*core.credentials.TokenCredential = null,
+    credential: Credential,
     amqp_transport: *AmqpTransport,
+    /// The audience tokens are issued for. Owned only when built from a
+    /// connection string, since `SasCredential` borrows it.
+    owned_audience: ?[]u8 = null,
+    allocator: ?std.mem.Allocator = null,
 
     pub fn init(
         options: ProducerClientOptions,
@@ -529,25 +606,59 @@ pub const ProducerClient = struct {
     ) ProducerClient {
         return .{
             .options = options,
-            .credential = credential,
+            .credential = .{ .token = credential },
             .amqp_transport = amqp_transport,
         };
     }
 
-    /// Create from a connection string (SAS key auth, no TokenCredential needed).
+    /// Create from a connection string, signing with its shared access key.
+    ///
+    /// The connection string must outlive the client: the parsed namespace,
+    /// hub name, and key all borrow from it.
     pub fn fromConnectionString(
+        allocator: std.mem.Allocator,
         connection_string: []const u8,
         event_hub_name: ?[]const u8,
         amqp_transport: *AmqpTransport,
     ) !ProducerClient {
         const cs = try ConnectionStringProperties.parse(connection_string);
+        const hub = event_hub_name orelse cs.entity_path orelse return error.MissingEventHubName;
+
+        const aud = try audienceFor(allocator, cs.scheme(), cs.fully_qualified_namespace, hub);
+        errdefer allocator.free(aud);
+
         return .{
             .options = .{
                 .fully_qualified_namespace = cs.fully_qualified_namespace,
-                .event_hub_name = event_hub_name orelse cs.entity_path orelse return error.MissingEventHubName,
+                .event_hub_name = hub,
+            },
+            .credential = .{
+                .sas = try messaging_common.SasCredential.initFromConnectionString(allocator, cs, aud),
             },
             .amqp_transport = amqp_transport,
+            .owned_audience = aud,
+            .allocator = allocator,
         };
+    }
+
+    pub fn deinit(self: *ProducerClient) void {
+        if (self.allocator) |allocator| {
+            if (self.owned_audience) |aud| allocator.free(aud);
+        }
+        self.owned_audience = null;
+    }
+
+    /// The audience a token is put to CBS under, `amqps://{fqns}/{hub}`.
+    /// Caller owns the result.
+    pub fn entityAudience(self: *ProducerClient, allocator: std.mem.Allocator) ![]u8 {
+        if (self.owned_audience) |owned| return allocator.dupe(u8, owned);
+        return audienceFor(allocator, "amqps", self.options.fully_qualified_namespace, self.options.event_hub_name);
+    }
+
+    /// Acquire a token for this hub, for putting to CBS before a link
+    /// attaches.
+    pub fn getToken(self: *ProducerClient, ctx: core.context.Context) !core.credentials.AccessToken {
+        return self.credential.getToken(ctx);
     }
 
     /// Send a batch of events over AMQP.
@@ -585,6 +696,7 @@ pub const ProducerClient = struct {
 
     pub fn close(self: *ProducerClient) void {
         self.amqp_transport.close();
+        self.deinit();
     }
 };
 
@@ -597,8 +709,12 @@ pub const ConsumerClientOptions = struct {
 /// Receives events from an Event Hub partition.
 pub const ConsumerClient = struct {
     options: ConsumerClientOptions,
-    credential: ?*core.credentials.TokenCredential = null,
+    credential: Credential,
     amqp_transport: *AmqpTransport,
+    /// The audience tokens are issued for. Owned only when built from a
+    /// connection string, since `SasCredential` borrows it.
+    owned_audience: ?[]u8 = null,
+    allocator: ?std.mem.Allocator = null,
 
     pub fn init(
         options: ConsumerClientOptions,
@@ -607,25 +723,75 @@ pub const ConsumerClient = struct {
     ) ConsumerClient {
         return .{
             .options = options,
-            .credential = credential,
+            .credential = .{ .token = credential },
             .amqp_transport = amqp_transport,
         };
     }
 
-    /// Create from a connection string (SAS key auth, no TokenCredential needed).
+    /// Create from a connection string, signing with its shared access key.
+    ///
+    /// The connection string must outlive the client: the parsed namespace,
+    /// hub name, and key all borrow from it.
     pub fn fromConnectionString(
+        allocator: std.mem.Allocator,
         connection_string: []const u8,
         event_hub_name: ?[]const u8,
         amqp_transport: *AmqpTransport,
     ) !ConsumerClient {
         const cs = try ConnectionStringProperties.parse(connection_string);
+        const hub = event_hub_name orelse cs.entity_path orelse return error.MissingEventHubName;
+
+        const aud = try audienceFor(allocator, cs.scheme(), cs.fully_qualified_namespace, hub);
+        errdefer allocator.free(aud);
+
         return .{
             .options = .{
                 .fully_qualified_namespace = cs.fully_qualified_namespace,
-                .event_hub_name = event_hub_name orelse cs.entity_path orelse return error.MissingEventHubName,
+                .event_hub_name = hub,
+            },
+            .credential = .{
+                .sas = try messaging_common.SasCredential.initFromConnectionString(allocator, cs, aud),
             },
             .amqp_transport = amqp_transport,
+            .owned_audience = aud,
+            .allocator = allocator,
         };
+    }
+
+    pub fn deinit(self: *ConsumerClient) void {
+        if (self.allocator) |allocator| {
+            if (self.owned_audience) |aud| allocator.free(aud);
+        }
+        self.owned_audience = null;
+    }
+
+    /// The audience a token is put to CBS under, `amqps://{fqns}/{hub}`.
+    /// Caller owns the result.
+    pub fn entityAudience(self: *ConsumerClient, allocator: std.mem.Allocator) ![]u8 {
+        if (self.owned_audience) |owned| return allocator.dupe(u8, owned);
+        return audienceFor(allocator, "amqps", self.options.fully_qualified_namespace, self.options.event_hub_name);
+    }
+
+    /// The audience for a partition receiver, which authorises the consumer
+    /// group path rather than the hub.
+    pub fn partitionAudience(
+        self: *ConsumerClient,
+        allocator: std.mem.Allocator,
+        partition_id: []const u8,
+    ) ![]u8 {
+        const path = try std.fmt.allocPrint(allocator, "{s}/ConsumerGroups/{s}/Partitions/{s}", .{
+            self.options.event_hub_name,
+            self.options.consumer_group,
+            partition_id,
+        });
+        defer allocator.free(path);
+        return audienceFor(allocator, "amqps", self.options.fully_qualified_namespace, path);
+    }
+
+    /// Acquire a token for this hub, for putting to CBS before a link
+    /// attaches.
+    pub fn getToken(self: *ConsumerClient, ctx: core.context.Context) !core.credentials.AccessToken {
+        return self.credential.getToken(ctx);
     }
 
     /// Receive events from a specific partition.
@@ -668,6 +834,7 @@ pub const ConsumerClient = struct {
 
     pub fn close(self: *ConsumerClient) void {
         self.amqp_transport.close();
+        self.deinit();
     }
 };
 
@@ -961,35 +1128,183 @@ test "UamqpTransport sendBatch encodes messages" {
 }
 
 test "ProducerClient fromConnectionString" {
+    const allocator = std.testing.allocator;
     var amqp = MockAmqpTransport.init();
     const cs = "Endpoint=sb://mynamespace.servicebus.windows.net/;SharedAccessKeyName=mykey;SharedAccessKey=abc123=;EntityPath=myhub";
-    const producer = try ProducerClient.fromConnectionString(cs, null, amqp.asTransport());
+    var producer = try ProducerClient.fromConnectionString(allocator, cs, null, amqp.asTransport());
+    defer producer.deinit();
     try std.testing.expectEqualStrings("mynamespace.servicebus.windows.net", producer.options.fully_qualified_namespace);
     try std.testing.expectEqualStrings("myhub", producer.options.event_hub_name);
-    try std.testing.expect(producer.credential == null);
+    try std.testing.expect(producer.credential == .sas);
+    try std.testing.expectEqualStrings(
+        "amqps://mynamespace.servicebus.windows.net/myhub",
+        producer.owned_audience.?,
+    );
 }
 
 test "ProducerClient fromConnectionString with override" {
+    const allocator = std.testing.allocator;
     var amqp = MockAmqpTransport.init();
     const cs = "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=k;SharedAccessKey=v;EntityPath=hub1";
-    const producer = try ProducerClient.fromConnectionString(cs, "hub2", amqp.asTransport());
+    var producer = try ProducerClient.fromConnectionString(allocator, cs, "hub2", amqp.asTransport());
+    defer producer.deinit();
     try std.testing.expectEqualStrings("hub2", producer.options.event_hub_name);
+    try std.testing.expectEqualStrings("amqps://ns.servicebus.windows.net/hub2", producer.owned_audience.?);
 }
 
 test "ProducerClient fromConnectionString missing hub" {
     var amqp = MockAmqpTransport.init();
     const cs = "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=k;SharedAccessKey=v";
-    const result = ProducerClient.fromConnectionString(cs, null, amqp.asTransport());
+    const result = ProducerClient.fromConnectionString(std.testing.allocator, cs, null, amqp.asTransport());
     try std.testing.expectError(error.MissingEventHubName, result);
 }
 
 test "ConsumerClient fromConnectionString" {
+    const allocator = std.testing.allocator;
     var amqp = MockAmqpTransport.init();
     const cs = "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=k;SharedAccessKey=v;EntityPath=hub";
-    const consumer = try ConsumerClient.fromConnectionString(cs, null, amqp.asTransport());
+    var consumer = try ConsumerClient.fromConnectionString(allocator, cs, null, amqp.asTransport());
+    defer consumer.deinit();
     try std.testing.expectEqualStrings("ns.servicebus.windows.net", consumer.options.fully_qualified_namespace);
     try std.testing.expectEqualStrings("hub", consumer.options.event_hub_name);
     try std.testing.expectEqualStrings("$Default", consumer.options.consumer_group);
+    try std.testing.expect(consumer.credential == .sas);
+}
+
+/// Records the scopes it was asked for, so tests can assert Event Hubs uses
+/// the right AAD scope.
+const ScopeRecordingCredential = struct {
+    credential: core.credentials.TokenCredential,
+    last_scopes: []const []const u8 = &.{},
+
+    fn init() ScopeRecordingCredential {
+        return .{ .credential = .{ .getTokenFn = &getTokenImpl } };
+    }
+
+    fn asCredential(self: *ScopeRecordingCredential) *core.credentials.TokenCredential {
+        return &self.credential;
+    }
+
+    fn getTokenImpl(
+        credential: *core.credentials.TokenCredential,
+        request_context: core.credentials.TokenRequestContext,
+        ctx: core.context.Context,
+    ) anyerror!core.credentials.AccessToken {
+        _ = ctx;
+        const self: *ScopeRecordingCredential = @fieldParentPtr("credential", credential);
+        self.last_scopes = request_context.scopes;
+        return .{ .token = "aad-token", .expires_on = 1234 };
+    }
+};
+
+test "audienceFor uses the connection string scheme" {
+    const allocator = std.testing.allocator;
+
+    const secure = try audienceFor(allocator, "amqps", "ns.servicebus.windows.net", "hub");
+    defer allocator.free(secure);
+    try std.testing.expectEqualStrings("amqps://ns.servicebus.windows.net/hub", secure);
+
+    // The emulator serves plaintext AMQP on localhost.
+    const plain = try audienceFor(allocator, "amqp", "localhost", "hub");
+    defer allocator.free(plain);
+    try std.testing.expectEqualStrings("amqp://localhost/hub", plain);
+
+    const namespace_only = try audienceFor(allocator, "amqps", "ns.servicebus.windows.net", null);
+    defer allocator.free(namespace_only);
+    try std.testing.expectEqualStrings("amqps://ns.servicebus.windows.net/", namespace_only);
+}
+
+test "connection string credential signs the parsed entity" {
+    const allocator = std.testing.allocator;
+    var amqp = MockAmqpTransport.init();
+    const cs = "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=policy;SharedAccessKey=c2VjcmV0;EntityPath=hub";
+    var producer = try ProducerClient.fromConnectionString(allocator, cs, null, amqp.asTransport());
+    defer producer.deinit();
+
+    try std.testing.expect(producer.credential == .sas);
+    try std.testing.expectEqualStrings(
+        messaging_common.cbs_token_type_sas,
+        producer.credential.cbsTokenType(),
+    );
+    try std.testing.expect(producer.credential.isRefreshable());
+
+    var token = try producer.getToken(.{});
+    defer token.deinit();
+
+    try std.testing.expect(std.mem.startsWith(u8, token.token, "SharedAccessSignature "));
+    // The signature covers the hub the connection string named, not the bare
+    // namespace.
+    try std.testing.expect(std.mem.indexOf(u8, token.token, "sr=amqps%3a%2f%2fns.servicebus.windows.net%2fhub") != null);
+    try std.testing.expect(std.mem.indexOf(u8, token.token, "skn=policy") != null);
+    try std.testing.expect(std.mem.indexOf(u8, token.token, "sig=") != null);
+    try std.testing.expect(token.expires_on > 0);
+}
+
+test "AAD credential is asked for the Event Hubs scope" {
+    var amqp = MockAmqpTransport.init();
+    var recorder = ScopeRecordingCredential.init();
+    var producer = ProducerClient.init(.{
+        .fully_qualified_namespace = "ns.servicebus.windows.net",
+        .event_hub_name = "hub",
+    }, recorder.asCredential(), amqp.asTransport());
+    defer producer.deinit();
+
+    try std.testing.expect(producer.credential == .token);
+    try std.testing.expectEqualStrings(
+        messaging_common.cbs_token_type_jwt,
+        producer.credential.cbsTokenType(),
+    );
+    try std.testing.expect(producer.credential.isRefreshable());
+
+    var token = try producer.getToken(.{});
+    defer token.deinit();
+
+    try std.testing.expectEqualStrings("aad-token", token.token);
+    try std.testing.expectEqual(@as(usize, 1), recorder.last_scopes.len);
+    try std.testing.expectEqualStrings("https://eventhubs.azure.net/.default", recorder.last_scopes[0]);
+}
+
+test "entityAudience matches the hub, partitionAudience the consumer group path" {
+    const allocator = std.testing.allocator;
+    var amqp = MockAmqpTransport.init();
+    var recorder = ScopeRecordingCredential.init();
+    var consumer = ConsumerClient.init(.{
+        .fully_qualified_namespace = "ns.servicebus.windows.net",
+        .event_hub_name = "hub",
+        .consumer_group = "cg",
+    }, recorder.asCredential(), amqp.asTransport());
+    defer consumer.deinit();
+
+    const entity = try consumer.entityAudience(allocator);
+    defer allocator.free(entity);
+    try std.testing.expectEqualStrings("amqps://ns.servicebus.windows.net/hub", entity);
+
+    const partition = try consumer.partitionAudience(allocator, "3");
+    defer allocator.free(partition);
+    try std.testing.expectEqualStrings(
+        "amqps://ns.servicebus.windows.net/hub/ConsumerGroups/cg/Partitions/3",
+        partition,
+    );
+}
+
+test "a SAS credential survives being returned by value" {
+    const allocator = std.testing.allocator;
+    var amqp = MockAmqpTransport.init();
+    const cs = "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=k;SharedAccessKey=dg==;EntityPath=hub";
+
+    // `SasCredential` recovers itself with `@fieldParentPtr`, so a pointer
+    // taken before the client was moved would dangle. Resolving lazily
+    // through the moved client must still produce a usable token.
+    var producer = try ProducerClient.fromConnectionString(allocator, cs, null, amqp.asTransport());
+    defer producer.deinit();
+    var moved = producer;
+    producer.owned_audience = null;
+    producer.allocator = null;
+    defer moved.deinit();
+
+    var token = try moved.getToken(.{});
+    defer token.deinit();
+    try std.testing.expect(std.mem.indexOf(u8, token.token, "skn=k") != null);
 }
 
 test "EventDataBatch survives allocation failure at every step" {

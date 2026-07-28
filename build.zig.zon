@@ -9,8 +9,8 @@
             .hash = "azure_sdk_core-0.1.3-eFY0Eu3NBQCWhAf8JkUhPNkV_vNq_w68JXIUYNFAEamz",
         },
         .azure_sdk_messaging_common = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#51c5ec8e181abd59a0f8180fc4c37b9ddc8a2bcb",
-            .hash = "azure_sdk_messaging_common-0.1.0-YklmSnoYAACqhTFKLjL7ZX1jSngsgJRYKAhYkgx4J_RU",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#6d831b63f8e542d0ed1417373c12b8af3f207da3",
+            .hash = "azure_sdk_messaging_common-0.1.0-YklmSkWIAADEwFYrvi3pX7u36d19Ne7ksx-7Mofk4gkd",
         },
         .azure_sdk_storage_blobs = .{
             .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#547a1f88972a9a245f4af15479f592a0e1f8344b",
