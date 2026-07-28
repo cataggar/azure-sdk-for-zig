@@ -692,23 +692,29 @@ fn propertyValue(props: []const MapEntry, key: []const u8) ?AmqpValue {
 const Scripted = struct {
     allocator: Allocator,
     mem: *MemoryTransport,
-    clock: *driver.ManualClock,
-    conn: *driver.Driver,
     fixture: Fixture,
-    client: *amqp.Management,
+    client: *amqp.Management = undefined,
 
-    fn init(allocator: Allocator, mem: *MemoryTransport, clock: *driver.ManualClock, conn: *driver.Driver) !Scripted {
-        var fixture = try Fixture.init(allocator, mem, clock, conn);
-        errdefer fixture.deinit();
-        const client = try amqp.Management.open(&fixture.session, .{ .link_id = "eh" }, 10_000);
-        return .{
+    /// Initialised in place rather than returned by value.
+    ///
+    /// The management client keeps a pointer into `fixture.session`, so a
+    /// `Scripted` built in a local and then returned would leave that pointer
+    /// aimed at the dead frame it was built in. That reads fine on Linux,
+    /// where the stack is usually still intact, and segfaults on Windows.
+    fn open(
+        self: *Scripted,
+        allocator: Allocator,
+        mem: *MemoryTransport,
+        clock: *driver.ManualClock,
+        conn: *driver.Driver,
+    ) !void {
+        self.* = .{
             .allocator = allocator,
             .mem = mem,
-            .clock = clock,
-            .conn = conn,
-            .fixture = fixture,
-            .client = client,
+            .fixture = try Fixture.init(allocator, mem, clock, conn),
         };
+        errdefer self.fixture.deinit();
+        self.client = try amqp.Management.open(&self.fixture.session, .{ .link_id = "eh" }, 10_000);
     }
 
     fn deinit(self: *Scripted) void {
@@ -758,7 +764,8 @@ test "an event hub read puts the exact application properties on the wire" {
 
     var conn = try driver.Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
     defer conn.deinit();
-    var scripted = try Scripted.init(allocator, &mem, &clock, &conn);
+    var scripted: Scripted = undefined;
+    try scripted.open(allocator, &mem, &clock, &conn);
     defer scripted.deinit();
 
     mem.clearWritten();
@@ -814,7 +821,8 @@ test "a partition read names the partition and uses the partition entity type" {
 
     var conn = try driver.Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
     defer conn.deinit();
-    var scripted = try Scripted.init(allocator, &mem, &clock, &conn);
+    var scripted: Scripted = undefined;
+    try scripted.open(allocator, &mem, &clock, &conn);
     defer scripted.deinit();
 
     mem.clearWritten();
@@ -853,7 +861,8 @@ test "a management error status surfaces with the broker's description" {
 
     var conn = try driver.Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
     defer conn.deinit();
-    var scripted = try Scripted.init(allocator, &mem, &clock, &conn);
+    var scripted: Scripted = undefined;
+    try scripted.open(allocator, &mem, &clock, &conn);
     defer scripted.deinit();
 
     try testing.expectError(
@@ -881,7 +890,8 @@ test "a not-found status is classified as fatal rather than retried" {
 
     var conn = try driver.Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
     defer conn.deinit();
-    var scripted = try Scripted.init(allocator, &mem, &clock, &conn);
+    var scripted: Scripted = undefined;
+    try scripted.open(allocator, &mem, &clock, &conn);
     defer scripted.deinit();
 
     // A no-op sleeper: a fatal failure must not reach a backoff at all, so any
