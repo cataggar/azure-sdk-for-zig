@@ -69,122 +69,22 @@ pub const management = @import("management.zig");
 pub const PartitionProperties = management.PartitionProperties;
 pub const EventHubProperties = management.EventHubProperties;
 
-/// Where in a partition a consumer starts reading.
-///
-/// Rust models this as a `StartLocation` enum and Go as a set of optional
-/// fields that it rejects when more than one is set. A tagged union makes the
-/// conflict unrepresentable.
-pub const StartLocation = union(enum) {
-    /// The oldest event the partition still retains.
-    earliest,
-    /// Only events enqueued after the consumer attaches. This is the default
-    /// in Go and Rust alike.
-    latest,
-    /// An opaque offset token, which is not necessarily numeric.
-    offset: []const u8,
-    sequence_number: i64,
-    /// Unix milliseconds.
-    enqueued_time: i64,
-};
+// Start positions. Kept in their own file so `receiver.zig` can use them
+// without importing this one back. Not re-exported as a namespace: `position`
+// is the natural name for a local here, and Zig forbids the shadowing.
+const start_position_types = @import("position.zig");
+pub const StartLocation = start_position_types.StartLocation;
+pub const EventPosition = start_position_types.EventPosition;
+pub const StartPositions = start_position_types.StartPositions;
 
-/// Starting position for reading events from a partition.
-///
-/// Slices are borrowed and must outlive the position.
-pub const EventPosition = struct {
-    location: StartLocation = .latest,
-    /// Include the event at `location` rather than starting after it. Ignored
-    /// for `earliest` and `latest`, which have no event to include.
-    is_inclusive: bool = false,
-
-    /// Start from the beginning of the partition.
-    pub fn earliest() EventPosition {
-        return .{ .location = .earliest };
-    }
-
-    /// Start from the end of the partition (new events only).
-    pub fn latest() EventPosition {
-        return .{ .location = .latest };
-    }
-
-    /// Start from a specific offset.
-    pub fn fromOffset(offset: []const u8, inclusive: bool) EventPosition {
-        return .{ .location = .{ .offset = offset }, .is_inclusive = inclusive };
-    }
-
-    /// Start from a specific sequence number.
-    pub fn fromSequenceNumber(seq: i64, inclusive: bool) EventPosition {
-        return .{ .location = .{ .sequence_number = seq }, .is_inclusive = inclusive };
-    }
-
-    /// Start from a specific enqueued time (Unix ms).
-    pub fn fromEnqueuedTime(time: i64) EventPosition {
-        return .{ .location = .{ .enqueued_time = time } };
-    }
-
-    /// Render the AMQP filter expression for this position.
-    ///
-    /// A default-constructed position renders as `@latest` rather than
-    /// failing, matching Go's `getStartExpression` and Rust's
-    /// `StartPosition::start_expression`.
-    pub fn toFilterExpression(self: EventPosition, allocator: std.mem.Allocator) ![]u8 {
-        const op: []const u8 = if (self.is_inclusive) ">=" else ">";
-        return switch (self.location) {
-            // Go and Rust both emit `>` for these two regardless of
-            // inclusivity, because `-1` and `@latest` are sentinels that
-            // already sit outside the event range.
-            .earliest => allocator.dupe(u8, "amqp.annotation.x-opt-offset > '-1'"),
-            .latest => allocator.dupe(u8, "amqp.annotation.x-opt-offset > '@latest'"),
-            .offset => |offset| std.fmt.allocPrint(
-                allocator,
-                "amqp.annotation.x-opt-offset {s} '{s}'",
-                .{ op, offset },
-            ),
-            .sequence_number => |seq| std.fmt.allocPrint(
-                allocator,
-                "amqp.annotation.x-opt-sequence-number {s} '{d}'",
-                .{ op, seq },
-            ),
-            .enqueued_time => |time| std.fmt.allocPrint(
-                allocator,
-                "amqp.annotation.x-opt-enqueued-time {s} '{d}'",
-                .{ op, time },
-            ),
-        };
-    }
-};
-
-/// Per-partition starting positions, used when a partition has no checkpoint.
-///
-/// Partition ids are copied; every other slice is borrowed.
-pub const StartPositions = struct {
-    per_partition: std.StringArrayHashMapUnmanaged(EventPosition) = .empty,
-    /// Used for any partition absent from `per_partition`.
-    default: EventPosition = .{},
-
-    pub fn deinit(self: *StartPositions, allocator: std.mem.Allocator) void {
-        for (self.per_partition.keys()) |key| allocator.free(key);
-        self.per_partition.deinit(allocator);
-    }
-
-    pub fn put(
-        self: *StartPositions,
-        allocator: std.mem.Allocator,
-        partition_id: []const u8,
-        position: EventPosition,
-    ) !void {
-        const owned_id = try allocator.dupe(u8, partition_id);
-        errdefer allocator.free(owned_id);
-
-        const gop = try self.per_partition.getOrPut(allocator, owned_id);
-        if (gop.found_existing) allocator.free(owned_id);
-        gop.value_ptr.* = position;
-    }
-
-    /// Resolve the position for a partition, falling back to `default`.
-    pub fn forPartition(self: StartPositions, partition_id: []const u8) EventPosition {
-        return self.per_partition.get(partition_id) orelse self.default;
-    }
-};
+pub const receiving = @import("receiver.zig");
+pub const PartitionClient = receiving.PartitionClient;
+pub const PartitionClientOptions = receiving.PartitionClientOptions;
+pub const ReceiverPool = receiving.ReceiverPool;
+pub const ReceiveError = receiving.ReceiveError;
+pub const consumerPathFor = receiving.consumerPathFor;
+pub const default_prefetch = receiving.default_prefetch;
+pub const max_credit = receiving.max_credit;
 
 // ─────────────────── AMQP Transport ──────────────────
 
@@ -236,6 +136,9 @@ pub const LinkTransport = struct {
     /// Sender links, attached on demand. Sending fails as unimplemented while
     /// this is null, which is what a metadata-only client wants.
     senders: ?*SenderPool = null,
+    /// Receiver links, attached on demand. Null leaves receiving
+    /// unimplemented, as for a producer-only or metadata-only client.
+    receivers: ?*ReceiverPool = null,
     /// The CBS token for the hub audience. Event Hubs wants it on the message
     /// as well as on the link.
     security_token: ?[]const u8 = null,
@@ -248,6 +151,7 @@ pub const LinkTransport = struct {
         return .{
             .management_client = management_client,
             .senders = options.senders,
+            .receivers = options.receivers,
             .security_token = options.security_token,
             .deadline_ms = options.deadline_ms,
             .retry = options.retry,
@@ -264,6 +168,7 @@ pub const LinkTransport = struct {
 
     pub const Options = struct {
         senders: ?*SenderPool = null,
+        receivers: ?*ReceiverPool = null,
         security_token: ?[]const u8 = null,
         deadline_ms: i64,
         retry: ?errors.RetryConfig = null,
@@ -303,13 +208,19 @@ pub const LinkTransport = struct {
         return pool.maxMessageSize(address);
     }
 
+    /// `filter` applies only to the first call for a given source: after
+    /// that the partition client holds a position advanced past everything it
+    /// has already delivered, and reapplying the original filter would replay.
     fn receiveImpl(t: *AmqpTransport, allocator: std.mem.Allocator, source: []const u8, filter: ?[]const u8, max_count: u32) ![]ReceivedEventData {
-        _ = t;
-        _ = allocator;
-        _ = source;
-        _ = filter;
-        _ = max_count;
-        return error.Unimplemented;
+        const self: *LinkTransport = @fieldParentPtr("transport", t);
+        const pool = self.receivers orelse return error.Unimplemented;
+        return pool.receive(allocator, source, filter, max_count);
+    }
+
+    /// Why the broker detached the receiver link for `source`.
+    pub fn lastReceiveError(self: *LinkTransport, source: []const u8) ?errors.EventHubsError {
+        const pool = self.receivers orelse return null;
+        return pool.lastError(source);
     }
 
     fn getHubPropsImpl(t: *AmqpTransport, allocator: std.mem.Allocator, hub_name: []const u8) !EventHubProperties {
@@ -664,7 +575,14 @@ pub const ConsumerClientOptions = struct {
     fully_qualified_namespace: []const u8,
     event_hub_name: []const u8,
     consumer_group: []const u8 = "$Default",
+    /// Identifies this reader to the broker, so a stolen link names who took
+    /// it. Borrowed, and must outlive the client.
+    instance_id: ?[]const u8 = null,
 };
+
+/// Used when the caller supplies no instance id, matching the link-name
+/// suffix the producer side already uses.
+pub const default_instance_id = "eventhubs";
 
 /// Receives events from an Event Hub partition.
 pub const ConsumerClient = struct {
@@ -754,12 +672,63 @@ pub const ConsumerClient = struct {
         return self.credential.getToken(ctx);
     }
 
+    /// The AMQP address a partition is read from. Caller owns the result.
+    ///
+    /// This is an entity path, not a URL: the namespace comes from the
+    /// connection, so prefixing it here would attach to a link that does not
+    /// exist.
+    pub fn consumerPath(
+        self: *ConsumerClient,
+        allocator: std.mem.Allocator,
+        partition_id: []const u8,
+    ) ![]u8 {
+        return consumerPathFor(
+            allocator,
+            self.options.event_hub_name,
+            self.options.consumer_group,
+            partition_id,
+        );
+    }
+
+    /// The name this reader attaches under.
+    pub fn instanceId(self: *ConsumerClient) []const u8 {
+        return self.options.instance_id orelse default_instance_id;
+    }
+
+    /// Open a client that reads one partition over a link it keeps attached.
+    ///
+    /// Initialise in place; `client` must outlive neither `session` nor the
+    /// allocator. This mirrors Go's `NewPartitionClient` and is the path that
+    /// supports prefetch, owner level, and resuming without replay.
+    pub fn newPartitionClient(
+        self: *ConsumerClient,
+        client: *PartitionClient,
+        allocator: std.mem.Allocator,
+        session: *amqp.Session,
+        partition_id: []const u8,
+        deadline_ms: i64,
+        options: PartitionClientOptions,
+    ) !void {
+        const source = try self.consumerPath(allocator, partition_id);
+        defer allocator.free(source);
+
+        try client.open(allocator, session, .{
+            .source_address = source,
+            .instance_id = self.instanceId(),
+            .deadline_ms = deadline_ms,
+        }, options);
+    }
+
     /// Receive events from a specific partition.
+    ///
+    /// A one-shot convenience over the transport. Use `newPartitionClient`
+    /// when the reader needs prefetch control, an owner level, or to resume
+    /// where it left off: each call here re-applies `start_position`, and a
+    /// link-backed transport only honours it on the first call.
     ///
     /// The returned slice comes from the transport. A link-backed transport
     /// allocates it, so free it with `freeReceivedEvents`; `MockAmqpTransport`
-    /// returns
-    /// the slice a test handed it and keeps ownership.
+    /// returns the slice a test handed it and keeps ownership.
     pub fn receiveEvents(
         self: *ConsumerClient,
         allocator: std.mem.Allocator,
@@ -767,16 +736,7 @@ pub const ConsumerClient = struct {
         start_position: EventPosition,
         max_count: u32,
     ) ![]ReceivedEventData {
-        const address = try std.fmt.allocPrint(
-            allocator,
-            "{s}/{s}/ConsumerGroups/{s}/Partitions/{s}",
-            .{
-                self.options.fully_qualified_namespace,
-                self.options.event_hub_name,
-                self.options.consumer_group,
-                partition_id,
-            },
-        );
+        const address = try self.consumerPath(allocator, partition_id);
         defer allocator.free(address);
 
         const filter = try start_position.toFilterExpression(allocator);

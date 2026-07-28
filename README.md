@@ -79,6 +79,54 @@ owns the addresses it keys them by. When the broker refuses a delivery,
 `lastSendError` carries the AMQP condition and description that the Zig error
 cannot.
 
+## Receiving
+
+A partition is read through one receiver link held open for the life of a
+`PartitionClient`. The link carries the reader's position, so reattaching
+without advancing it replays events that were already handed to the caller.
+
+```zig
+var pool = ReceiverPool.init(allocator, &session, .{
+    .instance_id = "reader-1",
+    .deadline_ms = deadline,
+});
+defer pool.deinit();
+
+var transport = LinkTransport.init(management_client, .{
+    .receivers = &pool,
+    .deadline_ms = deadline,
+});
+
+var partition: PartitionClient = undefined;
+try consumer.newPartitionClient(&partition, allocator, &session, "0", deadline, .{
+    .start_position = EventPosition.earliest(),
+    .owner_level = 1,
+});
+defer partition.deinit();
+
+const events = try partition.receiveEvents(allocator, 100);
+defer freeReceivedEvents(allocator, events);
+```
+
+The source is the entity path `{hub}/ConsumerGroups/{group}/Partitions/{id}`,
+and the link's target is the instance id, which is what makes a stolen-link
+error name the reader that took it. The start position becomes a selector
+filter on the attach. After every successful receive the filter is rewritten to
+`amqp.annotation.x-opt-sequence-number > '<last>'`, so a reattach resumes
+without replay; `ReceiverPool` therefore applies the caller's filter only on the
+first call for an address.
+
+`owner_level` attaches as an exclusive consumer via `com.microsoft:epoch`. A
+higher level detaches every lower one, which reports as `ownership_lost`.
+
+`prefetch` defaults to 300 credits, as Go and Rust do. A negative value
+disables prefetch and issues exactly the credit each receive needs, for a
+caller that wants to bound its own memory use. Neither prefetch nor a single
+receive may exceed 5000, the session's incoming window.
+
+A receive that asks for more events than arrive returns the ones that did
+rather than failing: a quiet partition is not an error.
+
 ## Metadata
 
 `getEventHubProperties` and `getPartitionProperties` are `READ` operations on

@@ -583,6 +583,62 @@ fn optionalBinary(value: ?[]const u8) AmqpValue {
     return if (value) |bytes| .{ .binary = bytes } else .null;
 }
 
+/// The parts of an AMQP message an Event Hubs event is decoded from.
+///
+/// A neutral shape, so a message decoded by any codec can be converted without
+/// first being rebuilt as a `uamqp.message.Message`.
+pub const RawMessage = struct {
+    /// The single data section Event Hubs uses for an event body. Null when
+    /// the message has none or has several, which Go treats the same way.
+    body: ?[]const u8 = null,
+    message_annotations: ?[]const MapEntry = null,
+    application_properties: ?[]const MapEntry = null,
+    message_id: ?AmqpValue = null,
+    correlation_id: ?AmqpValue = null,
+    content_type: ?[]const u8 = null,
+};
+
+/// Decode the parts of an AMQP message into a received event.
+///
+/// Everything is borrowed and copied out, so the result stays valid after the
+/// message it came from is freed.
+pub fn fromRawMessage(
+    allocator: std.mem.Allocator,
+    raw: RawMessage,
+) !ReceivedEventData {
+    var received: ReceivedEventData = .{};
+    errdefer received.deinit(allocator);
+
+    received.event_data.body = try allocator.dupe(u8, raw.body orelse "");
+
+    if (raw.content_type) |content_type| {
+        received.event_data.content_type = try allocator.dupe(u8, content_type);
+    }
+    if (raw.correlation_id) |correlation_id| {
+        if (MessageId.fromAmqpValue(correlation_id)) |parsed| {
+            received.event_data.correlation_id = try parsed.clone(allocator);
+        }
+    }
+    if (raw.message_id) |message_id| {
+        if (MessageId.fromAmqpValue(message_id)) |parsed| {
+            received.event_data.message_id = try parsed.clone(allocator);
+        }
+    }
+
+    if (raw.application_properties) |entries| {
+        for (entries) |entry| {
+            const key = keyOf(entry.key) orelse continue;
+            try received.event_data.properties.put(allocator, key, entry.value);
+        }
+    }
+
+    if (raw.message_annotations) |entries| {
+        try applyAnnotations(allocator, entries, &received);
+    }
+
+    return received;
+}
+
 /// Decode an AMQP message into a received event.
 ///
 /// `message` is borrowed and every field is copied out, so the result stays
@@ -592,44 +648,21 @@ pub fn fromAmqpMessage(
     allocator: std.mem.Allocator,
     message: *const Message,
 ) !ReceivedEventData {
-    var received: ReceivedEventData = .{};
-    errdefer received.deinit(allocator);
-
     // Go only treats a message as having a body when there is exactly one data
     // section; anything else is reachable through `raw_amqp_message`.
-    received.event_data.body = if (message.body_data_sections.items.len == 1)
-        try allocator.dupe(u8, message.body_data_sections.items[0].bytes)
+    const body: ?[]const u8 = if (message.body_data_sections.items.len == 1)
+        message.body_data_sections.items[0].bytes
     else
-        try allocator.dupe(u8, "");
+        null;
 
-    if (message.properties) |properties| {
-        if (properties.content_type) |content_type| {
-            received.event_data.content_type = try allocator.dupe(u8, content_type);
-        }
-        if (properties.correlation_id) |correlation_id| {
-            if (MessageId.fromAmqpValue(correlation_id)) |parsed| {
-                received.event_data.correlation_id = try parsed.clone(allocator);
-            }
-        }
-        if (properties.message_id) |message_id| {
-            if (MessageId.fromAmqpValue(message_id)) |parsed| {
-                received.event_data.message_id = try parsed.clone(allocator);
-            }
-        }
-    }
-
-    if (message.application_properties) |entries| {
-        for (entries) |entry| {
-            const key = keyOf(entry.key) orelse continue;
-            try received.event_data.properties.put(allocator, key, entry.value);
-        }
-    }
-
-    if (message.message_annotations) |entries| {
-        try applyAnnotations(allocator, entries, &received);
-    }
-
-    return received;
+    return fromRawMessage(allocator, .{
+        .body = body,
+        .message_annotations = message.message_annotations,
+        .application_properties = message.application_properties,
+        .message_id = if (message.properties) |p| p.message_id else null,
+        .correlation_id = if (message.properties) |p| p.correlation_id else null,
+        .content_type = if (message.properties) |p| p.content_type else null,
+    });
 }
 
 /// Decode an AMQP message and take ownership of it.
@@ -652,7 +685,7 @@ pub fn fromOwnedAmqpMessage(
 
 fn applyAnnotations(
     allocator: std.mem.Allocator,
-    entries: []MapEntry,
+    entries: []const MapEntry,
     received: *ReceivedEventData,
 ) !void {
     for (entries) |entry| {
