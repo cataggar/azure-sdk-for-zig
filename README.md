@@ -6,6 +6,39 @@ Azure Event Hubs clients:
 - `ConsumerClient`
 - [`checkpoint_store_blob`](checkpoint_store_blob/README.md)
 
+## Authentication
+
+Both clients hold a `Credential`, which is either an AAD `TokenCredential` or
+a shared access signature parsed out of a connection string:
+
+```zig
+// AAD. The credential must outlive the client.
+var producer = ProducerClient.init(.{
+    .fully_qualified_namespace = "ns.servicebus.windows.net",
+    .event_hub_name = "hub",
+}, cred.asCredential(), transport);
+defer producer.close();
+
+// Connection string. The string must outlive the client, because the
+// namespace, hub name, and key are all borrowed from it.
+var producer = try ProducerClient.fromConnectionString(allocator, cs, null, transport);
+defer producer.close();
+```
+
+AAD tokens are requested for `https://eventhubs.azure.net/.default` and put to
+CBS as `jwt`; connection-string tokens are put as `servicebus.windows.net:sastoken`.
+
+A token authorises an audience rather than the whole namespace.
+`entityAudience` returns `amqps://{namespace}/{hub}` for management operations
+and sending; `ConsumerClient.partitionAudience` returns the consumer group
+form, `amqps://{namespace}/{hub}/ConsumerGroups/{group}/Partitions/{id}`, which
+is what a partition receiver needs. The scheme comes from the connection string
+when there is one, so the emulator's plaintext `amqp://` endpoint works.
+
+A connection string carrying a pre-formed `SharedAccessSignature` instead of a
+key cannot be re-signed, so `credential.isRefreshable()` reports `false` and the
+client cannot outlive that signature.
+
 ## Event models
 
 `EventData` holds only what a producer sends: `body`, `properties`,
