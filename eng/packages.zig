@@ -50,6 +50,8 @@ pub const all = [_]Package{
             "transport.zig",
             "performative.zig",
             "connection.zig",
+            "message.zig",
+            "link.zig",
             "README.md",
             "LICENSE.txt",
         },
