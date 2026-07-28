@@ -1,5 +1,11 @@
 # Azure SDK for Zig
 
+> **⚠️ Experimental and unofficial** — This project is built with AI assistance
+> (GitHub Copilot). It was ported from the
+> [Azure SDK for C++](https://github.com/Azure/azure-sdk-for-cpp) as a starting
+> point, with all C/C++ dependencies replaced by pure Zig equivalents.
+> This is not an official Microsoft or Azure SDK.
+
 Idiomatic Azure client libraries for Zig 0.16.0 and later.
 
 ## SDK Packages
