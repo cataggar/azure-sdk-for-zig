@@ -13,12 +13,14 @@ const Context = core.context.Context;
 /// Parses JSON response fields: `token`, `expiresOn`.
 pub const AzureDeveloperCliCredential = struct {
     allocator: std.mem.Allocator,
+    io: std.Io,
     tenant_id: ?[]const u8 = null,
     credential: TokenCredential,
 
-    pub fn init(allocator: std.mem.Allocator) AzureDeveloperCliCredential {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io) AzureDeveloperCliCredential {
         return .{
             .allocator = allocator,
+            .io = io,
             .credential = .{ .getTokenFn = &getTokenImpl },
         };
     }
@@ -40,7 +42,7 @@ pub const AzureDeveloperCliCredential = struct {
         else
             return error.NoScopesProvided;
 
-        const result = try runCommand(allocator, scope, self.tenant_id);
+        const result = try runCommand(allocator, self.io, scope, self.tenant_id);
         defer allocator.free(result);
 
         return parseAzdResponse(allocator, result);
@@ -143,8 +145,13 @@ fn parseRfc3339Unix(value: []const u8) !i64 {
 }
 
 /// Run the azd auth token command and capture stdout.
-fn runCommand(allocator: std.mem.Allocator, scope: []const u8, tenant_id: ?[]const u8) ![]u8 {
-    var argv_buf: [8][]const u8 = undefined;
+fn runCommand(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    scope: []const u8,
+    tenant_id: ?[]const u8,
+) ![]u8 {
+    var argv_buf: [9][]const u8 = undefined;
     var argc: usize = 0;
 
     argv_buf[argc] = "azd";
@@ -169,23 +176,20 @@ fn runCommand(allocator: std.mem.Allocator, scope: []const u8, tenant_id: ?[]con
         argc += 1;
     }
 
-    var child = std.process.Child.init(argv_buf[0..argc], allocator);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
+    const result = try std.process.run(allocator, io, .{
+        .argv = argv_buf[0..argc],
+        .stdout_limit = .limited(1024 * 1024),
+        .stderr_limit = .limited(1024 * 1024),
+    });
+    defer allocator.free(result.stderr);
+    errdefer allocator.free(result.stdout);
 
-    try child.spawn();
+    switch (result.term) {
+        .exited => |code| if (code != 0) return error.AzdCliNotAvailable,
+        else => return error.AzdCliNotAvailable,
+    }
 
-    var stdout_buf: std.ArrayList(u8) = .empty;
-    defer stdout_buf.deinit(allocator);
-    var stderr_buf: std.ArrayList(u8) = .empty;
-    defer stderr_buf.deinit(allocator);
-
-    try child.collectOutput(allocator, &stdout_buf, &stderr_buf, 1024 * 1024);
-    const term = try child.wait();
-
-    if (term.Exited != 0) return error.AzdCliNotAvailable;
-
-    return stdout_buf.toOwnedSlice(allocator);
+    return result.stdout;
 }
 
 test "parseAzdResponse" {

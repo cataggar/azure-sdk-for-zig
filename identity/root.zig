@@ -31,6 +31,8 @@ pub const AzurePipelinesCredential = azure_pipelines.AzurePipelinesCredential;
 pub const WorkloadIdentityCredential = workload_identity.WorkloadIdentityCredential;
 pub const ChainedTokenCredential = default_azure_credential.ChainedTokenCredential;
 pub const DefaultAzureCredential = default_azure_credential.DefaultAzureCredential;
+pub const TokenCredentialSelection = default_azure_credential.TokenCredentialSelection;
+pub const CredentialKind = default_azure_credential.CredentialKind;
 
 test {
     @import("std").testing.refAllDecls(@This());
