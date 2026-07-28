@@ -13,6 +13,7 @@ pub const message_codec = @import("message.zig");
 pub const link = @import("link.zig");
 pub const rpc = @import("rpc.zig");
 pub const cbs = @import("cbs.zig");
+pub const management = @import("management.zig");
 
 // Transports.
 pub const Transport = transport.Transport;
@@ -65,6 +66,12 @@ pub const AccessToken = cbs.AccessToken;
 pub const TokenProvider = cbs.TokenProvider;
 pub const RefreshPolicy = cbs.RefreshPolicy;
 pub const cbs_address = cbs.address;
+pub const Management = management.Management;
+pub const ManagementOptions = management.Options;
+pub const ManagementRequest = management.Request;
+pub const ManagementError = management.ManagementError;
+pub const ManagementStatusError = management.StatusError;
+pub const management_address = management.address;
 
 // Message codec.
 pub const Message = message_codec.Message;
@@ -106,6 +113,7 @@ test {
     _ = link;
     _ = rpc;
     _ = cbs;
+    _ = management;
 }
 
 // ─────────────────────── Tests ───────────────────────

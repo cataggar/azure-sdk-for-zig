@@ -30,6 +30,8 @@ pub const RpcError = link.LinkError || error{
     RequestFailed,
     /// The service refused the credential (401).
     Unauthorized,
+    /// Awaited a request id that was never begun, or was already awaited.
+    UnknownRequest,
     /// The reply body could not be parsed as an AMQP message.
     MalformedReply,
 };
@@ -85,6 +87,9 @@ pub const RpcLink = struct {
     receiver: *link.Receiver,
     /// Serial number behind the correlation id.
     next_id: u64 = 1,
+    /// Requests awaiting a reply, keyed by correlation id. A filled value is a
+    /// reply that arrived before its caller asked for it.
+    pending: std.StringHashMapUnmanaged(?Response) = .empty,
 
     pub fn open(
         session: *link.Session,
@@ -147,6 +152,8 @@ pub const RpcLink = struct {
     }
 
     pub fn deinit(self: *RpcLink) void {
+        self.failAll();
+        self.pending.deinit(self.allocator);
         self.allocator.free(self.address);
         self.allocator.free(self.reply_to);
         self.allocator.destroy(self);
@@ -158,45 +165,125 @@ pub const RpcLink = struct {
         try self.sender.detach(deadline_ms);
     }
 
-    /// Send `request` and wait for the reply correlated to it.
+    /// Send `request` and return the id its reply will be correlated by.
     ///
     /// `request.properties.message_id` and `.reply_to` are filled in here and
     /// overwrite anything the caller set, since the correlation depends on
-    /// them.
-    pub fn call(
+    /// them. The returned id is owned by the link and stays valid until the
+    /// request is awaited or abandoned.
+    pub fn begin(
         self: *RpcLink,
         request: message.Message,
         deadline_ms: i64,
-    ) RpcError!Response {
-        var buf: [48]u8 = undefined;
-        const id = self.nextMessageId(&buf);
+    ) RpcError![]const u8 {
+        var buf: [64]u8 = undefined;
+        const id = try self.allocator.dupe(u8, self.nextMessageId(&buf));
+        errdefer self.allocator.free(id);
+
+        const entry = try self.pending.getOrPut(self.allocator, id);
+        std.debug.assert(!entry.found_existing);
+        entry.value_ptr.* = null;
+        errdefer _ = self.pending.remove(id);
 
         var outgoing = request;
         outgoing.properties.message_id = .{ .string = id };
         outgoing.properties.reply_to = self.reply_to;
 
         try self.sender.send(outgoing, deadline_ms);
+        return id;
+    }
 
-        // Replies for other requests can be in flight after a timeout, so keep
-        // reading until the correlation id matches rather than trusting order.
+    /// Wait for the reply to `id`.
+    ///
+    /// Replies for other outstanding requests are held rather than discarded,
+    /// so callers with several requests in flight each get their own answer
+    /// however the broker orders them.
+    pub fn awaitReply(
+        self: *RpcLink,
+        id: []const u8,
+        deadline_ms: i64,
+    ) RpcError!Response {
+        defer self.release(id);
         while (true) {
-            const delivery = try self.receiver.receive(deadline_ms);
-            var response = self.parse(delivery.payload) catch |e| switch (e) {
-                error.MalformedReply => {
-                    self.receiver.accept(delivery) catch {};
-                    continue;
-                },
+            if (self.pending.getEntry(id)) |entry| {
+                if (entry.value_ptr.*) |response| {
+                    entry.value_ptr.* = null;
+                    return response;
+                }
+            } else {
+                return error.UnknownRequest;
+            }
+
+            // A detached link will never answer, so fail rather than block
+            // until the deadline.
+            if (!self.receiver.attached) return error.LinkDetached;
+
+            const delivery = self.receiver.receive(deadline_ms) catch |e| {
+                if (e == error.LinkDetached) self.failAll();
+                return e;
+            };
+            self.deposit(delivery.payload) catch |e| switch (e) {
+                // A reply we cannot parse belongs to nobody; keep reading
+                // rather than failing a request that may still be answered.
+                error.MalformedReply => {},
                 else => return e,
             };
-            errdefer response.deinit();
             self.receiver.accept(delivery) catch {};
-
-            if (!correlates(response.decoded.message, id)) {
-                response.deinit();
-                continue;
-            }
-            return response;
         }
+    }
+
+    /// Give up on `id` without waiting for its reply.
+    pub fn abandon(self: *RpcLink, id: []const u8) void {
+        self.release(id);
+    }
+
+    /// Send `request` and wait for its reply.
+    pub fn call(
+        self: *RpcLink,
+        request: message.Message,
+        deadline_ms: i64,
+    ) RpcError!Response {
+        const id = try self.begin(request, deadline_ms);
+        return self.awaitReply(id, deadline_ms);
+    }
+
+    /// Park a reply against the request it answers, dropping it if no request
+    /// is waiting for it — a late answer to something already abandoned.
+    fn deposit(self: *RpcLink, payload: []const u8) RpcError!void {
+        var response = try self.parse(payload);
+        errdefer response.deinit();
+
+        const id = correlationOf(response.decoded.message) orelse {
+            response.deinit();
+            return;
+        };
+        const entry = self.pending.getEntry(id) orelse {
+            response.deinit();
+            return;
+        };
+        if (entry.value_ptr.*) |*existing| existing.deinit();
+        entry.value_ptr.* = response;
+    }
+
+    fn release(self: *RpcLink, id: []const u8) void {
+        if (self.pending.fetchRemove(id)) |removed| {
+            if (removed.value) |value| {
+                var response = value;
+                response.deinit();
+            }
+            self.allocator.free(removed.key);
+        }
+    }
+
+    /// Drop every outstanding request. Their callers get `error.LinkDetached`
+    /// on the next await rather than blocking for a reply that cannot come.
+    fn failAll(self: *RpcLink) void {
+        var it = self.pending.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.*) |*response| response.deinit();
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.pending.clearRetainingCapacity();
     }
 
     fn nextMessageId(self: *RpcLink, buf: []u8) []const u8 {
@@ -237,13 +324,14 @@ fn replyAddress(allocator: Allocator, address: []const u8, link_id: []const u8) 
     return std.fmt.allocPrint(allocator, "{s}-reply-to-{s}", .{ bare, link_id });
 }
 
-fn correlates(msg: message.Message, id: []const u8) bool {
+/// The request id a reply answers.
+fn correlationOf(msg: message.Message) ?[]const u8 {
     const value = msg.properties.correlation_id orelse
         // Some brokers echo the id in message-id instead.
-        msg.properties.message_id orelse return false;
+        msg.properties.message_id orelse return null;
     return switch (value) {
-        .string, .binary, .symbol => |s| std.mem.eql(u8, s, id),
-        else => false,
+        .string, .binary, .symbol => |s| s,
+        else => null,
     };
 }
 
@@ -348,14 +436,19 @@ test "a 401 is distinguished from other failures so it is not retried" {
 }
 
 test "a reply correlates on correlation-id, falling back to message-id" {
-    try testing.expect(correlates(.{
+    try testing.expectEqualStrings("id-1", correlationOf(.{
         .properties = .{ .correlation_id = .{ .string = "id-1" } },
-    }, "id-1"));
-    try testing.expect(!correlates(.{
-        .properties = .{ .correlation_id = .{ .string = "id-2" } },
-    }, "id-1"));
-    try testing.expect(correlates(.{
+    }).?);
+    // Some brokers echo the request id in message-id instead.
+    try testing.expectEqualStrings("id-1", correlationOf(.{
         .properties = .{ .message_id = .{ .string = "id-1" } },
-    }, "id-1"));
-    try testing.expect(!correlates(.{}, "id-1"));
+    }).?);
+    // correlation-id wins when both are present.
+    try testing.expectEqualStrings("id-1", correlationOf(.{
+        .properties = .{
+            .correlation_id = .{ .string = "id-1" },
+            .message_id = .{ .string = "id-2" },
+        },
+    }).?);
+    try testing.expect(correlationOf(.{}) == null);
 }

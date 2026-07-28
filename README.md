@@ -167,7 +167,35 @@ Acquiring the token is the credential's job. `TokenProvider` is a
 function-pointer struct, so this module does not depend on the credential type,
 and it is only consulted when a round-trip is actually needed.
 
-The `$management` link is not here yet.
+## Management
+
+`management.zig` drives the `$management` endpoint. A request carries the
+`operation` (`READ` for every metadata read), the entity `type`, the `name`,
+and the caller's `security_token`, with caller-supplied properties merged after
+them. The path has to be authorised over CBS before this link attaches.
+
+```zig
+const client = try amqp.Management.open(&session, .{ .link_id = id }, deadline_ms);
+defer client.deinit();
+
+var response = try client.call(.{
+    .entity_type = "com.microsoft:eventhub",
+    .name = hub_name,
+    .security_token = token,
+}, deadline_ms);
+defer response.deinit();
+```
+
+A non-2xx reply fails the call. Zig errors carry no payload, so the broker's
+status and description are recorded on `last_error`, the same way the
+connection driver records a remote error. `callRaw` returns the reply whatever
+its status, for callers that treat some codes as expected.
+
+`begin` and `awaitReply` are separate so several requests can be in flight at
+once; each is matched to its own reply however the broker orders them, and a
+reply that arrives before its caller asks for it is held rather than dropped. A
+detach fails everything outstanding instead of leaving a caller blocked until
+its deadline.
 
 ## Tests
 
