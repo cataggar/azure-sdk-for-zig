@@ -232,6 +232,39 @@ call `attempt.resetAttempts` to take one more immediate try after recovering a
 link. Both the `Sleeper` and the jitter source are injected, so tests can
 exercise the whole schedule without spending the time it describes.
 
+## Recovery
+
+A long-lived producer or consumer outlives the links it runs on. Brokers
+recycle links during upgrades and rebalances, and a connection can drop
+outright. `RecoverableConnection` rebuilds whatever the failure says is
+broken and `runWithRecovery` re-runs the operation on top of it:
+
+- `link` — reattach that one link. The connection and every other link stay
+  up. The first link failure of an operation takes one immediate retry
+  before the normal backoff, since a reattach is cheap and usually enough.
+- `connection` — rebuild the connection, its session, and every link.
+- `fatal` — surface it. `amqp:link:stolen` lands here, so a displaced
+  consumer stops rather than stealing its partition back.
+
+The connection is opened lazily through a `ConnectionFactory`, so nothing
+dials until the first operation runs. An `Authorizer` puts a CBS token on
+each generation *before* any link attaches: a rebuilt connection carries no
+claims, and a link attaching without one is refused with
+`unauthorized-access`, which is fatal.
+
+Recovery is idempotent across concurrent failures. `ensureOpen` returns the
+generation the caller is working against, and `recoverConnection` ignores a
+request naming a generation that is already gone — otherwise two operations
+failing on the same dead connection would rebuild it twice and the second
+rebuild would discard the first's healthy connection.
+
+Reattached receivers resume where they left off. The pool remembers each
+partition's selector when it drops a client, so a reattach continues past
+the last sequence number handed to the caller instead of replaying from the
+configured start position. For the same reason, a receive that fails partway
+through a batch returns the events that did arrive rather than discarding
+them; the next call finds the link dead and recovers it.
+
 Release branch: `sdk/eventhubs`. The package depends on `azure_sdk_core`,
 `azure_sdk_messaging_common`, `azure_sdk_storage_blobs`, `uamqp`, and `serde`
 and starts at `0.1.0`.

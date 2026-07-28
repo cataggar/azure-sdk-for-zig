@@ -77,6 +77,14 @@ pub const StartLocation = start_position_types.StartLocation;
 pub const EventPosition = start_position_types.EventPosition;
 pub const StartPositions = start_position_types.StartPositions;
 
+pub const recovery = @import("recovery.zig");
+pub const RecoverableConnection = recovery.RecoverableConnection;
+pub const ConnectionFactory = recovery.ConnectionFactory;
+pub const Plumbing = recovery.Plumbing;
+pub const Authorizer = recovery.Authorizer;
+pub const RecoveryError = recovery.RecoveryError;
+pub const runWithRecovery = recovery.runWithRecovery;
+
 pub const receiving = @import("receiver.zig");
 pub const PartitionClient = receiving.PartitionClient;
 pub const PartitionClientOptions = receiving.PartitionClientOptions;
@@ -132,13 +140,18 @@ pub const AmqpTransport = struct {
 /// client and session rather than opening them, because the connection and its
 /// CBS authorisation outlive any single operation and are owned by the caller.
 pub const LinkTransport = struct {
-    management_client: *amqp.Management,
+    /// Set when the caller manages the connection itself. Null when
+    /// `connection` provides it, since a rebuild replaces the client.
+    management_client: ?*amqp.Management = null,
     /// Sender links, attached on demand. Sending fails as unimplemented while
     /// this is null, which is what a metadata-only client wants.
     senders: ?*SenderPool = null,
     /// Receiver links, attached on demand. Null leaves receiving
     /// unimplemented, as for a producer-only or metadata-only client.
     receivers: ?*ReceiverPool = null,
+    /// When set, the transport owns neither the links nor the connection:
+    /// both come from here and are rebuilt when an operation says they broke.
+    connection: ?*RecoverableConnection = null,
     /// The CBS token for the hub audience. Event Hubs wants it on the message
     /// as well as on the link.
     security_token: ?[]const u8 = null,
@@ -148,10 +161,31 @@ pub const LinkTransport = struct {
     transport: AmqpTransport,
 
     pub fn init(management_client: *amqp.Management, options: Options) LinkTransport {
+        var self = initEmpty(options);
+        self.management_client = management_client;
+        self.senders = options.senders;
+        self.receivers = options.receivers;
+        return self;
+    }
+
+    /// Build a transport that recovers its own links and connection.
+    ///
+    /// Every operation runs under the retry schedule, because recovery is
+    /// pointless without one: rebuilding and then not retrying just returns
+    /// the original failure.
+    pub fn initRecoverable(
+        connection: *RecoverableConnection,
+        retry_config: errors.RetryConfig,
+        options: Options,
+    ) LinkTransport {
+        var self = initEmpty(options);
+        self.connection = connection;
+        self.retry = retry_config;
+        return self;
+    }
+
+    fn initEmpty(options: Options) LinkTransport {
         return .{
-            .management_client = management_client,
-            .senders = options.senders,
-            .receivers = options.receivers,
             .security_token = options.security_token,
             .deadline_ms = options.deadline_ms,
             .retry = options.retry,
@@ -181,17 +215,45 @@ pub const LinkTransport = struct {
     /// The broker's status and description for the most recent failed
     /// metadata operation, which a Zig error cannot carry.
     pub fn lastError(self: *LinkTransport) ?amqp.ManagementStatusError {
-        return self.management_client.last_error;
+        const client = self.managementClient() catch return null;
+        return client.last_error;
+    }
+
+    /// The management client to use, from the recoverable connection when
+    /// there is one.
+    fn managementClient(self: *LinkTransport) !*amqp.Management {
+        if (self.connection) |conn| return conn.managementClient();
+        return self.management_client orelse error.Unimplemented;
+    }
+
+    fn senderPool(self: *LinkTransport) !*SenderPool {
+        if (self.connection) |conn| return conn.senderPool();
+        return self.senders orelse error.Unimplemented;
+    }
+
+    fn receiverPool(self: *LinkTransport) !*ReceiverPool {
+        if (self.connection) |conn| return conn.receiverPool();
+        return self.receivers orelse error.Unimplemented;
     }
 
     /// Why the broker refused the most recent send.
     pub fn lastSendError(self: *LinkTransport) ?errors.EventHubsError {
-        const pool = self.senders orelse return null;
+        const pool = self.senderPool() catch return null;
         return pool.lastError();
     }
 
     fn sendBatchImpl(t: *AmqpTransport, allocator: std.mem.Allocator, target: []const u8, batch: EventDataBatch) !void {
         const self: *LinkTransport = @fieldParentPtr("transport", t);
+
+        if (self.connection) |conn| {
+            const config = self.retry orelse return error.Unimplemented;
+            var op = SendOp{ .connection = conn, .allocator = allocator, .target = target, .batch = batch };
+            return switch (recovery.runWithRecovery(void, conn, target, &op, config)) {
+                .ok => {},
+                .failed => |failure| failure.err,
+            };
+        }
+
         const pool = self.senders orelse return error.Unimplemented;
         if (self.retry) |config| {
             return switch (pool.sendWithRetry(allocator, target, batch, config)) {
@@ -202,9 +264,46 @@ pub const LinkTransport = struct {
         return pool.send(allocator, target, batch);
     }
 
+    /// One send attempt against whichever sender pool the connection has now.
+    ///
+    /// The pool is fetched inside `call` rather than captured, because a
+    /// recovery between attempts replaces the links behind it.
+    const SendOp = struct {
+        connection: *RecoverableConnection,
+        allocator: std.mem.Allocator,
+        target: []const u8,
+        batch: EventDataBatch,
+
+        pub fn call(op: *const @This(), attempt: *errors.Attempt) anyerror!void {
+            const pool = try op.connection.senderPool();
+            return pool.send(op.allocator, op.target, op.batch) catch |err| {
+                pool.recordFailure(op.target, attempt);
+                return err;
+            };
+        }
+    };
+
+    /// One receive attempt against whichever receiver pool the connection has
+    /// now.
+    const ReceiveOp = struct {
+        connection: *RecoverableConnection,
+        allocator: std.mem.Allocator,
+        source: []const u8,
+        filter: ?[]const u8,
+        max_count: u32,
+
+        pub fn call(op: *const @This(), attempt: *errors.Attempt) anyerror![]ReceivedEventData {
+            const pool = try op.connection.receiverPool();
+            return pool.receive(op.allocator, op.source, op.filter, op.max_count) catch |err| {
+                pool.recordFailure(op.source, attempt);
+                return err;
+            };
+        }
+    };
+
     fn maxMessageSizeImpl(t: *AmqpTransport, address: []const u8) !?u64 {
         const self: *LinkTransport = @fieldParentPtr("transport", t);
-        const pool = self.senders orelse return null;
+        const pool = self.senderPool() catch return null;
         return pool.maxMessageSize(address);
     }
 
@@ -213,13 +312,29 @@ pub const LinkTransport = struct {
     /// has already delivered, and reapplying the original filter would replay.
     fn receiveImpl(t: *AmqpTransport, allocator: std.mem.Allocator, source: []const u8, filter: ?[]const u8, max_count: u32) ![]ReceivedEventData {
         const self: *LinkTransport = @fieldParentPtr("transport", t);
+
+        if (self.connection) |conn| {
+            const config = self.retry orelse return error.Unimplemented;
+            var op = ReceiveOp{
+                .connection = conn,
+                .allocator = allocator,
+                .source = source,
+                .filter = filter,
+                .max_count = max_count,
+            };
+            return switch (recovery.runWithRecovery([]ReceivedEventData, conn, source, &op, config)) {
+                .ok => |events| events,
+                .failed => |failure| failure.err,
+            };
+        }
+
         const pool = self.receivers orelse return error.Unimplemented;
         return pool.receive(allocator, source, filter, max_count);
     }
 
     /// Why the broker detached the receiver link for `source`.
     pub fn lastReceiveError(self: *LinkTransport, source: []const u8) ?errors.EventHubsError {
-        const pool = self.receivers orelse return null;
+        const pool = self.receiverPool() catch return null;
         return pool.lastError(source);
     }
 
@@ -228,7 +343,7 @@ pub const LinkTransport = struct {
         if (self.retry) |config| {
             return switch (management.getEventHubPropertiesWithRetry(
                 allocator,
-                self.management_client,
+                try self.managementClient(),
                 hub_name,
                 self.security_token,
                 self.deadline_ms,
@@ -240,7 +355,7 @@ pub const LinkTransport = struct {
         }
         return management.getEventHubProperties(
             allocator,
-            self.management_client,
+            try self.managementClient(),
             hub_name,
             self.security_token,
             self.deadline_ms,
@@ -252,7 +367,7 @@ pub const LinkTransport = struct {
         if (self.retry) |config| {
             return switch (management.getPartitionPropertiesWithRetry(
                 allocator,
-                self.management_client,
+                try self.managementClient(),
                 hub_name,
                 partition_id,
                 self.security_token,
@@ -265,7 +380,7 @@ pub const LinkTransport = struct {
         }
         return management.getPartitionProperties(
             allocator,
-            self.management_client,
+            try self.managementClient(),
             hub_name,
             partition_id,
             self.security_token,

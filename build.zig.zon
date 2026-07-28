@@ -17,8 +17,8 @@
             .hash = "azure_sdk_storage_blobs-0.1.0-I5lGdlJ7CgCiJaJDvHH7ukhtln4baXBvqfvrDGCOhiVD",
         },
         .azure_sdk_amqp = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#e91e345f852b2a9b8ac33c0a494d82deace30f38",
-            .hash = "azure_sdk_amqp-0.1.0-fUByf3l2BADNnCWXU2h6TZCgZmAmaXNfmjOr0yTHE4JR",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#f86daf8c68a9cce393250e93d15f24d03711bc4f",
+            .hash = "azure_sdk_amqp-0.1.0-fUByf_qKBABdtcHT_R-h5O0Nw-2ZQgAf83vKGZTk7xZf",
         },
         .serde = .{
             .url = "git+https://github.com/cataggar/serde.zig#73d872776b0361b6fc92f6cecd7ccf2f05e77cdd",
@@ -35,6 +35,7 @@
         "sender.zig",
         "position.zig",
         "receiver.zig",
+        "recovery.zig",
         "errors.zig",
         "checkpoint.zig",
         "checkpoint_store.zig",
