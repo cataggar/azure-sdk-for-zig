@@ -4,7 +4,51 @@ Azure Event Hubs clients:
 
 - `ProducerClient`
 - `ConsumerClient`
+- `Processor`
 - [`checkpoint_store_blob`](checkpoint_store_blob/README.md)
+
+## Connecting
+
+`HubConnection` is the whole transport stack in one value: the dialler, the
+retry schedule, CBS authorisation, and a connection that rebuilds itself. It
+is what turns a client into one that reaches the network.
+
+```zig
+var hub: HubConnection = undefined;
+hub.open(.{
+    .allocator = allocator,
+    .io = io,
+    .fully_qualified_namespace = "ns.servicebus.windows.net",
+});
+defer hub.deinit();
+
+var producer = try ProducerClient.fromConnectionString(
+    allocator,
+    connection_string,
+    "my-hub",
+    hub.asTransport(),
+);
+defer producer.close();
+
+// Late-bound because a connection-string client owns the credential it
+// parses, and that credential does not exist until the client is built.
+const audience = try producer.entityAudience(allocator);
+defer allocator.free(audience);
+try hub.bind(&producer.credential, audience);
+```
+
+Initialise it in place. It holds interior pointers — the authorizer points at
+the credential, the transport at the connection — so a copy would dangle.
+
+Nothing dials until the first operation runs, and `Options` carries the
+`ConnectionOptions` described below along with the container id, link id,
+consumer instance id, per-operation deadline, and retry jitter seed.
+
+`CbsAuthorizer` is the piece that satisfies `recovery.Authorizer`: before any
+link attaches on a connection generation, it opens `$cbs`, puts the client's
+token for the audience, and tears the link down again. It is opened per
+authorisation on purpose — the link is only needed for the round trip, and
+holding it across a rebuild would leave it pointing at a dead session.
 
 ## Authentication
 
@@ -381,9 +425,57 @@ than a partition nobody can read.
 and for running a fleet in one process. It is last-write-wins and does not
 model the etag race a real store arbitrates; `BlobCheckpointStore` does.
 
+Expiry is measured against a `Clock`. `SystemClock` reads wall time — not
+monotonic, because a lease is compared against a `last_modified_time` written
+by another process, possibly on another machine, so the two have to share an
+epoch. `ManualClock` moves only when told to, which is what lets the expiry
+and hand-over paths be tested without spending 60 seconds.
+
 Release branch: `sdk/eventhubs`. The package depends on `azure_sdk_core`,
 `azure_sdk_messaging_common`, `azure_sdk_storage_blobs`, `uamqp`, and `serde`
 and starts at `0.1.0`.
+
+## Examples
+
+```bash
+zig build examples
+```
+
+Each builds to `zig-out/bin/` and reads its configuration from the
+environment and its arguments:
+
+| Example | What it shows |
+| --- | --- |
+| `eventhubs-send-events` | Producing with `DefaultAzureCredential` |
+| `eventhubs-connection-string` | Producing with a connection string |
+| `eventhubs-batch-producer` | Filling batches to the link's real ceiling |
+| `eventhubs-consume-partition` | Reading one partition from earliest |
+| `eventhubs-properties` | Hub and per-partition watermarks |
+| `eventhubs-processor` | A `Processor` over `BlobCheckpointStore` |
+
+## Live tests
+
+```bash
+zig build live-test
+```
+
+Every test skips when the environment is not configured, so this is safe to
+run anywhere and runs in CI on every change. Opt in with
+`AZURE_EVENTHUBS_LIVE_TESTS=1`; any other value is an error rather than a
+silent skip.
+
+| Variable | Required | Meaning |
+| --- | --- | --- |
+| `AZURE_EVENTHUBS_LIVE_TESTS` | yes | Set to `1` to opt in |
+| `AZURE_EVENTHUBS_CONNECTION_STRING` | yes | Namespace connection string |
+| `AZURE_EVENTHUBS_HUB_NAME` | unless the connection string has an `EntityPath` | The hub |
+| `AZURE_EVENTHUBS_CONSUMER_GROUP` | no | Defaults to `$Default` |
+| `AZURE_EVENTHUBS_STORAGE_ENDPOINT` | checkpoint test only | Blob service endpoint |
+| `AZURE_EVENTHUBS_STORAGE_CONTAINER` | checkpoint test only | Existing container |
+| `AZURE_TOKEN` | checkpoint test only | Bearer token for `https://storage.azure.com` |
+
+The tests publish events and write checkpoint blobs, so point them at
+resources you do not mind polluting.
 
 ## Development
 

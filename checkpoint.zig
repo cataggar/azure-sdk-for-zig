@@ -106,11 +106,18 @@ pub const Clock = struct {
 };
 
 /// The real clock.
+///
+/// Wall time rather than monotonic: ownership expiry compares against a
+/// `last_modified_time` written by another process, possibly on another
+/// machine, so the two have to share an epoch.
 pub const SystemClock = struct {
+    io: std.Io,
     clock: Clock = .{ .nowMillisFn = now },
 
-    fn now(_: *Clock) i64 {
-        return std.time.milliTimestamp();
+    fn now(c: *Clock) i64 {
+        const self: *SystemClock = @fieldParentPtr("clock", c);
+        const timestamp = std.Io.Timestamp.now(self.io, .real);
+        return @intCast(@divTrunc(timestamp.nanoseconds, std.time.ns_per_ms));
     }
 };
 
