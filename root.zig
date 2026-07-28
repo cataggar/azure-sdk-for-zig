@@ -7,6 +7,7 @@ const uamqp = @import("uamqp");
 const messaging_common = @import("azure_sdk_messaging_common");
 const checkpoint = @import("checkpoint.zig");
 const event_data = @import("event_data.zig");
+const errors = @import("errors.zig");
 
 pub const ConnectionStringProperties = messaging_common.ConnectionStringProperties;
 pub const Checkpoint = checkpoint.Checkpoint;
@@ -28,6 +29,21 @@ pub const freeAmqpMessage = event_data.freeAmqpMessage;
 pub const freeDecodedMessage = event_data.freeDecodedMessage;
 pub const fromAmqpMessage = event_data.fromAmqpMessage;
 pub const fromOwnedAmqpMessage = event_data.fromOwnedAmqpMessage;
+
+pub const ErrorCode = errors.ErrorCode;
+pub const EventHubsError = errors.EventHubsError;
+pub const RecoveryKind = errors.RecoveryKind;
+pub const amqp_condition = errors.condition;
+pub const recoveryKindForCondition = errors.recoveryKindForCondition;
+pub const errorCodeForCondition = errors.errorCodeForCondition;
+pub const RetryOptions = errors.RetryOptions;
+pub const RetryConfig = errors.RetryConfig;
+pub const Sleeper = errors.Sleeper;
+pub const IoSleeper = errors.IoSleeper;
+pub const SleepError = errors.SleepError;
+pub const Attempt = errors.Attempt;
+pub const Outcome = errors.Outcome;
+pub const retry = errors.retry;
 
 // ─────────────────────── Models ───────────────────────
 
@@ -1106,4 +1122,12 @@ test "StartPositions.put is failure atomic" {
         }
     };
     try std.testing.checkAllAllocationFailures(std.testing.allocator, Case.run, .{});
+}
+
+test {
+    // These are re-exported but not called from this file, so without an
+    // explicit reference Zig never analyses them and their tests never run.
+    _ = errors;
+    _ = event_data;
+    _ = checkpoint;
 }
