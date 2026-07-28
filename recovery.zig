@@ -25,7 +25,6 @@ const PartitionClientOptions = receiving.PartitionClientOptions;
 pub const Plumbing = struct {
     context: *anyopaque,
     session: *amqp.Session,
-    management: *amqp.Management,
 };
 
 /// Builds and tears down the AMQP plumbing behind a connection.
@@ -90,6 +89,12 @@ pub const RecoverableConnection = struct {
     plumbing: ?Plumbing = null,
     senders: SenderPool = undefined,
     receivers: ReceiverPool = undefined,
+    /// Attached on first use and torn down with the connection that carries
+    /// it, since the link cannot outlive its session.
+    management: ?*amqp.Management = null,
+    /// Distinguishes this client's `$management` link pair from any other on
+    /// the connection.
+    management_link_id: []const u8 = "eventhubs",
     closed: bool = false,
     /// The pools outlive any one generation, because a receiver's position
     /// has to survive the rebuild that lost its link.
@@ -190,9 +195,21 @@ pub const RecoverableConnection = struct {
         return self.plumbing.?.session;
     }
 
+    /// The `$management` client, attached on first use.
+    ///
+    /// Lazily, as Go does: a producer that only ever sends never needs the
+    /// link, and attaching one on every connection would cost a round trip
+    /// per recovery for nothing.
     pub fn managementClient(self: *RecoverableConnection) !*amqp.Management {
         _ = try self.ensureOpen();
-        return self.plumbing.?.management;
+        if (self.management) |client| return client;
+        const client = try amqp.Management.open(
+            self.plumbing.?.session,
+            .{ .link_id = self.management_link_id },
+            self.deadline_ms,
+        );
+        self.management = client;
+        return client;
     }
 
     pub fn senderPool(self: *RecoverableConnection) !*SenderPool {
@@ -254,6 +271,10 @@ pub const RecoverableConnection = struct {
 
     fn teardown(self: *RecoverableConnection) void {
         const plumbing = self.plumbing orelse return;
+        if (self.management) |client| {
+            client.deinit();
+            self.management = null;
+        }
         if (self.pools_ready) {
             // Forgotten rather than detached: the links belong to a session
             // that is about to stop existing, so a detach would be written
@@ -379,16 +400,12 @@ const Generation = struct {
     clock: *driver.ManualClock,
     conn: *driver.Driver,
     session: *amqp.Session,
-    /// Never used by these tests; management recovery is covered by the
-    /// metadata operations, which already run under the retry schedule.
-    management: *amqp.Management,
 
     fn deinit(self: *Generation) void {
         self.session.deinit();
         self.allocator.destroy(self.session);
         self.conn.deinit();
         self.allocator.destroy(self.conn);
-        self.allocator.destroy(self.management);
         self.mem.deinit();
         self.allocator.destroy(self.mem);
         self.allocator.destroy(self.clock);
@@ -423,7 +440,6 @@ const ScriptedFactory = struct {
         mem.* = MemoryTransport.init(self.allocator);
         const clock = try self.allocator.create(driver.ManualClock);
         clock.* = .{};
-        const management = try self.allocator.create(amqp.Management);
 
         try self.scripts[self.opened](self.allocator, .{ .allocator = self.allocator, .mem = mem });
         self.opened += 1;
@@ -444,13 +460,11 @@ const ScriptedFactory = struct {
             .clock = clock,
             .conn = conn,
             .session = session,
-            .management = management,
         };
         try self.live.append(self.allocator, generation);
         return .{
             .context = generation,
             .session = session,
-            .management = management,
         };
     }
 

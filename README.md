@@ -232,6 +232,56 @@ call `attempt.resetAttempts` to take one more immediate try after recovering a
 link. Both the `Sleeper` and the jitter source are injected, so tests can
 exercise the whole schedule without spending the time it describes.
 
+## Connection options
+
+Both clients carry a `connection: ConnectionOptions`, the knobs that decide
+how the namespace is reached rather than what is said once there:
+
+```zig
+var producer = ProducerClient.init(.{
+    .fully_qualified_namespace = "ns.servicebus.windows.net",
+    .event_hub_name = "my-hub",
+    .connection = .{
+        .application_id = "my-app/2.1",
+        .custom_endpoint = .{ .host = "proxy.contoso.com", .port = 443 },
+        .retry_options = .{ .max_retries = 5 },
+    },
+}, credential, transport);
+```
+
+`application_id` leads the user agent sent in the `open` properties, ahead of
+`azsdk-zig-eventhubs/<version> (<platform>)`, so the service can attribute
+traffic to the calling application.
+
+`custom_endpoint` changes the address dialled and nothing else. The namespace
+stays the TLS server name and the CBS audience: a proxy fronting Event Hubs
+presents the *namespace's* certificate, and tokens are issued for the
+namespace regardless of which address carried the bytes. The AMQP `open` also
+keeps naming the namespace as its virtual host, since that is what the service
+routes on.
+
+`tls.bundle` supplies the certificate bundle to validate against, which is
+also how the emulator's self-signed root is trusted. Leaving it null rescans
+the system trust store on every dial, so a long-lived client should hoist one
+bundle out and share it. `use_tls = false` reaches the emulator over plaintext
+AMQP.
+
+`web_socket` reaches the service on port 443, for firewalls that block 5671.
+The SDK ships no WebSocket implementation — that would be a second protocol
+stack and a dependency. Instead the hook is handed
+`wss://{namespace}/$servicebus/websocket` and returns a duplex stream, as
+Go's `NewWebSocketConn` does. A custom endpoint does not reach the hook: the
+URL names the namespace, and any proxying is the caller's business.
+
+Every connection asks for the `com.microsoft:georeplication` capability, which
+is what makes the service report `geo_replication_enabled` on the hub
+properties.
+
+`AmqpConnectionFactory` is the factory that honours all of this. Give it to a
+`RecoverableConnection` and a rebuild re-reads the options and re-dials from
+scratch, re-invoking the WebSocket hook, since the caller's stream died with
+the connection it was carrying.
+
 ## Recovery
 
 A long-lived producer or consumer outlives the links it runs on. Brokers
