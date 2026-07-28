@@ -448,6 +448,7 @@ pub const all = [_]Package{
             "azure_sdk_core",
             "azure_sdk_messaging_common",
             "azure_sdk_storage_blobs",
+            "azure_sdk_amqp",
         },
         .external_dependencies = &.{ "uamqp", "serde" },
         .publish_paths = &.{
@@ -459,6 +460,7 @@ pub const all = [_]Package{
             "errors.zig",
             "checkpoint.zig",
             "checkpoint_store.zig",
+            "management.zig",
             "checkpoint_store_blob",
             "README.md",
             "LICENSE.txt",
