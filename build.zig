@@ -4,9 +4,18 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const core_dep = b.dependency("azure_sdk_core", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const core_mod = core_dep.module("azure_sdk_core");
+
     _ = b.addModule("azure_sdk_messaging_common", .{
         .root_source_file = b.path("root.zig"),
         .target = target,
+        .imports = &.{
+            .{ .name = "azure_sdk_core", .module = core_mod },
+        },
     });
 
     const tests = b.addTest(.{
@@ -14,6 +23,9 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("root.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{ .name = "azure_sdk_core", .module = core_mod },
+            },
         }),
     });
     const test_step = b.step("test", "Run Messaging Common tests");
