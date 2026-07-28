@@ -6,6 +6,7 @@ const core = @import("azure_sdk_core");
 const uamqp = @import("uamqp");
 const messaging_common = @import("azure_sdk_messaging_common");
 const checkpoint = @import("checkpoint.zig");
+const event_data = @import("event_data.zig");
 
 pub const ConnectionStringProperties = messaging_common.ConnectionStringProperties;
 pub const Checkpoint = checkpoint.Checkpoint;
@@ -15,29 +16,20 @@ pub const freeCheckpoints = checkpoint.freeCheckpoints;
 pub const freeOwnerships = checkpoint.freeOwnerships;
 pub const checkpoint_store_blob = @import("checkpoint_store.zig");
 
+pub const AmqpValue = event_data.AmqpValue;
+pub const EventData = event_data.EventData;
+pub const ReceivedEventData = event_data.ReceivedEventData;
+pub const MessageId = event_data.MessageId;
+pub const PropertyMap = event_data.PropertyMap;
+pub const ConversionError = event_data.ConversionError;
+pub const PropertyError = event_data.PropertyError;
+pub const freeReceivedEvents = event_data.freeReceivedEvents;
+pub const freeAmqpMessage = event_data.freeAmqpMessage;
+pub const freeDecodedMessage = event_data.freeDecodedMessage;
+pub const fromAmqpMessage = event_data.fromAmqpMessage;
+pub const fromOwnedAmqpMessage = event_data.fromOwnedAmqpMessage;
+
 // ─────────────────────── Models ───────────────────────
-
-pub const EventData = struct {
-    body: []const u8,
-    properties: std.StringHashMap([]const u8),
-    partition_key: ?[]const u8 = null,
-    sequence_number: ?i64 = null,
-    offset: ?[]const u8 = null,
-    enqueued_time: ?i64 = null,
-    allocator: std.mem.Allocator,
-
-    pub fn init(allocator: std.mem.Allocator, body: []const u8) EventData {
-        return .{
-            .body = body,
-            .properties = std.StringHashMap([]const u8).init(allocator),
-            .allocator = allocator,
-        };
-    }
-
-    pub fn deinit(self: *EventData) void {
-        self.properties.deinit();
-    }
-};
 
 pub const EventDataBatch = struct {
     events: std.ArrayList(EventData),
@@ -70,6 +62,8 @@ pub const EventDataBatch = struct {
 
 pub const PartitionProperties = struct {
     id: []const u8,
+    /// Name of the Event Hub the partition belongs to.
+    event_hub_name: []const u8 = "",
     beginning_sequence_number: i64 = 0,
     last_enqueued_sequence_number: i64 = 0,
     last_enqueued_offset: ?[]const u8 = null,
@@ -81,6 +75,9 @@ pub const EventHubProperties = struct {
     name: []const u8,
     partition_ids: []const []const u8 = &.{},
     created_on: ?i64 = null,
+    /// True when the namespace has geo-replication enabled, which the service
+    /// reports as a geo-replication factor greater than one.
+    geo_replication_enabled: bool = false,
 };
 
 /// Starting position for reading events from a partition.
@@ -137,7 +134,7 @@ pub const EventPosition = struct {
 /// Abstracts over uamqp to enable unit testing.
 pub const AmqpTransport = struct {
     sendBatchFn: *const fn (self: *AmqpTransport, allocator: std.mem.Allocator, target: []const u8, batch: EventDataBatch) anyerror!void,
-    receiveFn: *const fn (self: *AmqpTransport, allocator: std.mem.Allocator, source: []const u8, filter: ?[]const u8, max_count: u32) anyerror![]EventData,
+    receiveFn: *const fn (self: *AmqpTransport, allocator: std.mem.Allocator, source: []const u8, filter: ?[]const u8, max_count: u32) anyerror![]ReceivedEventData,
     getHubPropertiesFn: *const fn (self: *AmqpTransport, allocator: std.mem.Allocator, hub_name: []const u8) anyerror!EventHubProperties,
     getPartitionPropertiesFn: *const fn (self: *AmqpTransport, allocator: std.mem.Allocator, hub_name: []const u8, partition_id: []const u8) anyerror!PartitionProperties,
     closeFn: *const fn (self: *AmqpTransport) void,
@@ -146,7 +143,7 @@ pub const AmqpTransport = struct {
         return self.sendBatchFn(self, allocator, target, batch);
     }
 
-    pub fn receive(self: *AmqpTransport, allocator: std.mem.Allocator, source: []const u8, filter: ?[]const u8, max_count: u32) ![]EventData {
+    pub fn receive(self: *AmqpTransport, allocator: std.mem.Allocator, source: []const u8, filter: ?[]const u8, max_count: u32) ![]ReceivedEventData {
         return self.receiveFn(self, allocator, source, filter, max_count);
     }
 
@@ -204,13 +201,12 @@ pub const UamqpTransport = struct {
         _ = amqp_target;
 
         for (batch.events.items) |event| {
-            var msg = uamqp.message.Message.init(allocator);
-            defer msg.deinit();
-            try msg.addBodyData(event.body);
+            var msg = try event.toAmqpMessage(allocator);
+            defer event_data.freeAmqpMessage(allocator, &msg);
         }
     }
 
-    fn receiveImpl(t: *AmqpTransport, allocator: std.mem.Allocator, source: []const u8, filter: ?[]const u8, max_count: u32) ![]EventData {
+    fn receiveImpl(t: *AmqpTransport, allocator: std.mem.Allocator, source: []const u8, filter: ?[]const u8, max_count: u32) ![]ReceivedEventData {
         const self: *UamqpTransport = @fieldParentPtr("transport", t);
         _ = max_count;
         _ = filter; // Filter applied via AMQP source filter map entries (requires I/O)
@@ -236,8 +232,7 @@ pub const UamqpTransport = struct {
     fn getPartitionPropsImpl(t: *AmqpTransport, allocator: std.mem.Allocator, hub_name: []const u8, partition_id: []const u8) !PartitionProperties {
         _ = t;
         _ = allocator;
-        _ = hub_name;
-        return .{ .id = partition_id };
+        return .{ .id = partition_id, .event_hub_name = hub_name };
     }
 
     fn closeImpl(t: *AmqpTransport) void {
@@ -249,7 +244,9 @@ pub const UamqpTransport = struct {
 pub const MockAmqpTransport = struct {
     send_called: bool = false,
     send_batch_count: u32 = 0,
-    receive_result: []EventData = &.{},
+    /// Returned verbatim by `receive`, unlike a real transport which allocates.
+    /// Tests keep ownership and must not call `freeReceivedEvents` on it.
+    receive_result: []ReceivedEventData = &.{},
     hub_properties: EventHubProperties = .{ .name = "test-hub" },
     partition_properties: PartitionProperties = .{ .id = "0" },
     transport: AmqpTransport,
@@ -278,7 +275,7 @@ pub const MockAmqpTransport = struct {
         self.send_batch_count += @intCast(batch.count());
     }
 
-    fn receiveImpl(t: *AmqpTransport, allocator: std.mem.Allocator, source: []const u8, filter: ?[]const u8, max_count: u32) ![]EventData {
+    fn receiveImpl(t: *AmqpTransport, allocator: std.mem.Allocator, source: []const u8, filter: ?[]const u8, max_count: u32) ![]ReceivedEventData {
         _ = allocator;
         _ = source;
         _ = filter;
@@ -419,13 +416,17 @@ pub const ConsumerClient = struct {
     }
 
     /// Receive events from a specific partition.
+    ///
+    /// The returned slice comes from the transport. `UamqpTransport` allocates
+    /// it, so free it with `freeReceivedEvents`; `MockAmqpTransport` returns
+    /// the slice a test handed it and keeps ownership.
     pub fn receiveEvents(
         self: *ConsumerClient,
         allocator: std.mem.Allocator,
         partition_id: []const u8,
         start_position: EventPosition,
         max_count: u32,
-    ) ![]EventData {
+    ) ![]ReceivedEventData {
         const address = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}/ConsumerGroups/{s}/Partitions/{s}",
@@ -461,18 +462,19 @@ pub const ConsumerClient = struct {
 
 test "EventData init" {
     const allocator = std.testing.allocator;
-    var event = EventData.init(allocator, "hello world");
-    defer event.deinit();
-    try event.properties.put("source", "test");
+    var event = EventData.init("hello world");
+    defer event.deinit(allocator);
+    try event.setStringProperty(allocator, "source", "test");
     try std.testing.expectEqualStrings("hello world", event.body);
+    try std.testing.expectEqualStrings("test", event.properties.getString("source").?);
 }
 
 test "EventDataBatch tryAdd" {
     const allocator = std.testing.allocator;
     var batch = EventDataBatch.init(allocator);
     defer batch.deinit(allocator);
-    var e1 = EventData.init(allocator, "event-1");
-    defer e1.deinit();
+    var e1 = EventData.init("event-1");
+    defer e1.deinit(allocator);
     const added = try batch.tryAdd(allocator, e1);
     try std.testing.expect(added);
     try std.testing.expectEqual(@as(usize, 1), batch.count());
@@ -544,8 +546,8 @@ test "ProducerClient sendBatch" {
 
     var batch = producer.createBatch(allocator);
     defer batch.deinit(allocator);
-    var e1 = EventData.init(allocator, "event-1");
-    defer e1.deinit();
+    var e1 = EventData.init("event-1");
+    defer e1.deinit(allocator);
     _ = try batch.tryAdd(allocator, e1);
 
     try producer.sendBatch(allocator, batch);
@@ -618,8 +620,8 @@ test "UamqpTransport sendBatch encodes messages" {
 
     var batch = EventDataBatch.init(allocator);
     defer batch.deinit(allocator);
-    var e1 = EventData.init(allocator, "hello");
-    defer e1.deinit();
+    var e1 = EventData.init("hello");
+    defer e1.deinit(allocator);
     _ = try batch.tryAdd(allocator, e1);
 
     try transport.asTransport().sendBatch(allocator, "ns.servicebus.windows.net/my-hub", batch);
