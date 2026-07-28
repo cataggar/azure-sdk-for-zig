@@ -445,6 +445,7 @@ pub const all = [_]Package{
             "build.zig.zon",
             "root.zig",
             "event_data.zig",
+            "errors.zig",
             "checkpoint.zig",
             "checkpoint_store.zig",
             "checkpoint_store_blob",
