@@ -4,6 +4,7 @@
 const std = @import("std");
 const core = @import("azure_sdk_core");
 const uamqp = @import("uamqp");
+const amqp = @import("azure_sdk_amqp");
 const messaging_common = @import("azure_sdk_messaging_common");
 const checkpoint = @import("checkpoint.zig");
 const event_data = @import("event_data.zig");
@@ -195,25 +196,12 @@ fn dataSectionSize(payload_len: usize) usize {
     return if (payload_len < 256) vbin8_overhead + payload_len else vbin32_overhead + payload_len;
 }
 
-pub const PartitionProperties = struct {
-    id: []const u8,
-    /// Name of the Event Hub the partition belongs to.
-    event_hub_name: []const u8 = "",
-    beginning_sequence_number: i64 = 0,
-    last_enqueued_sequence_number: i64 = 0,
-    last_enqueued_offset: ?[]const u8 = null,
-    last_enqueued_time: ?i64 = null,
-    is_empty: bool = true,
-};
-
-pub const EventHubProperties = struct {
-    name: []const u8,
-    partition_ids: []const []const u8 = &.{},
-    created_on: ?i64 = null,
-    /// True when the namespace has geo-replication enabled, which the service
-    /// reports as a geo-replication factor greater than one.
-    geo_replication_enabled: bool = false,
-};
+/// Metadata models and the `$management` operations that produce them. Both
+/// carry an optional arena, so a decoded value owns its strings and one built
+/// by hand borrows them; `deinit` is correct either way.
+pub const management = @import("management.zig");
+pub const PartitionProperties = management.PartitionProperties;
+pub const EventHubProperties = management.EventHubProperties;
 
 /// Where in a partition a consumer starts reading.
 ///
@@ -428,16 +416,143 @@ pub const UamqpTransport = struct {
         return &.{};
     }
 
+    // These used to echo the caller's own arguments back, which reads as a
+    // successful metadata read and is indistinguishable from one. Failing is
+    // the honest answer until this transport can actually reach the service;
+    // `ManagementTransport` does the real RPC today.
     fn getHubPropsImpl(t: *AmqpTransport, allocator: std.mem.Allocator, hub_name: []const u8) !EventHubProperties {
         _ = t;
         _ = allocator;
-        return .{ .name = hub_name };
+        _ = hub_name;
+        return error.NotConnected;
     }
 
     fn getPartitionPropsImpl(t: *AmqpTransport, allocator: std.mem.Allocator, hub_name: []const u8, partition_id: []const u8) !PartitionProperties {
         _ = t;
         _ = allocator;
-        return .{ .id = partition_id, .event_hub_name = hub_name };
+        _ = hub_name;
+        _ = partition_id;
+        return error.NotConnected;
+    }
+
+    fn closeImpl(t: *AmqpTransport) void {
+        _ = t;
+    }
+};
+
+/// A transport whose metadata operations are real `$management` RPCs.
+///
+/// It borrows an already-open management client rather than opening one,
+/// because the connection, its CBS authorisation, and its session outlive any
+/// single operation and are owned by the caller. Sending and receiving events
+/// still belong to the link-based transport and are not implemented here.
+pub const ManagementTransport = struct {
+    management_client: *amqp.Management,
+    /// The CBS token for the hub audience. Event Hubs wants it on the message
+    /// as well as on the link.
+    security_token: ?[]const u8 = null,
+    deadline_ms: i64,
+    /// When set, both operations run under the Event Hubs retry schedule.
+    retry: ?errors.RetryConfig = null,
+    transport: AmqpTransport,
+
+    pub fn init(management_client: *amqp.Management, options: Options) ManagementTransport {
+        return .{
+            .management_client = management_client,
+            .security_token = options.security_token,
+            .deadline_ms = options.deadline_ms,
+            .retry = options.retry,
+            .transport = .{
+                .sendBatchFn = &sendBatchImpl,
+                .receiveFn = &receiveImpl,
+                .getHubPropertiesFn = &getHubPropsImpl,
+                .getPartitionPropertiesFn = &getPartitionPropsImpl,
+                .closeFn = &closeImpl,
+            },
+        };
+    }
+
+    pub const Options = struct {
+        security_token: ?[]const u8 = null,
+        deadline_ms: i64,
+        retry: ?errors.RetryConfig = null,
+    };
+
+    pub fn asTransport(self: *ManagementTransport) *AmqpTransport {
+        return &self.transport;
+    }
+
+    /// The broker's status and description for the most recent failure, which
+    /// a Zig error cannot carry.
+    pub fn lastError(self: *ManagementTransport) ?amqp.ManagementStatusError {
+        return self.management_client.last_error;
+    }
+
+    fn sendBatchImpl(t: *AmqpTransport, allocator: std.mem.Allocator, target: []const u8, batch: EventDataBatch) !void {
+        _ = t;
+        _ = allocator;
+        _ = target;
+        _ = batch;
+        return error.Unimplemented;
+    }
+
+    fn receiveImpl(t: *AmqpTransport, allocator: std.mem.Allocator, source: []const u8, filter: ?[]const u8, max_count: u32) ![]ReceivedEventData {
+        _ = t;
+        _ = allocator;
+        _ = source;
+        _ = filter;
+        _ = max_count;
+        return error.Unimplemented;
+    }
+
+    fn getHubPropsImpl(t: *AmqpTransport, allocator: std.mem.Allocator, hub_name: []const u8) !EventHubProperties {
+        const self: *ManagementTransport = @fieldParentPtr("transport", t);
+        if (self.retry) |config| {
+            return switch (management.getEventHubPropertiesWithRetry(
+                allocator,
+                self.management_client,
+                hub_name,
+                self.security_token,
+                self.deadline_ms,
+                config,
+            )) {
+                .ok => |props| props,
+                .failed => |failure| failure.err,
+            };
+        }
+        return management.getEventHubProperties(
+            allocator,
+            self.management_client,
+            hub_name,
+            self.security_token,
+            self.deadline_ms,
+        );
+    }
+
+    fn getPartitionPropsImpl(t: *AmqpTransport, allocator: std.mem.Allocator, hub_name: []const u8, partition_id: []const u8) !PartitionProperties {
+        const self: *ManagementTransport = @fieldParentPtr("transport", t);
+        if (self.retry) |config| {
+            return switch (management.getPartitionPropertiesWithRetry(
+                allocator,
+                self.management_client,
+                hub_name,
+                partition_id,
+                self.security_token,
+                self.deadline_ms,
+                config,
+            )) {
+                .ok => |props| props,
+                .failed => |failure| failure.err,
+            };
+        }
+        return management.getPartitionProperties(
+            allocator,
+            self.management_client,
+            hub_name,
+            partition_id,
+            self.security_token,
+            self.deadline_ms,
+        );
     }
 
     fn closeImpl(t: *AmqpTransport) void {
@@ -1020,11 +1135,11 @@ test "ProducerClient createBatch" {
     );
     defer mock.deinit();
     var cred = cred_mod.ClientSecretCredential.init(allocator, mock.asTransport(), "t", "c", "s");
-    var amqp = MockAmqpTransport.init();
+    var mock_amqp = MockAmqpTransport.init();
     var producer = ProducerClient.init(.{
         .fully_qualified_namespace = "ns.servicebus.windows.net",
         .event_hub_name = "my-hub",
-    }, cred.asCredential(), amqp.asTransport());
+    }, cred.asCredential(), mock_amqp.asTransport());
     var batch = try producer.createBatch(.{});
     defer batch.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 0), batch.count());
@@ -1038,11 +1153,11 @@ test "ProducerClient sendBatch" {
     );
     defer mock_http.deinit();
     var cred = cred_mod.ClientSecretCredential.init(allocator, mock_http.asTransport(), "t", "c", "s");
-    var amqp = MockAmqpTransport.init();
+    var mock_amqp = MockAmqpTransport.init();
     var producer = ProducerClient.init(.{
         .fully_qualified_namespace = "ns.servicebus.windows.net",
         .event_hub_name = "my-hub",
-    }, cred.asCredential(), amqp.asTransport());
+    }, cred.asCredential(), mock_amqp.asTransport());
 
     var batch = try producer.createBatch(.{});
     defer batch.deinit(allocator);
@@ -1051,8 +1166,8 @@ test "ProducerClient sendBatch" {
     _ = try batch.tryAdd(allocator, e1);
 
     try producer.sendBatch(allocator, batch);
-    try std.testing.expect(amqp.send_called);
-    try std.testing.expectEqual(@as(u32, 1), amqp.send_batch_count);
+    try std.testing.expect(mock_amqp.send_called);
+    try std.testing.expectEqual(@as(u32, 1), mock_amqp.send_batch_count);
 }
 
 test "ProducerClient sendBatch empty returns error" {
@@ -1063,11 +1178,11 @@ test "ProducerClient sendBatch empty returns error" {
     );
     defer mock_http.deinit();
     var cred = cred_mod.ClientSecretCredential.init(allocator, mock_http.asTransport(), "t", "c", "s");
-    var amqp = MockAmqpTransport.init();
+    var mock_amqp = MockAmqpTransport.init();
     var producer = ProducerClient.init(.{
         .fully_qualified_namespace = "ns.servicebus.windows.net",
         .event_hub_name = "my-hub",
-    }, cred.asCredential(), amqp.asTransport());
+    }, cred.asCredential(), mock_amqp.asTransport());
 
     var batch = try producer.createBatch(.{});
     defer batch.deinit(allocator);
@@ -1084,12 +1199,12 @@ test "ProducerClient getEventHubProperties" {
     );
     defer mock_http.deinit();
     var cred = cred_mod.ClientSecretCredential.init(allocator, mock_http.asTransport(), "t", "c", "s");
-    var amqp = MockAmqpTransport.init();
-    amqp.hub_properties = .{ .name = "my-hub", .partition_ids = &.{ "0", "1", "2" } };
+    var mock_amqp = MockAmqpTransport.init();
+    mock_amqp.hub_properties = .{ .name = "my-hub", .partition_ids = &.{ "0", "1", "2" } };
     var producer = ProducerClient.init(.{
         .fully_qualified_namespace = "ns.servicebus.windows.net",
         .event_hub_name = "my-hub",
-    }, cred.asCredential(), amqp.asTransport());
+    }, cred.asCredential(), mock_amqp.asTransport());
 
     const props = try producer.getEventHubProperties(allocator);
     try std.testing.expectEqualStrings("my-hub", props.name);
@@ -1104,11 +1219,11 @@ test "ConsumerClient receiveEvents" {
     );
     defer mock_http.deinit();
     var cred = cred_mod.ClientSecretCredential.init(allocator, mock_http.asTransport(), "t", "c", "s");
-    var amqp = MockAmqpTransport.init();
+    var mock_amqp = MockAmqpTransport.init();
     var consumer = ConsumerClient.init(.{
         .fully_qualified_namespace = "ns.servicebus.windows.net",
         .event_hub_name = "my-hub",
-    }, cred.asCredential(), amqp.asTransport());
+    }, cred.asCredential(), mock_amqp.asTransport());
 
     const events = try consumer.receiveEvents(allocator, "0", EventPosition.earliest(), 10);
     try std.testing.expectEqual(@as(usize, 0), events.len);
@@ -1129,9 +1244,9 @@ test "UamqpTransport sendBatch encodes messages" {
 
 test "ProducerClient fromConnectionString" {
     const allocator = std.testing.allocator;
-    var amqp = MockAmqpTransport.init();
+    var mock_amqp = MockAmqpTransport.init();
     const cs = "Endpoint=sb://mynamespace.servicebus.windows.net/;SharedAccessKeyName=mykey;SharedAccessKey=abc123=;EntityPath=myhub";
-    var producer = try ProducerClient.fromConnectionString(allocator, cs, null, amqp.asTransport());
+    var producer = try ProducerClient.fromConnectionString(allocator, cs, null, mock_amqp.asTransport());
     defer producer.deinit();
     try std.testing.expectEqualStrings("mynamespace.servicebus.windows.net", producer.options.fully_qualified_namespace);
     try std.testing.expectEqualStrings("myhub", producer.options.event_hub_name);
@@ -1144,26 +1259,26 @@ test "ProducerClient fromConnectionString" {
 
 test "ProducerClient fromConnectionString with override" {
     const allocator = std.testing.allocator;
-    var amqp = MockAmqpTransport.init();
+    var mock_amqp = MockAmqpTransport.init();
     const cs = "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=k;SharedAccessKey=v;EntityPath=hub1";
-    var producer = try ProducerClient.fromConnectionString(allocator, cs, "hub2", amqp.asTransport());
+    var producer = try ProducerClient.fromConnectionString(allocator, cs, "hub2", mock_amqp.asTransport());
     defer producer.deinit();
     try std.testing.expectEqualStrings("hub2", producer.options.event_hub_name);
     try std.testing.expectEqualStrings("amqps://ns.servicebus.windows.net/hub2", producer.owned_audience.?);
 }
 
 test "ProducerClient fromConnectionString missing hub" {
-    var amqp = MockAmqpTransport.init();
+    var mock_amqp = MockAmqpTransport.init();
     const cs = "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=k;SharedAccessKey=v";
-    const result = ProducerClient.fromConnectionString(std.testing.allocator, cs, null, amqp.asTransport());
+    const result = ProducerClient.fromConnectionString(std.testing.allocator, cs, null, mock_amqp.asTransport());
     try std.testing.expectError(error.MissingEventHubName, result);
 }
 
 test "ConsumerClient fromConnectionString" {
     const allocator = std.testing.allocator;
-    var amqp = MockAmqpTransport.init();
+    var mock_amqp = MockAmqpTransport.init();
     const cs = "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=k;SharedAccessKey=v;EntityPath=hub";
-    var consumer = try ConsumerClient.fromConnectionString(allocator, cs, null, amqp.asTransport());
+    var consumer = try ConsumerClient.fromConnectionString(allocator, cs, null, mock_amqp.asTransport());
     defer consumer.deinit();
     try std.testing.expectEqualStrings("ns.servicebus.windows.net", consumer.options.fully_qualified_namespace);
     try std.testing.expectEqualStrings("hub", consumer.options.event_hub_name);
@@ -1216,9 +1331,9 @@ test "audienceFor uses the connection string scheme" {
 
 test "connection string credential signs the parsed entity" {
     const allocator = std.testing.allocator;
-    var amqp = MockAmqpTransport.init();
+    var mock_amqp = MockAmqpTransport.init();
     const cs = "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=policy;SharedAccessKey=c2VjcmV0;EntityPath=hub";
-    var producer = try ProducerClient.fromConnectionString(allocator, cs, null, amqp.asTransport());
+    var producer = try ProducerClient.fromConnectionString(allocator, cs, null, mock_amqp.asTransport());
     defer producer.deinit();
 
     try std.testing.expect(producer.credential == .sas);
@@ -1241,12 +1356,12 @@ test "connection string credential signs the parsed entity" {
 }
 
 test "AAD credential is asked for the Event Hubs scope" {
-    var amqp = MockAmqpTransport.init();
+    var mock_amqp = MockAmqpTransport.init();
     var recorder = ScopeRecordingCredential.init();
     var producer = ProducerClient.init(.{
         .fully_qualified_namespace = "ns.servicebus.windows.net",
         .event_hub_name = "hub",
-    }, recorder.asCredential(), amqp.asTransport());
+    }, recorder.asCredential(), mock_amqp.asTransport());
     defer producer.deinit();
 
     try std.testing.expect(producer.credential == .token);
@@ -1266,13 +1381,13 @@ test "AAD credential is asked for the Event Hubs scope" {
 
 test "entityAudience matches the hub, partitionAudience the consumer group path" {
     const allocator = std.testing.allocator;
-    var amqp = MockAmqpTransport.init();
+    var mock_amqp = MockAmqpTransport.init();
     var recorder = ScopeRecordingCredential.init();
     var consumer = ConsumerClient.init(.{
         .fully_qualified_namespace = "ns.servicebus.windows.net",
         .event_hub_name = "hub",
         .consumer_group = "cg",
-    }, recorder.asCredential(), amqp.asTransport());
+    }, recorder.asCredential(), mock_amqp.asTransport());
     defer consumer.deinit();
 
     const entity = try consumer.entityAudience(allocator);
@@ -1289,13 +1404,13 @@ test "entityAudience matches the hub, partitionAudience the consumer group path"
 
 test "a SAS credential survives being returned by value" {
     const allocator = std.testing.allocator;
-    var amqp = MockAmqpTransport.init();
+    var mock_amqp = MockAmqpTransport.init();
     const cs = "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=k;SharedAccessKey=dg==;EntityPath=hub";
 
     // `SasCredential` recovers itself with `@fieldParentPtr`, so a pointer
     // taken before the client was moved would dangle. Resolving lazily
     // through the moved client must still produce a usable token.
-    var producer = try ProducerClient.fromConnectionString(allocator, cs, null, amqp.asTransport());
+    var producer = try ProducerClient.fromConnectionString(allocator, cs, null, mock_amqp.asTransport());
     defer producer.deinit();
     var moved = producer;
     producer.owned_audience = null;

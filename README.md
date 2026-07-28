@@ -39,6 +39,42 @@ A connection string carrying a pre-formed `SharedAccessSignature` instead of a
 key cannot be re-signed, so `credential.isRefreshable()` reports `false` and the
 client cannot outlive that signature.
 
+## Metadata
+
+`getEventHubProperties` and `getPartitionProperties` are `READ` operations on
+the `$management` link, distinguished by entity type — `com.microsoft:eventhub`
+returns the hub's partition list, `com.microsoft:partition` returns one
+partition's sequence number range.
+
+`ManagementTransport` performs them against an already-open
+`azure_sdk_amqp.Management` client. It borrows the client rather than opening
+one, because the connection, its CBS authorisation, and its session outlive any
+single operation.
+
+```zig
+var transport = ManagementTransport.init(management_client, .{
+    .security_token = token.token,
+    .deadline_ms = deadline,
+    .retry = .{ .sleeper = &sleeper, .random = prng.random() },
+});
+var props = try producer.getEventHubProperties(allocator);
+defer props.deinit();
+```
+
+Decoded properties own their strings through an arena; ones built by hand leave
+it null and borrow instead, so `deinit` is always correct and is idempotent.
+
+The wire names are not guessable and are taken from the Go SDK. In a partition
+reply `name` is the *hub* and `partition` is the partition; the first sequence
+number is `begin_sequence_number`; geo-replication is reported as a *factor*
+that the client turns into a boolean, so a factor of one is not
+geo-replication.
+
+Failures carry the broker's status and description, which a Zig error cannot,
+on `Management.last_error`. Both operations optionally run under the Event Hubs
+retry schedule, which classifies a management status into the AMQP condition it
+corresponds to — a 404 is fatal and is not retried, a 503 is not.
+
 ## Event models
 
 `EventData` holds only what a producer sends: `body`, `properties`,
