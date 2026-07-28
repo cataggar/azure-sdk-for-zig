@@ -11,6 +11,8 @@ pub const performative = @import("performative.zig");
 pub const connection_driver = @import("connection.zig");
 pub const message_codec = @import("message.zig");
 pub const link = @import("link.zig");
+pub const rpc = @import("rpc.zig");
+pub const cbs = @import("cbs.zig");
 
 // Transports.
 pub const Transport = transport.Transport;
@@ -51,6 +53,19 @@ pub const openReceiver = link.openReceiver;
 pub const receiver_name_property = link.receiver_name_property;
 pub const epoch_property = link.epoch_property;
 
+// Request/response and CBS.
+pub const RpcLink = rpc.RpcLink;
+pub const RpcOptions = rpc.Options;
+pub const RpcError = rpc.RpcError;
+pub const RpcResponse = rpc.Response;
+pub const Cbs = cbs.Cbs;
+pub const CbsOptions = cbs.Options;
+pub const CbsError = cbs.CbsError;
+pub const AccessToken = cbs.AccessToken;
+pub const TokenProvider = cbs.TokenProvider;
+pub const RefreshPolicy = cbs.RefreshPolicy;
+pub const cbs_address = cbs.address;
+
 // Message codec.
 pub const Message = message_codec.Message;
 pub const MessageBody = message_codec.Body;
@@ -79,17 +94,7 @@ pub const SaslMechanism = uamqp.sasl.mechanism.Mechanism;
 pub const messaging = uamqp.messaging;
 
 /// CBS token types used by Azure services.
-pub const CbsTokenType = enum {
-    sas,
-    jwt,
-
-    pub fn toString(self: CbsTokenType) []const u8 {
-        return switch (self) {
-            .sas => "servicebus.windows.net:sastoken",
-            .jwt => "jwt",
-        };
-    }
-};
+pub const CbsTokenType = cbs.TokenType;
 
 // Zig only analyzes a file that something actually references, so the
 // re-exports above are not enough to make these files' tests run.
@@ -99,6 +104,8 @@ test {
     _ = connection_driver;
     _ = message_codec;
     _ = link;
+    _ = rpc;
+    _ = cbs;
 }
 
 // ─────────────────────── Tests ───────────────────────

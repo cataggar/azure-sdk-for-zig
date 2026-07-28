@@ -129,9 +129,54 @@ A handle in an inbound frame is scoped to the peer that sent it, so links are
 looked up by the handle the peer chose, never by our own. A session holding both
 a CBS link and an events link would otherwise cross its deliveries.
 
-CBS authentication and the `$management` link are not here yet.
+## Request/response links
 
-Run its independent tests from this directory:
+`rpc.zig` pairs a sender with a receiver attached to a private reply address,
+correlating each reply to its request by message id. Both `$cbs` and
+`$management` are built on it, as they are in the Go client.
+
+A reply's status rides in application properties rather than in the delivery
+outcome, so a refused request still arrives as an accepted transfer. Both
+spellings brokers use — `status-code` and `statusCode` — are accepted, as is
+any integral encoding of the code.
+
+## CBS authentication
+
+Event Hubs carries no credential in the SASL exchange, so every entity is
+authorised separately by putting a token to `$cbs` before a link on that path
+attaches. `cbs.zig` sends the `operation`, `type`, `name`, and `expiration`
+application properties with the token as the message value, matching Go's
+layout exactly, and maps a 401 to `error.Unauthorized` so callers do not retry
+a refused credential.
+
+```zig
+const client = try amqp.Cbs.open(&session, .{ .link_id = id }, deadline_ms);
+defer client.deinit();
+
+try client.authorize(audience, credential.tokenProvider(), now_ms, deadline_ms);
+```
+
+Tokens are cached per audience and refreshed six minutes before expiry with up
+to five seconds of jitter, backing off thirty seconds after a failure — the
+same policy as the Rust client. A pre-formed SAS from a connection string is
+marked non-refreshable and schedules nothing, since renewing it returns the
+same expiry; the broker still enforces it, and `invalidateAll` re-authorises
+every path after a connection is recovered.
+
+Acquiring the token is the credential's job. `TokenProvider` is a
+function-pointer struct, so this module does not depend on the credential type,
+and it is only consulted when a round-trip is actually needed.
+
+The `$management` link is not here yet.
+
+## Tests
+
+`test_peer.zig` drives the far end of a `MemoryTransport`, writing the frames a
+broker would send and parsing back what the driver emitted. The link, RPC, and
+CBS tests share it, since they all need the same open/begin/attach preamble
+before the behaviour under test starts.
+
+Run the package's independent tests from this directory:
 
 ```bash
 zig build test --summary all

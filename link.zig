@@ -281,7 +281,8 @@ pub const Session = struct {
 ///
 /// A transfer frame carries the message payload immediately after the
 /// performative, so the split has to be found by measuring the performative.
-fn performativeLength(allocator: Allocator, body: []const u8) ?usize {
+/// Byte length of the performative at the head of `body`; the rest is payload.
+pub fn performativeLength(allocator: Allocator, body: []const u8) ?usize {
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
     const result = uamqp.decoder.decode(arena.allocator(), body) catch return null;
@@ -774,131 +775,12 @@ pub fn openReceiver(
 
 const testing = std.testing;
 const MemoryTransport = @import("transport.zig").MemoryTransport;
-const FrameHeader = uamqp.frame.FrameHeader;
-
-/// Scripts peer bytes and reads back what the driver emitted.
-const Peer = struct {
-    allocator: Allocator,
-    mem: *MemoryTransport,
-
-    fn pushHeader(self: Peer, header: *const [8]u8) !void {
-        try self.mem.pushPeerBytes(header);
-    }
-
-    fn push(self: Peer, channel: u16, p: perf.Performative) !void {
-        var buf = uamqp.encoder.Buffer.initDynamic(self.allocator);
-        defer buf.deinit();
-        try perf.encode(self.allocator, p, &buf);
-        try self.pushRaw(channel, buf.written());
-    }
-
-    /// Push a transfer performative followed by a payload chunk.
-    fn pushTransfer(self: Peer, channel: u16, t: perf.Transfer, chunk: []const u8) !void {
-        var buf = uamqp.encoder.Buffer.initDynamic(self.allocator);
-        defer buf.deinit();
-        try perf.encodeTransfer(self.allocator, t, &buf);
-        try buf.writeAll(chunk);
-        try self.pushRaw(channel, buf.written());
-    }
-
-    fn pushRaw(self: Peer, channel: u16, body: []const u8) !void {
-        const header = FrameHeader{
-            .size = @intCast(frame.frame_header_size + body.len),
-            .doff = 2,
-            .frame_type = .amqp,
-            .channel = channel,
-        };
-        const bytes = header.serialize();
-        try self.mem.pushPeerBytes(&bytes);
-        try self.mem.pushPeerBytes(body);
-    }
-};
-
-/// Every frame body the driver wrote, in order.
-const EmittedFrames = struct {
-    bodies: std.ArrayList([]const u8),
-    allocator: Allocator,
-
-    fn parse(allocator: Allocator, written: []const u8) !EmittedFrames {
-        var bodies: std.ArrayList([]const u8) = .empty;
-        errdefer bodies.deinit(allocator);
-        // A protocol header only leads the buffer before it is cleared.
-        var offset: usize = if (std.mem.startsWith(u8, written, "AMQP")) 8 else 0;
-        while (offset + frame.frame_header_size <= written.len) {
-            const header = try FrameHeader.parse(written[offset..][0..8]);
-            const body_len = header.size - @as(u32, header.doff) * 4;
-            const start = offset + @as(usize, header.doff) * 4;
-            try bodies.append(allocator, written[start..][0..body_len]);
-            offset += header.size;
-        }
-        return .{ .bodies = bodies, .allocator = allocator };
-    }
-
-    fn deinit(self: *EmittedFrames) void {
-        self.bodies.deinit(self.allocator);
-    }
-
-    /// Bodies whose descriptor matches `code`.
-    fn of(self: EmittedFrames, allocator: Allocator, code: u64) ![]const []const u8 {
-        var out: std.ArrayList([]const u8) = .empty;
-        for (self.bodies.items) |b| {
-            if (perf.peekDescriptor(b) == code) try out.append(allocator, b);
-        }
-        return out.toOwnedSlice(allocator);
-    }
-};
-
-const test_options = connection.Options{
-    .container_id = "test-container",
-    .hostname = "ns.servicebus.windows.net",
-    .sasl = .none,
-    .max_frame_size = 512,
-    .idle_timeout_ms = 0,
-};
-
-/// A driver opened against a scripted peer, plus a begun session.
-const Fixture = struct {
-    allocator: Allocator,
-    mem: *MemoryTransport,
-    clock: *connection.ManualClock,
-    driver: *Driver,
-    session: Session,
-
-    fn init(allocator: Allocator, mem: *MemoryTransport, clock: *connection.ManualClock, driver: *Driver) !Fixture {
-        try driver.open(10_000);
-        const session = try Session.begin(allocator, driver, 0, .{
-            .incoming_window = 100,
-            .outgoing_window = 100,
-        }, 10_000);
-        return .{
-            .allocator = allocator,
-            .mem = mem,
-            .clock = clock,
-            .driver = driver,
-            .session = session,
-        };
-    }
-
-    fn deinit(self: *Fixture) void {
-        self.session.deinit();
-    }
-};
-
-/// Script the peer's side of open + begin.
-fn scriptHandshake(peer: Peer, max_frame_size: u32) !void {
-    try peer.pushHeader(&frame.amqp_header);
-    try peer.push(0, .{ .open = .{
-        .container_id = "service-bus",
-        .max_frame_size = max_frame_size,
-        .channel_max = 255,
-    } });
-    try peer.push(0, .{ .begin = .{
-        .remote_channel = 0,
-        .next_outgoing_id = 1,
-        .incoming_window = 1000,
-        .outgoing_window = 1000,
-    } });
-}
+const harness = @import("test_peer.zig");
+const Peer = harness.Peer;
+const EmittedFrames = harness.EmittedFrames;
+const test_options = harness.driver_options;
+const Fixture = harness.Fixture;
+const scriptHandshake = harness.scriptHandshake;
 
 test "a sender attaches and reports the peer's max-message-size" {
     const allocator = testing.allocator;
