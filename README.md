@@ -315,6 +315,72 @@ configured start position. For the same reason, a receive that fails partway
 through a batch returns the events that did arrive rather than discarding
 them; the next call finds the link dead and recovers it.
 
+## Distributed consumption
+
+A `Processor` spreads a hub's partitions across a fleet of consumers. Each
+processor claims what it is entitled to, opens a reader for it, and hands
+that reader to the caller; ownership lives in a `CheckpointStore`, so the
+fleet coordinates through storage rather than through each other.
+
+```zig
+var processor = consumer.newProcessor(
+    allocator,
+    &store.store,
+    opener.asOpener(),
+    .{ .load_balancing_strategy = .greedy },
+    &clock.clock,
+    prng.random(),
+);
+defer processor.deinit();
+
+while (running) {
+    try processor.runOnce();
+    while (processor.nextPartitionClient()) |partition| {
+        // read from `partition`, then `partition.updateCheckpoint(...)`
+    }
+    std.Thread.sleep(@intCast(processor.nextIntervalMs() * std.time.ns_per_ms));
+}
+```
+
+`runOnce` is one balancing cycle rather than a thread, so the caller owns
+the loop and its shutdown. `nextIntervalMs` applies Go's 0.8–1.3 jitter to
+the update interval, which keeps a fleet that started together from
+rebalancing in lockstep.
+
+Two strategies decide how fast a processor grows:
+
+- `balanced` (the default, as in Go) takes at most one partition per cycle,
+  so a fleet converges gradually and a restarting processor does not
+  stampede.
+- `greedy` takes its whole fair share at once, which is what Rust defaults
+  to and what a small, stable fleet wants.
+
+Both prefer a partition that is unowned, expired, or explicitly relinquished
+before stealing from a processor holding more than its share. The fair share
+is `partitions / owners`, plus one where the division is uneven. Selection
+among equally good candidates is random on purpose: every processor runs the
+same algorithm at the same instant, so list order would make them all race
+for the same partition.
+
+Ownership is a lease. It is renewed by re-claiming every cycle and expires
+after `partition_expiration_ms` (60s, as in Go and Rust), so a processor that
+dies is taken over rather than blocking its partitions forever. `deinit`
+relinquishes by writing an empty owner id, which the balancer treats as
+immediately available — a clean shutdown hands over in one cycle instead of
+one expiry.
+
+A reader starts where the checkpoint says, preferring offset over sequence
+number; failing that, at the per-partition start position; failing that, at
+the default. A checkpoint carrying neither offset nor sequence number is an
+error rather than a silent restart. When a geo-replicated namespace rejects
+a checkpointed offset — offsets there are per-replica and mean nothing after
+a failover — the reader restarts at earliest, inclusive: duplicates rather
+than a partition nobody can read.
+
+`InMemoryCheckpointStore` is a `CheckpointStore` held in memory, for tests
+and for running a fleet in one process. It is last-write-wins and does not
+model the etag race a real store arbitrates; `BlobCheckpointStore` does.
+
 Release branch: `sdk/eventhubs`. The package depends on `azure_sdk_core`,
 `azure_sdk_messaging_common`, `azure_sdk_storage_blobs`, `uamqp`, and `serde`
 and starts at `0.1.0`.
