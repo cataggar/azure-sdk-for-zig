@@ -44,6 +44,8 @@
         "checkpoint_store.zig",
         "management.zig",
         "checkpoint_store_blob",
+        "examples",
+        "live_tests",
         "README.md",
         "LICENSE.txt",
     },

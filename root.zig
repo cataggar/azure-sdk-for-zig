@@ -16,6 +16,10 @@ pub const PartitionOwnership = checkpoint.PartitionOwnership;
 pub const CheckpointStore = checkpoint.CheckpointStore;
 pub const freeCheckpoints = checkpoint.freeCheckpoints;
 pub const freeOwnerships = checkpoint.freeOwnerships;
+pub const InMemoryCheckpointStore = checkpoint.InMemoryCheckpointStore;
+pub const Clock = checkpoint.Clock;
+pub const SystemClock = checkpoint.SystemClock;
+pub const ManualClock = checkpoint.ManualClock;
 pub const checkpoint_store_blob = @import("checkpoint_store.zig");
 
 pub const AmqpValue = event_data.AmqpValue;
@@ -872,10 +876,10 @@ pub const ConsumerClient = struct {
     /// from a connection.
     pub fn partitionOpener(
         self: *ConsumerClient,
-        session: *amqp.Session,
+        connection: *recovery.RecoverableConnection,
         deadline_ms: i64,
     ) ConsumerPartitionOpener {
-        return .{ .client = self, .session = session, .deadline_ms = deadline_ms };
+        return .{ .client = self, .connection = connection, .deadline_ms = deadline_ms };
     }
 
     /// Build a processor that reads this hub through `opener`.
@@ -939,7 +943,10 @@ pub const ConsumerClient = struct {
 /// A `PartitionOpener` backed by a `ConsumerClient` and one session.
 pub const ConsumerPartitionOpener = struct {
     client: *ConsumerClient,
-    session: *amqp.Session,
+    /// The session is resolved per open rather than held: a recovered
+    /// connection has a new one, and a link attached to the old session would
+    /// be attached to nothing.
+    connection: *recovery.RecoverableConnection,
     deadline_ms: i64,
     opener: PartitionOpener = .{
         .partitionIdsFn = partitionIds,
@@ -979,12 +986,13 @@ pub const ConsumerPartitionOpener = struct {
         const client = try allocator.create(PartitionClient);
         errdefer allocator.destroy(client);
 
+        const session = try self.connection.session();
         var with_position = options;
         with_position.start_position = position;
         self.client.newPartitionClient(
             client,
             allocator,
-            self.session,
+            session,
             partition_id,
             self.deadline_ms,
             with_position,
@@ -992,7 +1000,7 @@ pub const ConsumerPartitionOpener = struct {
             // A replicated namespace refuses an offset carried over from
             // before a failover. Say so in the error so the processor can
             // restart the partition rather than abandon it.
-            if (err == error.LinkDetached and self.sawGeoReplicationRejection()) {
+            if (err == error.LinkDetached and sawGeoReplicationRejection(session)) {
                 return error.GeoReplicationOffsetRejected;
             }
             return err;
@@ -1003,8 +1011,8 @@ pub const ConsumerPartitionOpener = struct {
     /// Whether the attach that just failed was refused for a geo-replicated
     /// offset. The link never attached, so the condition is only readable
     /// from the detached receiver the session still holds.
-    fn sawGeoReplicationRejection(self: *ConsumerPartitionOpener) bool {
-        for (self.session.receivers.items) |receiver| {
+    fn sawGeoReplicationRejection(session: *amqp.Session) bool {
+        for (session.receivers.items) |receiver| {
             const remote = receiver.detach_error orelse continue;
             if (load_balancing.isGeoReplicationOffsetError(remote.condition)) return true;
         }
@@ -1019,6 +1027,150 @@ pub const ConsumerPartitionOpener = struct {
     }
 };
 
+// ─────────────────────── Connecting ───────────────────────
+
+/// Puts the client's CBS token on a session before any link attaches.
+///
+/// A rebuilt connection carries no claims, so recovery re-authorises through
+/// this before reattaching. The `$cbs` link pair is opened and torn down per
+/// authorisation: it is only needed for the round trip, and holding it across
+/// a rebuild would leave a link pointing at a dead session.
+pub const CbsAuthorizer = struct {
+    allocator: std.mem.Allocator,
+    /// The credential to sign with. Bound after the client is built, because
+    /// a connection-string client owns the credential it creates.
+    credential: ?*Credential = null,
+    /// `amqps://{fqns}/{hub}`. Owned when `bind` copied it.
+    audience: ?[]u8 = null,
+    link_id: []const u8 = "eventhubs",
+    ctx: core.context.Context = .none,
+    authorizer: recovery.Authorizer = .{ .authorizeFn = authorize },
+
+    pub fn bind(self: *CbsAuthorizer, credential: *Credential, audience: []const u8) !void {
+        const owned = try self.allocator.dupe(u8, audience);
+        if (self.audience) |old| self.allocator.free(old);
+        self.audience = owned;
+        self.credential = credential;
+    }
+
+    pub fn deinit(self: *CbsAuthorizer) void {
+        if (self.audience) |audience| self.allocator.free(audience);
+        self.audience = null;
+    }
+
+    pub fn asAuthorizer(self: *CbsAuthorizer) *recovery.Authorizer {
+        return &self.authorizer;
+    }
+
+    fn authorize(a: *recovery.Authorizer, session: *amqp.Session, deadline_ms: i64) anyerror!void {
+        const self: *CbsAuthorizer = @fieldParentPtr("authorizer", a);
+        const credential = self.credential orelse return error.CredentialNotBound;
+        const audience = self.audience orelse return error.CredentialNotBound;
+
+        var token = try credential.getToken(self.ctx);
+        defer token.deinit();
+
+        const client = try amqp.Cbs.open(session, .{ .link_id = self.link_id }, deadline_ms);
+        defer client.deinit();
+
+        try client.putToken(audience, .{
+            .token = token.token,
+            .expires_on_ms = token.expires_on * std.time.ms_per_s,
+            .kind = switch (credential.*) {
+                .token => .jwt,
+                .sas => .sas,
+            },
+            .refreshable = credential.isRefreshable(),
+        }, deadline_ms);
+        client.close(deadline_ms) catch {};
+    }
+};
+
+/// Everything a client needs to reach a namespace, assembled.
+///
+/// The pieces are individually usable — this only saves a caller from wiring
+/// a factory, an authorizer, a recoverable connection, and a transport by
+/// hand. It holds interior pointers, so initialise it in place and never copy
+/// it after `open`.
+pub const HubConnection = struct {
+    allocator: std.mem.Allocator,
+    sleeper: errors.IoSleeper,
+    prng: std.Random.DefaultPrng,
+    factory: connection_options.AmqpConnectionFactory,
+    authorizer: CbsAuthorizer,
+    connection: recovery.RecoverableConnection,
+    transport: LinkTransport,
+
+    pub const Options = struct {
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        fully_qualified_namespace: []const u8,
+        /// Identifies this connection to the service. Go uses a GUID.
+        container_id: []const u8 = "azure-sdk-for-zig",
+        /// Distinguishes this client's links from any other on the connection.
+        link_id: []const u8 = "eventhubs",
+        /// Identifies this reader to the broker, and is what a stolen-link
+        /// message names.
+        instance_id: []const u8 = default_instance_id,
+        connection: ConnectionOptions = .{},
+        partition_client: PartitionClientOptions = .{},
+        /// How long any one operation may take, including its recovery.
+        deadline_ms: i64 = 60_000,
+        /// Seed for the retry jitter.
+        seed: u64 = 0,
+    };
+
+    /// Initialise in place. Nothing dials until the first operation runs.
+    pub fn open(self: *HubConnection, options: Options) void {
+        self.* = .{
+            .allocator = options.allocator,
+            .sleeper = errors.IoSleeper.init(options.io),
+            .prng = std.Random.DefaultPrng.init(options.seed),
+            .factory = .{
+                .allocator = options.allocator,
+                .io = options.io,
+                .fully_qualified_namespace = options.fully_qualified_namespace,
+                .container_id = options.container_id,
+                .options = options.connection,
+            },
+            .authorizer = .{ .allocator = options.allocator },
+            .connection = undefined,
+            .transport = undefined,
+        };
+        self.connection = recovery.RecoverableConnection.init(options.allocator, .{
+            .factory = &self.factory.factory,
+            .authorizer = self.authorizer.asAuthorizer(),
+            .deadline_ms = options.deadline_ms,
+            .instance_id = options.instance_id,
+            .link_id = options.link_id,
+            .partition_client = options.partition_client,
+        });
+        self.transport = LinkTransport.initRecoverable(
+            &self.connection,
+            options.connection.retryConfig(&self.sleeper.sleeper, self.prng.random()),
+            .{ .deadline_ms = options.deadline_ms },
+        );
+    }
+
+    /// Point the authorizer at the client's credential.
+    ///
+    /// Separate from `open` because a connection-string client owns the
+    /// credential it parses, so the credential does not exist until after the
+    /// client is built, and the client needs this transport to be built.
+    pub fn bind(self: *HubConnection, credential: *Credential, audience: []const u8) !void {
+        return self.authorizer.bind(credential, audience);
+    }
+
+    pub fn asTransport(self: *HubConnection) *AmqpTransport {
+        return self.transport.asTransport();
+    }
+
+    pub fn deinit(self: *HubConnection) void {
+        self.connection.deinit();
+        self.authorizer.deinit();
+    }
+};
+
 // ─────────────────────── Tests ───────────────────────
 
 // Zig only analyses a file it is told to. Re-exporting a type is not
@@ -1027,6 +1179,40 @@ test {
     _ = @import("load_balancer.zig");
     _ = @import("processor.zig");
     _ = ConsumerPartitionOpener;
+}
+
+test "a hub connection wires itself up without dialling" {
+    const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    defer threaded.deinit();
+
+    var hub: HubConnection = undefined;
+    hub.open(.{
+        .allocator = allocator,
+        .io = threaded.io(),
+        .fully_qualified_namespace = "ns.servicebus.windows.net",
+        .container_id = "test",
+    });
+    defer hub.deinit();
+
+    // Nothing has dialled, so there is no plumbing and no claim yet.
+    try std.testing.expect(hub.connection.plumbing == null);
+    try std.testing.expect(hub.authorizer.credential == null);
+
+    var credential = Credential{ .sas = undefined };
+    try hub.bind(&credential, "amqps://ns.servicebus.windows.net/hub");
+    try std.testing.expectEqualStrings(
+        "amqps://ns.servicebus.windows.net/hub",
+        hub.authorizer.audience.?,
+    );
+
+    // Binding twice replaces rather than leaks: recovery rebinds after a
+    // credential is swapped.
+    try hub.bind(&credential, "amqps://ns.servicebus.windows.net/other");
+    try std.testing.expectEqualStrings(
+        "amqps://ns.servicebus.windows.net/other",
+        hub.authorizer.audience.?,
+    );
 }
 
 test "EventData init" {
