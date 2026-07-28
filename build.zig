@@ -22,11 +22,15 @@ pub fn build(b: *std.Build) void {
     });
     const blobs_mod = blobs_dep.module("azure_sdk_storage_blobs");
 
-    const uamqp_dep = b.dependency("uamqp", .{});
-    const uamqp_mod = b.createModule(.{
-        .root_source_file = uamqp_dep.path("src/zig/uamqp.zig"),
+    const amqp_dep = b.dependency("azure_sdk_amqp", .{
         .target = target,
+        .optimize = optimize,
     });
+    const amqp_mod = amqp_dep.module("azure_sdk_amqp");
+    // Reuse the AMQP package's uamqp module rather than building a second one.
+    // Two modules over the same source produce two incompatible copies of
+    // every type, so an `AmqpValue` could not cross the package boundary.
+    const uamqp_mod = amqp_dep.module("uamqp");
 
     const serde_dep = b.dependency("serde", .{
         .target = target,
@@ -44,6 +48,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "azure_sdk_core", .module = core_mod },
             .{ .name = "azure_sdk_messaging_common", .module = common_mod },
             .{ .name = "azure_sdk_storage_blobs", .module = blobs_mod },
+            .{ .name = "azure_sdk_amqp", .module = amqp_mod },
             .{ .name = "uamqp", .module = uamqp_mod },
             .{ .name = "serde", .module = serde_mod },
         },
@@ -58,6 +63,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "azure_sdk_core", .module = core_mod },
                 .{ .name = "azure_sdk_messaging_common", .module = common_mod },
                 .{ .name = "azure_sdk_storage_blobs", .module = blobs_mod },
+                .{ .name = "azure_sdk_amqp", .module = amqp_mod },
                 .{ .name = "uamqp", .module = uamqp_mod },
                 .{ .name = "serde", .module = serde_mod },
             },

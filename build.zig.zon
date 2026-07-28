@@ -16,9 +16,9 @@
             .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#547a1f88972a9a245f4af15479f592a0e1f8344b",
             .hash = "azure_sdk_storage_blobs-0.1.0-I5lGdlJ7CgCiJaJDvHH7ukhtln4baXBvqfvrDGCOhiVD",
         },
-        .uamqp = .{
-            .url = "git+https://github.com/cataggar/azure-uamqp-zig#1121d1e68dde8d188516083555cc7e1553b0f595",
-            .hash = "uamqp-0.1.0-lXMcafDqAQD3LSUZbUbyfrWhQfGG7OevKFUwhWxvGZDU",
+        .azure_sdk_amqp = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#7cf871c3cc9a6541f601f3e07242eb48e9e43ae5",
+            .hash = "azure_sdk_amqp-0.1.0-fUByf_teBADElN-o5BreZApnLGcLcxlb8ykLJ3GF-Mc4",
         },
         .serde = .{
             .url = "git+https://github.com/cataggar/serde.zig#73d872776b0361b6fc92f6cecd7ccf2f05e77cdd",
@@ -34,6 +34,7 @@
         "errors.zig",
         "checkpoint.zig",
         "checkpoint_store.zig",
+        "management.zig",
         "checkpoint_store_blob",
         "README.md",
         "LICENSE.txt",
