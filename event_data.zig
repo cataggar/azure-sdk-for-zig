@@ -530,6 +530,30 @@ fn encodeMessageSections(
     return encoded;
 }
 
+/// Append one data section per payload to an already encoded prefix.
+///
+/// This is how an Event Hubs batch is laid out: the envelope from
+/// `encodeMessageEnvelope` followed by the contained messages, each wrapped in
+/// its own data section. `EventData.toAmqpMessage` produces no footer, so
+/// nothing in the envelope has to follow the body.
+pub fn encodeDataSections(
+    allocator: std.mem.Allocator,
+    prefix: []const u8,
+    payloads: []const []u8,
+) ![]u8 {
+    var buffer = uamqp.encoder.Buffer.initDynamic(allocator);
+    errdefer buffer.deinit();
+
+    try buffer.writeAll(prefix);
+    for (payloads) |payload| {
+        try encodeSection(&buffer, uamqp.definitions.descriptor.data, .{ .binary = payload });
+    }
+
+    const encoded = try allocator.dupe(u8, buffer.written());
+    buffer.deinit();
+    return encoded;
+}
+
 fn encodeSection(buffer: *uamqp.encoder.Buffer, code: u64, value: AmqpValue) !void {
     var descriptor: AmqpValue = .{ .ulong = code };
     var section = value;

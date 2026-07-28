@@ -39,6 +39,46 @@ A connection string carrying a pre-formed `SharedAccessSignature` instead of a
 key cannot be re-signed, so `credential.isRefreshable()` reports `false` and the
 client cannot outlive that signature.
 
+## Sending
+
+A batch leaves as a single AMQP transfer whose `message-format` is
+`0x80013700`. Its body is the first event's non-body sections reused as an
+envelope, followed by one data section per event, each holding a fully encoded
+AMQP message. The service splits it back apart. Go and Rust produce the same
+shape.
+
+```zig
+var pool = SenderPool.init(allocator, &session, .{ .deadline_ms = deadline });
+defer pool.deinit();
+
+var transport = LinkTransport.init(management_client, .{
+    .senders = &pool,
+    .deadline_ms = deadline,
+});
+
+var batch = try producer.createBatch(allocator, .{ .partition_key = "orders" });
+defer batch.deinit(allocator);
+_ = try batch.tryAdd(allocator, EventData.init("hello"));
+try producer.sendBatch(allocator, batch);
+```
+
+The link target is the entity path, not the namespace: `{hub}` lets the service
+pick a partition, and `{hub}/Partitions/{id}` pins one. A batch created with a
+`partition_id` routes itself. One link is attached per address and reused,
+because credit and `max-message-size` are both per link.
+
+`createBatch` asks the link for its negotiated `max-message-size` and sizes the
+batch by it, so a batch that reports as fitting actually fits. An explicit
+`max_bytes` above what the link allows is refused rather than truncated.
+
+A partition key becomes an `x-opt-partition-key` message annotation on every
+event and on the envelope, which is the copy the service routes by.
+
+The senders belong to the session, which detaches and frees them; the pool only
+owns the addresses it keys them by. When the broker refuses a delivery,
+`lastSendError` carries the AMQP condition and description that the Zig error
+cannot.
+
 ## Metadata
 
 `getEventHubProperties` and `getPartitionProperties` are `READ` operations on
@@ -46,13 +86,13 @@ the `$management` link, distinguished by entity type — `com.microsoft:eventhub
 returns the hub's partition list, `com.microsoft:partition` returns one
 partition's sequence number range.
 
-`ManagementTransport` performs them against an already-open
+`LinkTransport` performs them against an already-open
 `azure_sdk_amqp.Management` client. It borrows the client rather than opening
 one, because the connection, its CBS authorisation, and its session outlive any
 single operation.
 
 ```zig
-var transport = ManagementTransport.init(management_client, .{
+var transport = LinkTransport.init(management_client, .{
     .security_token = token.token,
     .deadline_ms = deadline,
     .retry = .{ .sleeper = &sleeper, .random = prng.random() },
