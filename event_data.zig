@@ -340,14 +340,19 @@ pub fn freeReceivedEvents(allocator: std.mem.Allocator, events: []ReceivedEventD
     allocator.free(events);
 }
 
-/// Free a message produced by `EventData.toAmqpMessage`.
+/// Free a message produced by `EventData.toAmqpMessage`, including any
+/// annotations added afterwards by `setPartitionKeyAnnotation`.
 ///
-/// Only the sections that encoder sets are released, because `Message.deinit`
+/// Only the sections this module sets are released, because `Message.deinit`
 /// covers the body alone.
 pub fn freeAmqpMessage(allocator: std.mem.Allocator, message: *Message) void {
     if (message.application_properties) |entries| {
         freeMapEntries(allocator, entries);
         message.application_properties = null;
+    }
+    if (message.message_annotations) |entries| {
+        freeMapEntries(allocator, entries);
+        message.message_annotations = null;
     }
     if (message.properties) |*properties| {
         if (properties.message_id) |*message_id| message_id.deinit(allocator);
@@ -394,6 +399,164 @@ fn freeMapEntries(allocator: std.mem.Allocator, entries: []MapEntry) void {
         entry.value.deinit(allocator);
     }
     allocator.free(entries);
+}
+
+/// Stamp `x-opt-partition-key` on a message built by `EventData.toAmqpMessage`.
+///
+/// Event Hubs hashes this annotation to pick a partition, and Go applies it to
+/// every message as it enters a batch so the encoded size accounts for it.
+pub fn setPartitionKeyAnnotation(
+    allocator: std.mem.Allocator,
+    message: *Message,
+    partition_key: []const u8,
+) !void {
+    const entries = try allocator.alloc(MapEntry, 1);
+    errdefer allocator.free(entries);
+
+    const key = try allocator.dupe(u8, partition_key_annotation);
+    errdefer allocator.free(key);
+    const value = try allocator.dupe(u8, partition_key);
+
+    entries[0] = .{ .key = .{ .symbol = key }, .value = .{ .string = value } };
+    if (message.message_annotations) |existing| freeMapEntries(allocator, existing);
+    message.message_annotations = entries;
+}
+
+// ─────────────────── Message serialization ───────────────────
+
+/// Encode a message into AMQP 1.0 wire format, section by section
+/// (AMQP 1.0 section 3.2).
+///
+/// `uamqp` encodes individual values but has no message serializer, so the
+/// sections are assembled here. Batching needs this to measure real sizes
+/// instead of estimating them.
+pub fn encodeMessage(allocator: std.mem.Allocator, message: *const Message) ![]u8 {
+    return encodeMessageSections(allocator, message, true);
+}
+
+/// Encode every section except the body.
+///
+/// A batch transfer reuses the first message's sections as the envelope around
+/// the per-message data sections, so its size is measured without a body.
+pub fn encodeMessageEnvelope(allocator: std.mem.Allocator, message: *const Message) ![]u8 {
+    return encodeMessageSections(allocator, message, false);
+}
+
+fn encodeMessageSections(
+    allocator: std.mem.Allocator,
+    message: *const Message,
+    include_body: bool,
+) ![]u8 {
+    var buffer = uamqp.encoder.Buffer.initDynamic(allocator);
+    errdefer buffer.deinit();
+
+    if (message.header) |header| {
+        var fields = [_]AmqpValue{
+            .{ .boolean = header.durable },
+            .{ .ubyte = header.priority },
+            if (header.ttl) |ttl| .{ .uint = ttl } else .null,
+            .{ .boolean = header.first_acquirer },
+            .{ .uint = header.delivery_count },
+        };
+        try encodeSection(&buffer, uamqp.definitions.descriptor.header, .{
+            .list = trimTrailingNulls(&fields),
+        });
+    }
+
+    if (message.delivery_annotations) |entries| {
+        try encodeSection(&buffer, uamqp.definitions.descriptor.delivery_annotations, .{
+            .map = entries,
+        });
+    }
+
+    if (message.message_annotations) |entries| {
+        try encodeSection(&buffer, uamqp.definitions.descriptor.message_annotations, .{
+            .map = entries,
+        });
+    }
+
+    if (message.properties) |properties| {
+        var fields = [_]AmqpValue{
+            properties.message_id orelse .null,
+            optionalBinary(properties.user_id),
+            optionalString(properties.to),
+            optionalString(properties.subject),
+            optionalString(properties.reply_to),
+            properties.correlation_id orelse .null,
+            optionalSymbol(properties.content_type),
+            optionalSymbol(properties.content_encoding),
+            if (properties.absolute_expiry_time) |v| .{ .timestamp = v } else .null,
+            if (properties.creation_time) |v| .{ .timestamp = v } else .null,
+            optionalString(properties.group_id),
+            if (properties.group_sequence) |v| .{ .uint = v } else .null,
+            optionalString(properties.reply_to_group_id),
+        };
+        try encodeSection(&buffer, uamqp.definitions.descriptor.properties, .{
+            .list = trimTrailingNulls(&fields),
+        });
+    }
+
+    if (message.application_properties) |entries| {
+        try encodeSection(&buffer, uamqp.definitions.descriptor.application_properties, .{
+            .map = entries,
+        });
+    }
+
+    if (include_body) {
+        switch (message.body_type) {
+            .none => {},
+            .data => for (message.body_data_sections.items) |section| {
+                try encodeSection(&buffer, uamqp.definitions.descriptor.data, .{
+                    .binary = section.bytes,
+                });
+            },
+            .sequence => for (message.body_sequence_sections.items) |sequence| {
+                try encodeSection(&buffer, uamqp.definitions.descriptor.amqp_sequence, .{
+                    .list = sequence,
+                });
+            },
+            .value => if (message.body_value) |value| {
+                try encodeSection(&buffer, uamqp.definitions.descriptor.amqp_value, value);
+            },
+        }
+    }
+
+    if (message.footer) |entries| {
+        try encodeSection(&buffer, uamqp.definitions.descriptor.footer, .{ .map = entries });
+    }
+
+    const encoded = try allocator.dupe(u8, buffer.written());
+    buffer.deinit();
+    return encoded;
+}
+
+fn encodeSection(buffer: *uamqp.encoder.Buffer, code: u64, value: AmqpValue) !void {
+    var descriptor: AmqpValue = .{ .ulong = code };
+    var section = value;
+    try uamqp.encoder.encode(
+        .{ .described = .{ .descriptor = &descriptor, .value = &section } },
+        buffer,
+    );
+}
+
+/// AMQP composite types may omit trailing null fields, which every real
+/// encoder does and which keeps measured batch sizes realistic.
+fn trimTrailingNulls(fields: []AmqpValue) []AmqpValue {
+    var len = fields.len;
+    while (len > 0 and fields[len - 1] == .null) len -= 1;
+    return fields[0..len];
+}
+
+fn optionalString(value: ?[]const u8) AmqpValue {
+    return if (value) |text| .{ .string = text } else .null;
+}
+
+fn optionalSymbol(value: ?[]const u8) AmqpValue {
+    return if (value) |text| .{ .symbol = text } else .null;
+}
+
+fn optionalBinary(value: ?[]const u8) AmqpValue {
+    return if (value) |bytes| .{ .binary = bytes } else .null;
 }
 
 /// Decode an AMQP message into a received event.
@@ -889,4 +1052,112 @@ test "conversions survive allocation failure at every step" {
         }
     };
     try std.testing.checkAllAllocationFailures(std.testing.allocator, Case.run, .{});
+}
+
+test "setPartitionKeyAnnotation stamps the annotation Event Hubs hashes" {
+    const allocator = std.testing.allocator;
+
+    var event = EventData.init("body");
+    defer event.deinit(allocator);
+
+    var message = try event.toAmqpMessage(allocator);
+    defer freeAmqpMessage(allocator, &message);
+
+    try setPartitionKeyAnnotation(allocator, &message, "pk-9");
+    try setPartitionKeyAnnotation(allocator, &message, "pk-10");
+
+    var decoded = try fromAmqpMessage(allocator, &message);
+    defer decoded.deinit(allocator);
+    try std.testing.expectEqualStrings("pk-10", decoded.partition_key.?);
+}
+
+test "encodeMessage emits a data section in AMQP wire format" {
+    const allocator = std.testing.allocator;
+
+    var message = Message.init(allocator);
+    defer message.deinit();
+    try message.addBodyData("hi");
+
+    const encoded = try encodeMessage(allocator, &message);
+    defer allocator.free(encoded);
+
+    // 0x00 described constructor, 0x53 smallulong descriptor 0x75 (data),
+    // 0xa0 binary with a one-byte length of 2.
+    try std.testing.expectEqualSlices(
+        u8,
+        &[_]u8{ 0x00, 0x53, 0x75, 0xa0, 0x02, 'h', 'i' },
+        encoded,
+    );
+}
+
+test "encoded sections decode back with the right descriptors" {
+    const allocator = std.testing.allocator;
+
+    var event = EventData.init("payload");
+    defer event.deinit(allocator);
+    event.content_type = "application/json";
+    try event.setStringProperty(allocator, "tenant", "contoso");
+
+    var message = try event.toAmqpMessage(allocator);
+    defer freeAmqpMessage(allocator, &message);
+    try setPartitionKeyAnnotation(allocator, &message, "pk-1");
+
+    const encoded = try encodeMessage(allocator, &message);
+    defer allocator.free(encoded);
+
+    const expected = [_]u64{
+        uamqp.definitions.descriptor.message_annotations,
+        uamqp.definitions.descriptor.properties,
+        uamqp.definitions.descriptor.application_properties,
+        uamqp.definitions.descriptor.data,
+    };
+
+    var offset: usize = 0;
+    for (expected) |descriptor_code| {
+        var result = try uamqp.decoder.decode(allocator, encoded[offset..]);
+        defer result.value.deinit(allocator);
+        try std.testing.expectEqual(descriptor_code, result.value.described.descriptor.ulong);
+        offset += result.bytes_consumed;
+    }
+    try std.testing.expectEqual(encoded.len, offset);
+}
+
+test "encodeMessageEnvelope drops the body" {
+    const allocator = std.testing.allocator;
+
+    var event = EventData.init("a fairly long payload that dominates the encoded size");
+    defer event.deinit(allocator);
+    event.content_type = "text/plain";
+
+    var message = try event.toAmqpMessage(allocator);
+    defer freeAmqpMessage(allocator, &message);
+
+    const full = try encodeMessage(allocator, &message);
+    defer allocator.free(full);
+    const envelope = try encodeMessageEnvelope(allocator, &message);
+    defer allocator.free(envelope);
+
+    try std.testing.expect(envelope.len < full.len);
+    try std.testing.expectEqualSlices(u8, envelope, full[0..envelope.len]);
+}
+
+test "trailing null fields are omitted from composite sections" {
+    const allocator = std.testing.allocator;
+
+    var with_content_type = Message.init(allocator);
+    defer with_content_type.deinit();
+    with_content_type.properties = .{ .content_type = "text/plain" };
+
+    var empty_properties = Message.init(allocator);
+    defer empty_properties.deinit();
+    empty_properties.properties = .{};
+
+    const long = try encodeMessage(allocator, &with_content_type);
+    defer allocator.free(long);
+    const short = try encodeMessage(allocator, &empty_properties);
+    defer allocator.free(short);
+
+    // An all-null properties section collapses to the empty-list format code.
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x00, 0x53, 0x73, 0x45 }, short);
+    try std.testing.expect(long.len > short.len);
 }

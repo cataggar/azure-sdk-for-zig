@@ -31,34 +31,153 @@ pub const fromOwnedAmqpMessage = event_data.fromOwnedAmqpMessage;
 
 // ─────────────────────── Models ───────────────────────
 
-pub const EventDataBatch = struct {
-    events: std.ArrayList(EventData),
-    max_size_bytes: usize = 1024 * 1024,
-    current_size: usize = 0,
+/// AMQP message format identifying an Event Hubs batch transfer.
+pub const batch_message_format: u32 = 0x80013700;
 
-    pub fn init(allocator: std.mem.Allocator) EventDataBatch {
-        _ = allocator;
+/// Size assumed before a sender link negotiates `max-message-size`. Event Hubs
+/// standard tiers allow 1 MiB.
+pub const default_max_message_size: usize = 1024 * 1024;
+
+pub const BatchError = error{
+    /// A batch targets either a partition or a partition key, never both.
+    PartitionKeyAndIdBothSet,
+    /// The event cannot fit an empty batch, so no batch size would accept it.
+    EventDataTooLarge,
+    /// The requested `max_bytes` is above what the sender link negotiated.
+    MaxBytesExceedsLinkLimit,
+    /// The link limit can only be adopted before events are added.
+    BatchNotEmpty,
+};
+
+pub const EventDataBatchOptions = struct {
+    /// Upper bound on the encoded batch size. Defaults to the sender link's
+    /// negotiated maximum, or `default_max_message_size` until one exists.
+    max_bytes: ?usize = null,
+    /// Route related events to one partition by hash. Mutually exclusive with
+    /// `partition_id`.
+    partition_key: ?[]const u8 = null,
+    /// Send to an explicit partition. Mutually exclusive with `partition_key`.
+    partition_id: ?[]const u8 = null,
+};
+
+/// Packs events into a single AMQP batch transfer.
+///
+/// Events are encoded as they are added and the batch tracks the real byte
+/// count, so a batch that reports as fitting actually fits. Go and Rust both
+/// work this way; estimating from body length under-counts properties,
+/// annotations, and per-message framing.
+pub const EventDataBatch = struct {
+    /// Fully encoded sub-messages, each of which becomes one data section of
+    /// the batch transfer.
+    marshaled: std.ArrayList([]u8) = .empty,
+    /// Encoded non-body sections of the first event, which become the batch
+    /// envelope. Go reuses the first message this way.
+    envelope: ?[]u8 = null,
+    max_size_bytes: usize = default_max_message_size,
+    current_size: usize = 0,
+    partition_key: ?[]const u8 = null,
+    partition_id: ?[]const u8 = null,
+    /// Set when the caller pinned `max_bytes`, so a link cannot raise it.
+    requested_max_bytes: ?usize = null,
+
+    pub fn init(options: EventDataBatchOptions) BatchError!EventDataBatch {
+        if (options.partition_key != null and options.partition_id != null) {
+            return BatchError.PartitionKeyAndIdBothSet;
+        }
         return .{
-            .events = .empty,
+            .max_size_bytes = options.max_bytes orelse default_max_message_size,
+            .partition_key = options.partition_key,
+            .partition_id = options.partition_id,
+            .requested_max_bytes = options.max_bytes,
         };
     }
 
+    pub fn deinit(self: *EventDataBatch, allocator: std.mem.Allocator) void {
+        for (self.marshaled.items) |encoded| allocator.free(encoded);
+        self.marshaled.deinit(allocator);
+        if (self.envelope) |envelope| allocator.free(envelope);
+        self.envelope = null;
+        self.current_size = 0;
+    }
+
+    /// Adopt the `max-message-size` a sender link negotiated.
+    ///
+    /// An explicitly requested `max_bytes` is kept when it is smaller and
+    /// rejected when it exceeds what the link allows, matching Go.
+    pub fn applyLinkMaxMessageSize(
+        self: *EventDataBatch,
+        link_max_bytes: usize,
+    ) BatchError!void {
+        if (self.marshaled.items.len > 0) return BatchError.BatchNotEmpty;
+        if (self.requested_max_bytes) |requested| {
+            if (requested > link_max_bytes) return BatchError.MaxBytesExceedsLinkLimit;
+            return;
+        }
+        self.max_size_bytes = link_max_bytes;
+    }
+
+    /// Encode `event` and add it if the batch still has room.
+    ///
+    /// Returns `false` when the event does not fit alongside what is already
+    /// batched, and `BatchError.EventDataTooLarge` when it would not fit even
+    /// an empty batch.
     pub fn tryAdd(self: *EventDataBatch, allocator: std.mem.Allocator, event: EventData) !bool {
-        const event_size = event.body.len + 64; // approximate overhead
-        if (self.current_size + event_size > self.max_size_bytes) return false;
-        try self.events.append(allocator, event);
-        self.current_size += event_size;
+        var message = try event.toAmqpMessage(allocator);
+        defer event_data.freeAmqpMessage(allocator, &message);
+
+        if (self.partition_key) |partition_key| {
+            try event_data.setPartitionKeyAnnotation(allocator, &message, partition_key);
+        }
+
+        // Both buffers are discarded unless the event is actually adopted,
+        // which includes the `false` return when it simply does not fit.
+        var adopted = false;
+
+        const encoded = try event_data.encodeMessage(allocator, &message);
+        defer if (!adopted) allocator.free(encoded);
+
+        // The first event also fixes the envelope, so its cost is charged here.
+        const is_first = self.marshaled.items.len == 0;
+        const envelope: ?[]u8 = if (is_first)
+            try event_data.encodeMessageEnvelope(allocator, &message)
+        else
+            null;
+        defer if (!adopted) {
+            if (envelope) |bytes| allocator.free(bytes);
+        };
+
+        const envelope_size = if (envelope) |bytes| bytes.len else 0;
+        const projected = self.current_size + envelope_size + dataSectionSize(encoded.len);
+        if (projected > self.max_size_bytes) {
+            if (is_first) return BatchError.EventDataTooLarge;
+            return false;
+        }
+
+        try self.marshaled.append(allocator, encoded);
+        if (envelope) |bytes| self.envelope = bytes;
+        self.current_size = projected;
+        adopted = true;
         return true;
     }
 
     pub fn count(self: EventDataBatch) usize {
-        return self.events.items.len;
+        return self.marshaled.items.len;
     }
 
-    pub fn deinit(self: *EventDataBatch, allocator: std.mem.Allocator) void {
-        self.events.deinit(allocator);
+    /// Encoded size of the batch as it would go on the wire.
+    pub fn sizeInBytes(self: EventDataBatch) usize {
+        return self.current_size;
     }
 };
+
+/// Wrapping a payload in a data section costs a described-type constructor, the
+/// descriptor, and a binary length prefix. Go's `calcActualSizeForPayload`
+/// uses the same constants.
+fn dataSectionSize(payload_len: usize) usize {
+    const vbin8_overhead = 5;
+    const vbin32_overhead = 8;
+    return if (payload_len < 256) vbin8_overhead + payload_len else vbin32_overhead + payload_len;
+}
 
 pub const PartitionProperties = struct {
     id: []const u8,
@@ -200,9 +319,10 @@ pub const UamqpTransport = struct {
         const amqp_target = uamqp.messaging.createTarget(target);
         _ = amqp_target;
 
-        for (batch.events.items) |event| {
-            var msg = try event.toAmqpMessage(allocator);
-            defer event_data.freeAmqpMessage(allocator, &msg);
+        // Each batched event is already encoded; a real send wraps them in the
+        // batch envelope and writes one transfer with `batch_message_format`.
+        for (batch.marshaled.items) |encoded| {
+            std.debug.assert(encoded.len > 0);
         }
     }
 
@@ -357,9 +477,17 @@ pub const ProducerClient = struct {
         return self.amqp_transport.sendBatch(allocator, address, batch);
     }
 
-    pub fn createBatch(self: *ProducerClient, _: std.mem.Allocator) EventDataBatch {
+    /// Create a batch sized for this producer.
+    ///
+    /// The limit stays at `default_max_message_size` until a sender link
+    /// negotiates `max-message-size`, at which point `applyLinkMaxMessageSize`
+    /// adopts it.
+    pub fn createBatch(
+        self: *ProducerClient,
+        options: EventDataBatchOptions,
+    ) BatchError!EventDataBatch {
         _ = self;
-        return .{ .events = .empty };
+        return EventDataBatch.init(options);
     }
 
     pub fn getEventHubProperties(self: *ProducerClient, allocator: std.mem.Allocator) !EventHubProperties {
@@ -471,13 +599,133 @@ test "EventData init" {
 
 test "EventDataBatch tryAdd" {
     const allocator = std.testing.allocator;
-    var batch = EventDataBatch.init(allocator);
+    var batch = try EventDataBatch.init(.{});
     defer batch.deinit(allocator);
     var e1 = EventData.init("event-1");
     defer e1.deinit(allocator);
     const added = try batch.tryAdd(allocator, e1);
     try std.testing.expect(added);
     try std.testing.expectEqual(@as(usize, 1), batch.count());
+    try std.testing.expect(batch.sizeInBytes() > 0);
+    try std.testing.expect(batch.envelope != null);
+}
+
+test "EventDataBatch rejects a partition key and id together" {
+    try std.testing.expectError(
+        BatchError.PartitionKeyAndIdBothSet,
+        EventDataBatch.init(.{ .partition_key = "pk", .partition_id = "0" }),
+    );
+    const by_key = try EventDataBatch.init(.{ .partition_key = "pk" });
+    try std.testing.expectEqualStrings("pk", by_key.partition_key.?);
+    const by_id = try EventDataBatch.init(.{ .partition_id = "3" });
+    try std.testing.expectEqualStrings("3", by_id.partition_id.?);
+}
+
+test "EventDataBatch defaults to one mebibyte" {
+    const batch = try EventDataBatch.init(.{});
+    try std.testing.expectEqual(default_max_message_size, batch.max_size_bytes);
+    try std.testing.expectEqual(@as(usize, 1024 * 1024), default_max_message_size);
+}
+
+test "EventDataBatch fills up without exceeding max_bytes" {
+    const allocator = std.testing.allocator;
+    var batch = try EventDataBatch.init(.{ .max_bytes = 512 });
+    defer batch.deinit(allocator);
+
+    var event = EventData.init("x" ** 32);
+    defer event.deinit(allocator);
+
+    var added: usize = 0;
+    while (try batch.tryAdd(allocator, event)) : (added += 1) {
+        try std.testing.expect(batch.sizeInBytes() <= 512);
+    }
+
+    try std.testing.expect(added > 1);
+    try std.testing.expectEqual(added, batch.count());
+    try std.testing.expect(batch.sizeInBytes() <= 512);
+    // The next event still does not fit, and that stays a `false` rather than
+    // an error because the batch is not empty.
+    try std.testing.expect(!try batch.tryAdd(allocator, event));
+}
+
+test "EventDataBatch reports an oversized event distinctly" {
+    const allocator = std.testing.allocator;
+    var batch = try EventDataBatch.init(.{ .max_bytes = 32 });
+    defer batch.deinit(allocator);
+
+    var event = EventData.init("y" ** 256);
+    defer event.deinit(allocator);
+
+    try std.testing.expectError(BatchError.EventDataTooLarge, batch.tryAdd(allocator, event));
+    try std.testing.expectEqual(@as(usize, 0), batch.count());
+    try std.testing.expectEqual(@as(usize, 0), batch.sizeInBytes());
+    try std.testing.expect(batch.envelope == null);
+}
+
+test "EventDataBatch size matches the encoded bytes" {
+    const allocator = std.testing.allocator;
+    var batch = try EventDataBatch.init(.{});
+    defer batch.deinit(allocator);
+
+    var first = EventData.init("first event");
+    defer first.deinit(allocator);
+    try first.setStringProperty(allocator, "tenant", "contoso");
+    var second = EventData.init("second event body which is a little longer");
+    defer second.deinit(allocator);
+
+    try std.testing.expect(try batch.tryAdd(allocator, first));
+    try std.testing.expect(try batch.tryAdd(allocator, second));
+
+    var expected = batch.envelope.?.len;
+    for (batch.marshaled.items) |encoded| {
+        expected += if (encoded.len < 256) 5 + encoded.len else 8 + encoded.len;
+    }
+    try std.testing.expectEqual(expected, batch.sizeInBytes());
+}
+
+test "EventDataBatch charges for the partition key annotation" {
+    const allocator = std.testing.allocator;
+
+    var event = EventData.init("event");
+    defer event.deinit(allocator);
+
+    var plain = try EventDataBatch.init(.{});
+    defer plain.deinit(allocator);
+    try std.testing.expect(try plain.tryAdd(allocator, event));
+
+    var keyed = try EventDataBatch.init(.{ .partition_key = "a-partition-key" });
+    defer keyed.deinit(allocator);
+    try std.testing.expect(try keyed.tryAdd(allocator, event));
+
+    try std.testing.expect(keyed.sizeInBytes() > plain.sizeInBytes());
+}
+
+test "EventDataBatch adopts the link negotiated size" {
+    const allocator = std.testing.allocator;
+
+    var negotiated = try EventDataBatch.init(.{});
+    try negotiated.applyLinkMaxMessageSize(256 * 1024);
+    try std.testing.expectEqual(@as(usize, 256 * 1024), negotiated.max_size_bytes);
+
+    var smaller = try EventDataBatch.init(.{ .max_bytes = 4096 });
+    try smaller.applyLinkMaxMessageSize(256 * 1024);
+    try std.testing.expectEqual(@as(usize, 4096), smaller.max_size_bytes);
+
+    var too_large = try EventDataBatch.init(.{ .max_bytes = 2 * 1024 * 1024 });
+    try std.testing.expectError(
+        BatchError.MaxBytesExceedsLinkLimit,
+        too_large.applyLinkMaxMessageSize(1024 * 1024),
+    );
+
+    var started = try EventDataBatch.init(.{});
+    defer started.deinit(allocator);
+    var event = EventData.init("event");
+    defer event.deinit(allocator);
+    try std.testing.expect(try started.tryAdd(allocator, event));
+    try std.testing.expectError(
+        BatchError.BatchNotEmpty,
+        started.applyLinkMaxMessageSize(256 * 1024),
+    );
 }
 
 test "EventPosition earliest filter" {
@@ -525,7 +773,7 @@ test "ProducerClient createBatch" {
         .fully_qualified_namespace = "ns.servicebus.windows.net",
         .event_hub_name = "my-hub",
     }, cred.asCredential(), amqp.asTransport());
-    var batch = producer.createBatch(allocator);
+    var batch = try producer.createBatch(.{});
     defer batch.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 0), batch.count());
 }
@@ -544,7 +792,7 @@ test "ProducerClient sendBatch" {
         .event_hub_name = "my-hub",
     }, cred.asCredential(), amqp.asTransport());
 
-    var batch = producer.createBatch(allocator);
+    var batch = try producer.createBatch(.{});
     defer batch.deinit(allocator);
     var e1 = EventData.init("event-1");
     defer e1.deinit(allocator);
@@ -569,7 +817,7 @@ test "ProducerClient sendBatch empty returns error" {
         .event_hub_name = "my-hub",
     }, cred.asCredential(), amqp.asTransport());
 
-    var batch = producer.createBatch(allocator);
+    var batch = try producer.createBatch(.{});
     defer batch.deinit(allocator);
 
     const result = producer.sendBatch(allocator, batch);
@@ -618,7 +866,7 @@ test "UamqpTransport sendBatch encodes messages" {
     const allocator = std.testing.allocator;
     var transport = UamqpTransport.init(allocator, "ns.servicebus.windows.net");
 
-    var batch = EventDataBatch.init(allocator);
+    var batch = try EventDataBatch.init(.{});
     defer batch.deinit(allocator);
     var e1 = EventData.init("hello");
     defer e1.deinit(allocator);
@@ -657,4 +905,37 @@ test "ConsumerClient fromConnectionString" {
     try std.testing.expectEqualStrings("ns.servicebus.windows.net", consumer.options.fully_qualified_namespace);
     try std.testing.expectEqualStrings("hub", consumer.options.event_hub_name);
     try std.testing.expectEqualStrings("$Default", consumer.options.consumer_group);
+}
+
+test "EventDataBatch survives allocation failure at every step" {
+    const Case = struct {
+        fn run(allocator: std.mem.Allocator) !void {
+            var batch = try EventDataBatch.init(.{ .partition_key = "pk-1" });
+            defer batch.deinit(allocator);
+
+            var event = EventData.init("payload");
+            defer event.deinit(allocator);
+            event.content_type = "application/json";
+            try event.setStringProperty(allocator, "tenant", "contoso");
+
+            _ = try batch.tryAdd(allocator, event);
+            _ = try batch.tryAdd(allocator, event);
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Case.run, .{});
+}
+
+test "EventDataBatch does not leak when an event does not fit" {
+    const allocator = std.testing.allocator;
+    var batch = try EventDataBatch.init(.{ .max_bytes = 128 });
+    defer batch.deinit(allocator);
+
+    var small = EventData.init("s");
+    defer small.deinit(allocator);
+    try std.testing.expect(try batch.tryAdd(allocator, small));
+
+    var large = EventData.init("z" ** 200);
+    defer large.deinit(allocator);
+    try std.testing.expect(!try batch.tryAdd(allocator, large));
+    try std.testing.expectEqual(@as(usize, 1), batch.count());
 }
