@@ -45,7 +45,29 @@ Identity remains part of `azure_sdk_core` and is available through
 | `AzureCliCredential` | `az account get-access-token` |
 | `WorkloadIdentityCredential` | Kubernetes OIDC federation |
 | `ChainedTokenCredential` | First successful credential |
-| `DefaultAzureCredential` | Environment, workload identity, managed identity, then Azure CLI |
+| `DefaultAzureCredential` | A chain selected by `AZURE_TOKEN_CREDENTIALS` |
+
+### `AZURE_TOKEN_CREDENTIALS`
+
+`DefaultAzureCredential` builds its chain from `AZURE_TOKEN_CREDENTIALS`.
+
+| Value | Chain |
+| --- | --- |
+| unset | `EnvironmentCredential`, `WorkloadIdentityCredential`, `AzureCliCredential`, `AzureDeveloperCliCredential` |
+| `prod` | `EnvironmentCredential`, `WorkloadIdentityCredential`, `ManagedIdentityCredential` |
+| `dev` | `AzureCliCredential`, `AzureDeveloperCliCredential` |
+| a credential name | just that credential |
+
+Values are matched ignoring ASCII case and surrounding whitespace; any other
+value fails with `error.UnknownTokenCredentialSelection`. A selected credential
+whose configuration is absent is left out of the chain, and a selection that
+leaves the chain empty fails with `error.NoCredentialConfigured`.
+
+`ManagedIdentityCredential` probes the Instance Metadata Service at
+`169.254.169.254`, which is unroutable outside Azure and stalls every token
+request until the connection times out. It is therefore never in the default
+chain. Set `AZURE_TOKEN_CREDENTIALS=prod` on deployed services, or name the
+credential directly, to use it.
 
 ## Related packages
 
