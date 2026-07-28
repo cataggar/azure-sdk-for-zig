@@ -61,6 +61,17 @@ pub const SessionOptions = struct {
 };
 
 /// A session, owning the links attached to one channel.
+/// Drop `link` from `list` and free it. A link that is not in the list was
+/// already dropped, so freeing it here would be a double free.
+fn removeLink(comptime T: type, list: *std.ArrayList(*T), link: *T) void {
+    for (list.items, 0..) |item, i| {
+        if (item != link) continue;
+        _ = list.orderedRemove(i);
+        link.deinit();
+        return;
+    }
+}
+
 pub const Session = struct {
     allocator: Allocator,
     driver: *Driver,
@@ -114,6 +125,23 @@ pub const Session = struct {
     /// End the session on the wire.
     pub fn end(self: *Session, deadline_ms: i64) LinkError!void {
         try self.driver.endSession(self.channel, deadline_ms);
+    }
+
+    /// Detach one sender and drop it from the session.
+    ///
+    /// Detaching without dropping would leave the session pumping frames into
+    /// a link nobody can reach, and `deinit` would free it a second time. The
+    /// detach is best effort: a link being recovered has usually already been
+    /// detached by the peer, and failing here would strand the link instead.
+    pub fn closeSender(self: *Session, sender: *Sender, deadline_ms: i64) void {
+        if (sender.attached) sender.detach(deadline_ms) catch {};
+        removeLink(Sender, &self.senders, sender);
+    }
+
+    /// Detach one receiver and drop it from the session.
+    pub fn closeReceiver(self: *Session, receiver: *Receiver, deadline_ms: i64) void {
+        if (receiver.attached) receiver.detach(deadline_ms) catch {};
+        removeLink(Receiver, &self.receivers, receiver);
     }
 
     fn allocateHandle(self: *Session) u32 {
@@ -336,6 +364,23 @@ pub const Sender = struct {
         if (self.rejection) |r| r.deinit(self.allocator);
         if (self.detach_error) |e| e.deinit(self.allocator);
         self.allocator.destroy(self);
+    }
+
+    /// Detach the link, waiting for the peer's detach.
+    ///
+    /// A peer that has already gone reads as closed rather than as a failure:
+    /// the link is detached either way, and reporting an error would make a
+    /// caller tearing down think it had to retry.
+    pub fn detach(self: *Sender, deadline_ms: i64) LinkError!void {
+        try self.session.driver.sendPerformative(.amqp, self.session.channel, .{
+            .detach = .{ .handle = self.handle, .closed = true },
+        });
+        while (self.attached) {
+            _ = self.session.pump(deadline_ms) catch |e| switch (e) {
+                error.RemoteClosed, error.ConnectionClosed => return,
+                else => return e,
+            };
+        }
     }
 
     /// The largest message the peer will take, or null when unlimited.
@@ -1682,4 +1727,92 @@ test "draining a receiver waits for the sender to consume the outstanding credit
     try receiver.drainCredit(10_000);
     try testing.expectEqual(@as(u32, 0), receiver.credit);
     try testing.expect(!receiver.drain);
+}
+
+test "closing a sender detaches it and drops it from the session" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock = connection.ManualClock{};
+    var conn = try Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
+    defer conn.deinit();
+
+    const peer = harness.Peer{ .allocator = allocator, .mem = &mem };
+    try harness.scriptHandshake(peer, 512);
+    try peer.push(0, .{ .attach = .{
+        .name = "s",
+        .handle = 0,
+        .role = .receiver,
+        .initial_delivery_count = 0,
+    } });
+    try peer.push(0, .{ .detach = .{ .handle = 0, .closed = true } });
+
+    var fixture = try harness.Fixture.init(allocator, &mem, &clock, &conn);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "s",
+        .target_address = "hub",
+    }, 10_000);
+    try testing.expectEqual(@as(usize, 1), fixture.session.senders.items.len);
+
+    mem.clearWritten();
+    fixture.session.closeSender(sender, 10_000);
+
+    // Left in the list, the session would keep pumping frames at a link
+    // nobody can reach and `deinit` would free it a second time.
+    try testing.expectEqual(@as(usize, 0), fixture.session.senders.items.len);
+
+    var frames = try harness.EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    var detaches: usize = 0;
+    for (frames.bodies.items) |body| {
+        if (perf.peekDescriptor(body) == perf.descriptor.detach) detaches += 1;
+    }
+    try testing.expectEqual(@as(usize, 1), detaches);
+}
+
+test "closing a receiver the peer already detached sends no detach" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock = connection.ManualClock{};
+    var conn = try Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
+    defer conn.deinit();
+
+    const peer = harness.Peer{ .allocator = allocator, .mem = &mem };
+    try harness.scriptHandshake(peer, 512);
+    try peer.push(0, .{ .attach = .{
+        .name = "r",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    try peer.push(0, .{ .detach = .{
+        .handle = 0,
+        .closed = true,
+        .err = .{ .condition = "amqp:link:stolen", .description = "taken" },
+    } });
+
+    var fixture = try harness.Fixture.init(allocator, &mem, &clock, &conn);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "r",
+        .source_address = "hub/ConsumerGroups/$default/Partitions/0",
+    }, 10_000);
+
+    // Drain the peer's detach so the link knows it is gone.
+    try testing.expectError(error.LinkDetached, receiver.receive(10_000));
+    try testing.expectEqualStrings("amqp:link:stolen", receiver.detach_error.?.condition);
+
+    mem.clearWritten();
+    fixture.session.closeReceiver(receiver, 10_000);
+    try testing.expectEqual(@as(usize, 0), fixture.session.receivers.items.len);
+
+    var frames = try harness.EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    for (frames.bodies.items) |body| {
+        try testing.expect(perf.peekDescriptor(body) != perf.descriptor.detach);
+    }
 }
