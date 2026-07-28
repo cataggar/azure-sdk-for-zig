@@ -77,8 +77,59 @@ try driver.open(deadline_ms);
 const remote_channel = try driver.beginSession(0, .{}, deadline_ms);
 ```
 
-CBS authentication, the `$management` link, and message transfer are not here
-yet.
+## Message codec
+
+`message.zig` encodes and decodes the AMQP message sections — header, delivery
+and message annotations, properties, application properties, body, and footer.
+The body is a `data`, `sequence`, or `value` section.
+
+```zig
+const bytes = try amqp.encodeMessageAlloc(allocator, .{
+    .properties = .{ .message_id = .{ .string = id } },
+    .application_properties = props,
+    .body = .{ .data = &.{payload} },
+});
+defer allocator.free(bytes);
+```
+
+## Sessions and links
+
+`link.zig` builds sessions, senders, and receivers on top of the driver:
+
+- attach and detach, matched to the peer's echoed attach by link name
+- flow control, including credit rebasing onto our delivery count (§2.6.7) and
+  draining, which waits for the sender to consume the outstanding credit
+- multi-frame transfers, split to the negotiated `max-frame-size` on send and
+  reassembled on receive
+- settlement: accepted, rejected, and released outcomes, with a rejection
+  surfacing the peer's error condition
+- the Event Hubs link properties the Go and Rust clients send —
+  `com.microsoft:receiver-name`, `com.microsoft:epoch`, and the
+  `apache.org:selector-filter:string` filter used to pick a starting offset
+
+```zig
+var session = try amqp.Session.begin(allocator, &driver, 0, .{}, deadline_ms);
+defer session.deinit();
+
+const filters = [_]amqp.performative.Filter{
+    .selector("amqp.annotation.x-opt-offset > '@latest'"),
+};
+const receiver = try amqp.openReceiver(&session, .{
+    .name = link_name,
+    .source_address = "myhub/ConsumerGroups/$Default/Partitions/0",
+    .filters = &filters,
+    .prefetch = 300,
+}, deadline_ms);
+
+const delivery = try receiver.receive(deadline_ms);
+try receiver.accept(delivery);
+```
+
+A handle in an inbound frame is scoped to the peer that sent it, so links are
+looked up by the handle the peer chose, never by our own. A session holding both
+a CBS link and an events link would otherwise cross its deliveries.
+
+CBS authentication and the `$management` link are not here yet.
 
 Run its independent tests from this directory:
 

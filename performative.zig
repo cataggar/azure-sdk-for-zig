@@ -98,6 +98,165 @@ pub const SaslOutcome = struct {
     additional_data: ?[]const u8 = null,
 };
 
+// ─────────────────────── Link layer ───────────────────────
+
+/// Descriptor code for the standard selector filter.
+///
+/// `<descriptor name="apache.org:selector-filter:string" code="0x0000468C:0x00000004"/>`.
+/// Event Hubs uses it to carry the starting offset expression.
+pub const selector_filter_name = "apache.org:selector-filter:string";
+pub const selector_filter_code: u64 = 0x0000468C00000004;
+
+pub const Role = enum(u1) {
+    sender = 0,
+    receiver = 1,
+
+    pub fn isReceiver(self: Role) bool {
+        return self == .receiver;
+    }
+};
+
+/// sender-settle-mode (§3.8.7).
+pub const SenderSettleMode = enum(u8) {
+    unsettled = 0,
+    settled = 1,
+    mixed = 2,
+};
+
+/// receiver-settle-mode (§3.8.8).
+pub const ReceiverSettleMode = enum(u8) {
+    /// Settle on the first disposition. What Event Hubs expects.
+    first = 0,
+    second = 1,
+};
+
+/// One entry of a filter-set: a symbol key naming a described value.
+pub const Filter = struct {
+    name: []const u8,
+    /// Descriptor code; when null the `name` symbol is used as the descriptor.
+    code: ?u64 = null,
+    value: AmqpValue,
+
+    /// The selector filter Event Hubs reads the starting position from.
+    pub fn selector(expression: []const u8) Filter {
+        return .{
+            .name = selector_filter_name,
+            .code = selector_filter_code,
+            .value = .{ .string = expression },
+        };
+    }
+};
+
+/// Source (§3.5.3). Only the fields Event Hubs uses are modelled.
+pub const Source = struct {
+    address: ?[]const u8 = null,
+    durable: u32 = 0,
+    expiry_policy: ?[]const u8 = null,
+    timeout: ?u32 = null,
+    dynamic: bool = false,
+    distribution_mode: ?[]const u8 = null,
+    filters: ?[]const Filter = null,
+    capabilities: ?[]const []const u8 = null,
+};
+
+/// Target (§3.5.4).
+pub const Target = struct {
+    address: ?[]const u8 = null,
+    durable: u32 = 0,
+    expiry_policy: ?[]const u8 = null,
+    timeout: ?u32 = null,
+    dynamic: bool = false,
+    capabilities: ?[]const []const u8 = null,
+};
+
+/// A terminal delivery state (§3.4).
+pub const DeliveryState = union(enum) {
+    accepted,
+    released,
+    rejected: ?AmqpError,
+    modified: Modified,
+
+    pub const Modified = struct {
+        delivery_failed: bool = false,
+        undeliverable_here: bool = false,
+        message_annotations: ?Fields = null,
+    };
+
+    pub fn descriptorCode(self: DeliveryState) u64 {
+        return switch (self) {
+            .accepted => descriptor.accepted,
+            .released => descriptor.released,
+            .rejected => descriptor.rejected,
+            .modified => descriptor.modified,
+        };
+    }
+};
+
+/// Attach (§2.7.3).
+pub const Attach = struct {
+    name: []const u8,
+    handle: u32,
+    role: Role,
+    snd_settle_mode: SenderSettleMode = .mixed,
+    rcv_settle_mode: ReceiverSettleMode = .first,
+    source: ?Source = null,
+    target: ?Target = null,
+    incomplete_unsettled: bool = false,
+    initial_delivery_count: ?u32 = null,
+    max_message_size: ?u64 = null,
+    offered_capabilities: ?[]const []const u8 = null,
+    desired_capabilities: ?[]const []const u8 = null,
+    properties: ?Fields = null,
+};
+
+/// Flow (§2.7.4).
+pub const Flow = struct {
+    next_incoming_id: ?u32 = null,
+    incoming_window: u32,
+    next_outgoing_id: u32,
+    outgoing_window: u32,
+    handle: ?u32 = null,
+    delivery_count: ?u32 = null,
+    link_credit: ?u32 = null,
+    available: ?u32 = null,
+    drain: bool = false,
+    echo: bool = false,
+    properties: ?Fields = null,
+};
+
+/// Transfer (§2.7.5). The message payload follows the performative in the
+/// same frame and is not part of the described list.
+pub const Transfer = struct {
+    handle: u32,
+    delivery_id: ?u32 = null,
+    delivery_tag: ?[]const u8 = null,
+    message_format: ?u32 = null,
+    settled: ?bool = null,
+    more: bool = false,
+    rcv_settle_mode: ?ReceiverSettleMode = null,
+    state: ?DeliveryState = null,
+    resume_: bool = false,
+    aborted: bool = false,
+    batchable: bool = false,
+};
+
+/// Disposition (§2.7.6).
+pub const Disposition = struct {
+    role: Role,
+    first: u32,
+    last: ?u32 = null,
+    settled: bool = false,
+    state: ?DeliveryState = null,
+    batchable: bool = false,
+};
+
+/// Detach (§2.7.7).
+pub const Detach = struct {
+    handle: u32,
+    closed: bool = false,
+    err: ?AmqpError = null,
+};
+
 /// A performative the connection driver understands.
 ///
 /// Slices borrow from the `Decoded` that produced them and become invalid once
@@ -107,6 +266,11 @@ pub const Performative = union(enum) {
     begin: Begin,
     end: End,
     close: Close,
+    attach: Attach,
+    flow: Flow,
+    transfer: Transfer,
+    disposition: Disposition,
+    detach: Detach,
     sasl_mechanisms: SaslMechanisms,
     sasl_init: SaslInit,
     sasl_outcome: SaslOutcome,
@@ -117,6 +281,11 @@ pub const Performative = union(enum) {
             .begin => descriptor.begin,
             .end => descriptor.end,
             .close => descriptor.close,
+            .attach => descriptor.attach,
+            .flow => descriptor.flow,
+            .transfer => descriptor.transfer,
+            .disposition => descriptor.disposition,
+            .detach => descriptor.detach,
             .sasl_mechanisms => descriptor.sasl_mechanisms,
             .sasl_init => descriptor.sasl_init,
             .sasl_outcome => descriptor.sasl_outcome,
@@ -136,6 +305,11 @@ const Field = union(enum) {
     value: AmqpValue,
     symbols: []const []const u8,
     err: AmqpError,
+    source: Source,
+    target: Target,
+    delivery_state: DeliveryState,
+    /// A filter-set: a symbol-keyed map whose values are described.
+    filters: []const Filter,
 };
 
 fn optionalString(v: ?[]const u8) Field {
@@ -166,6 +340,37 @@ fn optionalError(v: ?AmqpError) Field {
     return if (v) |e| .{ .err = e } else .null;
 }
 
+fn optionalBool(v: ?bool) Field {
+    return if (v) |b| .{ .value = .{ .boolean = b } } else .null;
+}
+
+/// A boolean that is only written when it differs from the spec default.
+fn defaultedBool(v: bool, default: bool) Field {
+    return if (v == default) .null else .{ .value = .{ .boolean = v } };
+}
+
+fn optionalUlong(v: ?u64) Field {
+    return if (v) |n| .{ .value = .{ .ulong = n } } else .null;
+}
+
+fn optionalSource(v: ?Source) Field {
+    return if (v) |x| .{ .source = x } else .null;
+}
+
+fn optionalTarget(v: ?Target) Field {
+    return if (v) |x| .{ .target = x } else .null;
+}
+
+fn optionalDeliveryState(v: ?DeliveryState) Field {
+    return if (v) |x| .{ .delivery_state = x } else .null;
+}
+
+fn optionalFilters(v: ?[]const Filter) Field {
+    const list = v orelse return .null;
+    if (list.len == 0) return .null;
+    return .{ .filters = list };
+}
+
 fn optionalSymbols(v: ?[]const []const u8) Field {
     const list = v orelse return .null;
     if (list.len == 0) return .null;
@@ -184,6 +389,10 @@ fn encodeField(allocator: Allocator, field: Field, buf: *encoder.Buffer) EncodeE
         .value => |v| try encoder.encode(v, buf),
         .symbols => |s| try encodeSymbolMultiple(s, buf),
         .err => |e| try encodeError(allocator, e, buf),
+        .source => |v| try encodeSource(allocator, v, buf),
+        .target => |v| try encodeTarget(allocator, v, buf),
+        .delivery_state => |v| try encodeDeliveryState(allocator, v, buf),
+        .filters => |v| try encodeFilterSet(allocator, v, buf),
     }
 }
 
@@ -276,6 +485,91 @@ fn encodeError(allocator: Allocator, e: AmqpError, buf: *encoder.Buffer) EncodeE
     try encodeDescribedList(allocator, error_descriptor, &fields, buf);
 }
 
+pub fn encodeSource(allocator: Allocator, src: Source, buf: *encoder.Buffer) EncodeError!void {
+    const fields = [_]Field{
+        optionalString(src.address),
+        .{ .value = .{ .uint = src.durable } },
+        optionalSymbol(src.expiry_policy),
+        optionalUint(src.timeout),
+        defaultedBool(src.dynamic, false),
+        .null, // dynamic-node-properties
+        optionalSymbol(src.distribution_mode),
+        optionalFilters(src.filters),
+        .null, // default-outcome
+        .null, // outcomes
+        optionalSymbols(src.capabilities),
+    };
+    try encodeDescribedList(allocator, descriptor.source, &fields, buf);
+}
+
+pub fn encodeTarget(allocator: Allocator, tgt: Target, buf: *encoder.Buffer) EncodeError!void {
+    const fields = [_]Field{
+        optionalString(tgt.address),
+        .{ .value = .{ .uint = tgt.durable } },
+        optionalSymbol(tgt.expiry_policy),
+        optionalUint(tgt.timeout),
+        defaultedBool(tgt.dynamic, false),
+        .null, // dynamic-node-properties
+        optionalSymbols(tgt.capabilities),
+    };
+    try encodeDescribedList(allocator, descriptor.target, &fields, buf);
+}
+
+/// Encode a filter-set: a symbol-keyed map of described values (§3.5.8).
+fn encodeFilterSet(allocator: Allocator, filters: []const Filter, buf: *encoder.Buffer) EncodeError!void {
+    var body = encoder.Buffer.initDynamic(allocator);
+    defer body.deinit();
+
+    for (filters) |f| {
+        try encoder.encode(.{ .symbol = f.name }, &body);
+        try body.writeByte(0x00);
+        if (f.code) |code| {
+            try encoder.encode(.{ .ulong = code }, &body);
+        } else {
+            try encoder.encode(.{ .symbol = f.name }, &body);
+        }
+        try encoder.encode(f.value, &body);
+    }
+
+    const bytes = body.written();
+    const count = filters.len * 2;
+    if (bytes.len + 1 <= 0xff and count <= 0xff) {
+        try buf.writeByte(0xc1); // map8
+        try buf.writeByte(@intCast(bytes.len + 1));
+        try buf.writeByte(@intCast(count));
+    } else {
+        try buf.writeByte(0xd1); // map32
+        var size_bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, &size_bytes, @intCast(bytes.len + 4), .big);
+        try buf.writeAll(&size_bytes);
+        std.mem.writeInt(u32, &size_bytes, @intCast(count), .big);
+        try buf.writeAll(&size_bytes);
+    }
+    try buf.writeAll(bytes);
+}
+
+pub fn encodeDeliveryState(
+    allocator: Allocator,
+    state: DeliveryState,
+    buf: *encoder.Buffer,
+) EncodeError!void {
+    switch (state) {
+        .accepted, .released => try encodeDescribedList(allocator, state.descriptorCode(), &.{}, buf),
+        .rejected => |e| {
+            const fields = [_]Field{optionalError(e)};
+            try encodeDescribedList(allocator, descriptor.rejected, &fields, buf);
+        },
+        .modified => |m| {
+            const fields = [_]Field{
+                defaultedBool(m.delivery_failed, false),
+                defaultedBool(m.undeliverable_here, false),
+                optionalFields(m.message_annotations),
+            };
+            try encodeDescribedList(allocator, descriptor.modified, &fields, buf);
+        },
+    }
+}
+
 // ─────────────────────── Performative encoding ───────────────────────
 
 /// Encode any supported performative into `buf`.
@@ -285,6 +579,11 @@ pub fn encode(allocator: Allocator, p: Performative, buf: *encoder.Buffer) Encod
         .begin => |v| try encodeBegin(allocator, v, buf),
         .end => |v| try encodeEnd(allocator, v, buf),
         .close => |v| try encodeClose(allocator, v, buf),
+        .attach => |v| try encodeAttach(allocator, v, buf),
+        .flow => |v| try encodeFlow(allocator, v, buf),
+        .transfer => |v| try encodeTransfer(allocator, v, buf),
+        .disposition => |v| try encodeDisposition(allocator, v, buf),
+        .detach => |v| try encodeDetach(allocator, v, buf),
         .sasl_mechanisms => |v| try encodeSaslMechanisms(allocator, v, buf),
         .sasl_init => |v| try encodeSaslInit(allocator, v, buf),
         .sasl_outcome => |v| try encodeSaslOutcome(allocator, v, buf),
@@ -337,6 +636,87 @@ pub fn encodeEnd(allocator: Allocator, end: End, buf: *encoder.Buffer) EncodeErr
 pub fn encodeClose(allocator: Allocator, close: Close, buf: *encoder.Buffer) EncodeError!void {
     const fields = [_]Field{optionalError(close.err)};
     try encodeDescribedList(allocator, descriptor.close, &fields, buf);
+}
+
+pub fn encodeAttach(allocator: Allocator, attach: Attach, buf: *encoder.Buffer) EncodeError!void {
+    const fields = [_]Field{
+        .{ .value = .{ .string = attach.name } },
+        .{ .value = .{ .uint = attach.handle } },
+        .{ .value = .{ .boolean = attach.role.isReceiver() } },
+        .{ .value = .{ .ubyte = @intFromEnum(attach.snd_settle_mode) } },
+        .{ .value = .{ .ubyte = @intFromEnum(attach.rcv_settle_mode) } },
+        optionalSource(attach.source),
+        optionalTarget(attach.target),
+        .null, // unsettled
+        defaultedBool(attach.incomplete_unsettled, false),
+        optionalUint(attach.initial_delivery_count),
+        optionalUlong(attach.max_message_size),
+        optionalSymbols(attach.offered_capabilities),
+        optionalSymbols(attach.desired_capabilities),
+        optionalFields(attach.properties),
+    };
+    try encodeDescribedList(allocator, descriptor.attach, &fields, buf);
+}
+
+pub fn encodeFlow(allocator: Allocator, flow: Flow, buf: *encoder.Buffer) EncodeError!void {
+    const fields = [_]Field{
+        optionalUint(flow.next_incoming_id),
+        .{ .value = .{ .uint = flow.incoming_window } },
+        .{ .value = .{ .uint = flow.next_outgoing_id } },
+        .{ .value = .{ .uint = flow.outgoing_window } },
+        optionalUint(flow.handle),
+        optionalUint(flow.delivery_count),
+        optionalUint(flow.link_credit),
+        optionalUint(flow.available),
+        defaultedBool(flow.drain, false),
+        defaultedBool(flow.echo, false),
+        optionalFields(flow.properties),
+    };
+    try encodeDescribedList(allocator, descriptor.flow, &fields, buf);
+}
+
+/// Encode the transfer performative only; the payload is appended by the
+/// caller so a message can be split across frames.
+pub fn encodeTransfer(allocator: Allocator, xfer: Transfer, buf: *encoder.Buffer) EncodeError!void {
+    const fields = [_]Field{
+        .{ .value = .{ .uint = xfer.handle } },
+        optionalUint(xfer.delivery_id),
+        optionalBinary(xfer.delivery_tag),
+        optionalUint(xfer.message_format),
+        optionalBool(xfer.settled),
+        defaultedBool(xfer.more, false),
+        if (xfer.rcv_settle_mode) |m| Field{ .value = .{ .ubyte = @intFromEnum(m) } } else .null,
+        optionalDeliveryState(xfer.state),
+        defaultedBool(xfer.resume_, false),
+        defaultedBool(xfer.aborted, false),
+        defaultedBool(xfer.batchable, false),
+    };
+    try encodeDescribedList(allocator, descriptor.transfer, &fields, buf);
+}
+
+pub fn encodeDisposition(
+    allocator: Allocator,
+    d: Disposition,
+    buf: *encoder.Buffer,
+) EncodeError!void {
+    const fields = [_]Field{
+        .{ .value = .{ .boolean = d.role.isReceiver() } },
+        .{ .value = .{ .uint = d.first } },
+        optionalUint(d.last),
+        defaultedBool(d.settled, false),
+        optionalDeliveryState(d.state),
+        defaultedBool(d.batchable, false),
+    };
+    try encodeDescribedList(allocator, descriptor.disposition, &fields, buf);
+}
+
+pub fn encodeDetach(allocator: Allocator, d: Detach, buf: *encoder.Buffer) EncodeError!void {
+    const fields = [_]Field{
+        .{ .value = .{ .uint = d.handle } },
+        defaultedBool(d.closed, false),
+        optionalError(d.err),
+    };
+    try encodeDescribedList(allocator, descriptor.detach, &fields, buf);
 }
 
 pub fn encodeSaslInit(allocator: Allocator, init: SaslInit, buf: *encoder.Buffer) EncodeError!void {
@@ -450,6 +830,65 @@ fn fromValue(allocator: Allocator, value: AmqpValue) DecodeError!Performative {
             .desired_capabilities = try symbolsAt(allocator, list, 6),
             .properties = try fieldsAt(list, 7),
         } },
+        descriptor.attach => .{ .attach = .{
+            .name = (try stringAt(list, 0)) orelse "",
+            .handle = (try uintAt(list, 1)) orelse 0,
+            .role = if ((try boolAt(list, 2)) orelse false) .receiver else .sender,
+            .snd_settle_mode = senderModeFromInt((try ubyteAt(list, 3)) orelse 2) orelse
+                return error.MalformedBody,
+            .rcv_settle_mode = receiverModeFromInt((try ubyteAt(list, 4)) orelse 0) orelse
+                return error.MalformedBody,
+            .source = try sourceAt(allocator, list, 5),
+            .target = try targetAt(allocator, list, 6),
+            .incomplete_unsettled = (try boolAt(list, 8)) orelse false,
+            .initial_delivery_count = try uintAt(list, 9),
+            .max_message_size = try ulongAt(list, 10),
+            .offered_capabilities = try symbolsAt(allocator, list, 11),
+            .desired_capabilities = try symbolsAt(allocator, list, 12),
+            .properties = try fieldsAt(list, 13),
+        } },
+        descriptor.flow => .{ .flow = .{
+            .next_incoming_id = try uintAt(list, 0),
+            .incoming_window = (try uintAt(list, 1)) orelse 0,
+            .next_outgoing_id = (try uintAt(list, 2)) orelse 0,
+            .outgoing_window = (try uintAt(list, 3)) orelse 0,
+            .handle = try uintAt(list, 4),
+            .delivery_count = try uintAt(list, 5),
+            .link_credit = try uintAt(list, 6),
+            .available = try uintAt(list, 7),
+            .drain = (try boolAt(list, 8)) orelse false,
+            .echo = (try boolAt(list, 9)) orelse false,
+            .properties = try fieldsAt(list, 10),
+        } },
+        descriptor.transfer => .{ .transfer = .{
+            .handle = (try uintAt(list, 0)) orelse 0,
+            .delivery_id = try uintAt(list, 1),
+            .delivery_tag = try binaryAt(list, 2),
+            .message_format = try uintAt(list, 3),
+            .settled = try boolAt(list, 4),
+            .more = (try boolAt(list, 5)) orelse false,
+            .rcv_settle_mode = if (try ubyteAt(list, 6)) |m|
+                receiverModeFromInt(m) orelse return error.MalformedBody
+            else
+                null,
+            .state = try deliveryStateAt(list, 7),
+            .resume_ = (try boolAt(list, 8)) orelse false,
+            .aborted = (try boolAt(list, 9)) orelse false,
+            .batchable = (try boolAt(list, 10)) orelse false,
+        } },
+        descriptor.disposition => .{ .disposition = .{
+            .role = if ((try boolAt(list, 0)) orelse false) .receiver else .sender,
+            .first = (try uintAt(list, 1)) orelse 0,
+            .last = try uintAt(list, 2),
+            .settled = (try boolAt(list, 3)) orelse false,
+            .state = try deliveryStateAt(list, 4),
+            .batchable = (try boolAt(list, 5)) orelse false,
+        } },
+        descriptor.detach => .{ .detach = .{
+            .handle = (try uintAt(list, 0)) orelse 0,
+            .closed = (try boolAt(list, 1)) orelse false,
+            .err = try errorAt(list, 2),
+        } },
         descriptor.end => .{ .end = .{ .err = try errorAt(list, 0) } },
         descriptor.close => .{ .close = .{ .err = try errorAt(list, 0) } },
         descriptor.sasl_mechanisms => .{ .sasl_mechanisms = .{
@@ -466,6 +905,23 @@ fn fromValue(allocator: Allocator, value: AmqpValue) DecodeError!Performative {
             .additional_data = try binaryAt(list, 1),
         } },
         else => error.UnknownDescriptor,
+    };
+}
+
+fn senderModeFromInt(value: u8) ?SenderSettleMode {
+    return switch (value) {
+        0 => .unsettled,
+        1 => .settled,
+        2 => .mixed,
+        else => null,
+    };
+}
+
+fn receiverModeFromInt(value: u8) ?ReceiverSettleMode {
+    return switch (value) {
+        0 => .first,
+        1 => .second,
+        else => null,
     };
 }
 
@@ -533,6 +989,128 @@ fn ubyteAt(list: []const AmqpValue, index: usize) DecodeError!?u8 {
         .ubyte => |n| n,
         .ushort => |n| std.math.cast(u8, n) orelse error.MalformedBody,
         .uint => |n| std.math.cast(u8, n) orelse error.MalformedBody,
+        else => error.MalformedBody,
+    };
+}
+
+fn boolAt(list: []const AmqpValue, index: usize) DecodeError!?bool {
+    const v = at(list, index) orelse return null;
+    return switch (v) {
+        .boolean => |b| b,
+        else => error.MalformedBody,
+    };
+}
+
+fn ulongAt(list: []const AmqpValue, index: usize) DecodeError!?u64 {
+    const v = at(list, index) orelse return null;
+    return switch (v) {
+        .ulong => |n| n,
+        .uint => |n| n,
+        .ushort => |n| n,
+        .ubyte => |n| n,
+        else => error.MalformedBody,
+    };
+}
+
+/// Unwrap a described value at `index`, checking its descriptor code.
+fn describedAt(
+    list: []const AmqpValue,
+    index: usize,
+    code: u64,
+) DecodeError!?[]const AmqpValue {
+    const v = at(list, index) orelse return null;
+    if (v != .described) return error.MalformedBody;
+    const actual = switch (v.described.descriptor.*) {
+        .ulong => |c| c,
+        else => return error.MalformedBody,
+    };
+    if (actual != code) return error.MalformedBody;
+    return switch (v.described.value.*) {
+        .list => |items| items,
+        .null => &.{},
+        else => error.MalformedBody,
+    };
+}
+
+fn sourceAt(allocator: Allocator, list: []const AmqpValue, index: usize) DecodeError!?Source {
+    const inner = try describedAt(list, index, descriptor.source) orelse return null;
+    return .{
+        .address = try stringAt(inner, 0),
+        .durable = (try uintAt(inner, 1)) orelse 0,
+        .expiry_policy = try symbolAt(inner, 2),
+        .timeout = try uintAt(inner, 3),
+        .dynamic = (try boolAt(inner, 4)) orelse false,
+        .distribution_mode = try symbolAt(inner, 6),
+        .filters = try filtersAt(allocator, inner, 7),
+        .capabilities = try symbolsAt(allocator, inner, 10),
+    };
+}
+
+fn targetAt(allocator: Allocator, list: []const AmqpValue, index: usize) DecodeError!?Target {
+    const inner = try describedAt(list, index, descriptor.target) orelse return null;
+    return .{
+        .address = try stringAt(inner, 0),
+        .durable = (try uintAt(inner, 1)) orelse 0,
+        .expiry_policy = try symbolAt(inner, 2),
+        .timeout = try uintAt(inner, 3),
+        .dynamic = (try boolAt(inner, 4)) orelse false,
+        .capabilities = try symbolsAt(allocator, inner, 6),
+    };
+}
+
+fn filtersAt(
+    allocator: Allocator,
+    list: []const AmqpValue,
+    index: usize,
+) DecodeError!?[]const Filter {
+    const v = at(list, index) orelse return null;
+    const entries = switch (v) {
+        .map => |m| m,
+        else => return error.MalformedBody,
+    };
+    const out = try allocator.alloc(Filter, entries.len);
+    for (entries, 0..) |entry, i| {
+        const name = switch (entry.key) {
+            .symbol, .string => |sym| sym,
+            else => return error.MalformedBody,
+        };
+        switch (entry.value) {
+            .described => |d| out[i] = .{
+                .name = name,
+                .code = switch (d.descriptor.*) {
+                    .ulong => |c| c,
+                    else => null,
+                },
+                .value = d.value.*,
+            },
+            else => out[i] = .{ .name = name, .code = null, .value = entry.value },
+        }
+    }
+    return out;
+}
+
+fn deliveryStateAt(list: []const AmqpValue, index: usize) DecodeError!?DeliveryState {
+    const v = at(list, index) orelse return null;
+    if (v != .described) return error.MalformedBody;
+    const code = switch (v.described.descriptor.*) {
+        .ulong => |c| c,
+        else => return error.MalformedBody,
+    };
+    const inner: []const AmqpValue = switch (v.described.value.*) {
+        .list => |items| items,
+        .null => &.{},
+        else => return error.MalformedBody,
+    };
+    return switch (code) {
+        descriptor.accepted => .accepted,
+        descriptor.released => .released,
+        descriptor.rejected => .{ .rejected = try errorAt(inner, 0) },
+        descriptor.modified => .{ .modified = .{
+            .delivery_failed = (try boolAt(inner, 0)) orelse false,
+            .undeliverable_here = (try boolAt(inner, 1)) orelse false,
+            .message_annotations = try fieldsAt(inner, 2),
+        } },
+        // `received` and any non-terminal state are not modelled.
         else => error.MalformedBody,
     };
 }
@@ -827,8 +1405,8 @@ test "decode rejects bodies that are not described types" {
 
 test "decode reports unknown descriptors" {
     const allocator = testing.allocator;
-    // 0x12 is `attach`, which this driver does not model yet.
-    try testing.expectError(error.UnknownDescriptor, decode(allocator, &.{ 0x00, 0x53, 0x12, 0x45 }));
+    // 0x42 is `sasl-challenge`, which this driver does not model.
+    try testing.expectError(error.UnknownDescriptor, decode(allocator, &.{ 0x00, 0x53, 0x42, 0x45 }));
 }
 
 test "encoding survives allocation failure" {
@@ -847,4 +1425,195 @@ test "encoding survives allocation failure" {
         }
     };
     try testing.checkAllAllocationFailures(testing.allocator, Case.run, .{});
+}
+
+test "attach round-trips with source, target, and properties" {
+    const allocator = testing.allocator;
+    const props = [_]MapEntry{
+        .{ .key = .{ .symbol = "com.microsoft:receiver-name" }, .value = .{ .string = "inst-1" } },
+        .{ .key = .{ .symbol = "com.microsoft:epoch" }, .value = .{ .long = 3 } },
+    };
+    const filters = [_]Filter{Filter.selector("amqp.annotation.x-opt-offset > '42'")};
+
+    const attach = Attach{
+        .name = "eh/ConsumerGroups/$default/Partitions/0",
+        .handle = 7,
+        .role = .receiver,
+        .snd_settle_mode = .mixed,
+        .rcv_settle_mode = .first,
+        .source = .{
+            .address = "eh/ConsumerGroups/$default/Partitions/0",
+            .filters = &filters,
+        },
+        .target = .{ .address = "inst-1" },
+        .max_message_size = 1048576,
+        .desired_capabilities = &.{"com.microsoft:georeplication"},
+        .properties = &props,
+    };
+
+    const bytes = try encodeAlloc(allocator, .{ .attach = attach });
+    defer allocator.free(bytes);
+    var decoded = try decode(allocator, bytes);
+    defer decoded.deinit();
+
+    const got = decoded.performative.attach;
+    try testing.expectEqualStrings(attach.name, got.name);
+    try testing.expectEqual(@as(u32, 7), got.handle);
+    try testing.expectEqual(Role.receiver, got.role);
+    try testing.expectEqual(SenderSettleMode.mixed, got.snd_settle_mode);
+    try testing.expectEqual(ReceiverSettleMode.first, got.rcv_settle_mode);
+    try testing.expectEqualStrings(attach.source.?.address.?, got.source.?.address.?);
+    try testing.expectEqualStrings("inst-1", got.target.?.address.?);
+    try testing.expectEqual(@as(u64, 1048576), got.max_message_size.?);
+    try testing.expectEqualStrings("com.microsoft:georeplication", got.desired_capabilities.?[0]);
+    try testing.expectEqual(@as(usize, 2), got.properties.?.len);
+    try testing.expectEqualStrings("inst-1", got.properties.?[0].value.string);
+    try testing.expectEqual(@as(i64, 3), got.properties.?[1].value.long);
+
+    const got_filter = got.source.?.filters.?[0];
+    try testing.expectEqualStrings(selector_filter_name, got_filter.name);
+    try testing.expectEqual(selector_filter_code, got_filter.code.?);
+    try testing.expectEqualStrings("amqp.annotation.x-opt-offset > '42'", got_filter.value.string);
+}
+
+test "a selector filter encodes as a described value in a symbol-keyed map" {
+    const allocator = testing.allocator;
+    var buf = encoder.Buffer.initDynamic(allocator);
+    defer buf.deinit();
+    const filters = [_]Filter{Filter.selector("x")};
+    try encodeFilterSet(allocator, &filters, &buf);
+
+    // map8, size, count=2, sym8 "apache.org:selector-filter:string",
+    // then 0x00 descriptor ulong 0x0000468C00000004, then str8 "x".
+    const name = selector_filter_name;
+    var expected = std.ArrayList(u8).empty;
+    defer expected.deinit(allocator);
+    try expected.appendSlice(allocator, &.{ 0xc1, 0, 2, 0xa3, @intCast(name.len) });
+    try expected.appendSlice(allocator, name);
+    try expected.appendSlice(allocator, &.{ 0x00, 0x80, 0x00, 0x00, 0x46, 0x8c, 0x00, 0x00, 0x00, 0x04 });
+    try expected.appendSlice(allocator, &.{ 0xa1, 1, 'x' });
+    // map8 size counts the body plus the count byte, not the size byte itself.
+    expected.items[1] = @intCast(expected.items.len - 2);
+
+    try testing.expectEqualSlices(u8, expected.items, buf.written());
+}
+
+test "flow and disposition round-trip" {
+    const allocator = testing.allocator;
+    const flow = Flow{
+        .next_incoming_id = 3,
+        .incoming_window = 2048,
+        .next_outgoing_id = 9,
+        .outgoing_window = 100,
+        .handle = 1,
+        .delivery_count = 42,
+        .link_credit = 300,
+        .drain = true,
+    };
+    const flow_bytes = try encodeAlloc(allocator, .{ .flow = flow });
+    defer allocator.free(flow_bytes);
+    var flow_decoded = try decode(allocator, flow_bytes);
+    defer flow_decoded.deinit();
+    try testing.expectEqual(flow, flow_decoded.performative.flow);
+
+    const d = Disposition{
+        .role = .receiver,
+        .first = 5,
+        .last = 9,
+        .settled = true,
+        .state = .accepted,
+    };
+    const d_bytes = try encodeAlloc(allocator, .{ .disposition = d });
+    defer allocator.free(d_bytes);
+    var d_decoded = try decode(allocator, d_bytes);
+    defer d_decoded.deinit();
+    const got = d_decoded.performative.disposition;
+    try testing.expectEqual(Role.receiver, got.role);
+    try testing.expectEqual(@as(u32, 5), got.first);
+    try testing.expectEqual(@as(u32, 9), got.last.?);
+    try testing.expect(got.settled);
+    try testing.expectEqual(DeliveryState.accepted, got.state.?);
+}
+
+test "a rejected disposition carries the condition" {
+    const allocator = testing.allocator;
+    const d = Disposition{
+        .role = .receiver,
+        .first = 1,
+        .state = .{ .rejected = .{
+            .condition = "amqp:link:message-size-exceeded",
+            .description = "too big",
+        } },
+    };
+    const bytes = try encodeAlloc(allocator, .{ .disposition = d });
+    defer allocator.free(bytes);
+    var decoded = try decode(allocator, bytes);
+    defer decoded.deinit();
+
+    const err = decoded.performative.disposition.state.?.rejected.?;
+    try testing.expectEqualStrings("amqp:link:message-size-exceeded", err.condition);
+    try testing.expectEqualStrings("too big", err.description.?);
+}
+
+test "transfer round-trips and elides defaulted booleans" {
+    const allocator = testing.allocator;
+    const xfer = Transfer{
+        .handle = 2,
+        .delivery_id = 11,
+        .delivery_tag = "\x00\x00\x00\x0b",
+        .message_format = 0,
+        .settled = false,
+        .more = true,
+    };
+    const bytes = try encodeAlloc(allocator, .{ .transfer = xfer });
+    defer allocator.free(bytes);
+    var decoded = try decode(allocator, bytes);
+    defer decoded.deinit();
+
+    const got = decoded.performative.transfer;
+    try testing.expectEqual(@as(u32, 2), got.handle);
+    try testing.expectEqual(@as(u32, 11), got.delivery_id.?);
+    try testing.expectEqualSlices(u8, "\x00\x00\x00\x0b", got.delivery_tag.?);
+    try testing.expectEqual(@as(u32, 0), got.message_format.?);
+    try testing.expectEqual(false, got.settled.?);
+    try testing.expect(got.more);
+    try testing.expect(!got.aborted);
+    try testing.expect(!got.batchable);
+
+    try testing.expectEqual(descriptor.transfer, peekDescriptor(bytes).?);
+}
+
+test "detach round-trips with a closed flag and an error" {
+    const allocator = testing.allocator;
+    const d = Detach{
+        .handle = 4,
+        .closed = true,
+        .err = .{ .condition = "amqp:link:stolen", .description = "higher epoch" },
+    };
+    const bytes = try encodeAlloc(allocator, .{ .detach = d });
+    defer allocator.free(bytes);
+    var decoded = try decode(allocator, bytes);
+    defer decoded.deinit();
+
+    const got = decoded.performative.detach;
+    try testing.expectEqual(@as(u32, 4), got.handle);
+    try testing.expect(got.closed);
+    try testing.expectEqualStrings("amqp:link:stolen", got.err.?.condition);
+}
+
+test "a modified delivery state round-trips" {
+    const allocator = testing.allocator;
+    const d = Disposition{
+        .role = .receiver,
+        .first = 0,
+        .state = .{ .modified = .{ .delivery_failed = true, .undeliverable_here = true } },
+    };
+    const bytes = try encodeAlloc(allocator, .{ .disposition = d });
+    defer allocator.free(bytes);
+    var decoded = try decode(allocator, bytes);
+    defer decoded.deinit();
+
+    const m = decoded.performative.disposition.state.?.modified;
+    try testing.expect(m.delivery_failed);
+    try testing.expect(m.undeliverable_here);
 }
