@@ -14,6 +14,9 @@ pub const link = @import("link.zig");
 pub const rpc = @import("rpc.zig");
 pub const cbs = @import("cbs.zig");
 pub const management = @import("management.zig");
+/// Scripted-peer helpers. Exported so packages built on this one can drive a
+/// client against a canned peer without re-implementing the handshake.
+pub const test_peer = @import("test_peer.zig");
 
 // Transports.
 pub const Transport = transport.Transport;
@@ -114,6 +117,7 @@ test {
     _ = rpc;
     _ = cbs;
     _ = management;
+    _ = test_peer;
 }
 
 // ─────────────────────── Tests ───────────────────────
