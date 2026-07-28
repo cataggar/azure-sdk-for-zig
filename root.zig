@@ -77,6 +77,15 @@ pub const StartLocation = start_position_types.StartLocation;
 pub const EventPosition = start_position_types.EventPosition;
 pub const StartPositions = start_position_types.StartPositions;
 
+// Connection-level options. Named `connection_options` rather than
+// `options`, which would shadow the many locals called that.
+pub const connection_options = @import("connection_options.zig");
+pub const ConnectionOptions = connection_options.ConnectionOptions;
+pub const CustomEndpoint = connection_options.CustomEndpoint;
+pub const TlsSettings = connection_options.TlsSettings;
+pub const WebSocketHook = connection_options.WebSocketHook;
+pub const AmqpConnectionFactory = connection_options.AmqpConnectionFactory;
+
 pub const recovery = @import("recovery.zig");
 pub const RecoverableConnection = recovery.RecoverableConnection;
 pub const ConnectionFactory = recovery.ConnectionFactory;
@@ -557,6 +566,8 @@ pub const Credential = union(enum) {
 pub const ProducerClientOptions = struct {
     fully_qualified_namespace: []const u8,
     event_hub_name: []const u8,
+    /// Application id, custom endpoint, retry schedule, TLS, and WebSockets.
+    connection: ConnectionOptions = .{},
 };
 
 /// Sends events to an Event Hub.
@@ -693,6 +704,8 @@ pub const ConsumerClientOptions = struct {
     /// Identifies this reader to the broker, so a stolen link names who took
     /// it. Borrowed, and must outlive the client.
     instance_id: ?[]const u8 = null,
+    /// Application id, custom endpoint, retry schedule, TLS, and WebSockets.
+    connection: ConnectionOptions = .{},
 };
 
 /// Used when the caller supplies no instance id, matching the link-name
