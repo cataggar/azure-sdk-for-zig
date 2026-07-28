@@ -48,153 +48,19 @@ pub const retry = errors.retry;
 
 // ─────────────────────── Models ───────────────────────
 
-/// AMQP message format identifying an Event Hubs batch transfer.
-pub const batch_message_format: u32 = 0x80013700;
+// Not re-exported as a namespace: `batch` is the natural name for a
+// parameter throughout this file, and Zig forbids the shadowing.
+const batching = @import("batch.zig");
+pub const batch_message_format = batching.batch_message_format;
+pub const default_max_message_size = batching.default_max_message_size;
+pub const BatchError = batching.BatchError;
+pub const EventDataBatchOptions = batching.EventDataBatchOptions;
+pub const EventDataBatch = batching.EventDataBatch;
 
-/// Size assumed before a sender link negotiates `max-message-size`. Event Hubs
-/// standard tiers allow 1 MiB.
-pub const default_max_message_size: usize = 1024 * 1024;
-
-pub const BatchError = error{
-    /// A batch targets either a partition or a partition key, never both.
-    PartitionKeyAndIdBothSet,
-    /// The event cannot fit an empty batch, so no batch size would accept it.
-    EventDataTooLarge,
-    /// The requested `max_bytes` is above what the sender link negotiated.
-    MaxBytesExceedsLinkLimit,
-    /// The link limit can only be adopted before events are added.
-    BatchNotEmpty,
-};
-
-pub const EventDataBatchOptions = struct {
-    /// Upper bound on the encoded batch size. Defaults to the sender link's
-    /// negotiated maximum, or `default_max_message_size` until one exists.
-    max_bytes: ?usize = null,
-    /// Route related events to one partition by hash. Mutually exclusive with
-    /// `partition_id`.
-    partition_key: ?[]const u8 = null,
-    /// Send to an explicit partition. Mutually exclusive with `partition_key`.
-    partition_id: ?[]const u8 = null,
-};
-
-/// Packs events into a single AMQP batch transfer.
-///
-/// Events are encoded as they are added and the batch tracks the real byte
-/// count, so a batch that reports as fitting actually fits. Go and Rust both
-/// work this way; estimating from body length under-counts properties,
-/// annotations, and per-message framing.
-pub const EventDataBatch = struct {
-    /// Fully encoded sub-messages, each of which becomes one data section of
-    /// the batch transfer.
-    marshaled: std.ArrayList([]u8) = .empty,
-    /// Encoded non-body sections of the first event, which become the batch
-    /// envelope. Go reuses the first message this way.
-    envelope: ?[]u8 = null,
-    max_size_bytes: usize = default_max_message_size,
-    current_size: usize = 0,
-    partition_key: ?[]const u8 = null,
-    partition_id: ?[]const u8 = null,
-    /// Set when the caller pinned `max_bytes`, so a link cannot raise it.
-    requested_max_bytes: ?usize = null,
-
-    pub fn init(options: EventDataBatchOptions) BatchError!EventDataBatch {
-        if (options.partition_key != null and options.partition_id != null) {
-            return BatchError.PartitionKeyAndIdBothSet;
-        }
-        return .{
-            .max_size_bytes = options.max_bytes orelse default_max_message_size,
-            .partition_key = options.partition_key,
-            .partition_id = options.partition_id,
-            .requested_max_bytes = options.max_bytes,
-        };
-    }
-
-    pub fn deinit(self: *EventDataBatch, allocator: std.mem.Allocator) void {
-        for (self.marshaled.items) |encoded| allocator.free(encoded);
-        self.marshaled.deinit(allocator);
-        if (self.envelope) |envelope| allocator.free(envelope);
-        self.envelope = null;
-        self.current_size = 0;
-    }
-
-    /// Adopt the `max-message-size` a sender link negotiated.
-    ///
-    /// An explicitly requested `max_bytes` is kept when it is smaller and
-    /// rejected when it exceeds what the link allows, matching Go.
-    pub fn applyLinkMaxMessageSize(
-        self: *EventDataBatch,
-        link_max_bytes: usize,
-    ) BatchError!void {
-        if (self.marshaled.items.len > 0) return BatchError.BatchNotEmpty;
-        if (self.requested_max_bytes) |requested| {
-            if (requested > link_max_bytes) return BatchError.MaxBytesExceedsLinkLimit;
-            return;
-        }
-        self.max_size_bytes = link_max_bytes;
-    }
-
-    /// Encode `event` and add it if the batch still has room.
-    ///
-    /// Returns `false` when the event does not fit alongside what is already
-    /// batched, and `BatchError.EventDataTooLarge` when it would not fit even
-    /// an empty batch.
-    pub fn tryAdd(self: *EventDataBatch, allocator: std.mem.Allocator, event: EventData) !bool {
-        var message = try event.toAmqpMessage(allocator);
-        defer event_data.freeAmqpMessage(allocator, &message);
-
-        if (self.partition_key) |partition_key| {
-            try event_data.setPartitionKeyAnnotation(allocator, &message, partition_key);
-        }
-
-        // Both buffers are discarded unless the event is actually adopted,
-        // which includes the `false` return when it simply does not fit.
-        var adopted = false;
-
-        const encoded = try event_data.encodeMessage(allocator, &message);
-        defer if (!adopted) allocator.free(encoded);
-
-        // The first event also fixes the envelope, so its cost is charged here.
-        const is_first = self.marshaled.items.len == 0;
-        const envelope: ?[]u8 = if (is_first)
-            try event_data.encodeMessageEnvelope(allocator, &message)
-        else
-            null;
-        defer if (!adopted) {
-            if (envelope) |bytes| allocator.free(bytes);
-        };
-
-        const envelope_size = if (envelope) |bytes| bytes.len else 0;
-        const projected = self.current_size + envelope_size + dataSectionSize(encoded.len);
-        if (projected > self.max_size_bytes) {
-            if (is_first) return BatchError.EventDataTooLarge;
-            return false;
-        }
-
-        try self.marshaled.append(allocator, encoded);
-        if (envelope) |bytes| self.envelope = bytes;
-        self.current_size = projected;
-        adopted = true;
-        return true;
-    }
-
-    pub fn count(self: EventDataBatch) usize {
-        return self.marshaled.items.len;
-    }
-
-    /// Encoded size of the batch as it would go on the wire.
-    pub fn sizeInBytes(self: EventDataBatch) usize {
-        return self.current_size;
-    }
-};
-
-/// Wrapping a payload in a data section costs a described-type constructor, the
-/// descriptor, and a binary length prefix. Go's `calcActualSizeForPayload`
-/// uses the same constants.
-fn dataSectionSize(payload_len: usize) usize {
-    const vbin8_overhead = 5;
-    const vbin32_overhead = 8;
-    return if (payload_len < 256) vbin8_overhead + payload_len else vbin32_overhead + payload_len;
-}
+pub const sending = @import("sender.zig");
+pub const SenderPool = sending.SenderPool;
+pub const SendError = sending.SendError;
+pub const entityPathFor = sending.entityPathFor;
 
 /// Metadata models and the `$management` operations that produce them. Both
 /// carry an optional arena, so a decoded value owns its strings and one built
@@ -329,6 +195,9 @@ pub const AmqpTransport = struct {
     receiveFn: *const fn (self: *AmqpTransport, allocator: std.mem.Allocator, source: []const u8, filter: ?[]const u8, max_count: u32) anyerror![]ReceivedEventData,
     getHubPropertiesFn: *const fn (self: *AmqpTransport, allocator: std.mem.Allocator, hub_name: []const u8) anyerror!EventHubProperties,
     getPartitionPropertiesFn: *const fn (self: *AmqpTransport, allocator: std.mem.Allocator, hub_name: []const u8, partition_id: []const u8) anyerror!PartitionProperties,
+    /// The peer's `max-message-size` for `address`, or null when it advertised
+    /// no limit or the transport cannot ask. `createBatch` sizes itself by it.
+    maxMessageSizeFn: *const fn (self: *AmqpTransport, address: []const u8) anyerror!?u64,
     closeFn: *const fn (self: *AmqpTransport) void,
 
     pub fn sendBatch(self: *AmqpTransport, allocator: std.mem.Allocator, target: []const u8, batch: EventDataBatch) !void {
@@ -347,118 +216,38 @@ pub const AmqpTransport = struct {
         return self.getPartitionPropertiesFn(self, allocator, hub_name, partition_id);
     }
 
+    pub fn maxMessageSize(self: *AmqpTransport, address: []const u8) !?u64 {
+        return self.maxMessageSizeFn(self, address);
+    }
+
     pub fn close(self: *AmqpTransport) void {
         self.closeFn(self);
     }
 };
 
-/// AMQP transport backed by the uamqp library.
+/// A transport backed by real AMQP links.
 ///
-/// Creates proper AMQP objects (Connection, Session, Message encoding)
-/// for Event Hub operations. Full network I/O integration requires
-/// a TLS transport layer (see azure-uamqp-zig).
-pub const UamqpTransport = struct {
-    allocator: std.mem.Allocator,
-    hostname: []const u8,
-    transport: AmqpTransport,
-
-    pub fn init(allocator: std.mem.Allocator, hostname: []const u8) UamqpTransport {
-        return .{
-            .allocator = allocator,
-            .hostname = hostname,
-            .transport = .{
-                .sendBatchFn = &sendBatchImpl,
-                .receiveFn = &receiveImpl,
-                .getHubPropertiesFn = &getHubPropsImpl,
-                .getPartitionPropertiesFn = &getPartitionPropsImpl,
-                .closeFn = &closeImpl,
-            },
-        };
-    }
-
-    pub fn asTransport(self: *UamqpTransport) *AmqpTransport {
-        return &self.transport;
-    }
-
-    fn sendBatchImpl(t: *AmqpTransport, allocator: std.mem.Allocator, target: []const u8, batch: EventDataBatch) !void {
-        const self: *UamqpTransport = @fieldParentPtr("transport", t);
-
-        var conn = uamqp.connection.Connection.init(allocator, "azure-sdk-zig", self.hostname, .{});
-        defer conn.deinit();
-
-        var session = uamqp.session.Session.init(allocator, &conn, .{});
-        defer session.deinit();
-
-        const amqp_target = uamqp.messaging.createTarget(target);
-        _ = amqp_target;
-
-        // Each batched event is already encoded; a real send wraps them in the
-        // batch envelope and writes one transfer with `batch_message_format`.
-        for (batch.marshaled.items) |encoded| {
-            std.debug.assert(encoded.len > 0);
-        }
-    }
-
-    fn receiveImpl(t: *AmqpTransport, allocator: std.mem.Allocator, source: []const u8, filter: ?[]const u8, max_count: u32) ![]ReceivedEventData {
-        const self: *UamqpTransport = @fieldParentPtr("transport", t);
-        _ = max_count;
-        _ = filter; // Filter applied via AMQP source filter map entries (requires I/O)
-
-        var conn = uamqp.connection.Connection.init(allocator, "azure-sdk-zig", self.hostname, .{});
-        defer conn.deinit();
-
-        var session = uamqp.session.Session.init(allocator, &conn, .{});
-        defer session.deinit();
-
-        const amqp_source = uamqp.messaging.createSource(source);
-        _ = amqp_source;
-
-        return &.{};
-    }
-
-    // These used to echo the caller's own arguments back, which reads as a
-    // successful metadata read and is indistinguishable from one. Failing is
-    // the honest answer until this transport can actually reach the service;
-    // `ManagementTransport` does the real RPC today.
-    fn getHubPropsImpl(t: *AmqpTransport, allocator: std.mem.Allocator, hub_name: []const u8) !EventHubProperties {
-        _ = t;
-        _ = allocator;
-        _ = hub_name;
-        return error.NotConnected;
-    }
-
-    fn getPartitionPropsImpl(t: *AmqpTransport, allocator: std.mem.Allocator, hub_name: []const u8, partition_id: []const u8) !PartitionProperties {
-        _ = t;
-        _ = allocator;
-        _ = hub_name;
-        _ = partition_id;
-        return error.NotConnected;
-    }
-
-    fn closeImpl(t: *AmqpTransport) void {
-        _ = t;
-    }
-};
-
-/// A transport whose metadata operations are real `$management` RPCs.
-///
-/// It borrows an already-open management client rather than opening one,
-/// because the connection, its CBS authorisation, and its session outlive any
-/// single operation and are owned by the caller. Sending and receiving events
-/// still belong to the link-based transport and are not implemented here.
-pub const ManagementTransport = struct {
+/// Metadata operations are `$management` RPCs and sends go out over sender
+/// links attached to the entity address. It borrows an already-open management
+/// client and session rather than opening them, because the connection and its
+/// CBS authorisation outlive any single operation and are owned by the caller.
+pub const LinkTransport = struct {
     management_client: *amqp.Management,
+    /// Sender links, attached on demand. Sending fails as unimplemented while
+    /// this is null, which is what a metadata-only client wants.
+    senders: ?*SenderPool = null,
     /// The CBS token for the hub audience. Event Hubs wants it on the message
     /// as well as on the link.
     security_token: ?[]const u8 = null,
     deadline_ms: i64,
-    /// When set, both operations run under the Event Hubs retry schedule.
+    /// When set, operations run under the Event Hubs retry schedule.
     retry: ?errors.RetryConfig = null,
     transport: AmqpTransport,
 
-    pub fn init(management_client: *amqp.Management, options: Options) ManagementTransport {
+    pub fn init(management_client: *amqp.Management, options: Options) LinkTransport {
         return .{
             .management_client = management_client,
+            .senders = options.senders,
             .security_token = options.security_token,
             .deadline_ms = options.deadline_ms,
             .retry = options.retry,
@@ -467,33 +256,51 @@ pub const ManagementTransport = struct {
                 .receiveFn = &receiveImpl,
                 .getHubPropertiesFn = &getHubPropsImpl,
                 .getPartitionPropertiesFn = &getPartitionPropsImpl,
+                .maxMessageSizeFn = &maxMessageSizeImpl,
                 .closeFn = &closeImpl,
             },
         };
     }
 
     pub const Options = struct {
+        senders: ?*SenderPool = null,
         security_token: ?[]const u8 = null,
         deadline_ms: i64,
         retry: ?errors.RetryConfig = null,
     };
 
-    pub fn asTransport(self: *ManagementTransport) *AmqpTransport {
+    pub fn asTransport(self: *LinkTransport) *AmqpTransport {
         return &self.transport;
     }
 
-    /// The broker's status and description for the most recent failure, which
-    /// a Zig error cannot carry.
-    pub fn lastError(self: *ManagementTransport) ?amqp.ManagementStatusError {
+    /// The broker's status and description for the most recent failed
+    /// metadata operation, which a Zig error cannot carry.
+    pub fn lastError(self: *LinkTransport) ?amqp.ManagementStatusError {
         return self.management_client.last_error;
     }
 
+    /// Why the broker refused the most recent send.
+    pub fn lastSendError(self: *LinkTransport) ?errors.EventHubsError {
+        const pool = self.senders orelse return null;
+        return pool.lastError();
+    }
+
     fn sendBatchImpl(t: *AmqpTransport, allocator: std.mem.Allocator, target: []const u8, batch: EventDataBatch) !void {
-        _ = t;
-        _ = allocator;
-        _ = target;
-        _ = batch;
-        return error.Unimplemented;
+        const self: *LinkTransport = @fieldParentPtr("transport", t);
+        const pool = self.senders orelse return error.Unimplemented;
+        if (self.retry) |config| {
+            return switch (pool.sendWithRetry(allocator, target, batch, config)) {
+                .ok => {},
+                .failed => |failure| failure.err,
+            };
+        }
+        return pool.send(allocator, target, batch);
+    }
+
+    fn maxMessageSizeImpl(t: *AmqpTransport, address: []const u8) !?u64 {
+        const self: *LinkTransport = @fieldParentPtr("transport", t);
+        const pool = self.senders orelse return null;
+        return pool.maxMessageSize(address);
     }
 
     fn receiveImpl(t: *AmqpTransport, allocator: std.mem.Allocator, source: []const u8, filter: ?[]const u8, max_count: u32) ![]ReceivedEventData {
@@ -506,7 +313,7 @@ pub const ManagementTransport = struct {
     }
 
     fn getHubPropsImpl(t: *AmqpTransport, allocator: std.mem.Allocator, hub_name: []const u8) !EventHubProperties {
-        const self: *ManagementTransport = @fieldParentPtr("transport", t);
+        const self: *LinkTransport = @fieldParentPtr("transport", t);
         if (self.retry) |config| {
             return switch (management.getEventHubPropertiesWithRetry(
                 allocator,
@@ -530,7 +337,7 @@ pub const ManagementTransport = struct {
     }
 
     fn getPartitionPropsImpl(t: *AmqpTransport, allocator: std.mem.Allocator, hub_name: []const u8, partition_id: []const u8) !PartitionProperties {
-        const self: *ManagementTransport = @fieldParentPtr("transport", t);
+        const self: *LinkTransport = @fieldParentPtr("transport", t);
         if (self.retry) |config| {
             return switch (management.getPartitionPropertiesWithRetry(
                 allocator,
@@ -564,11 +371,18 @@ pub const ManagementTransport = struct {
 pub const MockAmqpTransport = struct {
     send_called: bool = false,
     send_batch_count: u32 = 0,
+    /// The address the most recent send was routed to, so a test can assert
+    /// partition targeting without a peer. Copied, because the caller builds
+    /// the address on the stack or frees it as soon as the call returns.
+    send_target_buf: [256]u8 = undefined,
+    send_target_len: ?usize = null,
     /// Returned verbatim by `receive`, unlike a real transport which allocates.
     /// Tests keep ownership and must not call `freeReceivedEvents` on it.
     receive_result: []ReceivedEventData = &.{},
     hub_properties: EventHubProperties = .{ .name = "test-hub" },
     partition_properties: PartitionProperties = .{ .id = "0" },
+    /// Stands in for a sender link's negotiated limit.
+    link_max_message_size: ?u64 = null,
     transport: AmqpTransport,
 
     pub fn init() MockAmqpTransport {
@@ -578,6 +392,7 @@ pub const MockAmqpTransport = struct {
                 .receiveFn = &receiveImpl,
                 .getHubPropertiesFn = &getHubPropsImpl,
                 .getPartitionPropertiesFn = &getPartitionPropsImpl,
+                .maxMessageSizeFn = &maxMessageSizeImpl,
                 .closeFn = &closeImpl,
             },
         };
@@ -589,10 +404,24 @@ pub const MockAmqpTransport = struct {
 
     fn sendBatchImpl(t: *AmqpTransport, allocator: std.mem.Allocator, target: []const u8, batch: EventDataBatch) !void {
         _ = allocator;
-        _ = target;
         const self: *MockAmqpTransport = @fieldParentPtr("transport", t);
         self.send_called = true;
         self.send_batch_count += @intCast(batch.count());
+        const len = @min(target.len, self.send_target_buf.len);
+        @memcpy(self.send_target_buf[0..len], target[0..len]);
+        self.send_target_len = len;
+    }
+
+    /// The address of the most recent send, or null if there was none.
+    pub fn sendTarget(self: *const MockAmqpTransport) ?[]const u8 {
+        const len = self.send_target_len orelse return null;
+        return self.send_target_buf[0..len];
+    }
+
+    fn maxMessageSizeImpl(t: *AmqpTransport, address: []const u8) !?u64 {
+        _ = address;
+        const self: *MockAmqpTransport = @fieldParentPtr("transport", t);
+        return self.link_max_message_size;
     }
 
     fn receiveImpl(t: *AmqpTransport, allocator: std.mem.Allocator, source: []const u8, filter: ?[]const u8, max_count: u32) ![]ReceivedEventData {
@@ -776,29 +605,45 @@ pub const ProducerClient = struct {
         return self.credential.getToken(ctx);
     }
 
+    /// The AMQP address a batch is published to: the hub, letting the service
+    /// pick a partition, or `{hub}/Partitions/{id}`. Caller owns the result.
+    pub fn entityPath(
+        self: *ProducerClient,
+        allocator: std.mem.Allocator,
+        partition_id: ?[]const u8,
+    ) ![]u8 {
+        return entityPathFor(allocator, self.options.event_hub_name, partition_id);
+    }
+
     /// Send a batch of events over AMQP.
     pub fn sendBatch(self: *ProducerClient, allocator: std.mem.Allocator, batch: EventDataBatch) !void {
-        if (batch.count() == 0) return error.EmptyBatch;
-        const address = try std.fmt.allocPrint(
-            allocator,
-            "{s}/{s}",
-            .{ self.options.fully_qualified_namespace, self.options.event_hub_name },
-        );
+        if (batch.count() == 0) return SendError.EmptyBatch;
+        const address = try self.entityPath(allocator, batch.partition_id);
         defer allocator.free(address);
         return self.amqp_transport.sendBatch(allocator, address, batch);
     }
 
     /// Create a batch sized for this producer.
     ///
-    /// The limit stays at `default_max_message_size` until a sender link
-    /// negotiates `max-message-size`, at which point `applyLinkMaxMessageSize`
-    /// adopts it.
+    /// The limit comes from the sender link's negotiated `max-message-size`
+    /// when the transport can report one, and stays at
+    /// `default_max_message_size` otherwise. Go likewise attaches the link
+    /// inside `NewEventDataBatch` so the batch knows its real ceiling.
     pub fn createBatch(
         self: *ProducerClient,
+        allocator: std.mem.Allocator,
         options: EventDataBatchOptions,
-    ) BatchError!EventDataBatch {
-        _ = self;
-        return EventDataBatch.init(options);
+    ) !EventDataBatch {
+        var new_batch = try EventDataBatch.init(options);
+        errdefer new_batch.deinit(allocator);
+
+        const address = try self.entityPath(allocator, options.partition_id);
+        defer allocator.free(address);
+
+        if (try self.amqp_transport.maxMessageSize(address)) |limit| {
+            try new_batch.applyLinkMaxMessageSize(@intCast(limit));
+        }
+        return new_batch;
     }
 
     pub fn getEventHubProperties(self: *ProducerClient, allocator: std.mem.Allocator) !EventHubProperties {
@@ -911,8 +756,9 @@ pub const ConsumerClient = struct {
 
     /// Receive events from a specific partition.
     ///
-    /// The returned slice comes from the transport. `UamqpTransport` allocates
-    /// it, so free it with `freeReceivedEvents`; `MockAmqpTransport` returns
+    /// The returned slice comes from the transport. A link-backed transport
+    /// allocates it, so free it with `freeReceivedEvents`; `MockAmqpTransport`
+    /// returns
     /// the slice a test handed it and keeps ownership.
     pub fn receiveEvents(
         self: *ConsumerClient,
@@ -1140,7 +986,7 @@ test "ProducerClient createBatch" {
         .fully_qualified_namespace = "ns.servicebus.windows.net",
         .event_hub_name = "my-hub",
     }, cred.asCredential(), mock_amqp.asTransport());
-    var batch = try producer.createBatch(.{});
+    var batch = try producer.createBatch(allocator, .{});
     defer batch.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 0), batch.count());
 }
@@ -1159,7 +1005,7 @@ test "ProducerClient sendBatch" {
         .event_hub_name = "my-hub",
     }, cred.asCredential(), mock_amqp.asTransport());
 
-    var batch = try producer.createBatch(.{});
+    var batch = try producer.createBatch(allocator, .{});
     defer batch.deinit(allocator);
     var e1 = EventData.init("event-1");
     defer e1.deinit(allocator);
@@ -1168,6 +1014,92 @@ test "ProducerClient sendBatch" {
     try producer.sendBatch(allocator, batch);
     try std.testing.expect(mock_amqp.send_called);
     try std.testing.expectEqual(@as(u32, 1), mock_amqp.send_batch_count);
+}
+
+test "ProducerClient sendBatch targets the hub, or one partition when pinned" {
+    const allocator = std.testing.allocator;
+    const cred_mod = @import("azure_sdk_core").identity.client_secret;
+    var mock_http = core.http.MockTransport.init(allocator, 200,
+        \\{"access_token":"t","expires_in":3600}
+    );
+    defer mock_http.deinit();
+    var cred = cred_mod.ClientSecretCredential.init(allocator, mock_http.asTransport(), "t", "c", "s");
+    var mock_amqp = MockAmqpTransport.init();
+    var producer = ProducerClient.init(.{
+        .fully_qualified_namespace = "ns.servicebus.windows.net",
+        .event_hub_name = "my-hub",
+    }, cred.asCredential(), mock_amqp.asTransport());
+
+    var event = EventData.init("event-1");
+    defer event.deinit(allocator);
+
+    // Unpinned: the service picks the partition, so the link targets the hub.
+    // The namespace is not part of the address; it is the connection's.
+    var any = try producer.createBatch(allocator, .{});
+    defer any.deinit(allocator);
+    _ = try any.tryAdd(allocator, event);
+    try producer.sendBatch(allocator, any);
+    try std.testing.expectEqualStrings("my-hub", mock_amqp.sendTarget().?);
+
+    var pinned = try producer.createBatch(allocator, .{ .partition_id = "3" });
+    defer pinned.deinit(allocator);
+    _ = try pinned.tryAdd(allocator, event);
+    try producer.sendBatch(allocator, pinned);
+    try std.testing.expectEqualStrings("my-hub/Partitions/3", mock_amqp.sendTarget().?);
+}
+
+test "createBatch adopts the sender link's max-message-size" {
+    const allocator = std.testing.allocator;
+    const cred_mod = @import("azure_sdk_core").identity.client_secret;
+    var mock_http = core.http.MockTransport.init(allocator, 200,
+        \\{"access_token":"t","expires_in":3600}
+    );
+    defer mock_http.deinit();
+    var cred = cred_mod.ClientSecretCredential.init(allocator, mock_http.asTransport(), "t", "c", "s");
+    var mock_amqp = MockAmqpTransport.init();
+    var producer = ProducerClient.init(.{
+        .fully_qualified_namespace = "ns.servicebus.windows.net",
+        .event_hub_name = "my-hub",
+    }, cred.asCredential(), mock_amqp.asTransport());
+
+    // Premium namespaces negotiate well above the 1 MiB default, and a batch
+    // that kept the default would refuse events the broker would have taken.
+    mock_amqp.link_max_message_size = 20 * 1024 * 1024;
+    var large = try producer.createBatch(allocator, .{});
+    defer large.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 20 * 1024 * 1024), large.max_size_bytes);
+
+    // An explicit smaller ceiling still wins.
+    var capped = try producer.createBatch(allocator, .{ .max_bytes = 4096 });
+    defer capped.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 4096), capped.max_size_bytes);
+
+    // Asking for more than the link allows is refused rather than silently
+    // truncated, so an oversized batch cannot reach the broker.
+    try std.testing.expectError(
+        BatchError.MaxBytesExceedsLinkLimit,
+        producer.createBatch(allocator, .{ .max_bytes = 32 * 1024 * 1024 }),
+    );
+}
+
+test "a link transport without sender links refuses to send" {
+    const allocator = std.testing.allocator;
+    var mgmt: amqp.Management = undefined;
+    var transport = LinkTransport.init(&mgmt, .{ .deadline_ms = 10_000 });
+
+    var empty = try EventDataBatch.init(.{});
+    defer empty.deinit(allocator);
+    var event = EventData.init("x");
+    defer event.deinit(allocator);
+    _ = try empty.tryAdd(allocator, event);
+
+    // Reporting success without a link is the bug this replaced; the
+    // management client is never touched, so it may stay uninitialised.
+    try std.testing.expectError(
+        error.Unimplemented,
+        transport.asTransport().sendBatch(allocator, "my-hub", empty),
+    );
+    try std.testing.expectEqual(@as(?u64, null), try transport.asTransport().maxMessageSize("my-hub"));
 }
 
 test "ProducerClient sendBatch empty returns error" {
@@ -1184,7 +1116,7 @@ test "ProducerClient sendBatch empty returns error" {
         .event_hub_name = "my-hub",
     }, cred.asCredential(), mock_amqp.asTransport());
 
-    var batch = try producer.createBatch(.{});
+    var batch = try producer.createBatch(allocator, .{});
     defer batch.deinit(allocator);
 
     const result = producer.sendBatch(allocator, batch);
@@ -1227,19 +1159,6 @@ test "ConsumerClient receiveEvents" {
 
     const events = try consumer.receiveEvents(allocator, "0", EventPosition.earliest(), 10);
     try std.testing.expectEqual(@as(usize, 0), events.len);
-}
-
-test "UamqpTransport sendBatch encodes messages" {
-    const allocator = std.testing.allocator;
-    var transport = UamqpTransport.init(allocator, "ns.servicebus.windows.net");
-
-    var batch = try EventDataBatch.init(.{});
-    defer batch.deinit(allocator);
-    var e1 = EventData.init("hello");
-    defer e1.deinit(allocator);
-    _ = try batch.tryAdd(allocator, e1);
-
-    try transport.asTransport().sendBatch(allocator, "ns.servicebus.windows.net/my-hub", batch);
 }
 
 test "ProducerClient fromConnectionString" {
