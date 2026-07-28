@@ -416,11 +416,13 @@ pub const all = [_]Package{
         .name = "azure_sdk_messaging_common",
         .module_name = "azure_sdk_messaging_common",
         .branch = "sdk/messaging_common",
+        .dependencies = &.{"azure_sdk_core"},
         .publish_paths = &.{
             ".gitignore",
             "build.zig",
             "build.zig.zon",
             "root.zig",
+            "sas.zig",
             "README.md",
             "LICENSE.txt",
         },
