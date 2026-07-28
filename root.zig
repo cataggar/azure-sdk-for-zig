@@ -1,9 +1,38 @@
 ///! Azure AMQP Core — wraps azure-uamqp-zig for AMQP 1.0 protocol support.
 ///!
-///! Re-exports the uamqp library types and provides Azure-specific
-///! convenience wrappers for Connection, Session, Link, and Message.
+///! Re-exports the uamqp library types and adds what uamqp does not provide:
+///! byte transports (TLS, plaintext TCP, and an in-memory duplex), a
+///! performative codec, and a connection driver that runs the real handshake.
 const std = @import("std");
 pub const uamqp = @import("uamqp");
+
+pub const transport = @import("transport.zig");
+pub const performative = @import("performative.zig");
+pub const connection_driver = @import("connection.zig");
+
+// Transports.
+pub const Transport = transport.Transport;
+pub const TransportError = transport.TransportError;
+pub const TlsTransport = transport.TlsTransport;
+pub const TcpTransport = transport.TcpTransport;
+pub const MemoryTransport = transport.MemoryTransport;
+pub const Endpoint = transport.Endpoint;
+pub const Socket = transport.Socket;
+pub const connect = transport.connect;
+pub const tls_port = transport.tls_port;
+pub const tcp_port = transport.tcp_port;
+
+// Connection driver.
+pub const Driver = connection_driver.Driver;
+pub const DriverOptions = connection_driver.Options;
+pub const ConnectionError = connection_driver.ConnectionError;
+pub const Clock = connection_driver.Clock;
+pub const IoClock = connection_driver.IoClock;
+pub const ManualClock = connection_driver.ManualClock;
+pub const ClientInfo = connection_driver.ClientInfo;
+pub const buildProperties = connection_driver.buildProperties;
+pub const defaultClientInfo = connection_driver.defaultClientInfo;
+pub const georeplication_capability = connection_driver.georeplication_capability;
 
 // Re-export core protocol types.
 pub const Connection = uamqp.connection.Connection;
@@ -47,6 +76,14 @@ pub const CbsTokenType = enum {
         };
     }
 };
+
+// Zig only analyzes a file that something actually references, so the
+// re-exports above are not enough to make these files' tests run.
+test {
+    _ = transport;
+    _ = performative;
+    _ = connection_driver;
+}
 
 // ─────────────────────── Tests ───────────────────────
 
