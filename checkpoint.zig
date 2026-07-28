@@ -95,6 +95,194 @@ pub const CheckpointStore = struct {
     }
 };
 
+/// A source of wall-clock time, so ownership expiry can be tested without
+/// sleeping.
+pub const Clock = struct {
+    nowMillisFn: *const fn (self: *Clock) i64,
+
+    pub fn nowMillis(self: *Clock) i64 {
+        return self.nowMillisFn(self);
+    }
+};
+
+/// The real clock.
+pub const SystemClock = struct {
+    clock: Clock = .{ .nowMillisFn = now },
+
+    fn now(_: *Clock) i64 {
+        return std.time.milliTimestamp();
+    }
+};
+
+/// A clock that only moves when told to.
+pub const ManualClock = struct {
+    millis: i64 = 1_000_000,
+    clock: Clock = .{ .nowMillisFn = now },
+
+    fn now(c: *Clock) i64 {
+        const self: *ManualClock = @fieldParentPtr("clock", c);
+        return self.millis;
+    }
+
+    pub fn advance(self: *ManualClock, ms: i64) void {
+        self.millis += ms;
+    }
+};
+
+/// Free an ownership record that was duplicated with `dupeOwnership`.
+pub fn freeOwned(allocator: std.mem.Allocator, ownership: PartitionOwnership) void {
+    ownership.deinit(allocator);
+}
+
+/// Copy an ownership record, substituting `owner_id`.
+pub fn dupeOwnership(
+    allocator: std.mem.Allocator,
+    source: PartitionOwnership,
+    owner_id: []const u8,
+) !PartitionOwnership {
+    var out: PartitionOwnership = .{
+        .fully_qualified_namespace = undefined,
+        .event_hub_name = undefined,
+        .consumer_group = undefined,
+        .partition_id = undefined,
+        .owner_id = undefined,
+        .last_modified_time = source.last_modified_time,
+    };
+    out.fully_qualified_namespace = try allocator.dupe(u8, source.fully_qualified_namespace);
+    errdefer allocator.free(out.fully_qualified_namespace);
+    out.event_hub_name = try allocator.dupe(u8, source.event_hub_name);
+    errdefer allocator.free(out.event_hub_name);
+    out.consumer_group = try allocator.dupe(u8, source.consumer_group);
+    errdefer allocator.free(out.consumer_group);
+    out.partition_id = try allocator.dupe(u8, source.partition_id);
+    errdefer allocator.free(out.partition_id);
+    out.owner_id = try allocator.dupe(u8, owner_id);
+    return out;
+}
+
+/// A `CheckpointStore` held entirely in memory.
+///
+/// Intended for tests and for running a processor fleet in one process. It is
+/// last-write-wins: it does not model the etag race a real store arbitrates,
+/// so two processors claiming the same partition in the same cycle both
+/// succeed rather than one losing.
+pub const InMemoryCheckpointStore = struct {
+    allocator: std.mem.Allocator,
+    ownerships: std.ArrayList(PartitionOwnership) = .empty,
+    checkpoints: std.ArrayList(Checkpoint) = .empty,
+    clock: *Clock,
+    store: CheckpointStore = .{
+        .claimOwnershipFn = claimOwnership,
+        .listOwnershipFn = listOwnership,
+        .updateCheckpointFn = updateCheckpoint,
+        .listCheckpointsFn = listCheckpoints,
+    },
+
+    pub fn deinit(self: *InMemoryCheckpointStore) void {
+        for (self.ownerships.items) |ownership| freeOwned(self.allocator, ownership);
+        self.ownerships.deinit(self.allocator);
+        for (self.checkpoints.items) |c| c.deinit(self.allocator);
+        self.checkpoints.deinit(self.allocator);
+    }
+
+    fn find(self: *InMemoryCheckpointStore, partition_id: []const u8) ?*PartitionOwnership {
+        for (self.ownerships.items) |*ownership| {
+            if (std.mem.eql(u8, ownership.partition_id, partition_id)) return ownership;
+        }
+        return null;
+    }
+
+    fn claimOwnership(
+        s: *CheckpointStore,
+        allocator: std.mem.Allocator,
+        requested: []const PartitionOwnership,
+    ) anyerror![]PartitionOwnership {
+        const self: *InMemoryCheckpointStore = @fieldParentPtr("store", s);
+        const now = @divFloor(self.clock.nowMillis(), std.time.ms_per_s);
+
+        var claimed: std.ArrayList(PartitionOwnership) = .empty;
+        errdefer {
+            for (claimed.items) |c| freeOwned(allocator, c);
+            claimed.deinit(allocator);
+        }
+
+        for (requested) |ownership| {
+            if (self.find(ownership.partition_id)) |existing| {
+                allocator.free(existing.owner_id);
+                existing.owner_id = try allocator.dupe(u8, ownership.owner_id);
+                existing.last_modified_time = now;
+            } else {
+                var stored = try dupeOwnership(allocator, ownership, ownership.owner_id);
+                stored.last_modified_time = now;
+                try self.ownerships.append(self.allocator, stored);
+            }
+            var out = try dupeOwnership(allocator, ownership, ownership.owner_id);
+            out.last_modified_time = now;
+            try claimed.append(allocator, out);
+        }
+        return claimed.toOwnedSlice(allocator);
+    }
+
+    fn listOwnership(
+        s: *CheckpointStore,
+        allocator: std.mem.Allocator,
+        _: []const u8,
+        _: []const u8,
+        _: []const u8,
+    ) anyerror![]PartitionOwnership {
+        const self: *InMemoryCheckpointStore = @fieldParentPtr("store", s);
+        const out = try allocator.alloc(PartitionOwnership, self.ownerships.items.len);
+        errdefer allocator.free(out);
+        for (out, self.ownerships.items) |*slot, stored| {
+            slot.* = try dupeOwnership(allocator, stored, stored.owner_id);
+        }
+        return out;
+    }
+
+    fn updateCheckpoint(s: *CheckpointStore, allocator: std.mem.Allocator, c: Checkpoint) anyerror!void {
+        const self: *InMemoryCheckpointStore = @fieldParentPtr("store", s);
+        _ = allocator;
+        for (self.checkpoints.items) |*existing| {
+            if (!std.mem.eql(u8, existing.partition_id, c.partition_id)) continue;
+            if (existing.offset) |offset| self.allocator.free(offset);
+            existing.offset = if (c.offset) |o| try self.allocator.dupe(u8, o) else null;
+            existing.sequence_number = c.sequence_number;
+            return;
+        }
+        try self.checkpoints.append(self.allocator, .{
+            .fully_qualified_namespace = try self.allocator.dupe(u8, c.fully_qualified_namespace),
+            .event_hub_name = try self.allocator.dupe(u8, c.event_hub_name),
+            .consumer_group = try self.allocator.dupe(u8, c.consumer_group),
+            .partition_id = try self.allocator.dupe(u8, c.partition_id),
+            .offset = if (c.offset) |o| try self.allocator.dupe(u8, o) else null,
+            .sequence_number = c.sequence_number,
+        });
+    }
+
+    fn listCheckpoints(
+        s: *CheckpointStore,
+        allocator: std.mem.Allocator,
+        _: []const u8,
+        _: []const u8,
+        _: []const u8,
+    ) anyerror![]Checkpoint {
+        const self: *InMemoryCheckpointStore = @fieldParentPtr("store", s);
+        const out = try allocator.alloc(Checkpoint, self.checkpoints.items.len);
+        errdefer allocator.free(out);
+        for (out, self.checkpoints.items) |*slot, stored| {
+            slot.* = .{
+                .fully_qualified_namespace = try allocator.dupe(u8, stored.fully_qualified_namespace),
+                .event_hub_name = try allocator.dupe(u8, stored.event_hub_name),
+                .consumer_group = try allocator.dupe(u8, stored.consumer_group),
+                .partition_id = try allocator.dupe(u8, stored.partition_id),
+                .offset = if (stored.offset) |o| try allocator.dupe(u8, o) else null,
+                .sequence_number = stored.sequence_number,
+            };
+        }
+        return out;
+    }
+};
+
 test "relinquished ownership is signalled by an empty owner id" {
     const relinquished = PartitionOwnership{
         .fully_qualified_namespace = "ns",

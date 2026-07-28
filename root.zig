@@ -86,6 +86,24 @@ pub const TlsSettings = connection_options.TlsSettings;
 pub const WebSocketHook = connection_options.WebSocketHook;
 pub const AmqpConnectionFactory = connection_options.AmqpConnectionFactory;
 
+// The processor. Named for the file: `processor` reads better as a local.
+pub const processing = @import("processor.zig");
+pub const Processor = processing.Processor;
+pub const ProcessorPartitionClient = processing.ProcessorPartitionClient;
+pub const PartitionOpener = processing.PartitionOpener;
+pub const freePartitionIds = processing.freePartitionIds;
+
+// Load balancing. Named for the file: `balancer` reads better as a local.
+pub const load_balancing = @import("load_balancer.zig");
+pub const LoadBalancer = load_balancing.LoadBalancer;
+pub const LoadBalancingStrategy = load_balancing.LoadBalancingStrategy;
+pub const ProcessorOptions = load_balancing.ProcessorOptions;
+pub const OwnershipDetails = load_balancing.OwnershipDetails;
+pub const resolveStartPosition = load_balancing.resolveStartPosition;
+pub const isGeoReplicationOffsetError = load_balancing.isGeoReplicationOffsetError;
+pub const geo_replication_fallback = load_balancing.geo_replication_fallback;
+pub const relinquished_owner_id = load_balancing.relinquished_owner_id;
+
 pub const recovery = @import("recovery.zig");
 pub const RecoverableConnection = recovery.RecoverableConnection;
 pub const ConnectionFactory = recovery.ConnectionFactory;
@@ -847,6 +865,37 @@ pub const ConsumerClient = struct {
         }, options);
     }
 
+    /// A `PartitionOpener` over this client and one session.
+    ///
+    /// This is what a `Processor` reads through: it knows partition ids and
+    /// how to attach a reader, which is everything the balancing loop needs
+    /// from a connection.
+    pub fn partitionOpener(
+        self: *ConsumerClient,
+        session: *amqp.Session,
+        deadline_ms: i64,
+    ) ConsumerPartitionOpener {
+        return .{ .client = self, .session = session, .deadline_ms = deadline_ms };
+    }
+
+    /// Build a processor that reads this hub through `opener`.
+    pub fn newProcessor(
+        self: *ConsumerClient,
+        allocator: std.mem.Allocator,
+        store: *CheckpointStore,
+        opener: *PartitionOpener,
+        options: ProcessorOptions,
+        clock: *load_balancing.Clock,
+        random: std.Random,
+    ) Processor {
+        return Processor.init(allocator, store, opener, .{
+            .fully_qualified_namespace = self.options.fully_qualified_namespace,
+            .event_hub_name = self.options.event_hub_name,
+            .consumer_group = self.options.consumer_group,
+            .client_id = self.instanceId(),
+        }, options, clock, random);
+    }
+
     /// Receive events from a specific partition.
     ///
     /// A one-shot convenience over the transport. Use `newPartitionClient`
@@ -887,7 +936,98 @@ pub const ConsumerClient = struct {
     }
 };
 
+/// A `PartitionOpener` backed by a `ConsumerClient` and one session.
+pub const ConsumerPartitionOpener = struct {
+    client: *ConsumerClient,
+    session: *amqp.Session,
+    deadline_ms: i64,
+    opener: PartitionOpener = .{
+        .partitionIdsFn = partitionIds,
+        .openFn = openPartition,
+        .closeFn = closePartition,
+    },
+
+    pub fn asOpener(self: *ConsumerPartitionOpener) *PartitionOpener {
+        return &self.opener;
+    }
+
+    fn partitionIds(o: *PartitionOpener, allocator: std.mem.Allocator) anyerror![][]const u8 {
+        const self: *ConsumerPartitionOpener = @fieldParentPtr("opener", o);
+        var props = try self.client.getEventHubProperties(allocator);
+        defer props.deinit();
+
+        const ids = try allocator.alloc([]const u8, props.partition_ids.len);
+        errdefer allocator.free(ids);
+        var filled: usize = 0;
+        errdefer for (ids[0..filled]) |id| allocator.free(id);
+        for (ids, props.partition_ids) |*slot, id| {
+            slot.* = try allocator.dupe(u8, id);
+            filled += 1;
+        }
+        return ids;
+    }
+
+    fn openPartition(
+        o: *PartitionOpener,
+        allocator: std.mem.Allocator,
+        partition_id: []const u8,
+        position: EventPosition,
+        options: PartitionClientOptions,
+    ) anyerror!*PartitionClient {
+        const self: *ConsumerPartitionOpener = @fieldParentPtr("opener", o);
+
+        const client = try allocator.create(PartitionClient);
+        errdefer allocator.destroy(client);
+
+        var with_position = options;
+        with_position.start_position = position;
+        self.client.newPartitionClient(
+            client,
+            allocator,
+            self.session,
+            partition_id,
+            self.deadline_ms,
+            with_position,
+        ) catch |err| {
+            // A replicated namespace refuses an offset carried over from
+            // before a failover. Say so in the error so the processor can
+            // restart the partition rather than abandon it.
+            if (err == error.LinkDetached and self.sawGeoReplicationRejection()) {
+                return error.GeoReplicationOffsetRejected;
+            }
+            return err;
+        };
+        return client;
+    }
+
+    /// Whether the attach that just failed was refused for a geo-replicated
+    /// offset. The link never attached, so the condition is only readable
+    /// from the detached receiver the session still holds.
+    fn sawGeoReplicationRejection(self: *ConsumerPartitionOpener) bool {
+        for (self.session.receivers.items) |receiver| {
+            const remote = receiver.detach_error orelse continue;
+            if (load_balancing.isGeoReplicationOffsetError(remote.condition)) return true;
+        }
+        return false;
+    }
+
+    fn closePartition(o: *PartitionOpener, client: *PartitionClient) void {
+        const self: *ConsumerPartitionOpener = @fieldParentPtr("opener", o);
+        client.close(self.deadline_ms) catch {};
+        client.deinit();
+        client.allocator.destroy(client);
+    }
+};
+
 // ─────────────────────── Tests ───────────────────────
+
+// Zig only analyses a file it is told to. Re-exporting a type is not
+// telling it: the decl is lazy, so the file's tests silently do not exist.
+test {
+    _ = @import("load_balancer.zig");
+    _ = @import("processor.zig");
+    _ = ConsumerPartitionOpener;
+}
 
 test "EventData init" {
     const allocator = std.testing.allocator;
