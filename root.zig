@@ -199,51 +199,120 @@ pub const EventHubProperties = struct {
     geo_replication_enabled: bool = false,
 };
 
+/// Where in a partition a consumer starts reading.
+///
+/// Rust models this as a `StartLocation` enum and Go as a set of optional
+/// fields that it rejects when more than one is set. A tagged union makes the
+/// conflict unrepresentable.
+pub const StartLocation = union(enum) {
+    /// The oldest event the partition still retains.
+    earliest,
+    /// Only events enqueued after the consumer attaches. This is the default
+    /// in Go and Rust alike.
+    latest,
+    /// An opaque offset token, which is not necessarily numeric.
+    offset: []const u8,
+    sequence_number: i64,
+    /// Unix milliseconds.
+    enqueued_time: i64,
+};
+
 /// Starting position for reading events from a partition.
+///
+/// Slices are borrowed and must outlive the position.
 pub const EventPosition = struct {
-    offset: ?[]const u8 = null,
-    sequence_number: ?i64 = null,
-    enqueued_time: ?i64 = null,
+    location: StartLocation = .latest,
+    /// Include the event at `location` rather than starting after it. Ignored
+    /// for `earliest` and `latest`, which have no event to include.
     is_inclusive: bool = false,
 
     /// Start from the beginning of the partition.
     pub fn earliest() EventPosition {
-        return .{ .offset = "-1" };
+        return .{ .location = .earliest };
     }
 
     /// Start from the end of the partition (new events only).
     pub fn latest() EventPosition {
-        return .{ .offset = "@latest" };
+        return .{ .location = .latest };
     }
 
     /// Start from a specific offset.
     pub fn fromOffset(offset: []const u8, inclusive: bool) EventPosition {
-        return .{ .offset = offset, .is_inclusive = inclusive };
+        return .{ .location = .{ .offset = offset }, .is_inclusive = inclusive };
     }
 
     /// Start from a specific sequence number.
     pub fn fromSequenceNumber(seq: i64, inclusive: bool) EventPosition {
-        return .{ .sequence_number = seq, .is_inclusive = inclusive };
+        return .{ .location = .{ .sequence_number = seq }, .is_inclusive = inclusive };
     }
 
     /// Start from a specific enqueued time (Unix ms).
     pub fn fromEnqueuedTime(time: i64) EventPosition {
-        return .{ .enqueued_time = time };
+        return .{ .location = .{ .enqueued_time = time } };
     }
 
     /// Render the AMQP filter expression for this position.
+    ///
+    /// A default-constructed position renders as `@latest` rather than
+    /// failing, matching Go's `getStartExpression` and Rust's
+    /// `StartPosition::start_expression`.
     pub fn toFilterExpression(self: EventPosition, allocator: std.mem.Allocator) ![]u8 {
         const op: []const u8 = if (self.is_inclusive) ">=" else ">";
-        if (self.offset) |offset| {
-            return std.fmt.allocPrint(allocator, "amqp.annotation.x-opt-offset {s} '{s}'", .{ op, offset });
-        }
-        if (self.sequence_number) |seq| {
-            return std.fmt.allocPrint(allocator, "amqp.annotation.x-opt-sequence-number {s} '{d}'", .{ op, seq });
-        }
-        if (self.enqueued_time) |time| {
-            return std.fmt.allocPrint(allocator, "amqp.annotation.x-opt-enqueued-time {s} '{d}'", .{ op, time });
-        }
-        return error.InvalidEventPosition;
+        return switch (self.location) {
+            // Go and Rust both emit `>` for these two regardless of
+            // inclusivity, because `-1` and `@latest` are sentinels that
+            // already sit outside the event range.
+            .earliest => allocator.dupe(u8, "amqp.annotation.x-opt-offset > '-1'"),
+            .latest => allocator.dupe(u8, "amqp.annotation.x-opt-offset > '@latest'"),
+            .offset => |offset| std.fmt.allocPrint(
+                allocator,
+                "amqp.annotation.x-opt-offset {s} '{s}'",
+                .{ op, offset },
+            ),
+            .sequence_number => |seq| std.fmt.allocPrint(
+                allocator,
+                "amqp.annotation.x-opt-sequence-number {s} '{d}'",
+                .{ op, seq },
+            ),
+            .enqueued_time => |time| std.fmt.allocPrint(
+                allocator,
+                "amqp.annotation.x-opt-enqueued-time {s} '{d}'",
+                .{ op, time },
+            ),
+        };
+    }
+};
+
+/// Per-partition starting positions, used when a partition has no checkpoint.
+///
+/// Partition ids are copied; every other slice is borrowed.
+pub const StartPositions = struct {
+    per_partition: std.StringArrayHashMapUnmanaged(EventPosition) = .empty,
+    /// Used for any partition absent from `per_partition`.
+    default: EventPosition = .{},
+
+    pub fn deinit(self: *StartPositions, allocator: std.mem.Allocator) void {
+        for (self.per_partition.keys()) |key| allocator.free(key);
+        self.per_partition.deinit(allocator);
+    }
+
+    pub fn put(
+        self: *StartPositions,
+        allocator: std.mem.Allocator,
+        partition_id: []const u8,
+        position: EventPosition,
+    ) !void {
+        const owned_id = try allocator.dupe(u8, partition_id);
+        errdefer allocator.free(owned_id);
+
+        const gop = try self.per_partition.getOrPut(allocator, owned_id);
+        if (gop.found_existing) allocator.free(owned_id);
+        gop.value_ptr.* = position;
+    }
+
+    /// Resolve the position for a partition, falling back to `default`.
+    pub fn forPartition(self: StartPositions, partition_id: []const u8) EventPosition {
+        return self.per_partition.get(partition_id) orelse self.default;
     }
 };
 
@@ -938,4 +1007,103 @@ test "EventDataBatch does not leak when an event does not fit" {
     defer large.deinit(allocator);
     try std.testing.expect(!try batch.tryAdd(allocator, large));
     try std.testing.expectEqual(@as(usize, 1), batch.count());
+}
+
+test "a default EventPosition starts at the latest event" {
+    const allocator = std.testing.allocator;
+    const expr = try (EventPosition{}).toFilterExpression(allocator);
+    defer allocator.free(expr);
+    try std.testing.expectEqualStrings("amqp.annotation.x-opt-offset > '@latest'", expr);
+    try std.testing.expectEqual(StartLocation.latest, std.meta.activeTag((EventPosition{}).location));
+}
+
+test "earliest and latest ignore inclusivity like Go and Rust" {
+    const allocator = std.testing.allocator;
+
+    var inclusive_earliest = EventPosition.earliest();
+    inclusive_earliest.is_inclusive = true;
+    const earliest_expr = try inclusive_earliest.toFilterExpression(allocator);
+    defer allocator.free(earliest_expr);
+    try std.testing.expectEqualStrings("amqp.annotation.x-opt-offset > '-1'", earliest_expr);
+
+    var inclusive_latest = EventPosition.latest();
+    inclusive_latest.is_inclusive = true;
+    const latest_expr = try inclusive_latest.toFilterExpression(allocator);
+    defer allocator.free(latest_expr);
+    try std.testing.expectEqualStrings("amqp.annotation.x-opt-offset > '@latest'", latest_expr);
+}
+
+test "EventPosition fromOffset honours inclusivity" {
+    const allocator = std.testing.allocator;
+
+    const exclusive = try EventPosition.fromOffset("12345", false).toFilterExpression(allocator);
+    defer allocator.free(exclusive);
+    try std.testing.expectEqualStrings("amqp.annotation.x-opt-offset > '12345'", exclusive);
+
+    const inclusive = try EventPosition.fromOffset("12345", true).toFilterExpression(allocator);
+    defer allocator.free(inclusive);
+    try std.testing.expectEqualStrings("amqp.annotation.x-opt-offset >= '12345'", inclusive);
+}
+
+test "EventPosition enqueued time honours inclusivity" {
+    const allocator = std.testing.allocator;
+
+    var position = EventPosition.fromEnqueuedTime(1617235200000);
+    position.is_inclusive = true;
+    const expr = try position.toFilterExpression(allocator);
+    defer allocator.free(expr);
+    try std.testing.expectEqualStrings(
+        "amqp.annotation.x-opt-enqueued-time >= '1617235200000'",
+        expr,
+    );
+}
+
+test "StartPositions prefers a per-partition entry over the default" {
+    const allocator = std.testing.allocator;
+
+    var positions = StartPositions{ .default = EventPosition.earliest() };
+    defer positions.deinit(allocator);
+
+    try positions.put(allocator, "3", EventPosition.fromSequenceNumber(99, true));
+
+    const configured = positions.forPartition("3");
+    try std.testing.expectEqual(@as(i64, 99), configured.location.sequence_number);
+    try std.testing.expect(configured.is_inclusive);
+
+    const fallback = positions.forPartition("7");
+    try std.testing.expectEqual(StartLocation.earliest, std.meta.activeTag(fallback.location));
+}
+
+test "StartPositions defaults to latest and replaces entries" {
+    const allocator = std.testing.allocator;
+
+    var positions = StartPositions{};
+    defer positions.deinit(allocator);
+
+    try std.testing.expectEqual(
+        StartLocation.latest,
+        std.meta.activeTag(positions.forPartition("0").location),
+    );
+
+    try positions.put(allocator, "0", EventPosition.earliest());
+    try positions.put(allocator, "0", EventPosition.fromOffset("42", false));
+
+    try std.testing.expectEqual(@as(usize, 1), positions.per_partition.count());
+    try std.testing.expectEqualStrings("42", positions.forPartition("0").location.offset);
+}
+
+test "StartPositions.put is failure atomic" {
+    const Case = struct {
+        fn run(allocator: std.mem.Allocator) !void {
+            var positions = StartPositions{};
+            defer positions.deinit(allocator);
+
+            try positions.put(allocator, "0", EventPosition.earliest());
+            try positions.put(allocator, "1", EventPosition.latest());
+            try positions.put(allocator, "0", EventPosition.fromOffset("7", true));
+
+            try std.testing.expectEqual(@as(usize, 2), positions.per_partition.count());
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Case.run, .{});
 }
