@@ -54,6 +54,7 @@ pub const all = [_]Package{
             "link.zig",
             "rpc.zig",
             "cbs.zig",
+            "management.zig",
             "test_peer.zig",
             "README.md",
             "LICENSE.txt",
