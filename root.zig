@@ -47,6 +47,7 @@ pub const Session = link.Session;
 pub const SessionOptions = link.SessionOptions;
 pub const Sender = link.Sender;
 pub const SenderOptions = link.SenderOptions;
+pub const SendOptions = link.SendOptions;
 pub const Receiver = link.Receiver;
 pub const ReceiverOptions = link.ReceiverOptions;
 pub const Delivery = link.Delivery;

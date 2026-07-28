@@ -303,6 +303,14 @@ pub const SenderOptions = struct {
     properties: ?perf.Fields = null,
 };
 
+/// Per-delivery options.
+pub const SendOptions = struct {
+    /// The `message-format` field of the transfer (§2.7.5). Zero is a plain
+    /// AMQP message; Event Hubs identifies a batch with `0x80013700`, whose
+    /// body is one data section per contained message.
+    message_format: u32 = 0,
+};
+
 pub const Sender = struct {
     allocator: Allocator,
     session: *Session,
@@ -370,13 +378,34 @@ pub const Sender = struct {
 
     /// Send a message and wait for the peer to settle it.
     pub fn send(self: *Sender, msg: message.Message, deadline_ms: i64) LinkError!void {
+        return self.sendWithOptions(msg, .{}, deadline_ms);
+    }
+
+    /// Send a message under explicit delivery options.
+    pub fn sendWithOptions(
+        self: *Sender,
+        msg: message.Message,
+        options: SendOptions,
+        deadline_ms: i64,
+    ) LinkError!void {
         const payload = try message.encodeAlloc(self.allocator, msg);
         defer self.allocator.free(payload);
-        try self.sendBytes(payload, deadline_ms);
+        try self.sendBytesWithOptions(payload, options, deadline_ms);
     }
 
     /// Send an already encoded message payload.
     pub fn sendBytes(self: *Sender, payload: []const u8, deadline_ms: i64) LinkError!void {
+        return self.sendBytesWithOptions(payload, .{}, deadline_ms);
+    }
+
+    /// Send an already encoded message payload under explicit delivery
+    /// options.
+    pub fn sendBytesWithOptions(
+        self: *Sender,
+        payload: []const u8,
+        options: SendOptions,
+        deadline_ms: i64,
+    ) LinkError!void {
         if (self.maxMessageSize()) |limit| {
             if (payload.len > limit) return error.MessageTooLarge;
         }
@@ -389,7 +418,7 @@ pub const Sender = struct {
         var offset: usize = 0;
         var first = true;
         while (first or offset < payload.len) {
-            const budget = try self.chunkBudget(delivery_id, &tag, first);
+            const budget = try self.chunkBudget(delivery_id, &tag, first, options.message_format);
             const take = @min(budget, payload.len - offset);
             const more = offset + take < payload.len;
 
@@ -397,7 +426,7 @@ pub const Sender = struct {
                 .handle = self.handle,
                 .delivery_id = if (first) delivery_id else null,
                 .delivery_tag = if (first) &tag else null,
-                .message_format = if (first) 0 else null,
+                .message_format = if (first) options.message_format else null,
                 .settled = false,
                 .more = more,
             };
@@ -429,16 +458,24 @@ pub const Sender = struct {
     }
 
     /// How many payload bytes fit alongside the transfer performative.
-    fn chunkBudget(self: *Sender, delivery_id: u32, tag: *const [4]u8, first: bool) LinkError!usize {
+    fn chunkBudget(
+        self: *Sender,
+        delivery_id: u32,
+        tag: *const [4]u8,
+        first: bool,
+        message_format: u32,
+    ) LinkError!usize {
         var buf = uamqp.encoder.Buffer.initDynamic(self.allocator);
         defer buf.deinit();
         // Encode with `more` set so the measurement is never an underestimate:
         // a true boolean is written where a defaulted false would be elided.
+        // The real message format has to be measured too, since a zero uint
+        // encodes as one byte and a batch format as five.
         try perf.encodeTransfer(self.allocator, .{
             .handle = self.handle,
             .delivery_id = if (first) delivery_id else null,
             .delivery_tag = if (first) tag else null,
-            .message_format = if (first) 0 else null,
+            .message_format = if (first) message_format else null,
             .settled = false,
             .more = true,
         }, &buf);
@@ -928,6 +965,144 @@ test "a message past max-frame-size is split and reassembles to the original" {
     for (frames.bodies.items) |body| {
         try testing.expect(body.len + frame.frame_header_size <= 512);
     }
+}
+
+test "a delivery carries the requested message format" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "producer",
+        .handle = 0,
+        .role = .receiver,
+        .initial_delivery_count = 0,
+    } });
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 1000,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+        .handle = 0,
+        .delivery_count = 0,
+        .link_credit = 5,
+    } });
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 0,
+        .last = 0,
+        .settled = true,
+        .state = .accepted,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+    }, 10_000);
+
+    mem.clearWritten();
+    // The Event Hubs batch format, which is what motivates the option.
+    try sender.sendBytesWithOptions("payload", .{ .message_format = 0x80013700 }, 10_000);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const transfers = try frames.of(allocator, perf.descriptor.transfer);
+    defer allocator.free(transfers);
+    try testing.expectEqual(@as(usize, 1), transfers.len);
+
+    var decoded = try perf.decode(allocator, transfers[0]);
+    defer decoded.deinit();
+    try testing.expectEqual(@as(u32, 0x80013700), decoded.performative.transfer.message_format.?);
+
+    const consumed = performativeLength(allocator, transfers[0]).?;
+    try testing.expectEqualStrings("payload", transfers[0][consumed..]);
+}
+
+test "a formatted delivery split across frames keeps every frame within the limit" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    // 512 is the spec minimum, so a five-byte format field is a meaningful
+    // share of the budget and an unmeasured one would overflow the frame.
+    try scriptHandshake(peer, 512);
+    try peer.push(0, .{ .attach = .{
+        .name = "producer",
+        .handle = 0,
+        .role = .receiver,
+        .initial_delivery_count = 0,
+    } });
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 1000,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+        .handle = 0,
+        .delivery_count = 0,
+        .link_credit = 10,
+    } });
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 0,
+        .last = 0,
+        .settled = true,
+        .state = .accepted,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+    }, 10_000);
+
+    const big = try allocator.alloc(u8, 1500);
+    defer allocator.free(big);
+    for (big, 0..) |*b, i| b.* = @intCast(i % 251);
+
+    mem.clearWritten();
+    try sender.sendBytesWithOptions(big, .{ .message_format = 0x80013700 }, 10_000);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+
+    var reassembled: std.ArrayList(u8) = .empty;
+    defer reassembled.deinit(allocator);
+
+    var count: usize = 0;
+    for (frames.bodies.items) |body| {
+        if (perf.peekDescriptor(body) != perf.descriptor.transfer) continue;
+        count += 1;
+        var decoded = try perf.decode(allocator, body);
+        defer decoded.deinit();
+
+        // Only the first frame names the format; the rest continue it.
+        if (count == 1) {
+            try testing.expectEqual(@as(u32, 0x80013700), decoded.performative.transfer.message_format.?);
+        } else {
+            try testing.expectEqual(@as(?u32, null), decoded.performative.transfer.message_format);
+        }
+
+        const consumed = performativeLength(allocator, body).?;
+        try reassembled.appendSlice(allocator, body[consumed..]);
+        try testing.expect(body.len + frame.frame_header_size <= 512);
+    }
+
+    try testing.expect(count > 1);
+    try testing.expectEqualSlices(u8, big, reassembled.items);
 }
 
 test "a rejected disposition surfaces the AMQP condition" {
