@@ -64,7 +64,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "azure_sdk_messaging_common", .module = common_mod },
                 .{ .name = "azure_sdk_storage_blobs", .module = blobs_mod },
                 .{ .name = "azure_sdk_amqp", .module = amqp_mod },
-            .{ .name = "uamqp", .module = uamqp_mod },
+                .{ .name = "uamqp", .module = uamqp_mod },
                 .{ .name = "serde", .module = serde_mod },
             },
         }),
