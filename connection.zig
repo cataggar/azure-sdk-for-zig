@@ -176,10 +176,19 @@ pub const RemoteError = struct {
     condition: []const u8,
     description: ?[]const u8,
 
-    fn deinit(self: *RemoteError, allocator: Allocator) void {
+    /// Copy an inbound error so it outlives the frame it arrived in.
+    pub fn dupe(allocator: Allocator, err: perf.AmqpError) Allocator.Error!RemoteError {
+        const condition = try allocator.dupe(u8, err.condition);
+        errdefer allocator.free(condition);
+        return .{
+            .condition = condition,
+            .description = if (err.description) |d| try allocator.dupe(u8, d) else null,
+        };
+    }
+
+    pub fn deinit(self: RemoteError, allocator: Allocator) void {
         allocator.free(self.condition);
         if (self.description) |d| allocator.free(d);
-        self.* = undefined;
     }
 };
 
@@ -465,13 +474,11 @@ pub const Driver = struct {
         self.state = .closed;
     }
 
-    fn recordRemoteError(self: *Driver, err: ?perf.AmqpError) ConnectionError!void {
+    pub fn recordRemoteError(self: *Driver, err: ?perf.AmqpError) ConnectionError!void {
         const e = err orelse return;
-        if (self.remote_error) |*old| old.deinit(self.allocator);
-        const condition = try self.allocator.dupe(u8, e.condition);
-        errdefer self.allocator.free(condition);
-        const description = if (e.description) |d| try self.allocator.dupe(u8, d) else null;
-        self.remote_error = .{ .condition = condition, .description = description };
+        const copy = try RemoteError.dupe(self.allocator, e);
+        if (self.remote_error) |old| old.deinit(self.allocator);
+        self.remote_error = copy;
     }
 
     // ── Channel routing ──

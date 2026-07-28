@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .uamqp = .{
-            .url = "git+https://github.com/cataggar/azure-uamqp-zig#1121d1e68dde8d188516083555cc7e1553b0f595",
-            .hash = "uamqp-0.1.0-lXMcafDqAQD3LSUZbUbyfrWhQfGG7OevKFUwhWxvGZDU",
+            .url = "git+https://github.com/cataggar/azure-uamqp-zig#593310683d2a60da5388aa02d1e464a393a51f23",
+            .hash = "uamqp-0.1.0-lXMcaSv6AQCOX3VGEAULcjka6Retcu8O6XMRo4m4Esr4",
         },
     },
     .paths = .{
@@ -17,6 +17,8 @@
         "transport.zig",
         "performative.zig",
         "connection.zig",
+        "message.zig",
+        "link.zig",
         "README.md",
         "LICENSE.txt",
     },

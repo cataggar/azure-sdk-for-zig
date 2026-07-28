@@ -9,6 +9,8 @@ pub const uamqp = @import("uamqp");
 pub const transport = @import("transport.zig");
 pub const performative = @import("performative.zig");
 pub const connection_driver = @import("connection.zig");
+pub const message_codec = @import("message.zig");
+pub const link = @import("link.zig");
 
 // Transports.
 pub const Transport = transport.Transport;
@@ -34,11 +36,29 @@ pub const buildProperties = connection_driver.buildProperties;
 pub const defaultClientInfo = connection_driver.defaultClientInfo;
 pub const georeplication_capability = connection_driver.georeplication_capability;
 
-// Re-export core protocol types.
-pub const Connection = uamqp.connection.Connection;
-pub const Session = uamqp.session.Session;
-pub const Link = uamqp.link.Link;
-pub const Message = uamqp.message.Message;
+// Sessions and links.
+pub const Session = link.Session;
+pub const SessionOptions = link.SessionOptions;
+pub const Sender = link.Sender;
+pub const SenderOptions = link.SenderOptions;
+pub const Receiver = link.Receiver;
+pub const ReceiverOptions = link.ReceiverOptions;
+pub const Delivery = link.Delivery;
+pub const Rejection = link.Rejection;
+pub const LinkError = link.LinkError;
+pub const openSender = link.openSender;
+pub const openReceiver = link.openReceiver;
+pub const receiver_name_property = link.receiver_name_property;
+pub const epoch_property = link.epoch_property;
+
+// Message codec.
+pub const Message = message_codec.Message;
+pub const MessageBody = message_codec.Body;
+pub const MessageHeader = message_codec.Header;
+pub const MessageProperties = message_codec.Properties;
+pub const encodeMessage = message_codec.encode;
+pub const encodeMessageAlloc = message_codec.encodeAlloc;
+pub const decodeMessage = message_codec.decode;
 
 // Re-export AMQP type system.
 pub const AmqpValue = uamqp.AmqpValue;
@@ -54,12 +74,6 @@ pub const definitions = uamqp.definitions;
 pub const SaslPlain = uamqp.sasl.plain.Plain;
 pub const SaslAnonymous = uamqp.sasl.anonymous.Anonymous;
 pub const SaslMechanism = uamqp.sasl.mechanism.Mechanism;
-
-// Re-export CBS (Claims-Based Security).
-pub const Cbs = uamqp.cbs.Cbs;
-
-// Re-export management operations.
-pub const Management = uamqp.management.Management;
 
 // Re-export messaging helpers.
 pub const messaging = uamqp.messaging;
@@ -83,32 +97,22 @@ test {
     _ = transport;
     _ = performative;
     _ = connection_driver;
+    _ = message_codec;
+    _ = link;
 }
 
 // ─────────────────────── Tests ───────────────────────
 
-test "Connection init and deinit" {
+test "the re-exported message codec round-trips a body" {
     const allocator = std.testing.allocator;
-    var conn = Connection.init(allocator, "azure-sdk-zig", "mynamespace.servicebus.windows.net", .{});
-    defer conn.deinit();
-    try std.testing.expectEqualStrings("azure-sdk-zig", conn.container_id);
-}
+    const bytes = try encodeMessageAlloc(allocator, .{
+        .body = .{ .data = &.{"hello, event hub!"} },
+    });
+    defer allocator.free(bytes);
 
-test "Session init" {
-    const allocator = std.testing.allocator;
-    var conn = Connection.init(allocator, "test", null, .{});
-    defer conn.deinit();
-    var session = Session.init(allocator, &conn, .{});
-    defer session.deinit();
-    try std.testing.expectEqual(@as(u32, 0), session.next_outgoing_id);
-}
-
-test "Message create and add body data" {
-    const allocator = std.testing.allocator;
-    var msg = Message.init(allocator);
-    defer msg.deinit();
-    try msg.addBodyData("hello, event hub!");
-    try std.testing.expectEqual(@as(usize, 1), msg.bodyDataCount());
+    var decoded = try decodeMessage(allocator, bytes);
+    defer decoded.deinit();
+    try std.testing.expectEqualStrings("hello, event hub!", decoded.message.body.data[0]);
 }
 
 test "SASL Plain mechanism" {
