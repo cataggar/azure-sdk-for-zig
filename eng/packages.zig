@@ -451,6 +451,8 @@ pub const all = [_]Package{
             "azure_sdk_amqp",
         },
         .external_dependencies = &.{ "uamqp", "serde" },
+        .examples_command = "zig build examples",
+        .live_test_command = "zig build live-test",
         .publish_paths = &.{
             ".gitignore",
             "build.zig",
@@ -470,6 +472,8 @@ pub const all = [_]Package{
             "checkpoint_store.zig",
             "management.zig",
             "checkpoint_store_blob",
+            "examples",
+            "live_tests",
             "README.md",
             "LICENSE.txt",
         },
