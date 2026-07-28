@@ -689,7 +689,11 @@ test "a connection failure rebuilds and re-authorises before reattaching" {
     // which is fatal and would end the retry.
     try testing.expectEqual(@as(usize, 2), authorizer.calls);
     try testing.expectEqual(@as(usize, 2), authorizer.sessions.items.len);
-    try testing.expect(authorizer.sessions.items[0] != authorizer.sessions.items[1]);
+    // The claim has to land on the session the links will actually attach on.
+    // Comparing the two recorded pointers would not show that: the first
+    // session is freed before the second is allocated, so the allocator is
+    // free to hand back the same address, and on Windows it does.
+    try testing.expectEqual(try connection.session(), authorizer.sessions.items[1]);
 }
 
 test "a stale recovery request does not rebuild a second time" {
