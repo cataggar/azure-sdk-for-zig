@@ -6,8 +6,11 @@
 //!
 //! e.g. <namespace> = my-namespace.servicebus.windows.net
 //!
-//! Authentication uses `DefaultAzureCredential`, so an `az login` session,
-//! a managed identity, or the usual `AZURE_*` environment variables all work.
+//! Authentication uses `DefaultAzureCredential`, so an `az login` session or
+//! the usual `AZURE_*` environment variables work out of the box. Managed
+//! identity is not in the default chain, because its IMDS probe stalls
+//! outside Azure; set `AZURE_TOKEN_CREDENTIALS=prod` on a deployed service to
+//! enable it.
 
 const std = @import("std");
 const core = @import("azure_sdk_core");
