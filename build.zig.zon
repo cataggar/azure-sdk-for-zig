@@ -1,6 +1,6 @@
 .{
     .name = .azure_sdk_eventhubs,
-    .version = "0.3.0",
+    .version = "0.3.1",
     .fingerprint = 0xcb7772a1125a8d42,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
@@ -17,8 +17,8 @@
             .hash = "azure_sdk_storage_blobs-0.2.0-I5lGdlJ7CgD0bdgR13OktiQ1moQ9O1QDCcPsgVdlb8lf",
         },
         .azure_sdk_amqp = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#ba0cff592398e19e81137dbf2c20832192b2d071",
-            .hash = "azure_sdk_amqp-0.2.0-fUByf1aQBADz7Rj7zQP39Pa-z_izpONFJlM2ZfvPJDSK",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#8377f9283ab3ddcc6073c36638e07ebaf313f771",
+            .hash = "azure_sdk_amqp-0.3.0-fUByfx7GBABEuMVKZdI2Dvu7x9civfpA9x52iqWA0KPF",
         },
         .serde = .{
             .url = "git+https://github.com/cataggar/serde.zig#73d872776b0361b6fc92f6cecd7ccf2f05e77cdd",
