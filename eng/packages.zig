@@ -474,6 +474,7 @@ pub const all = [_]Package{
             "checkpoint_store_blob",
             "examples",
             "live_tests",
+            "benchmarks",
             "README.md",
             "LICENSE.txt",
         },
