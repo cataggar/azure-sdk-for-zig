@@ -747,13 +747,12 @@ test "an event hub read puts the exact application properties on the wire" {
     const peer = Peer{ .allocator = allocator, .mem = &mem };
 
     var ids = [_]AmqpValue{ .{ .string = "0" }, .{ .string = "1" } };
-    // A list rather than an array: uamqp's array encoder writes a wrong
-    // length prefix (cataggar/azure-uamqp-zig), so an array cannot yet make
-    // the round trip through a real frame. Decoding an array is covered
-    // directly above.
+    // An array, which is what the service actually sends. This had to be a
+    // list until uamqp v0.3.0, whose array encoder wrote variable-width
+    // elements without their length prefix, so the frame could not round trip.
     var body_map = [_]MapEntry{
         mapEntry(reply.name, .{ .string = "my-hub" }),
-        mapEntry(reply.partition_ids, .{ .list = &ids }),
+        mapEntry(reply.partition_ids, .{ .array = &ids }),
         mapEntry(reply.created_at, .{ .timestamp = 1_700_000_000_000 }),
         mapEntry(reply.georeplication_factor, .{ .int = 3 }),
     };
