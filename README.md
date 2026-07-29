@@ -3,10 +3,9 @@
 AMQP 1.0 integration for Azure SDK clients, backed by the pure Zig
 [`azure-uamqp-zig`](https://github.com/cataggar/azure-uamqp-zig) package.
 
-- Source: `sdk/core/amqp`
-- Release branch: `sdk/core_amqp`
-- Initial version: `0.1.0`
-- External dependency: `uamqp`
+- Package branch: [`sdk/amqp`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/amqp)
+- External dependency: `uamqp` ([`azure-uamqp-zig`](https://github.com/cataggar/azure-uamqp-zig)), re-exported as `azure_sdk_amqp.uamqp`
+- Version: see `build.zig.zon`
 
 `azure-uamqp-zig` supplies the AMQP type system and frame layout but owns no
 sockets and encodes no performatives. This package adds both, so a client can
@@ -38,9 +37,15 @@ defer socket.deinit();
 ## Performative codec
 
 `performative.zig` encodes and decodes `open`, `begin`, `end`, `close`, and the
-SASL performatives as described lists. Encoding is written here rather than
-delegated to `uamqp.encoder` because that encoder writes array elements of
-variable-width types without their length prefix, which no peer accepts.
+SASL performatives as described lists.
+
+Encoding was originally written here rather than delegated to `uamqp.encoder`
+because that encoder wrote array elements of variable-width types without their
+length prefix, which no peer accepts. **uamqp v0.3.0 fixed that** — it now
+emits a shared element constructor and per-element lengths, and rejects arrays
+it cannot describe (`MixedArrayElements`, `UnsupportedArrayElement`). The
+duplication is therefore no longer necessary and this codec could be folded
+into `uamqp.encoder`; that consolidation has not been done yet.
 
 ## Connection driver
 

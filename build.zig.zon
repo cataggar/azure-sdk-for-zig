@@ -1,12 +1,12 @@
 .{
     .name = .azure_sdk_amqp,
-    .version = "0.1.0",
+    .version = "0.2.0",
     .fingerprint = 0xe0a2f9e77f72407d,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .uamqp = .{
-            .url = "git+https://github.com/cataggar/azure-uamqp-zig#593310683d2a60da5388aa02d1e464a393a51f23",
-            .hash = "uamqp-0.1.0-lXMcaSv6AQCOX3VGEAULcjka6Retcu8O6XMRo4m4Esr4",
+            .url = "git+https://github.com/cataggar/azure-uamqp-zig#7fe05747b219fa105d3d36dcf6eaebfe15d61d0e",
+            .hash = "uamqp-0.3.0-lXMcaflQBwBNWqC7b-Ny7_0QBjy4KRDRSjxnWXznD4Zz",
         },
     },
     .paths = .{
