@@ -140,4 +140,27 @@ pub fn build(b: *std.Build) void {
     );
     live_test_step.dependOn(&b.addRunArtifact(live_tests).step);
     test_step.dependOn(&live_tests.step);
+
+    // Offline encode/decode benchmarks. Build them with the tests so a
+    // signature change cannot silently rot them, but only run them on demand:
+    // they are far too slow for every `zig build test`.
+    const benchmarks = b.addExecutable(.{
+        .name = "eventhubs-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmarks/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "azure_sdk_core", .module = core_mod },
+                .{ .name = "azure_sdk_eventhubs", .module = sdk_mod },
+                .{ .name = "uamqp", .module = uamqp_mod },
+            },
+        }),
+    });
+    const bench_step = b.step(
+        "bench",
+        "Run Event Hubs encode/decode benchmarks (use -Doptimize=ReleaseFast)",
+    );
+    bench_step.dependOn(&b.addRunArtifact(benchmarks).step);
+    test_step.dependOn(&benchmarks.step);
 }
