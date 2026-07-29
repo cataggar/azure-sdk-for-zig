@@ -88,9 +88,16 @@ pub const Session = struct {
 
     next_outgoing_id: u32 = 0,
     next_incoming_id: u32 = 0,
+    /// How many transfer frames this endpoint can take from `next_incoming_id`.
+    /// Capacity rather than a countdown: every transfer is accepted, so the
+    /// room on offer slides forward with the id instead of running down.
     incoming_window: u32,
     outgoing_window: u32,
-    /// The peer's remaining capacity to receive transfers.
+    /// Our first transfer id. §2.5.6 falls back to this when a peer's flow
+    /// omits `next-incoming-id`, which it may until it has seen a transfer.
+    initial_outgoing_id: u32 = 0,
+    /// How many more transfer frames the peer can absorb. Seeded from its
+    /// `begin`, recomputed from every `flow`, and spent one per frame sent.
     remote_incoming_window: u32 = 0,
 
     next_handle: u32 = 0,
@@ -105,21 +112,33 @@ pub const Session = struct {
         options: SessionOptions,
         deadline_ms: i64,
     ) LinkError!Session {
+        // The id our first transfer will carry. §2.5.6 needs it a second time,
+        // as the fallback when a peer's flow omits `next-incoming-id`, so the
+        // two uses are tied together here rather than restated apart.
+        const initial_outgoing_id: u32 = 0;
+
         const remote = try driver.beginSession(channel, .{
-            .next_outgoing_id = 0,
+            .next_outgoing_id = initial_outgoing_id,
             .incoming_window = options.incoming_window,
             .outgoing_window = options.outgoing_window,
             .handle_max = options.handle_max,
         }, deadline_ms);
 
-        return .{
+        var session: Session = .{
             .allocator = allocator,
             .driver = driver,
             .channel = channel,
-            .remote_channel = remote,
+            .remote_channel = remote.channel,
             .incoming_window = options.incoming_window,
             .outgoing_window = options.outgoing_window,
+            .next_outgoing_id = initial_outgoing_id,
+            .initial_outgoing_id = initial_outgoing_id,
+            .next_incoming_id = remote.next_outgoing_id,
         };
+        // Through the same helper the flows use, so a window cannot be read
+        // one way at begin and another way a frame later.
+        session.remote_incoming_window = session.windowFrom(null, remote.incoming_window);
+        return session;
     }
 
     pub fn deinit(self: *Session) void {
@@ -209,7 +228,7 @@ pub const Session = struct {
 
     fn applyFlow(self: *Session, f: perf.Flow) LinkError!void {
         self.next_incoming_id = f.next_outgoing_id;
-        self.remote_incoming_window = f.incoming_window;
+        self.remote_incoming_window = self.windowFrom(f.next_incoming_id, f.incoming_window);
 
         const handle = f.handle orelse return;
         if (self.senderFor(handle)) |s| {
@@ -241,6 +260,33 @@ pub const Session = struct {
             }
         }
         if (f.echo) try self.sendFlow(null);
+    }
+
+    /// The peer's remaining capacity per §2.5.6:
+    ///
+    ///     next-incoming-id(flow) + incoming-window(flow) - next-outgoing-id
+    ///
+    /// which is `incoming-window` less the frames sent since the id the peer
+    /// named. The subtraction matters: `incoming-window` states the peer's room
+    /// as of that id, so taking it raw re-credits everything sent since and
+    /// lets a sender run past the window.
+    ///
+    /// A flow may omit `next-incoming-id` until the peer has seen a transfer,
+    /// in which case the spec substitutes our first transfer id.
+    ///
+    /// Only the distance we have sent is clamped as a serial number (RFC 1982),
+    /// never the window itself. The window is a peer-supplied `uint` spanning
+    /// the whole range — this library advertises `maxInt(u32)` — so testing it
+    /// against a serial bound would read the most open window possible as a
+    /// shut one. The distance is bounded by the frames actually in flight, so
+    /// a value in the top half means the peer named an id beyond anything we
+    /// sent, which is nonsense; take its window at face value and let credit
+    /// bound the sending.
+    fn windowFrom(self: *const Session, next_incoming_id: ?u32, incoming_window: u32) u32 {
+        const base = next_incoming_id orelse self.initial_outgoing_id;
+        const sent_since = self.next_outgoing_id -% base;
+        if (sent_since >= 1 << 31) return incoming_window;
+        return incoming_window -| sent_since;
     }
 
     fn applyDisposition(self: *Session, d: perf.Disposition) LinkError!void {
@@ -286,8 +332,15 @@ pub const Session = struct {
     }
 
     fn applyTransfer(self: *Session, t: perf.Transfer, body: []const u8) LinkError!void {
+        // `incoming_window` is capacity, not a countdown, so it is not spent
+        // here. This endpoint takes every transfer it is sent — the receiver
+        // buffers the delivery and link credit is what bounds a peer — so the
+        // room it can offer from `next_incoming_id` is the same after each
+        // frame as before it. Decrementing without ever replenishing pins the
+        // limit a peer computes from this, `next-incoming-id + incoming-window`
+        // (§2.5.6), at its opening value, turning a sliding window into a
+        // once-per-session budget that stops a conformant peer for good.
         self.next_incoming_id +%= 1;
-        if (self.incoming_window > 0) self.incoming_window -= 1;
 
         const receiver = self.receiverFor(t.handle) orelse return error.UnknownHandle;
         // The payload is whatever follows the performative in the frame.
@@ -346,12 +399,9 @@ pub const SenderOptions = struct {
     /// wire and collect the outcomes afterwards. The default stays at one so
     /// that `send` and `sendBytes` behave exactly as they always have.
     ///
-    /// Keep this well below the peer's session `incoming-window`. That window
-    /// is not yet enforced — the peer's `begin` is discarded rather than
-    /// seeding it — so overrunning it is a protocol violation the peer answers
-    /// by ending the session. Link credit bounds sending independently, and a
-    /// broker grants credit sized to a window it can absorb, so any value in
-    /// the low tens is far inside it.
+    /// The peer's session `incoming-window` bounds this independently and is
+    /// enforced, so a sender waits for the peer to reopen the window rather
+    /// than overrunning it.
     max_in_flight: u32 = 1,
 };
 
@@ -656,6 +706,12 @@ pub const Sender = struct {
             const take = @min(budget, payload.len - offset);
             const more = offset + take < payload.len;
 
+            // §2.5.6 forbids sending while the peer's window is closed, and a
+            // multi-frame delivery can exhaust it partway through. The peer
+            // reopens it with a flow, so unlike the in-flight ring this is
+            // something waiting can actually resolve.
+            try self.awaitSessionWindow(deadline_ms);
+
             const xfer = perf.Transfer{
                 .handle = self.handle,
                 .delivery_id = if (first) delivery_id else null,
@@ -669,14 +725,21 @@ pub const Sender = struct {
             const frame_cap = self.session.driver.maxOutgoingBody() - budget + take;
             try self.sendTransfer(xfer, payload[offset..][0..take], frame_cap);
 
+            // Session ids count transfer *frames*, not deliveries (§2.5.6):
+            // every frame of a multi-frame delivery consumes one, even though
+            // only the first carries the delivery id. Advancing once per
+            // delivery instead would leave the next delivery's id short of
+            // what the peer expects, so its dispositions would name ids we
+            // never issued.
+            self.session.next_outgoing_id +%= 1;
+            self.session.remote_incoming_window -|= 1;
+
             offset += take;
             first = false;
         }
 
-        self.session.next_outgoing_id +%= 1;
         self.delivery_count +%= 1;
         self.credit -|= 1;
-        if (self.session.remote_incoming_window > 0) self.session.remote_incoming_window -= 1;
 
         // Pushed only once every frame is away: a partially written delivery
         // has no outcome to wait for, and leaving it in the ring would stall
@@ -787,6 +850,14 @@ pub const Sender = struct {
 
     fn awaitCredit(self: *Sender, deadline_ms: i64) LinkError!void {
         while (self.credit == 0) {
+            if (!self.attached) return error.LinkDetached;
+            _ = try self.session.pump(deadline_ms);
+        }
+    }
+
+    /// Wait until the peer can absorb another transfer frame.
+    fn awaitSessionWindow(self: *Sender, deadline_ms: i64) LinkError!void {
+        while (self.session.remote_incoming_window == 0) {
             if (!self.attached) return error.LinkDetached;
             _ = try self.session.pump(deadline_ms);
         }
@@ -1254,6 +1325,7 @@ pub fn openReceiver(
 // ─────────────────────── Tests ───────────────────────
 
 const testing = std.testing;
+const maxInt = std.math.maxInt;
 const MemoryTransport = @import("transport.zig").MemoryTransport;
 const harness = @import("test_peer.zig");
 const Peer = harness.Peer;
@@ -1576,16 +1648,23 @@ test "a multi-frame send does not allocate per frame" {
         .delivery_count = 0,
         .link_credit = 10,
     } });
-    var settled: u32 = 0;
-    while (settled < 2) : (settled += 1) {
-        try peer.push(0, .{ .disposition = .{
-            .role = .receiver,
-            .first = settled,
-            .last = settled,
-            .settled = true,
-            .state = .accepted,
-        } });
-    }
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 0,
+        .last = 0,
+        .settled = true,
+        .state = .accepted,
+    } });
+    // The second delivery's id is the first delivery's frame count, since
+    // session ids count frames. This test is about allocations, so it settles
+    // a range rather than restating that arithmetic.
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 1,
+        .last = 1000,
+        .settled = true,
+        .state = .accepted,
+    } });
 
     var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
     defer driver.deinit();
@@ -1764,6 +1843,500 @@ fn scriptSenderAttach(peer: Peer, credit: u32) !void {
         .delivery_count = 0,
         .link_credit = credit,
     } });
+}
+
+test "session ids count transfer frames, so a delivery id follows the frames before it" {
+    // A multi-frame delivery consumes one session id per frame even though
+    // only its first frame carries the delivery id. Advancing once per
+    // delivery leaves every later id short of the peer's count, and the peer
+    // then settles ids this sender never issued.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    // 512 is the spec minimum, so the first message must span frames.
+    try scriptHandshake(peer, 512);
+    try peer.push(0, .{ .attach = .{
+        .name = "producer",
+        .handle = 0,
+        .role = .receiver,
+        .initial_delivery_count = 0,
+    } });
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 1000,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+        .handle = 0,
+        .delivery_count = 0,
+        .link_credit = 10,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+        .max_in_flight = 4,
+    }, 10_000);
+
+    const big = try allocator.alloc(u8, 1500);
+    defer allocator.free(big);
+    @memset(big, 'x');
+
+    mem.clearWritten();
+    _ = try sender.sendBytesAsync(big, .{}, 10_000);
+    _ = try sender.sendBytesAsync("second", .{}, 10_000);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+
+    var transfer_frames: u32 = 0;
+    var ids: std.ArrayList(u32) = .empty;
+    defer ids.deinit(allocator);
+    for (frames.bodies.items) |body| {
+        if (perf.peekDescriptor(body) != perf.descriptor.transfer) continue;
+        transfer_frames += 1;
+        var decoded = try perf.decode(allocator, body);
+        defer decoded.deinit();
+        if (decoded.performative.transfer.delivery_id) |id| try ids.append(allocator, id);
+    }
+
+    // The big message spans frames and the small one does not, so the two
+    // deliveries are one frame apart plus however many the first added.
+    try testing.expect(transfer_frames > 2);
+    try testing.expectEqual(@as(usize, 2), ids.items.len);
+    try testing.expectEqual(@as(u32, 0), ids.items[0]);
+    try testing.expectEqual(transfer_frames - 1, ids.items[1]);
+    try testing.expectEqual(transfer_frames, fixture.session.next_outgoing_id);
+}
+
+test "a peer settling by the ids it counted reaches the right delivery" {
+    // The end-to-end consequence of the id accounting: a spec-conformant peer
+    // numbers transfers by frame, so its disposition for the second delivery
+    // names an id a per-delivery counter never issues. The sender would then
+    // pump for a disposition that can never match and fail on the deadline.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 512);
+    try peer.push(0, .{ .attach = .{
+        .name = "producer",
+        .handle = 0,
+        .role = .receiver,
+        .initial_delivery_count = 0,
+    } });
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 1000,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+        .handle = 0,
+        .delivery_count = 0,
+        .link_credit = 10,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+    }, 10_000);
+
+    const big = try allocator.alloc(u8, 1500);
+    defer allocator.free(big);
+    @memset(big, 'x');
+
+    // Count the frames the peer would have seen, exactly as it would.
+    mem.clearWritten();
+    const token = try sender.sendBytesAsync(big, .{}, 10_000);
+    try testing.expectEqual(@as(u32, 0), token.id);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    var counted: u32 = 0;
+    for (frames.bodies.items) |body| {
+        if (perf.peekDescriptor(body) == perf.descriptor.transfer) counted += 1;
+    }
+    try testing.expect(counted > 1);
+
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 0,
+        .last = 0,
+        .settled = true,
+        .state = .accepted,
+    } });
+    const first = try sender.awaitSettlement(10_000);
+    try testing.expectEqual(Outcome.accepted, first.outcome);
+
+    // The peer's next id is the frame count, not one.
+    const next = try sender.sendBytesAsync("second", .{}, 10_000);
+    try testing.expectEqual(counted, next.id);
+
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = counted,
+        .last = counted,
+        .settled = true,
+        .state = .accepted,
+    } });
+    const second = try sender.awaitSettlement(10_000);
+    try testing.expectEqual(Outcome.accepted, second.outcome);
+    try testing.expectEqual(counted, second.token.id);
+}
+
+test "the peer's begin seeds the session window" {
+    // Discarding the peer's begin left the window at zero, which is why it
+    // could not be enforced without deadlocking every send.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try peer.pushHeader(&frame.amqp_header);
+    try peer.push(0, .{ .open = .{
+        .container_id = "service-bus",
+        .max_frame_size = 65536,
+        .channel_max = 255,
+    } });
+    try peer.push(0, .{ .begin = .{
+        .remote_channel = 0,
+        .next_outgoing_id = 42,
+        .incoming_window = 17,
+        .outgoing_window = 1000,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    try driver.open(10_000);
+    var session = try Session.begin(allocator, &driver, 0, .{}, 10_000);
+    defer session.deinit();
+
+    try testing.expectEqual(@as(u32, 17), session.remote_incoming_window);
+    try testing.expectEqual(@as(u32, 42), session.next_incoming_id);
+}
+
+test "a flow's window is rebased onto the frames already sent" {
+    // `incoming-window` describes the peer's capacity as of the id it names,
+    // so taking it raw re-credits everything sent since and lets a sender run
+    // past the window.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptSenderAttach(peer, 10);
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+        .max_in_flight = 8,
+    }, 10_000);
+
+    _ = try sender.sendBytesAsync("a", .{}, 10_000);
+    _ = try sender.sendBytesAsync("b", .{}, 10_000);
+    _ = try sender.sendBytesAsync("c", .{}, 10_000);
+    try testing.expectEqual(@as(u32, 3), fixture.session.next_outgoing_id);
+
+    // The peer has processed nothing yet: it can still take 10 from id 0, so
+    // only 7 of them are left to us.
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 10,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+    } });
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(u32, 7), fixture.session.remote_incoming_window);
+
+    // Once it has taken all three, the full window is ours again.
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 3,
+        .incoming_window = 10,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+    } });
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(u32, 10), fixture.session.remote_incoming_window);
+}
+
+test "the fallback for a missing next-incoming-id is the session's first id, not zero" {
+    // Sessions currently open at id zero, which makes the fallback and the
+    // literal indistinguishable on the wire. Drive the arithmetic directly so
+    // a session that ever starts elsewhere is still held to the spec.
+    var session: Session = undefined;
+    session.initial_outgoing_id = 100;
+    session.next_outgoing_id = 104;
+
+    // 100 + 10 - 104.
+    try testing.expectEqual(@as(u32, 6), session.windowFrom(null, 10));
+    // A supplied id wins over the fallback: 102 + 10 - 104.
+    try testing.expectEqual(@as(u32, 8), session.windowFrom(102, 10));
+    // And the peer is entitled to shrink below what is already in flight.
+    try testing.expectEqual(@as(u32, 0), session.windowFrom(null, 2));
+}
+
+test "a window is a count, not a serial number, so the widest one stays open" {
+    // The clamp applies to how far we have sent past the id the peer named,
+    // which the frames in flight bound. The window itself is a peer-supplied
+    // uint spanning the whole range, and this library advertises the very
+    // largest of them, so clamping that would read the most open window
+    // possible as a shut one and stall every send.
+    var session: Session = undefined;
+    session.initial_outgoing_id = 0;
+    session.next_outgoing_id = 0;
+
+    try testing.expectEqual(@as(u32, 0x7FFF_FFFF), session.windowFrom(0, 0x7FFF_FFFF));
+    try testing.expectEqual(@as(u32, 0x8000_0000), session.windowFrom(0, 0x8000_0000));
+    try testing.expectEqual(maxInt(u32), session.windowFrom(0, maxInt(u32)));
+    try testing.expectEqual(maxInt(u32), session.windowFrom(null, maxInt(u32)));
+
+    // Frames sent still come off the widest window.
+    session.next_outgoing_id = 3;
+    try testing.expectEqual(maxInt(u32) - 3, session.windowFrom(0, maxInt(u32)));
+
+    // A peer naming an id past anything we sent is nonsense rather than a
+    // window we have overrun, so its window stands.
+    session.next_outgoing_id = 3;
+    try testing.expectEqual(@as(u32, 10), session.windowFrom(9, 10));
+
+    // A genuine wrap is a short distance, not a huge one.
+    session.next_outgoing_id = 5;
+    try testing.expectEqual(@as(u32, 90), session.windowFrom(0xFFFF_FFFB, 100));
+}
+
+test "a peer advertising the widest window is sent to, not waited on" {
+    // The end-to-end shape of the same thing: this library's own sessions
+    // advertise maxInt(u32), so a pair of them would deadlock on the first
+    // flow if the widest window read as closed.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try peer.pushHeader(&frame.amqp_header);
+    try peer.push(0, .{ .open = .{
+        .container_id = "service-bus",
+        .max_frame_size = 65536,
+        .channel_max = 255,
+    } });
+    try peer.push(0, .{ .begin = .{
+        .remote_channel = 0,
+        .next_outgoing_id = 1,
+        .incoming_window = maxInt(u32),
+        .outgoing_window = maxInt(u32),
+    } });
+    try peer.push(0, .{ .attach = .{
+        .name = "producer",
+        .handle = 0,
+        .role = .receiver,
+        .initial_delivery_count = 0,
+    } });
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = maxInt(u32),
+        .next_outgoing_id = 1,
+        .outgoing_window = maxInt(u32),
+        .handle = 0,
+        .delivery_count = 0,
+        .link_credit = 10,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+        .max_in_flight = 4,
+    }, 10_000);
+
+    try testing.expectEqual(maxInt(u32), fixture.session.remote_incoming_window);
+
+    // The flow arrives while sending and must not shut the window.
+    mem.clearWritten();
+    _ = try sender.sendBytesAsync("a", .{}, 10_000);
+    _ = try sender.sendBytesAsync("b", .{}, 10_000);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    var transfers: usize = 0;
+    for (frames.bodies.items) |body| {
+        if (perf.peekDescriptor(body) == perf.descriptor.transfer) transfers += 1;
+    }
+    try testing.expectEqual(@as(usize, 2), transfers);
+    try testing.expectEqual(maxInt(u32) - 2, fixture.session.remote_incoming_window);
+}
+
+test "a flow without next-incoming-id falls back to the first transfer id" {
+    // A peer may omit `next-incoming-id` until it has seen a transfer, and
+    // §2.5.6 substitutes our initial outgoing id rather than treating it as
+    // zero credit.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptSenderAttach(peer, 10);
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+        .max_in_flight = 8,
+    }, 10_000);
+
+    _ = try sender.sendBytesAsync("a", .{}, 10_000);
+    _ = try sender.sendBytesAsync("b", .{}, 10_000);
+
+    try peer.push(0, .{ .flow = .{
+        .incoming_window = 6,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+    } });
+    _ = try fixture.session.pump(10_000);
+
+    // initial_outgoing_id (0) + 6 - next_outgoing_id (2).
+    try testing.expectEqual(@as(u32, 4), fixture.session.remote_incoming_window);
+}
+
+test "a window the sender has run past reads as closed, not as nearly four billion" {
+    // The rebase is serial arithmetic, so a peer that shrinks its window below
+    // what is already in flight yields a span in the top half rather than a
+    // negative. Read raw that is a wide-open window.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptSenderAttach(peer, 10);
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+        .max_in_flight = 8,
+    }, 10_000);
+
+    _ = try sender.sendBytesAsync("a", .{}, 10_000);
+    _ = try sender.sendBytesAsync("b", .{}, 10_000);
+    _ = try sender.sendBytesAsync("c", .{}, 10_000);
+
+    // Room for one from id 0, while three are already gone.
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 1,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+    } });
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(u32, 0), fixture.session.remote_incoming_window);
+}
+
+test "a sender waits for the peer to reopen the window instead of sending past it" {
+    // §2.5.6 forbids transferring into a closed window. Unlike the in-flight
+    // ring, the peer alone reopens this, so waiting is what resolves it.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try peer.pushHeader(&frame.amqp_header);
+    try peer.push(0, .{ .open = .{
+        .container_id = "service-bus",
+        .max_frame_size = 65536,
+        .channel_max = 255,
+    } });
+    // Room for exactly two transfer frames.
+    try peer.push(0, .{ .begin = .{
+        .remote_channel = 0,
+        .next_outgoing_id = 1,
+        .incoming_window = 2,
+        .outgoing_window = 1000,
+    } });
+    try peer.push(0, .{ .attach = .{
+        .name = "producer",
+        .handle = 0,
+        .role = .receiver,
+        .initial_delivery_count = 0,
+    } });
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 2,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+        .handle = 0,
+        .delivery_count = 0,
+        .link_credit = 10,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+        .max_in_flight = 8,
+    }, 10_000);
+
+    _ = try sender.sendBytesAsync("a", .{}, 10_000);
+    _ = try sender.sendBytesAsync("b", .{}, 10_000);
+    try testing.expectEqual(@as(u32, 0), fixture.session.remote_incoming_window);
+
+    // Nothing more may go out until the peer says so, and this is the only
+    // frame left for the sender to find.
+    mem.clearWritten();
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 2,
+        .incoming_window = 4,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+    } });
+    _ = try sender.sendBytesAsync("c", .{}, 10_000);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    var transfers: usize = 0;
+    for (frames.bodies.items) |body| {
+        if (perf.peekDescriptor(body) == perf.descriptor.transfer) transfers += 1;
+    }
+    try testing.expectEqual(@as(usize, 1), transfers);
+    try testing.expectEqual(@as(u32, 3), fixture.session.remote_incoming_window);
 }
 
 test "one disposition settles every delivery a pipelining sender put on the wire" {
@@ -2422,6 +2995,66 @@ const CountingAllocator = struct {
         self.child.rawFree(buf, a, ra);
     }
 };
+
+test "the window this endpoint advertises slides forward with what it receives" {
+    // A peer computes its own capacity from `next-incoming-id +
+    // incoming-window` (§2.5.6). Spending the window per frame while the id
+    // rises pins that sum for the life of the session, so the peer's capacity
+    // runs down to nothing and it stops sending — a once-per-session budget
+    // wearing the shape of a window. Now that senders honour the number, a
+    // pair of these endpoints would stall on it.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    const deliveries = 20;
+    var i: u32 = 0;
+    while (i < deliveries) : (i += 1) {
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = i,
+            .delivery_tag = "t",
+            .message_format = 0,
+            .settled = true,
+            .more = false,
+        }, "event");
+    }
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 64,
+    }, 10_000);
+
+    const capacity = fixture.session.incoming_window;
+    const limit_before = fixture.session.next_incoming_id +% capacity;
+
+    i = 0;
+    while (i < deliveries) : (i += 1) {
+        const delivery = try receiver.receive(10_000);
+        try testing.expectEqualStrings("event", delivery.payload);
+    }
+
+    // The room on offer is undiminished, and the limit the peer derives from
+    // it has moved forward by exactly what arrived.
+    try testing.expectEqual(capacity, fixture.session.incoming_window);
+    const limit_after = fixture.session.next_incoming_id +% fixture.session.incoming_window;
+    try testing.expectEqual(limit_before +% deliveries, limit_after);
+}
 
 test "a single-frame delivery bypasses the reassembly buffer" {
     const allocator = testing.allocator;

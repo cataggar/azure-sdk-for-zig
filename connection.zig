@@ -400,14 +400,24 @@ pub const Driver = struct {
         handle_max: u32 = std.math.maxInt(u32),
     };
 
+    /// What the peer's `begin` told us about its side of the session.
+    pub const RemoteSession = struct {
+        /// The channel the peer chose.
+        channel: u16,
+        /// The peer's first transfer id, which seeds our `next-incoming-id`.
+        next_outgoing_id: u32,
+        /// How many transfer frames the peer can absorb (§2.5.6). Sending
+        /// past it is a protocol violation, so this is not merely advisory.
+        incoming_window: u32,
+    };
+
     /// Send `begin` on `channel` and wait for the peer's `begin`.
-    /// Returns the channel the peer chose.
     pub fn beginSession(
         self: *Driver,
         channel: u16,
         options: SessionOptions,
         deadline_ms: i64,
-    ) ConnectionError!u16 {
+    ) ConnectionError!RemoteSession {
         if (self.state != .opened) return error.InvalidState;
         if (channel > self.remote_channel_max) return error.InvalidState;
 
@@ -422,7 +432,11 @@ pub const Driver = struct {
         var decoded = try self.decodeBody(inbound.body);
         defer decoded.deinit();
         switch (decoded.performative) {
-            .begin => return inbound.header.channel,
+            .begin => |b| return .{
+                .channel = inbound.header.channel,
+                .next_outgoing_id = b.next_outgoing_id,
+                .incoming_window = b.incoming_window,
+            },
             .close => |c| {
                 try self.recordRemoteError(c.err);
                 self.state = .closed;
@@ -828,8 +842,8 @@ test "open, begin, and close against a scripted peer" {
     try testing.expectEqual(@as(u16, 0), open_header.channel);
     try testing.expectEqualSlices(u8, expected_body, open_frame[8..]);
 
-    const remote_channel = try driver.beginSession(0, .{}, 10_000);
-    try testing.expectEqual(@as(u16, 7), remote_channel);
+    const remote = try driver.beginSession(0, .{}, 10_000);
+    try testing.expectEqual(@as(u16, 7), remote.channel);
 
     try driver.close(null, 10_000);
     try testing.expectEqual(State.closed, driver.state);
