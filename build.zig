@@ -153,6 +153,8 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "azure_sdk_core", .module = core_mod },
                 .{ .name = "azure_sdk_eventhubs", .module = sdk_mod },
+                // For the scripted peer the receive benchmark reads from.
+                .{ .name = "azure_sdk_amqp", .module = amqp_mod },
                 .{ .name = "uamqp", .module = uamqp_mod },
             },
         }),
