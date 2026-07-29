@@ -153,7 +153,12 @@ pub const PropertyMap = struct {
         const gop = try self.entries.getOrPut(allocator, owned_key);
         if (gop.found_existing) {
             allocator.free(owned_key);
-            gop.value_ptr.deinit(allocator);
+            // The assert above is compiled out in ReleaseFast, which is how
+            // this library is built. Without this guard the same misuse is a
+            // leak for a new key but an invalid free for a colliding one, and
+            // overwriting a decoded property is the likelier mistake of the
+            // two. Degrade to the leak.
+            if (!self.borrowed) gop.value_ptr.deinit(allocator);
         }
         gop.value_ptr.* = cloned;
     }
