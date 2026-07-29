@@ -144,11 +144,7 @@ pub const EventDataBatch = struct {
     }
 };
 
-/// Wrapping a payload in a data section costs a described-type constructor, the
-/// descriptor, and a binary length prefix. Go's `calcActualSizeForPayload`
-/// uses the same constants.
-fn dataSectionSize(payload_len: usize) usize {
-    const vbin8_overhead = 5;
-    const vbin32_overhead = 8;
-    return if (payload_len < 256) vbin8_overhead + payload_len else vbin32_overhead + payload_len;
-}
+/// Shared with the encoder rather than restated here, so a batch cannot report
+/// as fitting and then encode to something larger because only one of the two
+/// was changed.
+const dataSectionSize = event_data.dataSectionSize;
