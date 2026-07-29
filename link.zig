@@ -345,6 +345,13 @@ pub const SenderOptions = struct {
     /// are. Raising it lets `sendBytesAsync` keep that many deliveries on the
     /// wire and collect the outcomes afterwards. The default stays at one so
     /// that `send` and `sendBytes` behave exactly as they always have.
+    ///
+    /// Keep this well below the peer's session `incoming-window`. That window
+    /// is not yet enforced — the peer's `begin` is discarded rather than
+    /// seeding it — so overrunning it is a protocol violation the peer answers
+    /// by ending the session. Link credit bounds sending independently, and a
+    /// broker grants credit sized to a window it can absorb, so any value in
+    /// the low tens is far inside it.
     max_in_flight: u32 = 1,
 };
 
@@ -520,14 +527,23 @@ pub const Sender = struct {
             std.debug.assert(entry.rejection == null);
             if (decided == .rejected) {
                 if (decided.rejected) |e| {
+                    // Both dupes complete into locals before the field is
+                    // written. Assigning the struct literal directly would
+                    // use `entry.rejection` as the result location, so the
+                    // optional would already read as non-null with `condition`
+                    // stored and `description` still undefined if the second
+                    // dupe failed — the errdefer would then free `condition`
+                    // that `deinit` still believes it owns, and `deinit` would
+                    // free a `description` that was never allocated.
                     const condition = try self.allocator.dupe(u8, e.condition);
                     errdefer self.allocator.free(condition);
+                    const description = if (e.description) |d|
+                        try self.allocator.dupe(u8, d)
+                    else
+                        null;
                     entry.rejection = .{
                         .condition = condition,
-                        .description = if (e.description) |d|
-                            try self.allocator.dupe(u8, d)
-                        else
-                            null,
+                        .description = description,
                     };
                 }
             }
@@ -2153,6 +2169,57 @@ test "a sender discarded with a rejected delivery still in flight frees it" {
     const settlement = try sender.awaitSettlement(10_000);
     try testing.expect(settlement.outcome == .rejected);
     try testing.expectEqual(@as(usize, 1), sender.inFlight());
+}
+
+/// Drive a rejected send end to end, so every allocation on the path — the
+/// rejection's condition and description among them — is exercised.
+fn rejectedSendUnderAllocator(allocator: Allocator) !void {
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptSenderAttach(peer, 10);
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 0,
+        .last = 0,
+        .settled = true,
+        .state = .{ .rejected = .{
+            .condition = "amqp:resource-limit-exceeded",
+            .description = "the request was terminated by the broker",
+        } },
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+    }, 10_000);
+
+    sender.sendBytes("payload", 10_000) catch |err| switch (err) {
+        error.SendRejected => {},
+        else => return err,
+    };
+}
+
+test "a rejected send leaks nothing however the allocator fails" {
+    // Recording a rejection allocates twice, and the second dupe failing is
+    // the only way to observe a half-built `Rejection`. Assigning the struct
+    // literal straight into `entry.rejection` would use the field as the
+    // result location, publishing a non-null optional holding a live
+    // `condition` and an undefined `description` before the failure — a
+    // double free of the one and a wild free of the other. No mutation of
+    // working code reaches this; only a failing allocator does.
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        rejectedSendUnderAllocator,
+        .{},
+    );
 }
 
 test "a message past the peer's max-message-size is refused before sending" {
