@@ -968,7 +968,13 @@ pub const SettleBatch = struct {
 
     pub fn addId(self: *SettleBatch, id: u32) LinkError!void {
         if (self.first) |_| {
-            if (id == self.last +% 1) {
+            // A delivery id is a serial number (Â§2.8.3), so 0 really does
+            // follow 0xffffffff — but a range written that way reads as
+            // `first > last` to anything comparing the two numerically, which
+            // includes this library's own `Sender.applyDisposition`. Rather
+            // than emit a form only a strict serial-number implementation can
+            // read, close the run at the wrap and start a new one.
+            if (self.last != std.math.maxInt(u32) and id == self.last + 1) {
                 self.last = id;
                 return;
             }
@@ -2084,6 +2090,37 @@ test "a batch does not settle across a gap in delivery ids" {
     try testing.expectEqual([2]u32{ 3, 5 }, ranges[0]);
     try testing.expectEqual([2]u32{ 8, 9 }, ranges[1]);
     try testing.expectEqual([2]u32{ 11, 11 }, ranges[2]);
+}
+
+test "a batch does not settle across the delivery id wrap" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+
+    const max = std.math.maxInt(u32);
+    const ids = [_]u32{ max - 2, max - 1, max, 0, 1 };
+    var driver: Driver = undefined;
+    var fixture: Fixture = undefined;
+    const receiver = try scriptedReceiver(allocator, &mem, &clock, &driver, &fixture, &ids);
+    defer driver.deinit();
+    defer fixture.deinit();
+
+    mem.clearWritten();
+    var batch = SettleBatch.init(receiver, .accepted);
+    for (ids) |_| try batch.add(try receiver.receive(10_000));
+    try batch.flush();
+
+    const ranges = try settledRanges(allocator, mem.written());
+    defer allocator.free(ranges);
+
+    // Treating these five as one run would put `first = 0xfffffffd,
+    // last = 1` on the wire: legal under serial-number arithmetic, and
+    // unreadable to every peer that just compares the two.
+    try testing.expectEqual(@as(usize, 2), ranges.len);
+    try testing.expectEqual([2]u32{ max - 2, max }, ranges[0]);
+    try testing.expectEqual([2]u32{ 0, 1 }, ranges[1]);
+    for (ranges) |r| try testing.expect(r[0] <= r[1]);
 }
 
 test "flushing an empty batch says nothing" {

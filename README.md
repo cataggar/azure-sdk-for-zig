@@ -110,7 +110,8 @@ defer allocator.free(bytes);
   the delivery already owns rather than copying it into scratch storage, so a
   received body is copied once rather than three times
 - settlement: accepted, rejected, and released outcomes, with a rejection
-  surfacing the peer's error condition
+  surfacing the peer's error condition, one delivery at a time or a whole
+  contiguous run in a single disposition
 - the Event Hubs link properties the Go and Rust clients send —
   `com.microsoft:receiver-name`, `com.microsoft:epoch`, and the
   `apache.org:selector-filter:string` filter used to pick a starting offset
@@ -136,6 +137,24 @@ try receiver.accept(delivery);
 `delivery` stays valid until the next `receive` returns, so copy anything you
 need to keep. Prefetched deliveries queue up and are drained with a cursor
 rather than by shifting the queue, which keeps a deep prefetch window linear.
+
+Settling one delivery at a time costs a frame per message, which at a 300-deep
+prefetch is 300 frames of bookkeeping. A disposition can name a `first`..`last`
+range instead, and `SettleBatch` builds those runs safely — delivery ids belong
+to the session rather than to the link, so anything else sharing the session
+leaves gaps that a range must not span:
+
+```zig
+var settling = amqp.SettleBatch.init(receiver, .accepted);
+var i: usize = 0;
+while (i < 300) : (i += 1) {
+    try settling.add(try receiver.receive(deadline_ms));
+}
+try settling.flush();
+```
+
+Nothing reaches the wire until `flush`, so abandoning a batch leaves its
+deliveries unsettled and the peer redelivers them.
 
 A handle in an inbound frame is scoped to the peer that sent it, so links are
 looked up by the handle the peer chose, never by our own. A session holding both
