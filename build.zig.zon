@@ -9,12 +9,12 @@
             .hash = "azure_sdk_core-0.1.3-eFY0Eu3NBQCWhAf8JkUhPNkV_vNq_w68JXIUYNFAEamz",
         },
         .azure_sdk_messaging_common = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#6d831b63f8e542d0ed1417373c12b8af3f207da3",
-            .hash = "azure_sdk_messaging_common-0.1.0-YklmSkWIAADEwFYrvi3pX7u36d19Ne7ksx-7Mofk4gkd",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#719f1c06742d308bb7d8353dc23b78b323043b5d",
+            .hash = "azure_sdk_messaging_common-0.1.1-YklmSkWIAAA5cHQJWgEGchFkD8J5iIA1wUMce-N7UrcY",
         },
         .azure_sdk_storage_blobs = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#547a1f88972a9a245f4af15479f592a0e1f8344b",
-            .hash = "azure_sdk_storage_blobs-0.1.0-I5lGdlJ7CgCiJaJDvHH7ukhtln4baXBvqfvrDGCOhiVD",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#a7ef1bbd7e4743f2bd0bdb5a6c71595d9761909d",
+            .hash = "azure_sdk_storage_blobs-0.1.1-I5lGdlJ7CgASx12BmHwoTmejC0hO_9d40sUmvwm3e_9g",
         },
         .azure_sdk_amqp = .{
             .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#ba0cff592398e19e81137dbf2c20832192b2d071",
