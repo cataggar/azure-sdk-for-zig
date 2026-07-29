@@ -502,6 +502,22 @@ pub const Sender = struct {
     }
 
     /// How many deliveries are written but not yet settled.
+    /// Give up on every delivery still in flight, emptying the window.
+    ///
+    /// Their verdicts are lost. The peer may still settle those ids, and those
+    /// dispositions are then ignored, so this is at-least-once: a caller that
+    /// abandons a delivery the broker went on to accept and then resends it
+    /// has published it twice.
+    ///
+    /// This is the way out of a pipelined send that failed partway. A sender
+    /// still holding unsettled deliveries refuses every later blocking send
+    /// with `error.DeliveriesInFlight`, so without it a single timed-out
+    /// pipeline would wedge the link for good — the caller cannot wait the
+    /// deliveries out, because waiting is what just failed.
+    pub fn abandonInFlight(self: *Sender) void {
+        while (self.in_flight_len > 0) self.discardOldest();
+    }
+
     pub fn inFlight(self: *const Sender) usize {
         return self.in_flight_len;
     }
@@ -2337,6 +2353,114 @@ test "a sender waits for the peer to reopen the window instead of sending past i
     }
     try testing.expectEqual(@as(usize, 1), transfers);
     try testing.expectEqual(@as(u32, 3), fixture.session.remote_incoming_window);
+}
+
+test "abandoning the window frees a rejection and lets blocking sends resume" {
+    // Waiting is what fails when a pipeline fails, so a caller cannot wait the
+    // deliveries out. Without a way to drop them the sender refuses every
+    // later blocking send and the link is finished.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptSenderAttach(peer, 10);
+    // One verdict for three deliveries, and it carries an allocated
+    // description so the abandon has memory to release.
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 0,
+        .last = 0,
+        .settled = true,
+        .state = .{ .rejected = .{
+            .condition = "amqp:resource-limit-exceeded",
+            .description = "slow down",
+        } },
+    } });
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 3,
+        .last = 3,
+        .settled = true,
+        .state = .accepted,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+        .max_in_flight = 4,
+    }, 10_000);
+
+    _ = try sender.sendBytesAsync("a", .{}, 10_000);
+    _ = try sender.sendBytesAsync("b", .{}, 10_000);
+    _ = try sender.sendBytesAsync("c", .{}, 10_000);
+    try testing.expectEqual(@as(usize, 3), sender.inFlight());
+
+    // The first comes back refused, which parks an allocated rejection on its
+    // entry; the other two are never answered.
+    const first = try sender.awaitSettlement(10_000);
+    try testing.expectEqual(Outcome.rejected, first.outcome);
+    try testing.expectEqual(@as(usize, 2), sender.inFlight());
+
+    // A blocking send is refused while they are outstanding.
+    try testing.expectError(error.DeliveriesInFlight, sender.sendBytes("d", 10_000));
+
+    sender.abandonInFlight();
+    try testing.expectEqual(@as(usize, 0), sender.inFlight());
+
+    // And now it goes through, with the peer settling id 3 as it would.
+    try sender.sendBytes("d", 10_000);
+    try testing.expectEqual(@as(usize, 0), sender.inFlight());
+}
+
+test "abandoning an unanswered window leaks nothing" {
+    // The entries hold duplicated rejection text, so dropping them has to
+    // release it rather than just moving the cursors.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptSenderAttach(peer, 10);
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 0,
+        .last = 1,
+        .settled = true,
+        .state = .{ .rejected = .{
+            .condition = "amqp:internal-error",
+            .description = "a description long enough to be worth freeing",
+        } },
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+        .max_in_flight = 4,
+    }, 10_000);
+
+    _ = try sender.sendBytesAsync("a", .{}, 10_000);
+    _ = try sender.sendBytesAsync("b", .{}, 10_000);
+
+    // Pump the refusal onto both entries without retiring either.
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(usize, 2), sender.inFlight());
+
+    // testing.allocator reports anything left behind.
+    sender.abandonInFlight();
+    try testing.expectEqual(@as(usize, 0), sender.inFlight());
 }
 
 test "one disposition settles every delivery a pipelining sender put on the wire" {
