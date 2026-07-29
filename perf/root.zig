@@ -8,6 +8,18 @@ const std = @import("std");
 
 /// Collected metrics from a benchmark run.
 ///
+/// Two different clocks are recorded. `sum_ns` adds up the per-iteration laps
+/// and is what `avgNs` and `opsPerSecond` report, so those two agree with each
+/// other. `total_ns` is wall-clock for the whole run and additionally includes
+/// the harness's own per-iteration timer reads, so it is always the larger of
+/// the two; compare it against `sum_ns` to see how much overhead the harness
+/// itself contributed.
+///
+/// Each lap costs two clock reads (tens of nanoseconds on a typical host), so
+/// `min_ns` has a floor of roughly one clock read and measurements of
+/// operations that fast should not be trusted in absolute terms. Increase the
+/// work per iteration until `sum_ns` dominates that floor.
+///
 /// `allocations` and `bytes_allocated` are zero unless the benchmark ran
 /// through `benchmarkAllocating`.
 pub const BenchmarkResult = struct {
@@ -29,10 +41,12 @@ pub const BenchmarkResult = struct {
         return self.sum_ns / self.iterations;
     }
 
+    /// Throughput implied by the measured work, excluding harness overhead.
+    /// This is the reciprocal of `avgNs`; use `total_ns` for elapsed time.
     pub fn opsPerSecond(self: BenchmarkResult) f64 {
-        if (self.total_ns == 0) return 0;
+        if (self.sum_ns == 0) return 0;
         const iters: f64 = @floatFromInt(self.iterations);
-        const secs: f64 = @as(f64, @floatFromInt(self.total_ns)) / 1_000_000_000.0;
+        const secs: f64 = @as(f64, @floatFromInt(self.sum_ns)) / 1_000_000_000.0;
         return iters / secs;
     }
 
@@ -49,11 +63,19 @@ pub const BenchmarkResult = struct {
     }
 };
 
-/// Wraps an allocator and counts allocations and bytes requested.
+/// Wraps an allocator and counts the allocations made through it.
 ///
-/// `resize` is not counted: it grows or shrinks an existing allocation in
-/// place and issues no new one. `remap` is counted because it may move the
-/// allocation.
+/// Counting is deliberately restricted to events that obtain *new* memory:
+///
+/// - `alloc` counts only when the parent returns a pointer. A failed
+///   allocation obtained nothing.
+/// - `resize` never counts. It grows or shrinks an existing allocation in
+///   place and issues no new one.
+/// - `remap` counts only when it succeeds *and* moves the allocation. A remap
+///   that succeeds in place is a resize; a remap that returns `null` obtained
+///   nothing, and `std.mem.Allocator` then falls back to `alloc` + copy +
+///   `free`, which `alloc` counts. Counting the failure too would report the
+///   same event twice.
 pub const CountingAllocator = struct {
     parent: std.mem.Allocator,
     count: u64 = 0,
@@ -88,9 +110,12 @@ pub const CountingAllocator = struct {
         ret_addr: usize,
     ) ?[*]u8 {
         const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        self.count += 1;
-        self.bytes += len;
-        return self.parent.rawAlloc(len, alignment, ret_addr);
+        const result = self.parent.rawAlloc(len, alignment, ret_addr);
+        if (result != null) {
+            self.count += 1;
+            self.bytes += len;
+        }
+        return result;
     }
 
     fn resize(
@@ -112,9 +137,14 @@ pub const CountingAllocator = struct {
         ret_addr: usize,
     ) ?[*]u8 {
         const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        self.count += 1;
-        self.bytes += new_len;
-        return self.parent.rawRemap(memory, alignment, new_len, ret_addr);
+        const result = self.parent.rawRemap(memory, alignment, new_len, ret_addr);
+        if (result) |ptr| {
+            if (ptr != memory.ptr) {
+                self.count += 1;
+                self.bytes += new_len;
+            }
+        }
+        return result;
     }
 
     fn free(
@@ -330,6 +360,100 @@ test "CountingAllocator forwards to the parent allocator" {
     try std.testing.expectEqual(@as(u32, 255), list.items[255]);
     try std.testing.expect(counting.count > 0);
 }
+
+test "CountingAllocator ignores a failed remap" {
+    var buf: [512]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buf);
+    var counting = CountingAllocator.init(fba.allocator());
+    const allocator = counting.allocator();
+
+    const first = try allocator.alloc(u8, 16);
+    const second = try allocator.alloc(u8, 16);
+    try std.testing.expectEqual(@as(u64, 2), counting.count);
+
+    // `first` is not the last allocation, so the fixed buffer cannot grow it
+    // and cannot move it either. Nothing was obtained, so nothing is counted;
+    // std falls back to alloc+copy+free, and that alloc is what counts.
+    try std.testing.expect(allocator.remap(first, 32) == null);
+    try std.testing.expectEqual(@as(u64, 2), counting.count);
+    try std.testing.expectEqual(@as(u64, 32), counting.bytes);
+
+    // `second` is the last allocation, so this remap succeeds in place. An
+    // in-place remap is a resize, not a new allocation.
+    const grown = allocator.remap(second, 24);
+    try std.testing.expect(grown != null);
+    try std.testing.expectEqual(second.ptr, grown.?.ptr);
+    try std.testing.expectEqual(@as(u64, 2), counting.count);
+    try std.testing.expectEqual(@as(u64, 32), counting.bytes);
+}
+
+test "CountingAllocator ignores a failed allocation" {
+    var buf: [64]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buf);
+    var counting = CountingAllocator.init(fba.allocator());
+    const allocator = counting.allocator();
+
+    try std.testing.expectError(error.OutOfMemory, allocator.alloc(u8, 4096));
+    try std.testing.expectEqual(@as(u64, 0), counting.count);
+    try std.testing.expectEqual(@as(u64, 0), counting.bytes);
+}
+
+test "CountingAllocator matches ground truth through ArrayList growth" {
+    var truth = TruthAllocator{ .parent = std.testing.allocator };
+    var counting = CountingAllocator.init(truth.allocator());
+    const allocator = counting.allocator();
+
+    var list: std.ArrayList(u64) = .empty;
+    defer list.deinit(allocator);
+    for (0..2000) |i| try list.append(allocator, @intCast(i));
+
+    try std.testing.expectEqual(@as(usize, 2000), list.items.len);
+    try std.testing.expectEqual(truth.real_allocations, counting.count);
+}
+
+/// Records only the allocation events that actually obtained new memory,
+/// observed below `CountingAllocator` so the two can be compared.
+const TruthAllocator = struct {
+    parent: std.mem.Allocator,
+    real_allocations: u64 = 0,
+
+    const vtable: std.mem.Allocator.VTable = .{
+        .alloc = talloc,
+        .resize = tresize,
+        .remap = tremap,
+        .free = tfree,
+    };
+
+    fn allocator(self: *TruthAllocator) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+
+    fn talloc(ctx: *anyopaque, len: usize, a: std.mem.Alignment, ra: usize) ?[*]u8 {
+        const self: *TruthAllocator = @ptrCast(@alignCast(ctx));
+        const r = self.parent.rawAlloc(len, a, ra);
+        if (r != null) self.real_allocations += 1;
+        return r;
+    }
+
+    fn tresize(ctx: *anyopaque, m: []u8, a: std.mem.Alignment, n: usize, ra: usize) bool {
+        const self: *TruthAllocator = @ptrCast(@alignCast(ctx));
+        return self.parent.rawResize(m, a, n, ra);
+    }
+
+    fn tremap(ctx: *anyopaque, m: []u8, a: std.mem.Alignment, n: usize, ra: usize) ?[*]u8 {
+        const self: *TruthAllocator = @ptrCast(@alignCast(ctx));
+        const r = self.parent.rawRemap(m, a, n, ra);
+        if (r) |p| {
+            if (p != m.ptr) self.real_allocations += 1;
+        }
+        return r;
+    }
+
+    fn tfree(ctx: *anyopaque, m: []u8, a: std.mem.Alignment, ra: usize) void {
+        const self: *TruthAllocator = @ptrCast(@alignCast(ctx));
+        self.parent.rawFree(m, a, ra);
+    }
+};
 
 test "benchmark records failing iterations" {
     const Failing = struct {
