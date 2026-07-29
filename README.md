@@ -109,6 +109,14 @@ defer allocator.free(bytes);
   all of them — skips reassembly entirely, and `receive` hands out the buffer
   the delivery already owns rather than copying it into scratch storage, so a
   received body is copied once rather than three times
+- frames are read into a buffer the driver keeps and grows to the largest frame
+  it has actually seen, rather than allocating and freeing a body per frame,
+  and a transfer's payload is split off using the length the performative
+  decode already reported instead of decoding the performative a second time.
+  Together those take a received delivery from six allocations to four, each of
+  which ends up in something the caller reads. The body is valid until the next
+  `receiveFrame`, as before; decoded performatives copy into their own arena,
+  so they outlive it
 - settlement: accepted, rejected, and released outcomes, with a rejection
   surfacing the peer's error condition, one delivery at a time or a whole
   contiguous run in a single disposition

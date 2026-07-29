@@ -761,6 +761,13 @@ pub fn encodeSaslOutcome(
 pub const Decoded = struct {
     arena: *std.heap.ArenaAllocator,
     performative: Performative,
+    /// Bytes of `body` the performative occupied.
+    ///
+    /// A transfer frame carries its message payload immediately after the
+    /// performative, so the split has to be found by measuring the
+    /// performative — and the decode that produced this already knows it.
+    /// Reporting it saves the caller decoding the same bytes a second time.
+    bytes_consumed: usize,
 
     pub fn deinit(self: *Decoded) void {
         const child = self.arena.child_allocator;
@@ -785,7 +792,11 @@ pub fn decode(allocator: Allocator, body: []const u8) DecodeError!Decoded {
         else => return error.MalformedBody,
     };
     const performative = try fromValue(arena.allocator(), result.value);
-    return .{ .arena = arena, .performative = performative };
+    return .{
+        .arena = arena,
+        .performative = performative,
+        .bytes_consumed = result.bytes_consumed,
+    };
 }
 
 /// Peek at the descriptor code of a frame body without fully decoding it.
@@ -1620,4 +1631,48 @@ test "a modified delivery state round-trips" {
     const m = decoded.performative.disposition.state.?.modified;
     try testing.expect(m.delivery_failed);
     try testing.expect(m.undeliverable_here);
+}
+
+test "bytes_consumed splits a transfer frame from its payload" {
+    const allocator = testing.allocator;
+
+    // A transfer frame is the performative followed immediately by the message
+    // payload, with nothing marking the join. `bytes_consumed` is where the
+    // receive path cuts, so it has to be the performative's own length and not
+    // the whole body.
+    const head = try encodeAlloc(allocator, .{ .transfer = .{
+        .handle = 2,
+        .delivery_id = 11,
+        .delivery_tag = "\x00\x00\x00\x0b",
+        .message_format = 0,
+        .settled = true,
+        .more = false,
+    } });
+    defer allocator.free(head);
+
+    const payload = "\x00\x53\x75\xa0\x03abc";
+    const body = try std.mem.concat(allocator, u8, &.{ head, payload });
+    defer allocator.free(body);
+
+    var decoded = try decode(allocator, body);
+    defer decoded.deinit();
+
+    try testing.expectEqual(head.len, decoded.bytes_consumed);
+    try testing.expectEqualSlices(u8, payload, body[decoded.bytes_consumed..]);
+}
+
+test "bytes_consumed is the whole body when nothing follows" {
+    const allocator = testing.allocator;
+    const bytes = try encodeAlloc(allocator, .{ .flow = .{
+        .next_incoming_id = 1,
+        .incoming_window = 100,
+        .next_outgoing_id = 2,
+        .outgoing_window = 100,
+    } });
+    defer allocator.free(bytes);
+
+    var decoded = try decode(allocator, bytes);
+    defer decoded.deinit();
+
+    try testing.expectEqual(bytes.len, decoded.bytes_consumed);
 }

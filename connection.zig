@@ -247,9 +247,14 @@ pub const Driver = struct {
     in_buf: []u8,
     in_start: usize = 0,
     in_end: usize = 0,
-    /// The body most recently returned by `receiveFrame`, owned by the driver.
-    current_body: ?[]u8 = null,
-    current_header: ?FrameHeader = null,
+    /// The body most recently returned by `receiveFrame`, reused frame to
+    /// frame.
+    ///
+    /// Bodies were allocated and freed one per frame, which on a busy receiver
+    /// is a malloc/free pair for every message that arrives. The buffer grows
+    /// to the largest frame actually read — never to `acceptMaxFrameSize`,
+    /// which a peer can drive to 4 GiB by omitting `max-frame-size` (§2.7.1).
+    body_buf: []u8 = &.{},
 
     const in_buf_len = 16 * 1024;
 
@@ -269,7 +274,7 @@ pub const Driver = struct {
     }
 
     pub fn deinit(self: *Driver) void {
-        if (self.current_body) |b| self.allocator.free(b);
+        self.allocator.free(self.body_buf);
         self.handlers.deinit(self.allocator);
         self.allocator.free(self.in_buf);
         if (self.remote_container_id) |id| self.allocator.free(id);
@@ -619,11 +624,6 @@ pub const Driver = struct {
     /// handed, which cannot work across the protocol-header exchange that
     /// separates the SASL layer from the AMQP layer.
     pub fn receiveFrame(self: *Driver, deadline_ms: i64) ConnectionError!InboundFrame {
-        if (self.current_body) |b| {
-            self.allocator.free(b);
-            self.current_body = null;
-            self.current_header = null;
-        }
         while (true) {
             var header_bytes: [frame.frame_header_size]u8 = undefined;
             try self.readExact(&header_bytes, deadline_ms);
@@ -643,11 +643,12 @@ pub const Driver = struct {
             const body_size = header.size - prefix;
             if (body_size == 0) continue; // heartbeat
 
-            const body = try self.allocator.alloc(u8, body_size);
-            errdefer self.allocator.free(body);
+            if (body_size > self.body_buf.len) {
+                const grown = try self.allocator.realloc(self.body_buf, body_size);
+                self.body_buf = grown;
+            }
+            const body = self.body_buf[0..body_size];
             try self.readExact(body, deadline_ms);
-            self.current_body = body;
-            self.current_header = header;
             return .{ .header = header, .body = body };
         }
     }
