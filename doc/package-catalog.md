@@ -16,15 +16,15 @@ its source lives at the root of the named branch.
 | `azure_sdk_storage_common` | Branch | — | [`sdk/storage_common`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/storage_common) | `azure_sdk_core` |
 | `azure_sdk_storage_blobs` | Branch | — | [`sdk/storage_blobs`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/storage_blobs) | `azure_sdk_core`, `azure_sdk_storage_common` |
 | `azure_sdk_storage_queues` | Branch | — | [`sdk/storage_queues`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/storage_queues) | `azure_sdk_core`, `azure_sdk_storage_common` |
-| `azure_sdk_storage_files_shares` | Branch | — | [`sdk/storage_files_shares`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/storage_files_shares) | `azure_sdk_core`, `azure_sdk_storage_common` |
-| `azure_sdk_storage_files_datalake` | Branch | — | [`sdk/storage_files_datalake`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/storage_files_datalake) | `azure_sdk_core`, `azure_sdk_storage_common`, `azure_sdk_storage_blobs` |
+| `azure_sdk_storage_files_shares` | Branch | — | [`sdk/storage_files_shares`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/storage_files_shares) | `azure_sdk_core` |
+| `azure_sdk_storage_files_datalake` | Branch | — | [`sdk/storage_files_datalake`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/storage_files_datalake) | `azure_sdk_core` |
 | `azure_sdk_keyvault` | Branch | — | [`sdk/keyvault`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/keyvault) | `azure_sdk_core` |
 | `azure_sdk_data_tables` | Branch | — | [`sdk/data_tables`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/data_tables) | `azure_sdk_core` |
 | `azure_sdk_data_cosmos` | Branch | — | [`sdk/data_cosmos`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/data_cosmos) | `azure_sdk_core` |
 | `azure_sdk_data_appconfiguration` | Branch | — | [`sdk/data_appconfiguration`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/data_appconfiguration) | `azure_sdk_core` |
 | `azure_sdk_attestation` | Branch | — | [`sdk/attestation`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/attestation) | `azure_sdk_core` |
 | `azure_sdk_messaging_common` | Branch | — | [`sdk/messaging_common`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/messaging_common) | `azure_sdk_core` |
-| `azure_sdk_eventhubs` | Branch | — | [`sdk/eventhubs`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/eventhubs) | `azure_sdk_core`, `azure_sdk_messaging_common`, `azure_sdk_storage_blobs` |
+| `azure_sdk_eventhubs` | Branch | — | [`sdk/eventhubs`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/eventhubs) | `azure_sdk_core`, `azure_sdk_messaging_common`, `azure_sdk_storage_blobs`, `azure_sdk_amqp` |
 | `azure_sdk_servicebus` | Branch | — | [`sdk/servicebus`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/servicebus) | `azure_sdk_core`, `azure_sdk_messaging_common` |
 | `azure_sdk_kusto` | Branch | — | [`sdk/kusto`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/kusto) | `azure_sdk_core`, `azure_sdk_storage_common`, `azure_sdk_storage_blobs`, `azure_sdk_storage_queues` |
 

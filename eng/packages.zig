@@ -450,7 +450,7 @@ pub const all = [_]Package{
             "azure_sdk_storage_blobs",
             "azure_sdk_amqp",
         },
-        .external_dependencies = &.{ "uamqp", "serde" },
+        .external_dependencies = &.{"serde"},
         .examples_command = "zig build examples",
         .live_test_command = "zig build live-test",
         .publish_paths = &.{
