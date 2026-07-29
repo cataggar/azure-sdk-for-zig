@@ -1,10 +1,15 @@
-///! Azure SDK Performance Framework — benchmark harness.
-///!
-///! Provides a lightweight framework for throughput and latency benchmarks.
+//! Azure SDK Performance Framework — benchmark harness.
+//!
+//! Measures wall-clock nanoseconds and, optionally, allocation counts.
+//!
+//! Timing reads `std.Io.Timestamp` on the `.awake` monotonic clock, so every
+//! caller must supply a `std.Io`. Use `std.testing.io` in tests.
 const std = @import("std");
-const builtin = @import("builtin");
 
 /// Collected metrics from a benchmark run.
+///
+/// `allocations` and `bytes_allocated` are zero unless the benchmark ran
+/// through `benchmarkAllocating`.
 pub const BenchmarkResult = struct {
     name: []const u8,
     iterations: u64,
@@ -12,6 +17,12 @@ pub const BenchmarkResult = struct {
     min_ns: u64,
     max_ns: u64,
     sum_ns: u64,
+    allocations: u64 = 0,
+    bytes_allocated: u64 = 0,
+    /// Iterations whose closure returned an error. A benchmark that fails
+    /// early looks deceptively fast, so callers should check this is zero
+    /// before trusting the timings.
+    errors: u64 = 0,
 
     pub fn avgNs(self: BenchmarkResult) u64 {
         if (self.iterations == 0) return 0;
@@ -24,24 +35,113 @@ pub const BenchmarkResult = struct {
         const secs: f64 = @as(f64, @floatFromInt(self.total_ns)) / 1_000_000_000.0;
         return iters / secs;
     }
+
+    pub fn allocationsPerOp(self: BenchmarkResult) f64 {
+        if (self.iterations == 0) return 0;
+        return @as(f64, @floatFromInt(self.allocations)) /
+            @as(f64, @floatFromInt(self.iterations));
+    }
+
+    pub fn bytesPerOp(self: BenchmarkResult) f64 {
+        if (self.iterations == 0) return 0;
+        return @as(f64, @floatFromInt(self.bytes_allocated)) /
+            @as(f64, @floatFromInt(self.iterations));
+    }
 };
 
-/// Simple monotonic tick counter.
-/// Uses a thread-safe atomic counter — suitable for relative benchmarking.
-/// Real high-resolution timing requires `std.Io` in Zig 0.16.
-var global_tick: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+/// Wraps an allocator and counts allocations and bytes requested.
+///
+/// `resize` is not counted: it grows or shrinks an existing allocation in
+/// place and issues no new one. `remap` is counted because it may move the
+/// allocation.
+pub const CountingAllocator = struct {
+    parent: std.mem.Allocator,
+    count: u64 = 0,
+    bytes: u64 = 0,
 
-fn readTick() u64 {
-    return global_tick.fetchAdd(1, .monotonic);
+    const vtable: std.mem.Allocator.VTable = .{
+        .alloc = alloc,
+        .resize = resize,
+        .remap = remap,
+        .free = free,
+    };
+
+    pub fn init(parent: std.mem.Allocator) CountingAllocator {
+        return .{ .parent = parent };
+    }
+
+    pub fn allocator(self: *CountingAllocator) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+
+    /// Clears the counters without disturbing the parent allocator, so a
+    /// warm-up pass can be excluded from a measurement.
+    pub fn reset(self: *CountingAllocator) void {
+        self.count = 0;
+        self.bytes = 0;
+    }
+
+    fn alloc(
+        ctx: *anyopaque,
+        len: usize,
+        alignment: std.mem.Alignment,
+        ret_addr: usize,
+    ) ?[*]u8 {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        self.count += 1;
+        self.bytes += len;
+        return self.parent.rawAlloc(len, alignment, ret_addr);
+    }
+
+    fn resize(
+        ctx: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        ret_addr: usize,
+    ) bool {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        return self.parent.rawResize(memory, alignment, new_len, ret_addr);
+    }
+
+    fn remap(
+        ctx: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        ret_addr: usize,
+    ) ?[*]u8 {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        self.count += 1;
+        self.bytes += new_len;
+        return self.parent.rawRemap(memory, alignment, new_len, ret_addr);
+    }
+
+    fn free(
+        ctx: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        ret_addr: usize,
+    ) void {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        self.parent.rawFree(memory, alignment, ret_addr);
+    }
+};
+
+/// Reads the monotonic clock that keeps running while the process sleeps.
+pub fn nowNs(io: std.Io) i96 {
+    return std.Io.Timestamp.now(io, .awake).nanoseconds;
 }
 
-fn ticksToNs(ticks: u64) u64 {
-    // Each "tick" is one iteration unit — approximate as 1ns for stats.
-    return ticks;
+fn elapsedSince(io: std.Io, start: i96) u64 {
+    const delta = nowNs(io) - start;
+    if (delta <= 0) return 0;
+    return @intCast(delta);
 }
 
-/// Run a benchmark function `iterations` times and collect timing stats.
+/// Runs `func` `iterations` times and collects wall-clock timing stats.
 pub fn benchmark(
+    io: std.Io,
     name: []const u8,
     iterations: u64,
     comptime func: anytype,
@@ -49,36 +149,84 @@ pub fn benchmark(
     var min_ns: u64 = std.math.maxInt(u64);
     var max_ns: u64 = 0;
     var sum_ns: u64 = 0;
+    var errors: u64 = 0;
 
-    const start = readTick();
+    const start = nowNs(io);
 
     var i: u64 = 0;
     while (i < iterations) : (i += 1) {
-        const lap_start = readTick();
-        func() catch {};
-        const lap_end = readTick();
-        const elapsed = ticksToNs(lap_end - lap_start);
+        const lap_start = nowNs(io);
+        func() catch {
+            errors += 1;
+        };
+        const elapsed = elapsedSince(io, lap_start);
         sum_ns += elapsed;
         if (elapsed < min_ns) min_ns = elapsed;
         if (elapsed > max_ns) max_ns = elapsed;
     }
 
-    const total_ns = ticksToNs(readTick() - start);
+    return .{
+        .name = name,
+        .iterations = iterations,
+        .total_ns = elapsedSince(io, start),
+        .min_ns = if (iterations > 0) min_ns else 0,
+        .max_ns = max_ns,
+        .sum_ns = sum_ns,
+        .errors = errors,
+    };
+}
+
+/// Runs `func(allocator)` `iterations` times, collecting timing stats and
+/// counting the allocations `func` makes.
+///
+/// `func` receives a counting wrapper around `parent`; it must free whatever
+/// it allocates, since the wrapper only observes.
+pub fn benchmarkAllocating(
+    io: std.Io,
+    name: []const u8,
+    iterations: u64,
+    parent: std.mem.Allocator,
+    comptime func: anytype,
+) BenchmarkResult {
+    var counting = CountingAllocator.init(parent);
+    const allocator = counting.allocator();
+
+    var min_ns: u64 = std.math.maxInt(u64);
+    var max_ns: u64 = 0;
+    var sum_ns: u64 = 0;
+    var errors: u64 = 0;
+
+    const start = nowNs(io);
+
+    var i: u64 = 0;
+    while (i < iterations) : (i += 1) {
+        const lap_start = nowNs(io);
+        func(allocator) catch {
+            errors += 1;
+        };
+        const elapsed = elapsedSince(io, lap_start);
+        sum_ns += elapsed;
+        if (elapsed < min_ns) min_ns = elapsed;
+        if (elapsed > max_ns) max_ns = elapsed;
+    }
 
     return .{
         .name = name,
         .iterations = iterations,
-        .total_ns = total_ns,
+        .total_ns = elapsedSince(io, start),
         .min_ns = if (iterations > 0) min_ns else 0,
         .max_ns = max_ns,
         .sum_ns = sum_ns,
+        .allocations = counting.count,
+        .bytes_allocated = counting.bytes,
+        .errors = errors,
     };
 }
 
-/// Print benchmark results to stderr.
+/// Prints a benchmark result to stderr.
 pub fn printResult(result: BenchmarkResult) void {
     std.debug.print(
-        "BENCH {s}: {d} iters, avg {d}ns, min {d}ns, max {d}ns, {d:.0} ops/s\n",
+        "BENCH {s}: {d} iters, avg {d}ns, min {d}ns, max {d}ns, {d:.0} ops/s, {d:.2} allocs/op, {d:.0} B/op{s}\n",
         .{
             result.name,
             result.iterations,
@@ -86,8 +234,17 @@ pub fn printResult(result: BenchmarkResult) void {
             result.min_ns,
             result.max_ns,
             result.opsPerSecond(),
+            result.allocationsPerOp(),
+            result.bytesPerOp(),
+            if (result.errors > 0) " [ERRORS]" else "",
         },
     );
+    if (result.errors > 0) {
+        std.debug.print(
+            "  WARNING: {d} of {d} iterations returned an error; timings are not meaningful\n",
+            .{ result.errors, result.iterations },
+        );
+    }
 }
 
 fn dummyWork() !void {
@@ -96,13 +253,93 @@ fn dummyWork() !void {
     std.mem.doNotOptimizeAway(x);
 }
 
-test "benchmark collects stats" {
-    const result = benchmark("dummy", 1000, dummyWork);
+fn allocatingWork(allocator: std.mem.Allocator) !void {
+    const buf = try allocator.alloc(u8, 64);
+    defer allocator.free(buf);
+    @memset(buf, 7);
+    std.mem.doNotOptimizeAway(buf.ptr);
+}
+
+test "benchmark measures wall-clock time" {
+    const result = benchmark(std.testing.io, "dummy", 1000, dummyWork);
     try std.testing.expectEqual(@as(u64, 1000), result.iterations);
     try std.testing.expect(result.total_ns > 0);
     try std.testing.expect(result.min_ns <= result.max_ns);
-    try std.testing.expect(result.avgNs() > 0);
     try std.testing.expect(result.opsPerSecond() > 0);
+    try std.testing.expectEqual(@as(u64, 0), result.allocations);
+}
+
+test "benchmark elapsed time grows with work" {
+    const Work = struct {
+        fn spin(comptime rounds: usize) fn () anyerror!void {
+            return struct {
+                fn run() anyerror!void {
+                    var x: u64 = 0;
+                    for (0..rounds) |i| x +%= i *% 2654435761;
+                    std.mem.doNotOptimizeAway(x);
+                }
+            }.run;
+        }
+    };
+    const small = benchmark(std.testing.io, "small", 200, Work.spin(64));
+    const large = benchmark(std.testing.io, "large", 200, Work.spin(64 * 512));
+    try std.testing.expect(large.total_ns > small.total_ns);
+}
+
+test "benchmarkAllocating counts allocations" {
+    const result = benchmarkAllocating(
+        std.testing.io,
+        "alloc",
+        100,
+        std.testing.allocator,
+        allocatingWork,
+    );
+    try std.testing.expectEqual(@as(u64, 100), result.iterations);
+    try std.testing.expectEqual(@as(u64, 100), result.allocations);
+    try std.testing.expectEqual(@as(u64, 6400), result.bytes_allocated);
+    try std.testing.expectEqual(@as(f64, 1), result.allocationsPerOp());
+    try std.testing.expectEqual(@as(f64, 64), result.bytesPerOp());
+}
+
+test "CountingAllocator counts allocations but not resizes" {
+    var counting = CountingAllocator.init(std.testing.allocator);
+    const allocator = counting.allocator();
+
+    const buf = try allocator.alloc(u8, 32);
+    defer allocator.free(buf);
+    try std.testing.expectEqual(@as(u64, 1), counting.count);
+    try std.testing.expectEqual(@as(u64, 32), counting.bytes);
+
+    _ = allocator.resize(buf, 16);
+    try std.testing.expectEqual(@as(u64, 1), counting.count);
+
+    counting.reset();
+    try std.testing.expectEqual(@as(u64, 0), counting.count);
+    try std.testing.expectEqual(@as(u64, 0), counting.bytes);
+}
+
+test "CountingAllocator forwards to the parent allocator" {
+    var counting = CountingAllocator.init(std.testing.allocator);
+    const allocator = counting.allocator();
+
+    var list: std.ArrayList(u32) = .empty;
+    defer list.deinit(allocator);
+    for (0..256) |i| try list.append(allocator, @intCast(i));
+
+    try std.testing.expectEqual(@as(usize, 256), list.items.len);
+    try std.testing.expectEqual(@as(u32, 255), list.items[255]);
+    try std.testing.expect(counting.count > 0);
+}
+
+test "benchmark records failing iterations" {
+    const Failing = struct {
+        fn run() !void {
+            return error.Boom;
+        }
+    };
+    const result = benchmark(std.testing.io, "failing", 10, Failing.run);
+    try std.testing.expectEqual(@as(u64, 10), result.errors);
+    try std.testing.expectEqual(@as(u64, 10), result.iterations);
 }
 
 test "BenchmarkResult zero iterations" {
@@ -116,4 +353,6 @@ test "BenchmarkResult zero iterations" {
     };
     try std.testing.expectEqual(@as(u64, 0), r.avgNs());
     try std.testing.expectEqual(@as(f64, 0), r.opsPerSecond());
+    try std.testing.expectEqual(@as(f64, 0), r.allocationsPerOp());
+    try std.testing.expectEqual(@as(f64, 0), r.bytesPerOp());
 }

@@ -47,7 +47,7 @@ pub const wasi_http = if (@import("builtin").target.cpu.arch == .wasm32 and
 else
     struct {};
 
-pub const version: []const u8 = "0.1.0";
+pub const version: []const u8 = @import("build_options").version;
 pub const user_agent_prefix: []const u8 = "azsdk-zig-core/" ++ version;
 
 test {

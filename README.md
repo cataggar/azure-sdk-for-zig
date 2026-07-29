@@ -25,6 +25,8 @@ The canonical package/module name is `azure_sdk_core`, released from
 | `errors` | Azure error-envelope parsing |
 | `lro` | Long-running-operation polling |
 | `pager` | Generic `PipelinePager` |
+| `tracing` | Span and attribute plumbing |
+| `perf` | Wall-clock and allocation benchmark harness |
 
 `HttpTransport.open` and `HttpPipeline.open` return a heap-backed,
 single-owner `HttpOperation`. Consume its reader and call `finish` to drain for
@@ -69,12 +71,43 @@ request until the connection times out. It is therefore never in the default
 chain. Set `AZURE_TOKEN_CREDENTIALS=prod` on deployed services, or name the
 credential directly, to use it.
 
+## Benchmarking
+
+`core.perf` measures a closure against the monotonic clock and counts the
+allocations it makes.
+
+```zig
+fn encodeOnce() !void { ... }
+
+const result = core.perf.benchmark(io, "encode", 10_000, encodeOnce);
+core.perf.printResult(result);
+```
+
+`benchmark` needs a `std.Io` because it reads `std.Io.Timestamp.now(io, .awake)`,
+the monotonic clock that keeps running while a task sleeps. Pass the same `Io`
+the code under test uses; `std.testing.io` works in tests.
+
+To attribute allocations, run through `benchmarkAllocating`, which wraps the
+allocator you hand it and reports `allocationsPerOp` and `bytesPerOp` alongside
+`avgNs`:
+
+```zig
+fn encodeWith(allocator: std.mem.Allocator) !void { ... }
+
+const result = core.perf.benchmarkAllocating(io, "encode", 10_000, gpa, encodeWith);
+```
+
+`CountingAllocator` is also usable on its own to assert an operation stays
+allocation-free.
+
 ## Related packages
 
-- [Tracing](https://github.com/cataggar/azure-sdk-for-zig/tree/main/sdk/core/tracing)
-- [Testing](https://github.com/cataggar/azure-sdk-for-zig/tree/main/sdk/core/testing)
-- [Performance](https://github.com/cataggar/azure-sdk-for-zig/tree/main/sdk/core/perf)
-- [AMQP](https://github.com/cataggar/azure-sdk-for-zig/tree/main/sdk/core/amqp)
+- [AMQP](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/amqp)
+- [Event Hubs](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/eventhubs)
+- [Service Bus](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/servicebus)
+- [Testing](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/testing)
+
+`tracing` and `perf` are namespaces of this package, not separate packages.
 
 ## Development
 
@@ -82,5 +115,5 @@ credential directly, to use it.
 zig build test --summary all
 ```
 
-The package depends on `serde` and `azure_sdk_core_tracing`. See the
+The package depends on `serde`. See the
 [package model](https://github.com/cataggar/azure-sdk-for-zig/blob/main/doc/package-branch-model.md).
