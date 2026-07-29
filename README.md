@@ -135,9 +135,19 @@ try producer.sendBatches(allocator, &.{ batch_a, batch_b, batch_c });
 
 `sendBatches` keeps several on the wire at once and collects the confirmations
 afterwards, so the round trip is paid once for the window rather than once per
-batch. Retries, connection recovery and the at-least-once guarantee are exactly
-`sendBatch`'s — a batch the broker accepted but could not acknowledge may be
-published twice, either way.
+batch. Retries and connection recovery are exactly `sendBatch`'s.
+
+`max_in_flight` on `HubConnection.Options` sets how many a link may have
+unconfirmed, and defaults to 8. The ring is allocated once when the link
+attaches and costs a few dozen bytes a slot, and the blocking `sendBatch` still
+refuses to overlap with anything, so raising it only affects `sendBatches`.
+
+Both calls are at-least-once — a batch the broker accepted but could not
+acknowledge may be published twice — and overlapping widens that window. When a
+send fails, the batches behind it are already on the wire and may well be
+accepted, but their verdicts are abandoned unread, so they are re-sent. At most
+`max_in_flight` batches are ever at risk. The answer is the same as it is for
+`sendBatch`: give events an application property the consumer deduplicates on.
 
 Batches are grouped into runs by partition, because each partition is its own
 link and only batches sharing one can overlap. Passing them already grouped —
@@ -148,8 +158,10 @@ rather than a wildcard, so it forms runs of its own.
 For finer control, `SenderPool` exposes the pieces underneath: `sendAsync`
 returns a token without waiting, `confirm` collects the next verdict in send
 order and names it, `unconfirmed` reports how many are outstanding, and
-`sendPipelined` runs the window without retrying. `SenderPool.Options.max_in_flight`
-sets the window size and defaults to 1, which is the blocking behaviour.
+`sendPipelined` runs the window without retrying. It needs the link to itself:
+it reads the link's depth as its own and empties the ring when it finishes, so
+it returns `error.DeliveriesInFlight` rather than sharing a link whose verdicts
+someone else is still waiting for.
 
 ## Receiving
 

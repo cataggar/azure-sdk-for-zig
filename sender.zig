@@ -39,6 +39,15 @@ pub fn entityPathFor(
 /// deinitialised; this pool only owns the addresses it keys them by. Reusing a
 /// link matters beyond the attach round trip: the peer's credit and the
 /// negotiated `max-message-size` are per link.
+/// How many batches a link keeps on the wire unconfirmed by default.
+///
+/// Eight covers a round trip an order of magnitude longer than the time it
+/// takes to encode a batch, which is the regime that matters, and costs a ring
+/// of eight slots per link. Raising it further trades memory and the number of
+/// batches whose fate is unknown after a failure for very little more
+/// throughput.
+pub const default_max_in_flight: u32 = 8;
+
 pub const SenderPool = struct {
     allocator: Allocator,
     session: *amqp.Session,
@@ -65,10 +74,13 @@ pub const SenderPool = struct {
         ///
         /// One makes every send wait a full round trip for the broker's
         /// disposition, which caps a link at one batch per round trip however
-        /// large the batches are. Raising it lets `sendAsync` keep that many
-        /// batches in flight. `send` waits either way, so the default of one
-        /// leaves existing callers exactly as they were.
-        max_in_flight: u32 = 1,
+        /// large the batches are. Raising it lets `sendAsync`, and so
+        /// `sendPipelined`, keep that many batches in flight.
+        ///
+        /// The blocking `send` still refuses to overlap with anything, so this
+        /// only ever costs the ring: a few dozen bytes per slot, allocated
+        /// once when the link attaches. Zero is treated as one.
+        max_in_flight: u32 = default_max_in_flight,
     };
 
     pub fn init(allocator: Allocator, session: *amqp.Session, options: Options) SenderPool {
@@ -77,7 +89,7 @@ pub const SenderPool = struct {
             .session = session,
             .deadline_ms = options.deadline_ms,
             .link_id = options.link_id,
-            .max_in_flight = options.max_in_flight,
+            .max_in_flight = @max(options.max_in_flight, 1),
         };
     }
 
@@ -271,6 +283,15 @@ pub const SenderPool = struct {
     ) PipelinedSend {
         self.last_rejection = null;
 
+        // Checked before anything below can abandon the window: this call
+        // reads the link's depth as its own and empties the ring on the way
+        // out, so sharing the link would both misreport which batches landed
+        // and throw away a verdict its owner is still waiting for.
+        const already = self.unconfirmed(address) catch |err| {
+            return .{ .accepted = 0, .err = err };
+        };
+        if (already != 0) return .{ .accepted = 0, .err = error.DeliveriesInFlight };
+
         var accepted: usize = 0;
         const err = self.pipeline(allocator, address, batches, &accepted);
 
@@ -296,7 +317,7 @@ pub const SenderPool = struct {
     ) ?anyerror {
         var sent: usize = 0;
         while (sent < batches.len) {
-            const outstanding = self.unconfirmed(address) catch |err| return err;
+            const outstanding = sent - accepted.*;
             // Retire the oldest to make room, so the window stays full rather
             // than draining between batches.
             if (outstanding >= self.max_in_flight) {
@@ -781,6 +802,43 @@ test "a pipelined send keeps the window full instead of draining between batches
     // this passes only if nothing waited for a verdict mid-flight.
     const result = scripted.pool.sendPipelined(allocator, "my-hub", &batches);
     try testing.expectEqual(@as(usize, 3), result.accepted);
+    try testing.expectEqual(@as(?anyerror, null), result.err);
+}
+
+test "a window of zero is read as one rather than stalling every send" {
+    // A caller computing the window — from a config value, say — can land on
+    // zero, and an unclamped zero makes the very first batch look like an
+    // overflow, so `sendPipelined` fails before sending anything.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: driver.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptSender(peer, null, 2);
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 0,
+        .last = 0,
+        .settled = true,
+        .state = .accepted,
+    } });
+
+    var conn = try driver.Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
+    defer conn.deinit();
+    var scripted: Scripted = undefined;
+    try scripted.openWith(allocator, &mem, &clock, &conn, .{
+        .deadline_ms = 10_000,
+        .max_in_flight = 0,
+    });
+    defer scripted.deinit();
+
+    var batch = try batchOf(allocator, &.{"hello"}, .{});
+    defer batch.deinit(allocator);
+
+    const batches = [_]EventDataBatch{batch};
+    const result = scripted.pool.sendPipelined(allocator, "my-hub", &batches);
+    try testing.expectEqual(@as(usize, 1), result.accepted);
     try testing.expectEqual(@as(?anyerror, null), result.err);
 }
 
