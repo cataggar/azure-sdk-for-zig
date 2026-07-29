@@ -871,11 +871,31 @@ pub const Receiver = struct {
         delivery: Delivery,
         state: perf.DeliveryState,
     ) LinkError!void {
+        return self.settleRange(delivery.id, delivery.id, state);
+    }
+
+    /// Settle a contiguous run of deliveries with one disposition.
+    ///
+    /// A disposition names a `first`..`last` range (Â§2.7.6), so a consumer
+    /// working through a prefetch window does not need a frame per message.
+    /// At the default 300-deep prefetch that is the difference between 300
+    /// frames of bookkeeping and one.
+    ///
+    /// The range must be contiguous and must not span a delivery the caller
+    /// does not mean to settle: `SettleBatch` builds runs safely from ids that
+    /// may have gaps, which they do whenever another link on the same session
+    /// took a delivery id in between.
+    pub fn settleRange(
+        self: *Receiver,
+        first: u32,
+        last: u32,
+        state: perf.DeliveryState,
+    ) LinkError!void {
         try self.session.driver.sendPerformative(.amqp, self.session.channel, .{
             .disposition = .{
                 .role = .receiver,
-                .first = delivery.id,
-                .last = delivery.id,
+                .first = first,
+                .last = last,
                 .settled = true,
                 .state = state,
             },
@@ -917,6 +937,57 @@ pub const Receiver = struct {
                 else => return e,
             };
         }
+    }
+};
+
+/// Coalesces deliveries into as few dispositions as their ids allow.
+///
+/// Delivery ids are allocated by the session, not by the link, so a receiver
+/// sharing a session with anything else — a CBS link, `$management`, a second
+/// partition — sees gaps in the ids it is handed. Settling a range that spans
+/// a gap would settle a delivery belonging to another link, so a run is
+/// closed and emitted whenever the next id is not the one after it.
+///
+/// Nothing is on the wire until `flush`, so a caller that abandons a batch
+/// must either flush it or accept that the deliveries stay unsettled — which
+/// is the safe direction, since the peer redelivers them.
+pub const SettleBatch = struct {
+    receiver: *Receiver,
+    state: perf.DeliveryState = .accepted,
+    first: ?u32 = null,
+    last: u32 = 0,
+
+    pub fn init(receiver: *Receiver, state: perf.DeliveryState) SettleBatch {
+        return .{ .receiver = receiver, .state = state };
+    }
+
+    /// Extend the open run, or close it and start a new one.
+    pub fn add(self: *SettleBatch, delivery: Delivery) LinkError!void {
+        return self.addId(delivery.id);
+    }
+
+    pub fn addId(self: *SettleBatch, id: u32) LinkError!void {
+        if (self.first) |_| {
+            if (id == self.last +% 1) {
+                self.last = id;
+                return;
+            }
+            try self.flush();
+        }
+        self.first = id;
+        self.last = id;
+    }
+
+    /// Put the open run on the wire, if there is one.
+    pub fn flush(self: *SettleBatch) LinkError!void {
+        const first = self.first orelse return;
+        self.first = null;
+        try self.receiver.settleRange(first, self.last, self.state);
+    }
+
+    /// Whether anything is waiting to be settled.
+    pub fn pending(self: SettleBatch) bool {
+        return self.first != null;
     }
 };
 
@@ -1896,6 +1967,146 @@ test "draining an already queued backlog allocates nothing" {
         try testing.expectEqual(@as(usize, 8 + i * 4), delivery.payload.len);
     }
     try testing.expectEqual(@as(usize, 0), counting.allocs);
+}
+
+/// Every disposition on the wire, as `first..last` pairs.
+fn settledRanges(allocator: Allocator, written: []const u8) ![]const [2]u32 {
+    var frames = try EmittedFrames.parse(allocator, written);
+    defer frames.deinit();
+
+    var ranges: std.ArrayList([2]u32) = .empty;
+    errdefer ranges.deinit(allocator);
+    for (frames.bodies.items) |body| {
+        if (perf.peekDescriptor(body) != perf.descriptor.disposition) continue;
+        var decoded = try perf.decode(allocator, body);
+        defer decoded.deinit();
+        const d = decoded.performative.disposition;
+        try testing.expectEqual(perf.Role.receiver, d.role);
+        try testing.expect(d.settled);
+        try testing.expectEqual(perf.DeliveryState.accepted, d.state.?);
+        try ranges.append(allocator, .{ d.first, d.last orelse d.first });
+    }
+    return ranges.toOwnedSlice(allocator);
+}
+
+/// Attach a receiver and feed it `ids` as settled single-frame deliveries.
+fn scriptedReceiver(
+    allocator: Allocator,
+    mem: *MemoryTransport,
+    clock: *connection.ManualClock,
+    driver: *Driver,
+    fixture: *Fixture,
+    ids: []const u32,
+) !*Receiver {
+    const peer = Peer{ .allocator = allocator, .mem = mem };
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    for (ids) |id| {
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = id,
+            .delivery_tag = "t",
+            .message_format = 0,
+            .settled = false,
+            .more = false,
+        }, "event");
+    }
+
+    driver.* = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    fixture.* = try Fixture.init(allocator, mem, clock, driver);
+    return openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 32,
+    }, 10_000);
+}
+
+test "a batch settles a contiguous run in one disposition" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+
+    const ids = [_]u32{ 0, 1, 2, 3, 4, 5, 6, 7 };
+    var driver: Driver = undefined;
+    var fixture: Fixture = undefined;
+    const receiver = try scriptedReceiver(allocator, &mem, &clock, &driver, &fixture, &ids);
+    defer driver.deinit();
+    defer fixture.deinit();
+
+    mem.clearWritten();
+    var batch = SettleBatch.init(receiver, .accepted);
+    for (ids) |_| try batch.add(try receiver.receive(10_000));
+    try testing.expect(batch.pending());
+    try batch.flush();
+    try testing.expect(!batch.pending());
+
+    const ranges = try settledRanges(allocator, mem.written());
+    defer allocator.free(ranges);
+
+    // Settling one at a time put eight frames on the wire to say the same
+    // thing. At the default 300-deep prefetch that is 300.
+    try testing.expectEqual(@as(usize, 1), ranges.len);
+    try testing.expectEqual([2]u32{ 0, 7 }, ranges[0]);
+}
+
+test "a batch does not settle across a gap in delivery ids" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+
+    // Delivery ids are the session's, not the link's, so anything else on the
+    // session — a CBS link, `$management`, another partition — takes ids out
+    // of this receiver's run. Settling 3..9 as one range would settle two
+    // deliveries this receiver was never handed.
+    const ids = [_]u32{ 3, 4, 5, 8, 9, 11 };
+    var driver: Driver = undefined;
+    var fixture: Fixture = undefined;
+    const receiver = try scriptedReceiver(allocator, &mem, &clock, &driver, &fixture, &ids);
+    defer driver.deinit();
+    defer fixture.deinit();
+
+    mem.clearWritten();
+    var batch = SettleBatch.init(receiver, .accepted);
+    for (ids) |_| try batch.add(try receiver.receive(10_000));
+    try batch.flush();
+
+    const ranges = try settledRanges(allocator, mem.written());
+    defer allocator.free(ranges);
+
+    try testing.expectEqual(@as(usize, 3), ranges.len);
+    try testing.expectEqual([2]u32{ 3, 5 }, ranges[0]);
+    try testing.expectEqual([2]u32{ 8, 9 }, ranges[1]);
+    try testing.expectEqual([2]u32{ 11, 11 }, ranges[2]);
+}
+
+test "flushing an empty batch says nothing" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+
+    var driver: Driver = undefined;
+    var fixture: Fixture = undefined;
+    const receiver = try scriptedReceiver(allocator, &mem, &clock, &driver, &fixture, &.{});
+    defer driver.deinit();
+    defer fixture.deinit();
+
+    mem.clearWritten();
+    var batch = SettleBatch.init(receiver, .accepted);
+    try testing.expect(!batch.pending());
+    try batch.flush();
+    try batch.flush();
+
+    const ranges = try settledRanges(allocator, mem.written());
+    defer allocator.free(ranges);
+    try testing.expectEqual(@as(usize, 0), ranges.len);
 }
 
 test "a prefetching receiver replenishes credit rather than stalling" {
