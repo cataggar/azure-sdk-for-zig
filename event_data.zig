@@ -148,6 +148,41 @@ pub const PropertyMap = struct {
         return self.put(allocator, key, .{ .string = value });
     }
 
+    /// Insert `key` and `value` without copying either.
+    ///
+    /// `allocator` is used only for the map's own storage; the caller owns the
+    /// key and value bytes and must keep them alive at least as long as the
+    /// map. A map filled this way must be released with `deinitEntries`, never
+    /// with `deinit`, which would try to free memory it does not own.
+    ///
+    /// `ReceivedEventData` is the only user: every property it decodes already
+    /// lives in the event's backing block.
+    pub fn putBorrowed(
+        self: *PropertyMap,
+        allocator: std.mem.Allocator,
+        key: []const u8,
+        value: AmqpValue,
+    ) !void {
+        const gop = try self.entries.getOrPut(allocator, key);
+        gop.value_ptr.* = value;
+    }
+
+    /// Size the map for exactly `n` entries, so a run of `putBorrowed` neither
+    /// grows it nor leaves it holding slack it will never use.
+    ///
+    /// `setCapacity` rather than `ensureTotalCapacity`, which applies a
+    /// super-linear growth factor on top of what it is asked for.
+    pub fn reserveExact(self: *PropertyMap, allocator: std.mem.Allocator, n: usize) !void {
+        try self.entries.entries.setCapacity(allocator, n);
+    }
+
+    /// Release the map's own storage and leave the keys and values alone. The
+    /// counterpart to `putBorrowed`.
+    pub fn deinitEntries(self: *PropertyMap, allocator: std.mem.Allocator) void {
+        self.entries.deinit(allocator);
+        self.* = .empty;
+    }
+
     pub fn get(self: PropertyMap, key: []const u8) ?AmqpValue {
         return self.entries.get(key);
     }
@@ -280,7 +315,14 @@ pub const EventData = struct {
 /// An event returned by `ConsumerClient`, including the fields Event Hubs
 /// populates on the service side.
 ///
-/// Everything is allocator-owned; free with `deinit` or `freeReceivedEvents`.
+/// Every decoded byte — the body, the ids, the annotations, and both property
+/// maps' keys and values — lives in one `backing` block, so an event costs a
+/// single allocation rather than one per field. The maps keep their own index
+/// storage on the allocator, which is the only other thing `deinit` frees.
+///
+/// The consequence is that the fields are not individually owned: do not free
+/// one, replace one with allocated memory, or add to `properties` with
+/// `PropertyMap.put`. Free the event with `deinit` or `freeReceivedEvents`.
 pub const ReceivedEventData = struct {
     event_data: EventData = .{},
     /// UTC time the service accepted the event, in Unix milliseconds.
@@ -293,6 +335,8 @@ pub const ReceivedEventData = struct {
     sequence_number: i64 = 0,
     /// Message annotations that are not surfaced as dedicated fields.
     system_properties: PropertyMap = .empty,
+    /// The one block every decoded field points into. See the type docs.
+    backing: []align(block_alignment) u8 = &.{},
 
     pub fn body(self: ReceivedEventData) []const u8 {
         return self.event_data.body;
@@ -314,15 +358,13 @@ pub const ReceivedEventData = struct {
         return self.event_data.properties;
     }
 
+    /// Safe to call twice: the event is left empty, so a caller that hands
+    /// ownership on but keeps its own copy of the struct cannot double free.
     pub fn deinit(self: *ReceivedEventData, allocator: std.mem.Allocator) void {
-        allocator.free(self.event_data.body);
-        if (self.event_data.content_type) |content_type| allocator.free(content_type);
-        if (self.event_data.correlation_id) |correlation_id| correlation_id.deinit(allocator);
-        if (self.event_data.message_id) |message_id| message_id.deinit(allocator);
-        self.event_data.properties.deinit(allocator);
-        self.system_properties.deinit(allocator);
-        if (self.partition_key) |partition_key| allocator.free(partition_key);
-        if (self.offset) |offset| allocator.free(offset);
+        self.event_data.properties.deinitEntries(allocator);
+        self.system_properties.deinitEntries(allocator);
+        allocator.free(self.backing);
+        self.* = .{};
     }
 };
 
@@ -590,6 +632,10 @@ pub const RawMessage = struct {
 ///
 /// Everything is borrowed and copied out, so the result stays valid after the
 /// message it came from is freed.
+///
+/// The copy goes into one block, sized by `blockBytes` before anything is
+/// written. That costs a second walk of the message but turns a decode that
+/// allocated once per field into one that allocates once per event.
 pub fn fromRawMessage(
     allocator: std.mem.Allocator,
     raw: RawMessage,
@@ -597,34 +643,181 @@ pub fn fromRawMessage(
     var received: ReceivedEventData = .{};
     errdefer received.deinit(allocator);
 
-    received.event_data.body = try allocator.dupe(u8, raw.body orelse "");
+    const layout = plan(raw);
+    received.backing = try allocator.alignedAlloc(u8, .fromByteUnits(block_alignment), layout.bytes);
+    var fixed = std.heap.FixedBufferAllocator.init(received.backing);
+    const block = fixed.allocator();
+
+    received.event_data.body = try block.dupe(u8, raw.body orelse "");
 
     if (raw.content_type) |content_type| {
-        received.event_data.content_type = try allocator.dupe(u8, content_type);
+        received.event_data.content_type = try block.dupe(u8, content_type);
     }
     if (raw.correlation_id) |correlation_id| {
         if (MessageId.fromAmqpValue(correlation_id)) |parsed| {
-            received.event_data.correlation_id = try parsed.clone(allocator);
+            received.event_data.correlation_id = try parsed.clone(block);
         }
     }
     if (raw.message_id) |message_id| {
         if (MessageId.fromAmqpValue(message_id)) |parsed| {
-            received.event_data.message_id = try parsed.clone(allocator);
+            received.event_data.message_id = try parsed.clone(block);
         }
     }
 
     if (raw.application_properties) |entries| {
+        // Exactly the number of puts that follow, so the map is sized once
+        // rather than grown into, and never past what it holds.
+        try received.event_data.properties.reserveExact(allocator, layout.properties);
         for (entries) |entry| {
             const key = keyOf(entry.key) orelse continue;
-            try received.event_data.properties.put(allocator, key, entry.value);
+            try received.event_data.properties.putBorrowed(
+                allocator,
+                try block.dupe(u8, key),
+                try entry.value.clone(block),
+            );
         }
     }
 
     if (raw.message_annotations) |entries| {
-        try applyAnnotations(allocator, entries, &received);
+        if (layout.system_properties > 0) {
+            try received.system_properties.reserveExact(allocator, layout.system_properties);
+        }
+        try applyAnnotations(allocator, block, entries, &received);
     }
 
     return received;
+}
+
+/// Alignment of a received event's backing block, and the granularity every
+/// reservation in `blockBytes` is rounded to.
+///
+/// No allocation made from the block needs more than this: the widest thing
+/// carved out of it is an `AmqpValue`, and the rest are byte slices.
+const block_alignment = @alignOf(AmqpValue);
+
+comptime {
+    std.debug.assert(@alignOf(MapEntry) <= block_alignment);
+}
+
+/// Rounding each reservation up to the block's alignment is what makes their
+/// sum an upper bound no matter what order the allocations happen in: a
+/// cursor that starts at a multiple of the alignment and has consumed at most
+/// the sum so far can never be pushed past it by realigning for the next.
+fn reserve(n: usize) usize {
+    return std.mem.alignForward(usize, n, block_alignment);
+}
+
+/// Bytes `value.clone` takes from the block.
+///
+/// This mirrors `AmqpValue.clone` allocation for allocation, so the switch is
+/// deliberately exhaustive rather than defaulting: a type added to `AmqpValue`
+/// upstream has to fail to compile here rather than silently under-reserve
+/// and turn into an `OutOfMemory` at decode time.
+fn cloneSize(value: AmqpValue) usize {
+    return switch (value) {
+        .null,
+        .boolean,
+        .ubyte,
+        .ushort,
+        .uint,
+        .ulong,
+        .byte,
+        .short,
+        .int,
+        .long,
+        .float,
+        .double,
+        .char,
+        .timestamp,
+        .uuid,
+        => 0,
+        .binary, .string, .symbol => |bytes| reserve(bytes.len),
+        .list, .array => |items| total: {
+            var total = reserve(items.len * @sizeOf(AmqpValue));
+            for (items) |item| total += cloneSize(item);
+            break :total total;
+        },
+        .map => |entries| total: {
+            var total = reserve(entries.len * @sizeOf(MapEntry));
+            for (entries) |entry| total += cloneSize(entry.key) + cloneSize(entry.value);
+            break :total total;
+        },
+        .described => |described| reserve(@sizeOf(AmqpValue)) * 2 +
+            cloneSize(described.descriptor.*) + cloneSize(described.value.*),
+    };
+}
+
+/// What one decode needs, measured before anything is written.
+const Layout = struct {
+    /// Size of the backing block.
+    bytes: usize = 0,
+    /// Application properties that will be stored, so the map is sized once.
+    properties: usize = 0,
+    /// Annotations that are not surfaced as dedicated fields.
+    system_properties: usize = 0,
+};
+
+/// Measure what the decode will take. Walks exactly the fields
+/// `fromRawMessage` copies, skipping exactly the ones it skips.
+fn plan(raw: RawMessage) Layout {
+    var layout: Layout = .{};
+    layout.bytes = reserve(if (raw.body) |body| body.len else 0);
+    if (raw.content_type) |content_type| layout.bytes += reserve(content_type.len);
+    if (raw.correlation_id) |value| layout.bytes += messageIdSize(value);
+    if (raw.message_id) |value| layout.bytes += messageIdSize(value);
+
+    if (raw.application_properties) |entries| {
+        for (entries) |entry| {
+            const key = keyOf(entry.key) orelse continue;
+            layout.properties += 1;
+            layout.bytes += reserve(key.len) + cloneSize(entry.value);
+        }
+    }
+
+    if (raw.message_annotations) |entries| {
+        for (entries) |entry| {
+            const key = keyOf(entry.key) orelse continue;
+            switch (annotationOf(key)) {
+                // Read straight out of the value; nothing is copied.
+                .sequence_number, .enqueued_time => {},
+                // Copied only when the value is a string. Anything else is an
+                // error, and an error needs no room.
+                .partition_key, .offset => layout.bytes += switch (entry.value) {
+                    .string => |text| reserve(text.len),
+                    else => 0,
+                },
+                .other => {
+                    layout.system_properties += 1;
+                    layout.bytes += reserve(key.len) + cloneSize(entry.value);
+                },
+            }
+        }
+    }
+
+    return layout;
+}
+
+fn messageIdSize(value: AmqpValue) usize {
+    const parsed = MessageId.fromAmqpValue(value) orelse return 0;
+    return switch (parsed) {
+        .binary, .string => |bytes| reserve(bytes.len),
+        .ulong, .uuid => 0,
+    };
+}
+
+/// The annotations Event Hubs stamps on a received event.
+///
+/// Shared by the sizing pass and the decode so the two cannot disagree about
+/// which annotation is handled how — both switch on it exhaustively, so a new
+/// one has to be given a size as well as a meaning.
+const Annotation = enum { sequence_number, partition_key, enqueued_time, offset, other };
+
+fn annotationOf(key: []const u8) Annotation {
+    if (std.mem.eql(u8, key, sequence_number_annotation)) return .sequence_number;
+    if (std.mem.eql(u8, key, partition_key_annotation)) return .partition_key;
+    if (std.mem.eql(u8, key, enqueued_time_annotation)) return .enqueued_time;
+    if (std.mem.eql(u8, key, offset_annotation)) return .offset;
+    return .other;
 }
 
 /// Decode an AMQP message into a received event.
@@ -656,35 +849,44 @@ pub fn fromAmqpMessage(
 
 fn applyAnnotations(
     allocator: std.mem.Allocator,
+    block: std.mem.Allocator,
     entries: []const MapEntry,
     received: *ReceivedEventData,
 ) !void {
     for (entries) |entry| {
         const key = keyOf(entry.key) orelse continue;
-        if (std.mem.eql(u8, key, sequence_number_annotation)) {
-            received.sequence_number = toInt64(entry.value) orelse
-                return ConversionError.InvalidSequenceNumberAnnotation;
-        } else if (std.mem.eql(u8, key, partition_key_annotation)) {
-            if (received.partition_key != null) return ConversionError.DuplicateAnnotation;
-            const value = switch (entry.value) {
-                .string => |text| text,
-                else => return ConversionError.InvalidPartitionKeyAnnotation,
-            };
-            received.partition_key = try allocator.dupe(u8, value);
-        } else if (std.mem.eql(u8, key, enqueued_time_annotation)) {
-            received.enqueued_time = switch (entry.value) {
-                .timestamp => |value| value,
-                else => return ConversionError.InvalidEnqueuedTimeAnnotation,
-            };
-        } else if (std.mem.eql(u8, key, offset_annotation)) {
-            if (received.offset != null) return ConversionError.DuplicateAnnotation;
-            const value = switch (entry.value) {
-                .string => |text| text,
-                else => return ConversionError.InvalidOffsetAnnotation,
-            };
-            received.offset = try allocator.dupe(u8, value);
-        } else {
-            try received.system_properties.put(allocator, key, entry.value);
+        switch (annotationOf(key)) {
+            .sequence_number => {
+                received.sequence_number = toInt64(entry.value) orelse
+                    return ConversionError.InvalidSequenceNumberAnnotation;
+            },
+            .partition_key => {
+                if (received.partition_key != null) return ConversionError.DuplicateAnnotation;
+                const value = switch (entry.value) {
+                    .string => |text| text,
+                    else => return ConversionError.InvalidPartitionKeyAnnotation,
+                };
+                received.partition_key = try block.dupe(u8, value);
+            },
+            .enqueued_time => {
+                received.enqueued_time = switch (entry.value) {
+                    .timestamp => |value| value,
+                    else => return ConversionError.InvalidEnqueuedTimeAnnotation,
+                };
+            },
+            .offset => {
+                if (received.offset != null) return ConversionError.DuplicateAnnotation;
+                const value = switch (entry.value) {
+                    .string => |text| text,
+                    else => return ConversionError.InvalidOffsetAnnotation,
+                };
+                received.offset = try block.dupe(u8, value);
+            },
+            .other => try received.system_properties.putBorrowed(
+                allocator,
+                try block.dupe(u8, key),
+                try entry.value.clone(block),
+            ),
         }
     }
 }
@@ -1200,3 +1402,284 @@ test "trailing null fields are omitted from composite sections" {
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0x00, 0x53, 0x73, 0x45 }, short);
     try std.testing.expect(long.len > short.len);
 }
+
+test "a decoded event is one block plus its property maps" {
+    const allocator = std.testing.allocator;
+
+    var counting = CountingAllocator.init(allocator);
+    var annotations = [_]MapEntry{
+        .{ .key = .{ .symbol = sequence_number_annotation }, .value = .{ .long = 7 } },
+        .{ .key = .{ .symbol = offset_annotation }, .value = .{ .string = "12345" } },
+        .{ .key = .{ .symbol = partition_key_annotation }, .value = .{ .string = "pk" } },
+    };
+    var properties = [_]MapEntry{
+        .{ .key = .{ .string = "a" }, .value = .{ .string = "one" } },
+        .{ .key = .{ .string = "b" }, .value = .{ .int = 2 } },
+    };
+
+    var decoded = try fromRawMessage(counting.allocator(), .{
+        .body = "hello",
+        .content_type = "text/plain",
+        .message_id = .{ .string = "id" },
+        .message_annotations = &annotations,
+        .application_properties = &properties,
+    });
+    defer decoded.deinit(counting.allocator());
+
+    // One for the block, one for the property map. The annotations all map to
+    // dedicated fields, so `system_properties` stays empty and unallocated.
+    try std.testing.expectEqual(@as(usize, 2), counting.allocations);
+
+    // And the map was sized for exactly what it holds, so that one allocation
+    // is neither grown into nor left holding slack.
+    try std.testing.expectEqual(
+        decoded.properties().count(),
+        decoded.event_data.properties.entries.entries.capacity,
+    );
+}
+
+test "every AMQP value shape fits the block it was measured for" {
+    const allocator = std.testing.allocator;
+
+    // Application properties are supposed to be simple types, but nothing
+    // stops a peer sending otherwise and the decode clones whatever arrives.
+    // Anything `AmqpValue.clone` allocates, `cloneSize` has to have counted.
+    var inner = [_]AmqpValue{ .{ .string = "deep" }, .{ .binary = "bytes" } };
+    var inner_map = [_]MapEntry{.{ .key = .{ .symbol = "nested-key" }, .value = .{ .list = &inner } }};
+    var descriptor: AmqpValue = .{ .symbol = "com.example:thing" };
+    var described_value: AmqpValue = .{ .map = &inner_map };
+
+    var properties = [_]MapEntry{
+        .{ .key = .{ .string = "null" }, .value = .null },
+        .{ .key = .{ .string = "boolean" }, .value = .{ .boolean = true } },
+        .{ .key = .{ .string = "ubyte" }, .value = .{ .ubyte = 1 } },
+        .{ .key = .{ .string = "ushort" }, .value = .{ .ushort = 2 } },
+        .{ .key = .{ .string = "uint" }, .value = .{ .uint = 3 } },
+        .{ .key = .{ .string = "ulong" }, .value = .{ .ulong = 4 } },
+        .{ .key = .{ .string = "byte" }, .value = .{ .byte = -1 } },
+        .{ .key = .{ .string = "short" }, .value = .{ .short = -2 } },
+        .{ .key = .{ .string = "int" }, .value = .{ .int = -3 } },
+        .{ .key = .{ .string = "long" }, .value = .{ .long = -4 } },
+        .{ .key = .{ .string = "float" }, .value = .{ .float = 1.5 } },
+        .{ .key = .{ .string = "double" }, .value = .{ .double = 2.5 } },
+        .{ .key = .{ .string = "char" }, .value = .{ .char = 'z' } },
+        .{ .key = .{ .string = "timestamp" }, .value = .{ .timestamp = 1700000000 } },
+        .{ .key = .{ .string = "uuid" }, .value = .{ .uuid = @splat(7) } },
+        .{ .key = .{ .string = "binary" }, .value = .{ .binary = "raw" } },
+        .{ .key = .{ .string = "string" }, .value = .{ .string = "text" } },
+        .{ .key = .{ .string = "symbol" }, .value = .{ .symbol = "sym" } },
+        .{ .key = .{ .string = "list" }, .value = .{ .list = &inner } },
+        .{ .key = .{ .string = "map" }, .value = .{ .map = &inner_map } },
+        .{ .key = .{ .string = "array" }, .value = .{ .array = &inner } },
+        .{
+            .key = .{ .string = "described" },
+            .value = .{ .described = .{ .descriptor = &descriptor, .value = &described_value } },
+        },
+        // A key that is neither a string nor a symbol is skipped, and must be
+        // skipped by the measuring pass too or the block is oversized.
+        .{ .key = .{ .int = 9 }, .value = .{ .string = "unreachable" } },
+    };
+    // The same shapes again as annotations, which land in `system_properties`.
+    var annotations = [_]MapEntry{
+        .{ .key = .{ .symbol = "x-opt-vendor-list" }, .value = .{ .list = &inner } },
+        .{
+            .key = .{ .symbol = "x-opt-vendor-described" },
+            .value = .{ .described = .{ .descriptor = &descriptor, .value = &described_value } },
+        },
+    };
+
+    var decoded = try fromRawMessage(allocator, .{
+        .body = "body",
+        .message_annotations = &annotations,
+        .application_properties = &properties,
+    });
+    defer decoded.deinit(allocator);
+
+    try std.testing.expectEqual(properties.len - 1, decoded.properties().count());
+    try std.testing.expectEqual(@as(usize, 2), decoded.system_properties.count());
+    try std.testing.expect(decoded.properties().get("list").?.eql(.{ .list = &inner }));
+    try std.testing.expect(decoded.properties().get("map").?.eql(.{ .map = &inner_map }));
+    try std.testing.expect(decoded.system_properties.get("x-opt-vendor-described").?.eql(
+        .{ .described = .{ .descriptor = &descriptor, .value = &described_value } },
+    ));
+    try std.testing.expect(decoded.properties().get("unreachable") == null);
+}
+
+test "each value shape is measured with nothing to spare" {
+    const allocator = std.testing.allocator;
+
+    // Every key and string here is a multiple of the block alignment, so the
+    // measured size is exact rather than rounded up, and each shape is the
+    // only thing in its message. A term missing from `plan` or `cloneSize`
+    // then runs the decode out of block. The broad test above cannot do this
+    // job: across two dozen properties its rounding slack is large enough to
+    // swallow a miscount of a whole nested value.
+    var pair = [_]AmqpValue{ .{ .string = "aaaaaaaa" }, .{ .binary = "bbbbbbbb" } };
+    var pair_map = [_]MapEntry{
+        .{ .key = .{ .symbol = "cccccccc" }, .value = .{ .string = "dddddddd" } },
+    };
+    var descriptor: AmqpValue = .{ .symbol = "eeeeeeee" };
+    var described_value: AmqpValue = .{ .map = &pair_map };
+
+    const shapes = [_]AmqpValue{
+        .{ .string = "gggggggg" },
+        .{ .binary = "hhhhhhhh" },
+        .{ .symbol = "iiiiiiii" },
+        .{ .list = &pair },
+        .{ .array = &pair },
+        .{ .map = &pair_map },
+        .{ .described = .{ .descriptor = &descriptor, .value = &described_value } },
+    };
+
+    for (shapes) |shape| {
+        var properties = [_]MapEntry{.{ .key = .{ .string = "kkkkkkkk" }, .value = shape }};
+        var annotations = [_]MapEntry{.{ .key = .{ .symbol = "mmmmmmmm" }, .value = shape }};
+
+        var decoded = try fromRawMessage(allocator, .{
+            .application_properties = &properties,
+            .message_annotations = &annotations,
+        });
+        defer decoded.deinit(allocator);
+
+        try std.testing.expect(decoded.properties().get("kkkkkkkk").?.eql(shape));
+        try std.testing.expect(decoded.system_properties.get("mmmmmmmm").?.eql(shape));
+    }
+}
+
+test "each dedicated field is measured with nothing to spare" {
+    const allocator = std.testing.allocator;
+
+    // Same idea as above, for the fields that are copied out by name rather
+    // than through `cloneSize`.
+    var annotations = [_]MapEntry{
+        .{ .key = .{ .symbol = offset_annotation }, .value = .{ .string = "oooooooo" } },
+        .{ .key = .{ .symbol = partition_key_annotation }, .value = .{ .string = "pppppppp" } },
+    };
+
+    var decoded = try fromRawMessage(allocator, .{
+        .body = "bbbbbbbb",
+        .content_type = "tttttttt",
+        .message_id = .{ .string = "iiiiiiii" },
+        .correlation_id = .{ .binary = "cccccccc" },
+        .message_annotations = &annotations,
+    });
+    defer decoded.deinit(allocator);
+
+    try std.testing.expectEqualStrings("bbbbbbbb", decoded.body());
+    try std.testing.expectEqualStrings("tttttttt", decoded.contentType().?);
+    try std.testing.expectEqualStrings("iiiiiiii", decoded.messageId().?.string);
+    try std.testing.expectEqualStrings("cccccccc", decoded.correlationId().?.binary);
+    try std.testing.expectEqualStrings("oooooooo", decoded.offset.?);
+    try std.testing.expectEqualStrings("pppppppp", decoded.partition_key.?);
+}
+
+test "a decoded event outlives every byte it was decoded from" {
+    const allocator = std.testing.allocator;
+
+    // The copy has to be deep: heap-allocate the source, then release it
+    // before reading anything back.
+    const body = try allocator.dupe(u8, "payload");
+    const key = try allocator.dupe(u8, "tenant");
+    const value = try allocator.dupe(u8, "contoso");
+    const offset = try allocator.dupe(u8, "9001");
+
+    var properties = [_]MapEntry{.{ .key = .{ .string = key }, .value = .{ .string = value } }};
+    var annotations = [_]MapEntry{
+        .{ .key = .{ .symbol = offset_annotation }, .value = .{ .string = offset } },
+    };
+
+    var decoded = try fromRawMessage(allocator, .{
+        .body = body,
+        .message_annotations = &annotations,
+        .application_properties = &properties,
+    });
+    defer decoded.deinit(allocator);
+
+    allocator.free(body);
+    allocator.free(key);
+    allocator.free(value);
+    allocator.free(offset);
+
+    try std.testing.expectEqualStrings("payload", decoded.body());
+    try std.testing.expectEqualStrings("9001", decoded.offset.?);
+    try std.testing.expectEqualStrings("contoso", decoded.properties().getString("tenant").?);
+}
+
+test "a repeated application property key keeps the last value" {
+    const allocator = std.testing.allocator;
+
+    var properties = [_]MapEntry{
+        .{ .key = .{ .string = "k" }, .value = .{ .string = "first" } },
+        .{ .key = .{ .string = "k" }, .value = .{ .string = "second" } },
+    };
+
+    var decoded = try fromRawMessage(allocator, .{
+        .body = "b",
+        .application_properties = &properties,
+    });
+    defer decoded.deinit(allocator);
+
+    // The block is sized for both, so the superseded copy is simply left in
+    // it. Reserving for both is also what keeps the map from growing.
+    try std.testing.expectEqual(@as(usize, 1), decoded.properties().count());
+    try std.testing.expectEqualStrings("second", decoded.properties().getString("k").?);
+}
+
+test "deinit leaves an event that can be deinitialised again" {
+    const allocator = std.testing.allocator;
+
+    var properties = [_]MapEntry{.{ .key = .{ .string = "k" }, .value = .{ .string = "v" } }};
+    var decoded = try fromRawMessage(allocator, .{
+        .body = "b",
+        .application_properties = &properties,
+    });
+
+    decoded.deinit(allocator);
+    // Nothing is owned twice: an event handed on and then released by both
+    // sides must not double free. `testing.allocator` is the assertion.
+    decoded.deinit(allocator);
+
+    try std.testing.expectEqualStrings("", decoded.body());
+    try std.testing.expectEqual(@as(usize, 0), decoded.properties().count());
+}
+
+/// Counts the allocations a decode makes, which is the property under test in
+/// `"a decoded event is one block plus its property maps"`.
+const CountingAllocator = struct {
+    parent: std.mem.Allocator,
+    allocations: usize = 0,
+
+    fn init(parent: std.mem.Allocator) CountingAllocator {
+        return .{ .parent = parent };
+    }
+
+    fn allocator(self: *CountingAllocator) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &.{
+            .alloc = alloc,
+            .resize = resize,
+            .remap = remap,
+            .free = free,
+        } };
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ra: usize) ?[*]u8 {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        self.allocations += 1;
+        return self.parent.rawAlloc(len, alignment, ra);
+    }
+
+    fn resize(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) bool {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        return self.parent.rawResize(buf, alignment, new_len, ra);
+    }
+
+    fn remap(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) ?[*]u8 {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        return self.parent.rawRemap(buf, alignment, new_len, ra);
+    }
+
+    fn free(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, ra: usize) void {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        self.parent.rawFree(buf, alignment, ra);
+    }
+};

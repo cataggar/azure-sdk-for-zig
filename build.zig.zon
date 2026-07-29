@@ -1,6 +1,6 @@
 .{
     .name = .azure_sdk_eventhubs,
-    .version = "0.4.0",
+    .version = "0.5.0",
     .fingerprint = 0xcb7772a1125a8d42,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{

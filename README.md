@@ -229,8 +229,18 @@ try event.setProperty(allocator, "retries", .{ .long = 7 });
 ```
 
 `EventData` borrows every slice it is given and only `properties` allocates, so
-`deinit` frees just that map. Values decoded from the wire own everything and
-are freed with `ReceivedEventData.deinit` or `freeReceivedEvents`.
+`deinit` frees just that map.
+
+A `ReceivedEventData` owns its decoded bytes, but as a single block rather than
+a field at a time: the body, the ids, the annotations, and both property maps'
+keys and values all point into one allocation sized before anything is copied.
+Receiving an event costs two allocations instead of nine, and `deinit` — or
+`freeReceivedEvents` for a slice — releases the lot. `deinit` may be called
+twice, so handing an event on without giving up your own copy is safe.
+
+The fields are therefore not individually owned. Do not free one, replace one
+with allocated memory, or add to a received event's `properties` with
+`PropertyMap.put`; copy the event out first if you need to change it.
 
 ## Batching
 
