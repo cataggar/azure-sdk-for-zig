@@ -1,6 +1,6 @@
 .{
     .name = .azure_sdk_storage_blobs,
-    .version = "0.1.0",
+    .version = "0.1.1",
     .fingerprint = 0xd9bbf92976469923,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
