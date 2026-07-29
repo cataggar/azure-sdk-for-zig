@@ -501,23 +501,29 @@ pub const Sender = struct {
         return &self.in_flight[(self.in_flight_head + i) % self.in_flight.len];
     }
 
-    /// How many deliveries are written but not yet settled.
     /// Give up on every delivery still in flight, emptying the window.
     ///
-    /// Their verdicts are lost. The peer may still settle those ids, and those
-    /// dispositions are then ignored, so this is at-least-once: a caller that
-    /// abandons a delivery the broker went on to accept and then resends it
-    /// has published it twice.
+    /// Their verdicts are lost — including any the peer has already sent but
+    /// the caller has not collected, since `awaitSettlement` retires strictly
+    /// in send order and a peer may settle out of it. The peer may also settle
+    /// those ids later, and those dispositions are then ignored. So this is
+    /// at-least-once: a caller that abandons a delivery the broker went on to
+    /// accept and then resends it has published it twice.
     ///
     /// This is the way out of a pipelined send that failed partway. A sender
     /// still holding unsettled deliveries refuses every later blocking send
     /// with `error.DeliveriesInFlight`, so without it a single timed-out
     /// pipeline would wedge the link for good — the caller cannot wait the
     /// deliveries out, because waiting is what just failed.
+    ///
+    /// The `Settlement` from the last `awaitSettlement` stays valid: this is
+    /// not an `awaitSettlement`, so it does not disturb the rejection the
+    /// sender is holding for the caller to read.
     pub fn abandonInFlight(self: *Sender) void {
         while (self.in_flight_len > 0) self.discardOldest();
     }
 
+    /// How many deliveries are written but not yet settled.
     pub fn inFlight(self: *const Sender) usize {
         return self.in_flight_len;
     }
@@ -2366,12 +2372,12 @@ test "abandoning the window frees a rejection and lets blocking sends resume" {
     const peer = Peer{ .allocator = allocator, .mem = &mem };
 
     try scriptSenderAttach(peer, 10);
-    // One verdict for three deliveries, and it carries an allocated
-    // description so the abandon has memory to release.
+    // One verdict covering all three, so the two the caller never collects are
+    // each left holding an allocated rejection for the abandon to release.
     try peer.push(0, .{ .disposition = .{
         .role = .receiver,
         .first = 0,
-        .last = 0,
+        .last = 2,
         .settled = true,
         .state = .{ .rejected = .{
             .condition = "amqp:resource-limit-exceeded",
@@ -2413,6 +2419,11 @@ test "abandoning the window frees a rejection and lets blocking sends resume" {
 
     sender.abandonInFlight();
     try testing.expectEqual(@as(usize, 0), sender.inFlight());
+
+    // Abandoning is not a settlement, so the verdict already handed out is
+    // still readable — its contract says it lives until the next
+    // `awaitSettlement`, and this was not one.
+    try testing.expectEqualStrings("slow down", first.rejection.?.description.?);
 
     // And now it goes through, with the peer settling id 3 as it would.
     try sender.sendBytes("d", 10_000);
