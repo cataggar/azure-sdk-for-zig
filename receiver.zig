@@ -197,34 +197,60 @@ pub const PartitionClient = struct {
         }
 
         var events: std.ArrayList(ReceivedEventData) = .empty;
+        // `count` is exactly how many will be appended on the success path, and
+        // a `ReceivedEventData` is large enough that regrowing a 300-deep
+        // prefetch means repeatedly copying tens of kilobytes.
+        try events.ensureTotalCapacityPrecise(allocator, count);
         errdefer {
             for (events.items) |*e| e.deinit(allocator);
             events.deinit(allocator);
         }
 
+        // One disposition per message meant a frame on the wire per event; a
+        // full prefetch window cost hundreds of round trips of bookkeeping.
+        // `SettleBatch` coalesces the ids into runs and only breaks a run
+        // where another link on the session took an id in between.
+        var settling = amqp.SettleBatch.init(self.receiver, .accepted);
+
         while (events.items.len < count) {
             const delivery = self.receiver.receive(self.deadline_ms) catch |err| {
                 self.recordDetach();
-                // Events already in hand arrived and were accepted, so dropping
-                // them here would lose them outright. Hand back the short batch
-                // and let the next call surface the failure: the link is dead,
-                // so that call fails immediately with nothing to lose.
+                // Events already in hand arrived, so dropping them here would
+                // lose them outright. Hand back the short batch and let the
+                // next call surface the failure: the link is dead, so that
+                // call fails immediately with nothing to lose.
                 if (events.items.len > 0) break;
                 return err;
             };
 
-            var decoded = try amqp.decodeMessage(allocator, delivery.payload);
-            defer decoded.deinit();
+            const received = blk: {
+                var decoded = try amqp.decodeMessage(allocator, delivery.payload);
+                defer decoded.deinit();
+                break :blk try event_data.fromRawMessage(allocator, rawFrom(&decoded.message));
+            };
 
-            const received = try event_data.fromRawMessage(allocator, rawFrom(&decoded.message));
-            errdefer {
-                var owned = received;
-                owned.deinit(allocator);
-            }
-
-            try events.append(allocator, received);
-            try self.receiver.accept(delivery);
+            // Capacity for `count` was reserved up front and the loop runs
+            // only while short of it, so this cannot fail. That matters
+            // beyond the allocation it saves: it leaves no point at which
+            // the event is owned by both this frame and `events`, which is
+            // what would otherwise let a later failure in this iteration
+            // free it twice.
+            events.appendAssumeCapacity(received);
+            // `add` is not merely bookkeeping: it puts the open run on the
+            // wire whenever a delivery id is not the one after the last,
+            // which is whenever another link on the session took an id in
+            // between. So it fails for the same reasons the flush below
+            // does, and is swallowed for the same reason — see there.
+            settling.add(delivery) catch {};
         }
+
+        // Settling tells the peer these will not be asked for again. It is
+        // advisory here: an unsettled delivery is redelivered, and a consumer
+        // resumes from the sequence number rather than from AMQP settlement.
+        // So a settle write that does not land is never worth the events that
+        // did arrive — least of all on the break above, where the link that
+        // would carry it is the one that just failed.
+        settling.flush() catch {};
 
         if (events.items.len > 0) {
             try self.advancePast(events.items[events.items.len - 1].sequence_number);
@@ -667,6 +693,60 @@ test "receiveEvents decodes events and advances past the last one" {
     );
 }
 
+test "receiveEvents settles a whole batch in one disposition" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock = driver.ManualClock{};
+    var conn = try driver.Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
+    defer conn.deinit();
+
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+    try scriptAttach(peer);
+
+    const batch = 32;
+    var i: u32 = 0;
+    while (i < batch) : (i += 1) {
+        try pushEvent(allocator, peer, i, @as(i64, i) + 1, "event");
+    }
+
+    var scripted: Scripted = undefined;
+    try scripted.open(allocator, &mem, &clock, &conn, .{});
+    defer scripted.deinit();
+
+    mem.clearWritten();
+    const events = try scripted.client.receiveEvents(allocator, batch);
+    defer event_data.freeReceivedEvents(allocator, events);
+    try testing.expectEqual(@as(usize, batch), events.len);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+
+    var dispositions: usize = 0;
+    var covered_first: ?u32 = null;
+    var covered_last: ?u32 = null;
+    for (frames.bodies.items) |body| {
+        if (amqp.performative.peekDescriptor(body) != amqp.performative.descriptor.disposition) continue;
+        dispositions += 1;
+        var decoded = try amqp.performative.decode(allocator, body);
+        defer decoded.deinit();
+        const d = decoded.performative.disposition;
+        try testing.expectEqual(amqp.performative.Role.receiver, d.role);
+        try testing.expect(d.settled);
+        try testing.expectEqual(amqp.performative.DeliveryState.accepted, d.state.?);
+        covered_first = d.first;
+        covered_last = d.last orelse d.first;
+    }
+
+    // Settling one at a time put a frame on the wire per event, so a 300-deep
+    // prefetch cost 300 round trips of nothing but bookkeeping. AMQP 1.0
+    // §2.6.10 lets one disposition cover a contiguous `first..last` run, which
+    // is what every other client does.
+    try testing.expectEqual(@as(usize, 1), dispositions);
+    try testing.expectEqual(@as(u32, 0), covered_first.?);
+    try testing.expectEqual(@as(u32, batch - 1), covered_last.?);
+}
+
 test "a quiet partition returns the events that did arrive" {
     const allocator = testing.allocator;
     var mem = MemoryTransport.init(allocator);
@@ -695,6 +775,75 @@ test "a quiet partition returns the events that did arrive" {
 
     try testing.expectEqual(@as(usize, 1), events.len);
     try testing.expectEqualStrings("only", events[0].body());
+}
+
+test "a broken connection still hands back the events that arrived" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock = driver.ManualClock{};
+    var conn = try driver.Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
+    defer conn.deinit();
+
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+    try scriptAttach(peer);
+    try pushEvent(allocator, peer, 0, 1, "first");
+    try pushEvent(allocator, peer, 1, 2, "second");
+
+    var scripted: Scripted = undefined;
+    try scripted.open(allocator, &mem, &clock, &conn, .{});
+    defer scripted.deinit();
+
+    // A reset connection stops carrying traffic in both directions, so the
+    // disposition that settles the batch cannot go out either. Asking for
+    // more than the script holds runs the read failure and the failed
+    // settlement together, which is what a consumer sees when a broker
+    // recycles a node mid-batch.
+    mem.fail_write = true;
+
+    const events = try scripted.client.receiveEvents(allocator, 10);
+    defer event_data.freeReceivedEvents(allocator, events);
+
+    // Settling is advisory: unsettled deliveries are redelivered, and the
+    // consumer resumes from the sequence number. Reporting the failed
+    // disposition instead would throw away two events that did arrive.
+    try testing.expectEqual(@as(usize, 2), events.len);
+    try testing.expectEqualStrings("first", events[0].body());
+    try testing.expectEqualStrings("second", events[1].body());
+}
+
+test "a settle write failing mid-batch costs no events either" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock = driver.ManualClock{};
+    var conn = try driver.Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
+    defer conn.deinit();
+
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+    try scriptAttach(peer);
+    // The gap at 2 is what another link on the session leaves behind. It
+    // makes `SettleBatch.add` close the open run mid-loop, so the settle
+    // write — and its failure — land inside the loop rather than after it.
+    try pushEvent(allocator, peer, 0, 1, "first");
+    try pushEvent(allocator, peer, 1, 2, "second");
+    try pushEvent(allocator, peer, 3, 3, "third");
+
+    var scripted: Scripted = undefined;
+    try scripted.open(allocator, &mem, &clock, &conn, .{});
+    defer scripted.deinit();
+
+    mem.fail_write = true;
+
+    const events = try scripted.client.receiveEvents(allocator, 3);
+    defer event_data.freeReceivedEvents(allocator, events);
+
+    // The gap makes the settle write happen inside the loop rather than
+    // after it, which is the other place it can fail. It must cost the
+    // caller no more there than it does at the end.
+    try testing.expectEqual(@as(usize, 3), events.len);
+    try testing.expectEqualStrings("first", events[0].body());
+    try testing.expectEqualStrings("third", events[2].body());
 }
 
 test "disabled prefetch issues credit per receive" {
