@@ -98,7 +98,16 @@ const result = core.perf.benchmarkAllocating(io, "encode", 10_000, gpa, encodeWi
 ```
 
 `CountingAllocator` is also usable on its own to assert an operation stays
-allocation-free.
+allocation-free. It counts only events that obtain new memory: a failed
+allocation, an in-place `resize`, and a `remap` that succeeds without moving
+are all excluded, so the count reflects real allocation churn rather than
+allocator bookkeeping.
+
+`avgNs` and `opsPerSecond` are reciprocals — both derive from the summed
+per-iteration laps. `total_ns` is wall-clock for the whole run and also
+includes the harness's own timer reads, so it is always larger. Each lap costs
+two clock reads, which puts a floor of roughly one clock read on `min_ns`;
+give each iteration enough work to dominate it.
 
 ## Related packages
 
