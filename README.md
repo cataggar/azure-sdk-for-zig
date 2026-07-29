@@ -123,6 +123,34 @@ owns the addresses it keys them by. When the broker refuses a delivery,
 `lastSendError` carries the AMQP condition and description that the Zig error
 cannot.
 
+### Sending several batches at once
+
+`sendBatch` waits for the broker to confirm before returning, so a caller with
+several batches ready pays a full round trip for each one. Across a link with
+any real latency that, and not the encoding, is what sets the ceiling.
+
+```zig
+try producer.sendBatches(allocator, &.{ batch_a, batch_b, batch_c });
+```
+
+`sendBatches` keeps several on the wire at once and collects the confirmations
+afterwards, so the round trip is paid once for the window rather than once per
+batch. Retries, connection recovery and the at-least-once guarantee are exactly
+`sendBatch`'s — a batch the broker accepted but could not acknowledge may be
+published twice, either way.
+
+Batches are grouped into runs by partition, because each partition is its own
+link and only batches sharing one can overlap. Passing them already grouped —
+the natural order when they were built per partition — makes every batch
+eligible. A `null` partition is the gateway, a destination in its own right
+rather than a wildcard, so it forms runs of its own.
+
+For finer control, `SenderPool` exposes the pieces underneath: `sendAsync`
+returns a token without waiting, `confirm` collects the next verdict in send
+order and names it, `unconfirmed` reports how many are outstanding, and
+`sendPipelined` runs the window without retrying. `SenderPool.Options.max_in_flight`
+sets the window size and defaults to 1, which is the blocking behaviour.
+
 ## Receiving
 
 A partition is read through one receiver link held open for the life of a
