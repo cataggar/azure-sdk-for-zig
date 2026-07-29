@@ -493,7 +493,10 @@ pub const Sender = struct {
                 .settled = false,
                 .more = more,
             };
-            try self.sendTransfer(xfer, payload[offset..][0..take]);
+            // The frame is the performative plus the chunk, and `chunkBudget`
+            // measured that performative as `maxOutgoingBody() - budget`.
+            const frame_cap = self.session.driver.maxOutgoingBody() - budget + take;
+            try self.sendTransfer(xfer, payload[offset..][0..take], frame_cap);
 
             offset += take;
             first = false;
@@ -548,8 +551,13 @@ pub const Sender = struct {
         return available - buf.written().len;
     }
 
-    fn sendTransfer(self: *Sender, xfer: perf.Transfer, chunk: []const u8) LinkError!void {
-        var buf = uamqp.encoder.Buffer.initFixed(try self.frameBuffer());
+    fn sendTransfer(
+        self: *Sender,
+        xfer: perf.Transfer,
+        chunk: []const u8,
+        frame_cap: usize,
+    ) LinkError!void {
+        var buf = uamqp.encoder.Buffer.initFixed(try self.frameBuffer(frame_cap));
         try perf.encodeTransfer(self.allocator, xfer, &buf);
         // A fixed buffer never allocates, so the only way `writeAll` fails is
         // running out of room — which `chunkBudget` is supposed to have made
@@ -559,9 +567,16 @@ pub const Sender = struct {
         try self.session.driver.sendFrame(.amqp, self.session.channel, buf.written());
     }
 
-    /// The reusable frame scratch, grown if the peer's frame size demands it.
-    fn frameBuffer(self: *Sender) LinkError![]u8 {
-        const need = self.session.driver.maxOutgoingBody();
+    /// The reusable frame scratch, grown to `need` if it is not already there.
+    ///
+    /// `need` is the size of the frame actually being written, not the peer's
+    /// advertised `max-frame-size`. That value is unbounded on the wire — AMQP
+    /// §2.7.1 makes an absent `max-frame-size` mean `2^32-1`, which this
+    /// codec implements — so sizing to it would let a peer dictate a 4 GiB
+    /// allocation for a five-byte message. Sizing to the frame instead means
+    /// a sender holds only as much as its largest real frame, and every
+    /// later frame of the same size reuses it.
+    fn frameBuffer(self: *Sender, need: usize) LinkError![]u8 {
         if (self.frame_buf.len >= need) return self.frame_buf;
         self.frame_buf = if (self.frame_buf.len == 0)
             try self.allocator.alloc(u8, need)
@@ -1306,7 +1321,7 @@ test "a multi-frame send does not allocate per frame" {
 
     // The first send pays for the frame scratch once.
     try sender.sendBytes(big, 10_000);
-    try testing.expect(sender.frame_buf.len >= driver.maxOutgoingBody());
+    try testing.expect(sender.frame_buf.len > 0);
 
     const before = counting.allocs;
     try sender.sendBytes(big, 10_000);
@@ -1330,6 +1345,66 @@ test "a multi-frame send does not allocate per frame" {
     // allocations rather than 24 — and at the spec-minimum 512-byte frame the
     // old buffer only doubled three times. A real 64 KiB frame doubled ten.
     try testing.expect(spent <= per_send + 8);
+}
+
+test "the frame scratch is sized by the message, not by the peer's frame size" {
+    var counting = CountingAllocator{ .child = testing.allocator };
+    const allocator = counting.allocator();
+
+    var mem = MemoryTransport.init(testing.allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = testing.allocator, .mem = &mem };
+
+    // AMQP §2.7.1: an absent `max-frame-size` means 2^32-1, and this codec
+    // decodes it that way. A peer is entitled to say so, and plenty do rather
+    // than nominate a number.
+    try scriptHandshake(peer, std.math.maxInt(u32));
+    try peer.push(0, .{ .attach = .{
+        .name = "producer",
+        .handle = 0,
+        .role = .receiver,
+        .initial_delivery_count = 0,
+    } });
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 1000,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+        .handle = 0,
+        .delivery_count = 0,
+        .link_credit = 10,
+    } });
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 0,
+        .last = 0,
+        .settled = true,
+        .state = .accepted,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+    }, 10_000);
+
+    try testing.expectEqual(
+        @as(usize, std.math.maxInt(u32) - frame.frame_header_size),
+        driver.maxOutgoingBody(),
+    );
+
+    try sender.sendBytes("five!", 10_000);
+
+    // Reserving what the peer advertised would have asked for four gibibytes
+    // to put five bytes on the wire — either an outright `OutOfMemory` for a
+    // well-formed small message, or four gibibytes of address space held for
+    // the life of every link.
+    try testing.expect(sender.frame_buf.len < 256);
 }
 
 test "a rejected disposition surfaces the AMQP condition" {
