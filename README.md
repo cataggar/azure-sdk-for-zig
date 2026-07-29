@@ -221,6 +221,14 @@ Deliveries settle in the order they were sent, and the ring holding them is
 allocated once at attach, so a silent peer costs a fixed amount of memory rather
 than a growing one.
 
+`abandonInFlight` is the way out of a pipeline that failed partway. Waiting is
+what just failed, so the caller cannot wait the remaining deliveries out, and a
+sender still holding unsettled ones refuses every later blocking send — without
+it a single timed-out pipeline would wedge the link for good. The abandoned
+verdicts are lost and any disposition that arrives for them is ignored, so
+resending an abandoned delivery the broker went on to accept publishes it
+twice.
+
 ### Session flow control
 
 Session ids count transfer *frames*, not deliveries (§2.5.6). Every frame of a
