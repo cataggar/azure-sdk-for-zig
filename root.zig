@@ -31,9 +31,7 @@ pub const ConversionError = event_data.ConversionError;
 pub const PropertyError = event_data.PropertyError;
 pub const freeReceivedEvents = event_data.freeReceivedEvents;
 pub const freeAmqpMessage = event_data.freeAmqpMessage;
-pub const freeDecodedMessage = event_data.freeDecodedMessage;
 pub const fromAmqpMessage = event_data.fromAmqpMessage;
-pub const fromOwnedAmqpMessage = event_data.fromOwnedAmqpMessage;
 
 pub const ErrorCode = errors.ErrorCode;
 pub const EventHubsError = errors.EventHubsError;

@@ -293,11 +293,6 @@ pub const ReceivedEventData = struct {
     sequence_number: i64 = 0,
     /// Message annotations that are not surfaced as dedicated fields.
     system_properties: PropertyMap = .empty,
-    /// The message this event was decoded from, reachable for sections this
-    /// type does not model (multiple data sections, sequence or value bodies,
-    /// header, and footer). Owned: `deinit` frees it. Only
-    /// `fromOwnedAmqpMessage` populates it.
-    raw_amqp_message: ?*Message = null,
 
     pub fn body(self: ReceivedEventData) []const u8 {
         return self.event_data.body;
@@ -328,10 +323,6 @@ pub const ReceivedEventData = struct {
         self.system_properties.deinit(allocator);
         if (self.partition_key) |partition_key| allocator.free(partition_key);
         if (self.offset) |offset| allocator.free(offset);
-        if (self.raw_amqp_message) |message| {
-            freeDecodedMessage(allocator, message);
-            allocator.destroy(message);
-        }
     }
 };
 
@@ -359,36 +350,6 @@ pub fn freeAmqpMessage(allocator: std.mem.Allocator, message: *Message) void {
         if (properties.message_id) |*message_id| message_id.deinit(allocator);
         if (properties.correlation_id) |*correlation_id| correlation_id.deinit(allocator);
         if (properties.content_type) |content_type| allocator.free(content_type);
-        message.properties = null;
-    }
-    message.deinit();
-}
-
-/// Free a message and every section inside it, including the ones
-/// `freeAmqpMessage` leaves alone.
-///
-/// Every field must have been allocated with `allocator`, which holds for
-/// messages produced by an AMQP decoder.
-pub fn freeDecodedMessage(allocator: std.mem.Allocator, message: *Message) void {
-    if (message.application_properties) |entries| freeMapEntries(allocator, entries);
-    if (message.message_annotations) |entries| freeMapEntries(allocator, entries);
-    if (message.delivery_annotations) |entries| freeMapEntries(allocator, entries);
-    if (message.footer) |entries| freeMapEntries(allocator, entries);
-    message.application_properties = null;
-    message.message_annotations = null;
-    message.delivery_annotations = null;
-    message.footer = null;
-    if (message.properties) |*properties| {
-        if (properties.message_id) |*message_id| message_id.deinit(allocator);
-        if (properties.correlation_id) |*correlation_id| correlation_id.deinit(allocator);
-        if (properties.user_id) |value| allocator.free(value);
-        if (properties.to) |value| allocator.free(value);
-        if (properties.subject) |value| allocator.free(value);
-        if (properties.reply_to) |value| allocator.free(value);
-        if (properties.content_type) |value| allocator.free(value);
-        if (properties.content_encoding) |value| allocator.free(value);
-        if (properties.group_id) |value| allocator.free(value);
-        if (properties.reply_to_group_id) |value| allocator.free(value);
         message.properties = null;
     }
     message.deinit();
@@ -643,14 +604,15 @@ pub fn fromRawMessage(
 /// Decode an AMQP message into a received event.
 ///
 /// `message` is borrowed and every field is copied out, so the result stays
-/// valid after the message is freed. `raw_amqp_message` is left null; use
-/// `fromOwnedAmqpMessage` when the raw message should be reachable.
+/// valid after the message is freed. Only a single data section is treated as
+/// a body; sequence and value bodies, multiple data sections, the header, and
+/// the footer are not modelled by `ReceivedEventData`.
 pub fn fromAmqpMessage(
     allocator: std.mem.Allocator,
     message: *const Message,
 ) !ReceivedEventData {
     // Go only treats a message as having a body when there is exactly one data
-    // section; anything else is reachable through `raw_amqp_message`.
+    // section.
     const body: ?[]const u8 = if (message.body_data_sections.items.len == 1)
         message.body_data_sections.items[0].bytes
     else
@@ -664,24 +626,6 @@ pub fn fromAmqpMessage(
         .correlation_id = if (message.properties) |p| p.correlation_id else null,
         .content_type = if (message.properties) |p| p.content_type else null,
     });
-}
-
-/// Decode an AMQP message and take ownership of it.
-///
-/// `message` must be heap-allocated with `allocator` and every field inside it
-/// must be allocator-owned. The message is freed by `ReceivedEventData.deinit`
-/// and is also freed if decoding fails, so ownership transfers unconditionally.
-pub fn fromOwnedAmqpMessage(
-    allocator: std.mem.Allocator,
-    message: *Message,
-) !ReceivedEventData {
-    var received = fromAmqpMessage(allocator, message) catch |err| {
-        freeDecodedMessage(allocator, message);
-        allocator.destroy(message);
-        return err;
-    };
-    received.raw_amqp_message = message;
-    return received;
 }
 
 fn applyAnnotations(
@@ -807,7 +751,6 @@ test "EventData encodes to an AMQP message and decodes back" {
     try std.testing.expectEqual(@as(i64, 7), decoded.properties().get("retries").?.long);
     try std.testing.expectEqual(true, decoded.properties().get("enabled").?.boolean);
     try std.testing.expectEqual(@as(usize, 3), decoded.properties().count());
-    try std.testing.expect(decoded.raw_amqp_message == null);
 }
 
 test "non-string property values survive the round trip" {
@@ -959,50 +902,6 @@ test "freeReceivedEvents releases a decoded slice" {
     events[0] = try fromAmqpMessage(allocator, &message);
     events[1] = try fromAmqpMessage(allocator, &message);
     freeReceivedEvents(allocator, events);
-}
-
-test "fromOwnedAmqpMessage frees the message it adopts" {
-    const allocator = std.testing.allocator;
-
-    const message = try allocator.create(Message);
-    message.* = Message.init(allocator);
-    try message.addBodyData("adopted");
-
-    const annotations = try allocator.alloc(MapEntry, 1);
-    annotations[0] = .{
-        .key = .{ .symbol = try allocator.dupe(u8, sequence_number_annotation) },
-        .value = .{ .long = 5 },
-    };
-    message.message_annotations = annotations;
-    message.properties = .{ .content_type = try allocator.dupe(u8, "text/plain") };
-
-    var decoded = try fromOwnedAmqpMessage(allocator, message);
-    defer decoded.deinit(allocator);
-
-    try std.testing.expectEqualStrings("adopted", decoded.body());
-    try std.testing.expectEqual(@as(i64, 5), decoded.sequence_number);
-    try std.testing.expect(decoded.raw_amqp_message == message);
-    try std.testing.expectEqual(@as(usize, 1), decoded.raw_amqp_message.?.bodyDataCount());
-}
-
-test "fromOwnedAmqpMessage frees the message when decoding fails" {
-    const allocator = std.testing.allocator;
-
-    const message = try allocator.create(Message);
-    message.* = Message.init(allocator);
-    try message.addBodyData("body");
-
-    const annotations = try allocator.alloc(MapEntry, 1);
-    annotations[0] = .{
-        .key = .{ .symbol = try allocator.dupe(u8, offset_annotation) },
-        .value = .{ .long = 12 },
-    };
-    message.message_annotations = annotations;
-
-    try std.testing.expectError(
-        ConversionError.InvalidOffsetAnnotation,
-        fromOwnedAmqpMessage(allocator, message),
-    );
 }
 
 test "duplicate offset and partition key annotations are rejected" {
