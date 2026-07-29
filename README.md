@@ -112,6 +112,8 @@ defer allocator.free(bytes);
 - settlement: accepted, rejected, and released outcomes, with a rejection
   surfacing the peer's error condition, one delivery at a time or a whole
   contiguous run in a single disposition
+- pipelined sends: a configurable number of deliveries may be unsettled at
+  once, so a link is not limited to one message per round trip
 - the Event Hubs link properties the Go and Rust clients send —
   `com.microsoft:receiver-name`, `com.microsoft:epoch`, and the
   `apache.org:selector-filter:string` filter used to pick a starting offset
@@ -155,6 +157,54 @@ try settling.flush();
 
 Nothing reaches the wire until `flush`, so abandoning a batch leaves its
 deliveries unsettled and the peer redelivers them.
+
+### Keeping deliveries in flight
+
+`send` and `sendBytes` wait for the peer to settle each delivery, so a link
+sends at most one message per round trip no matter how small the messages are.
+Against a broker 30 ms away that caps a sender near 33 deliveries a second,
+which is a network limit rather than a CPU one and so survives any amount of
+encoding work.
+
+`max_in_flight` lifts the cap. `sendBytesAsync` writes the transfer frames and
+returns a `DeliveryToken` instead of waiting, and `awaitSettlement` retires the
+oldest delivery and reports the peer's verdict against the token that names it:
+
+```zig
+const sender = try amqp.openSender(&session, .{
+    .name = link_name,
+    .target_address = "myhub",
+    .max_in_flight = 8,
+}, deadline_ms);
+
+for (payloads) |payload| {
+    _ = sender.sendBytesAsync(payload, .{}, deadline_ms) catch |err| switch (err) {
+        error.InFlightWindowFull => {
+            _ = try sender.awaitSettlement(deadline_ms);
+            _ = try sender.sendBytesAsync(payload, .{}, deadline_ms);
+        },
+        else => return err,
+    };
+}
+while (sender.inFlight() > 0) {
+    const settlement = try sender.awaitSettlement(deadline_ms);
+    if (settlement.outcome != .accepted) return error.SendFailed;
+}
+```
+
+A full window is an error rather than a wait: only the caller can retire a
+delivery, so blocking inside `sendBytesAsync` until one was retired would wait
+on something only the blocked caller could do.
+
+A refused delivery comes back as `Settlement.outcome`, not as an error, because
+a pipelining caller needs to know *which* delivery the broker turned down —
+`sendBytes` keeps mapping the outcome onto `error.SendRejected` for callers that
+send one at a time. The default `max_in_flight` is 1, so a sender behaves
+exactly as it always has until it is asked for more.
+
+Deliveries settle in the order they were sent, and the ring holding them is
+allocated once at attach, so a silent peer costs a fixed amount of memory rather
+than a growing one.
 
 A handle in an inbound frame is scoped to the peer that sent it, so links are
 looked up by the handle the peer chose, never by our own. A session holding both
