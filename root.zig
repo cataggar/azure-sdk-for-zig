@@ -61,6 +61,7 @@ pub const EventDataBatch = batching.EventDataBatch;
 
 pub const sending = @import("sender.zig");
 pub const SenderPool = sending.SenderPool;
+pub const default_max_in_flight = sending.default_max_in_flight;
 pub const SendError = sending.SendError;
 pub const entityPathFor = sending.entityPathFor;
 
@@ -129,6 +130,10 @@ pub const max_credit = receiving.max_credit;
 /// Abstracts over uamqp to enable unit testing.
 pub const AmqpTransport = struct {
     sendBatchFn: *const fn (self: *AmqpTransport, allocator: std.mem.Allocator, target: []const u8, batch: EventDataBatch) anyerror!void,
+    /// Send several batches with as few round trips as the transport can
+    /// manage. Optional: a transport that cannot pipeline leaves it null and
+    /// `sendBatches` sends them one at a time, which is correct but slower.
+    sendBatchesFn: ?*const fn (self: *AmqpTransport, allocator: std.mem.Allocator, target: []const u8, batches: []const EventDataBatch) anyerror!void = null,
     receiveFn: *const fn (self: *AmqpTransport, allocator: std.mem.Allocator, source: []const u8, filter: ?[]const u8, max_count: u32) anyerror![]ReceivedEventData,
     getHubPropertiesFn: *const fn (self: *AmqpTransport, allocator: std.mem.Allocator, hub_name: []const u8) anyerror!EventHubProperties,
     getPartitionPropertiesFn: *const fn (self: *AmqpTransport, allocator: std.mem.Allocator, hub_name: []const u8, partition_id: []const u8) anyerror!PartitionProperties,
@@ -139,6 +144,11 @@ pub const AmqpTransport = struct {
 
     pub fn sendBatch(self: *AmqpTransport, allocator: std.mem.Allocator, target: []const u8, batch: EventDataBatch) !void {
         return self.sendBatchFn(self, allocator, target, batch);
+    }
+
+    pub fn sendBatches(self: *AmqpTransport, allocator: std.mem.Allocator, target: []const u8, batches: []const EventDataBatch) !void {
+        if (self.sendBatchesFn) |f| return f(self, allocator, target, batches);
+        for (batches) |batch| try self.sendBatch(allocator, target, batch);
     }
 
     pub fn receive(self: *AmqpTransport, allocator: std.mem.Allocator, source: []const u8, filter: ?[]const u8, max_count: u32) ![]ReceivedEventData {
@@ -220,6 +230,7 @@ pub const LinkTransport = struct {
             .retry = options.retry,
             .transport = .{
                 .sendBatchFn = &sendBatchImpl,
+                .sendBatchesFn = &sendBatchesImpl,
                 .receiveFn = &receiveImpl,
                 .getHubPropertiesFn = &getHubPropsImpl,
                 .getPartitionPropertiesFn = &getPartitionPropsImpl,
@@ -291,6 +302,39 @@ pub const LinkTransport = struct {
             };
         }
         return pool.send(allocator, target, batch);
+    }
+
+    /// Send every batch, pipelining them and falling back for whatever the
+    /// pipeline did not get accepted.
+    ///
+    /// The fast path keeps `max_in_flight` batches on the wire at once, so the
+    /// round trip is paid once for the window rather than once per batch. It
+    /// does not retry, so anything it did not land is re-sent through the
+    /// ordinary retrying path — which also recovers the connection if that is
+    /// what went wrong.
+    ///
+    /// The resend loop stops at the first failure, which is usually the batch
+    /// the broker just refused — so the ones behind it in the window, whose
+    /// verdicts were abandoned unread, are often neither re-sent nor reported.
+    /// That costs nothing in safety: `accepted` only ever counts acceptances
+    /// the broker stated, so the caller is never told a batch landed when it
+    /// might not have.
+    fn sendBatchesImpl(t: *AmqpTransport, allocator: std.mem.Allocator, target: []const u8, batches: []const EventDataBatch) !void {
+        const self: *LinkTransport = @fieldParentPtr("transport", t);
+        if (batches.len == 0) return;
+
+        var accepted: usize = 0;
+        // A pool is not guaranteed — `senderPool` fails before the client is
+        // connected — and the fallback reports that better than we can here.
+        if (self.senderPool()) |pool| {
+            const result = pool.sendPipelined(allocator, target, batches);
+            if (result.err == null) return;
+            accepted = result.accepted;
+        } else |_| {}
+
+        for (batches[accepted..]) |batch| {
+            try sendBatchImpl(t, allocator, target, batch);
+        }
     }
 
     /// One send attempt against whichever sender pool the connection has now.
@@ -438,12 +482,29 @@ pub const MockAmqpTransport = struct {
     partition_properties: PartitionProperties = .{ .id = "0" },
     /// Stands in for a sender link's negotiated limit.
     link_max_message_size: ?u64 = null,
+    /// One entry per `sendBatches` group, so a test can see how the client
+    /// split its batches across links rather than only the total that arrived.
+    groups: [8]Group = undefined,
+    group_count: usize = 0,
     transport: AmqpTransport,
+
+    pub const Group = struct {
+        len: usize,
+        target_buf: [256]u8,
+        target_len: usize,
+
+        pub fn target(self: *const Group) []const u8 {
+            return self.target_buf[0..self.target_len];
+        }
+    };
 
     pub fn init() MockAmqpTransport {
         return .{
             .transport = .{
                 .sendBatchFn = &sendBatchImpl,
+                // Records the grouping, then hands every batch to
+                // `sendBatchImpl` so the existing per-batch counts still hold.
+                .sendBatchesFn = &sendBatchesImpl,
                 .receiveFn = &receiveImpl,
                 .getHubPropertiesFn = &getHubPropsImpl,
                 .getPartitionPropertiesFn = &getPartitionPropsImpl,
@@ -465,6 +526,23 @@ pub const MockAmqpTransport = struct {
         const len = @min(target.len, self.send_target_buf.len);
         @memcpy(self.send_target_buf[0..len], target[0..len]);
         self.send_target_len = len;
+    }
+
+    fn sendBatchesImpl(t: *AmqpTransport, allocator: std.mem.Allocator, target: []const u8, batches: []const EventDataBatch) !void {
+        const self: *MockAmqpTransport = @fieldParentPtr("transport", t);
+        if (self.group_count < self.groups.len) {
+            var group: Group = .{ .len = batches.len, .target_buf = undefined, .target_len = 0 };
+            group.target_len = @min(target.len, group.target_buf.len);
+            @memcpy(group.target_buf[0..group.target_len], target[0..group.target_len]);
+            self.groups[self.group_count] = group;
+            self.group_count += 1;
+        }
+        for (batches) |batch| try sendBatchImpl(t, allocator, target, batch);
+    }
+
+    /// The groups `sendBatches` was called with, in order.
+    pub fn sentGroups(self: *const MockAmqpTransport) []const Group {
+        return self.groups[0..self.group_count];
     }
 
     /// The address of the most recent send, or null if there was none.
@@ -591,6 +669,13 @@ pub const ProducerClientOptions = struct {
 };
 
 /// Sends events to an Event Hub.
+/// Whether two batches address the same link. Null is the gateway, which is a
+/// distinct destination from any named partition rather than a wildcard.
+fn samePartition(a: ?[]const u8, b: ?[]const u8) bool {
+    if (a == null or b == null) return a == null and b == null;
+    return std.mem.eql(u8, a.?, b.?);
+}
+
 pub const ProducerClient = struct {
     options: ProducerClientOptions,
     credential: Credential,
@@ -678,6 +763,58 @@ pub const ProducerClient = struct {
         const address = try self.entityPath(allocator, batch.partition_id);
         defer allocator.free(address);
         return self.amqp_transport.sendBatch(allocator, address, batch);
+    }
+
+    /// Send several batches, overlapping them on the wire instead of waiting
+    /// for each to be confirmed before starting the next.
+    ///
+    /// This is `sendBatch` for callers that have more than one batch ready. A
+    /// blocking send costs a full round trip per batch, so across a link with
+    /// any real latency it is the round trips, not the encoding, that set the
+    /// ceiling; overlapping them lifts it by roughly the window size.
+    ///
+    /// Batches are grouped into runs by partition, because each partition is a
+    /// separate link and only batches sharing one can overlap. Passing them
+    /// already grouped — which is the natural order if they were built per
+    /// partition — makes every batch eligible.
+    ///
+    /// Retries and connection recovery are the same as `sendBatch`'s, and so
+    /// is the guarantee: at-least-once, so a batch may be published twice if
+    /// the broker accepted it but the acknowledgement was lost.
+    ///
+    /// Overlapping widens that window. When a send fails, the batches behind
+    /// it are already on the wire and the broker may well accept them, but
+    /// their verdicts are abandoned unread. They are then reported as not
+    /// accepted and may be sent again, so a consumer can see them twice. The
+    /// number at risk is bounded by `max_in_flight`, and the answer is the
+    /// same as for `sendBatch`: give events an application property the
+    /// consumer can deduplicate on.
+    ///
+    /// Nothing is silently dropped either way: a batch is only ever counted as
+    /// accepted once the broker has said so.
+    pub fn sendBatches(
+        self: *ProducerClient,
+        allocator: std.mem.Allocator,
+        batches: []const EventDataBatch,
+    ) !void {
+        for (batches) |batch| {
+            if (batch.count() == 0) return SendError.EmptyBatch;
+        }
+
+        var start: usize = 0;
+        while (start < batches.len) {
+            var end = start + 1;
+            while (end < batches.len and samePartition(
+                batches[start].partition_id,
+                batches[end].partition_id,
+            )) : (end += 1) {}
+
+            const address = try self.entityPath(allocator, batches[start].partition_id);
+            defer allocator.free(address);
+            try self.amqp_transport.sendBatches(allocator, address, batches[start..end]);
+
+            start = end;
+        }
     }
 
     /// Create a batch sized for this producer.
@@ -1107,6 +1244,10 @@ pub const HubConnection = struct {
         container_id: []const u8 = "azure-sdk-for-zig",
         /// Distinguishes this client's links from any other on the connection.
         link_id: []const u8 = "eventhubs",
+        /// How many batches a sender link may have on the wire unconfirmed.
+        /// This is what lets `sendBatches` overlap them; `sendBatch` waits for
+        /// each one either way.
+        max_in_flight: u32 = sending.default_max_in_flight,
         /// Identifies this reader to the broker, and is what a stolen-link
         /// message names.
         instance_id: []const u8 = default_instance_id,
@@ -1141,6 +1282,7 @@ pub const HubConnection = struct {
             .deadline_ms = options.deadline_ms,
             .instance_id = options.instance_id,
             .link_id = options.link_id,
+            .max_in_flight = options.max_in_flight,
             .partition_client = options.partition_client,
         });
         self.transport = LinkTransport.initRecoverable(
@@ -1571,6 +1713,383 @@ test "ConsumerClient receiveEvents" {
 
     const events = try consumer.receiveEvents(allocator, "0", EventPosition.earliest(), 10);
     try std.testing.expectEqual(@as(usize, 0), events.len);
+}
+
+test "a client passes its window down to the connection that sizes the links" {
+    const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    defer threaded.deinit();
+
+    var hub: HubConnection = undefined;
+    hub.open(.{
+        .allocator = allocator,
+        .io = threaded.io(),
+        .fully_qualified_namespace = "ns.servicebus.windows.net",
+        .max_in_flight = 6,
+    });
+    defer hub.deinit();
+    try std.testing.expectEqual(@as(u32, 6), hub.connection.sender_options.max_in_flight);
+}
+
+test "the pipeline refuses a link somebody else is still waiting on" {
+    // Its accounting reads the link's depth as its own, and it empties the
+    // whole ring on the way out, so sharing would both misreport which
+    // batches landed and throw away a verdict its caller was waiting for.
+    const allocator = std.testing.allocator;
+    const harness = amqp.test_peer;
+
+    var mem = amqp.MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: amqp.connection_driver.ManualClock = .{};
+    const peer = harness.Peer{ .allocator = allocator, .mem = &mem };
+
+    try harness.scriptHandshake(peer, 512);
+    try peer.push(0, .{ .attach = .{
+        .name = "my-hub-sender-eventhubs",
+        .handle = 0,
+        .role = .receiver,
+        .max_message_size = null,
+        .initial_delivery_count = 0,
+    } });
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 1000,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+        .handle = 0,
+        .delivery_count = 0,
+        .link_credit = 20,
+    } });
+
+    var conn = try amqp.connection_driver.Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
+    defer conn.deinit();
+    var fixture = try harness.Fixture.init(allocator, &mem, &clock, &conn);
+    defer fixture.deinit();
+
+    var pool = SenderPool.init(allocator, &fixture.session, .{
+        .deadline_ms = 10_000,
+        .max_in_flight = 4,
+    });
+    defer pool.deinit();
+
+    var batch = try EventDataBatch.init(.{});
+    defer batch.deinit(allocator);
+    var event = EventData.init("x");
+    defer event.deinit(allocator);
+    try std.testing.expect(try batch.tryAdd(allocator, event));
+
+    // Someone takes a token and has not collected its verdict yet.
+    _ = try pool.sendAsync(allocator, "my-hub", batch);
+    try std.testing.expectEqual(@as(usize, 1), try pool.unconfirmed("my-hub"));
+
+    const batches = [_]EventDataBatch{batch};
+    const result = pool.sendPipelined(allocator, "my-hub", &batches);
+    try std.testing.expectEqual(@as(usize, 0), result.accepted);
+    try std.testing.expectEqual(@as(?anyerror, error.DeliveriesInFlight), result.err);
+
+    // Refused rather than half-done: the other delivery is untouched, and
+    // nothing of this call's was put on the wire.
+    try std.testing.expectEqual(@as(usize, 1), try pool.unconfirmed("my-hub"));
+}
+
+test "the pipeline's fallback resends exactly the batches it was not told were accepted" {
+    // `accepted` is the one number standing between a duplicated batch and a
+    // dropped one, and `LinkTransport` is the only place it is turned into a
+    // resend slice. So drive a real pool over a scripted peer and count what
+    // actually reaches the wire.
+    const allocator = std.testing.allocator;
+    const harness = amqp.test_peer;
+
+    var mem = amqp.MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: amqp.connection_driver.ManualClock = .{};
+    const peer = harness.Peer{ .allocator = allocator, .mem = &mem };
+
+    try harness.scriptHandshake(peer, 512);
+    try peer.push(0, .{ .attach = .{
+        .name = "my-hub-sender-eventhubs",
+        .handle = 0,
+        .role = .receiver,
+        .max_message_size = null,
+        .initial_delivery_count = 0,
+    } });
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 1000,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+        .handle = 0,
+        .delivery_count = 0,
+        .link_credit = 20,
+    } });
+
+    // Window of two, three batches. The pipeline sends 0 and 1, retires 0 to
+    // make room, sends 2, then collects 1 — which is refused. Delivery 2 is
+    // still on the wire and gets abandoned, so the fallback owes batches 1
+    // and 2, which it sends as deliveries 3 and 4.
+    for ([_]struct { u32, bool }{ .{ 0, true }, .{ 1, false }, .{ 3, true }, .{ 4, true } }) |d| {
+        try peer.push(0, .{ .disposition = .{
+            .role = .receiver,
+            .first = d[0],
+            .last = d[0],
+            .settled = true,
+            .state = if (d[1]) .accepted else .{ .rejected = .{
+                .condition = "amqp:link:message-size-exceeded",
+                .description = "too big",
+            } },
+        } });
+    }
+
+    var conn = try amqp.connection_driver.Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
+    defer conn.deinit();
+    var fixture = try harness.Fixture.init(allocator, &mem, &clock, &conn);
+    defer fixture.deinit();
+
+    var pool = SenderPool.init(allocator, &fixture.session, .{
+        .deadline_ms = 10_000,
+        .max_in_flight = 2,
+    });
+    defer pool.deinit();
+
+    var transport = LinkTransport.initEmpty(.{ .deadline_ms = 10_000 });
+    transport.senders = &pool;
+
+    var batches: [3]EventDataBatch = undefined;
+    for (&batches, 0..) |*b, i| {
+        b.* = try EventDataBatch.init(.{});
+        var event = EventData.init(&[_]u8{@intCast('a' + i)});
+        defer event.deinit(allocator);
+        try std.testing.expect(try b.tryAdd(allocator, event));
+    }
+    defer for (&batches) |*b| b.deinit(allocator);
+
+    try transport.transport.sendBatches(allocator, "my-hub", &batches);
+
+    var frames = try harness.EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const transfers = try frames.of(allocator, amqp.performative.descriptor.transfer);
+    defer allocator.free(transfers);
+
+    // Five, not six: the accepted batch 0 is never sent again. Six would mean
+    // a duplicate, four would mean the refused batch was silently dropped.
+    try std.testing.expectEqual(@as(usize, 5), transfers.len);
+}
+
+test "sendBatches leaves the link idle enough for an ordinary send afterwards" {
+    // The failure path abandons deliveries, and a sender holding any refuses
+    // every blocking send. If that were not cleaned up, the very next
+    // `sendBatch` on the same client would fail for an unrelated reason.
+    const allocator = std.testing.allocator;
+    const harness = amqp.test_peer;
+
+    var mem = amqp.MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: amqp.connection_driver.ManualClock = .{};
+    const peer = harness.Peer{ .allocator = allocator, .mem = &mem };
+
+    try harness.scriptHandshake(peer, 512);
+    try peer.push(0, .{ .attach = .{
+        .name = "my-hub-sender-eventhubs",
+        .handle = 0,
+        .role = .receiver,
+        .max_message_size = null,
+        .initial_delivery_count = 0,
+    } });
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 1000,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+        .handle = 0,
+        .delivery_count = 0,
+        .link_credit = 20,
+    } });
+    // Refuse the first, then accept the two resends and the later plain send.
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 0,
+        .last = 0,
+        .settled = true,
+        .state = .{ .rejected = .{ .condition = "amqp:internal-error", .description = "no" } },
+    } });
+    for ([_]u32{ 2, 3, 4 }) |id| {
+        try peer.push(0, .{ .disposition = .{
+            .role = .receiver,
+            .first = id,
+            .last = id,
+            .settled = true,
+            .state = .accepted,
+        } });
+    }
+
+    var conn = try amqp.connection_driver.Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
+    defer conn.deinit();
+    var fixture = try harness.Fixture.init(allocator, &mem, &clock, &conn);
+    defer fixture.deinit();
+
+    var pool = SenderPool.init(allocator, &fixture.session, .{
+        .deadline_ms = 10_000,
+        .max_in_flight = 2,
+    });
+    defer pool.deinit();
+    var transport = LinkTransport.initEmpty(.{ .deadline_ms = 10_000 });
+    transport.senders = &pool;
+
+    var batches: [2]EventDataBatch = undefined;
+    for (&batches) |*b| {
+        b.* = try EventDataBatch.init(.{});
+        var event = EventData.init("x");
+        defer event.deinit(allocator);
+        try std.testing.expect(try b.tryAdd(allocator, event));
+    }
+    defer for (&batches) |*b| b.deinit(allocator);
+
+    // Batch 0 is refused, so both are resent; the resends are accepted.
+    try transport.transport.sendBatches(allocator, "my-hub", &batches);
+    try std.testing.expectEqual(@as(usize, 0), try pool.unconfirmed("my-hub"));
+
+    // And a plain send still works on the same link.
+    try transport.transport.sendBatch(allocator, "my-hub", batches[0]);
+}
+
+test "sendBatches groups batches by the link each one addresses" {
+    // Only batches sharing a partition share a link, so only they can overlap
+    // on the wire. Everything else has to be split.
+    const allocator = std.testing.allocator;
+    var mock_amqp = MockAmqpTransport.init();
+    const cs = "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=k;SharedAccessKey=v;EntityPath=hub";
+    var producer = try ProducerClient.fromConnectionString(allocator, cs, null, mock_amqp.asTransport());
+    defer producer.deinit();
+
+    const partitions = [_]?[]const u8{ "0", "0", "1", null, null };
+    var batches: [partitions.len]EventDataBatch = undefined;
+    for (&batches, partitions) |*b, partition| {
+        b.* = try EventDataBatch.init(.{ .partition_id = partition });
+        var event = EventData.init("hello");
+        defer event.deinit(allocator);
+        try std.testing.expect(try b.tryAdd(allocator, event));
+    }
+    defer for (&batches) |*b| b.deinit(allocator);
+
+    try producer.sendBatches(allocator, &batches);
+
+    const groups = mock_amqp.sentGroups();
+    try std.testing.expectEqual(@as(usize, 3), groups.len);
+
+    try std.testing.expectEqual(@as(usize, 2), groups[0].len);
+    try std.testing.expectEqualStrings("hub/Partitions/0", groups[0].target());
+
+    try std.testing.expectEqual(@as(usize, 1), groups[1].len);
+    try std.testing.expectEqualStrings("hub/Partitions/1", groups[1].target());
+
+    // Null is the gateway, a destination of its own rather than a wildcard
+    // that could be folded into either partition's run.
+    try std.testing.expectEqual(@as(usize, 2), groups[2].len);
+    try std.testing.expectEqualStrings("hub", groups[2].target());
+
+    // And every batch reached the wire exactly once.
+    try std.testing.expectEqual(@as(u32, 5), mock_amqp.send_batch_count);
+}
+
+test "sendBatches keeps one run whole when every batch shares a partition" {
+    // The case worth optimising: batches built per partition arrive already
+    // grouped, so the whole slice is eligible to pipeline.
+    const allocator = std.testing.allocator;
+    var mock_amqp = MockAmqpTransport.init();
+    const cs = "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=k;SharedAccessKey=v;EntityPath=hub";
+    var producer = try ProducerClient.fromConnectionString(allocator, cs, null, mock_amqp.asTransport());
+    defer producer.deinit();
+
+    var batches: [4]EventDataBatch = undefined;
+    for (&batches) |*b| {
+        b.* = try EventDataBatch.init(.{ .partition_id = "3" });
+        var event = EventData.init("hello");
+        defer event.deinit(allocator);
+        try std.testing.expect(try b.tryAdd(allocator, event));
+    }
+    defer for (&batches) |*b| b.deinit(allocator);
+
+    try producer.sendBatches(allocator, &batches);
+
+    const groups = mock_amqp.sentGroups();
+    try std.testing.expectEqual(@as(usize, 1), groups.len);
+    try std.testing.expectEqual(@as(usize, 4), groups[0].len);
+    try std.testing.expectEqualStrings("hub/Partitions/3", groups[0].target());
+}
+
+test "sendBatches refuses an empty batch before sending anything" {
+    // Checked up front rather than per batch: a caller that gets an error
+    // should not have to work out how much of its slice went out first.
+    const allocator = std.testing.allocator;
+    var mock_amqp = MockAmqpTransport.init();
+    const cs = "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=k;SharedAccessKey=v;EntityPath=hub";
+    var producer = try ProducerClient.fromConnectionString(allocator, cs, null, mock_amqp.asTransport());
+    defer producer.deinit();
+
+    var full = try EventDataBatch.init(.{});
+    defer full.deinit(allocator);
+    var event = EventData.init("hello");
+    defer event.deinit(allocator);
+    try std.testing.expect(try full.tryAdd(allocator, event));
+
+    var empty = try EventDataBatch.init(.{});
+    defer empty.deinit(allocator);
+
+    const batches = [_]EventDataBatch{ full, empty };
+    try std.testing.expectError(SendError.EmptyBatch, producer.sendBatches(allocator, &batches));
+    try std.testing.expect(!mock_amqp.send_called);
+}
+
+test "a transport that cannot pipeline still sends every batch" {
+    // `sendBatchesFn` is optional so an implementation outside this package
+    // keeps compiling and keeps working; the default just costs a round trip
+    // per batch.
+    const allocator = std.testing.allocator;
+
+    const Serial = struct {
+        transport: AmqpTransport,
+        count: u32 = 0,
+
+        fn sendBatchImpl(t: *AmqpTransport, _: std.mem.Allocator, _: []const u8, _: EventDataBatch) !void {
+            const self: *@This() = @fieldParentPtr("transport", t);
+            self.count += 1;
+        }
+        fn unreachableReceive(_: *AmqpTransport, _: std.mem.Allocator, _: []const u8, _: ?[]const u8, _: u32) ![]ReceivedEventData {
+            return error.Unimplemented;
+        }
+        fn unreachableHub(_: *AmqpTransport, _: std.mem.Allocator, _: []const u8) !EventHubProperties {
+            return error.Unimplemented;
+        }
+        fn unreachablePartition(_: *AmqpTransport, _: std.mem.Allocator, _: []const u8, _: []const u8) !PartitionProperties {
+            return error.Unimplemented;
+        }
+        fn noLimit(_: *AmqpTransport, _: []const u8) !?u64 {
+            return null;
+        }
+        fn closeImpl(_: *AmqpTransport) void {}
+    };
+
+    var serial = Serial{ .transport = .{
+        .sendBatchFn = &Serial.sendBatchImpl,
+        .receiveFn = &Serial.unreachableReceive,
+        .getHubPropertiesFn = &Serial.unreachableHub,
+        .getPartitionPropertiesFn = &Serial.unreachablePartition,
+        .maxMessageSizeFn = &Serial.noLimit,
+        .closeFn = &Serial.closeImpl,
+    } };
+    try std.testing.expect(serial.transport.sendBatchesFn == null);
+
+    var batches: [3]EventDataBatch = undefined;
+    for (&batches) |*b| {
+        b.* = try EventDataBatch.init(.{});
+        var event = EventData.init("hello");
+        defer event.deinit(allocator);
+        try std.testing.expect(try b.tryAdd(allocator, event));
+    }
+    defer for (&batches) |*b| b.deinit(allocator);
+
+    try serial.transport.sendBatches(allocator, "hub", &batches);
+    try std.testing.expectEqual(@as(u32, 3), serial.count);
 }
 
 test "ProducerClient fromConnectionString" {

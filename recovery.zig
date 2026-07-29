@@ -125,6 +125,9 @@ pub const RecoverableConnection = struct {
         instance_id: []const u8 = "eventhubs",
         /// Distinguishes this client's sender links from any others.
         link_id: []const u8 = "eventhubs",
+        /// How many batches a sender link may have on the wire unconfirmed.
+        /// Only `sendBatches` overlaps them; `sendBatch` waits either way.
+        max_in_flight: u32 = sending.default_max_in_flight,
         partition_client: PartitionClientOptions = .{},
     };
 
@@ -137,6 +140,7 @@ pub const RecoverableConnection = struct {
             .sender_options = .{
                 .deadline_ms = options.deadline_ms,
                 .link_id = options.link_id,
+                .max_in_flight = options.max_in_flight,
             },
             .receiver_options = .{
                 .instance_id = options.instance_id,
@@ -943,4 +947,34 @@ test "a reattached receiver resumes from the last sequence number" {
     // Reattaching with the original filter would replay event 40, which the
     // caller has already been given.
     try testing.expectEqualStrings("amqp.annotation.x-opt-sequence-number > '40'", filters[1]);
+}
+
+test "the client's window reaches the sender links it is meant to size" {
+    // Without this the whole pipelining path is inert: the pool defaults its
+    // window from its own options, so an option that stops anywhere along the
+    // chain leaves every real client sending one batch per round trip while
+    // the documentation promises otherwise.
+    const allocator = std.testing.allocator;
+
+    var factory: ConnectionFactory = undefined;
+    var connection = RecoverableConnection.init(allocator, .{
+        .factory = &factory,
+        .deadline_ms = 1_000,
+        .max_in_flight = 5,
+    });
+    defer connection.deinit();
+
+    try std.testing.expectEqual(@as(u32, 5), connection.sender_options.max_in_flight);
+
+    // And the default is a window worth having, not one.
+    var defaulted = RecoverableConnection.init(allocator, .{
+        .factory = &factory,
+        .deadline_ms = 1_000,
+    });
+    defer defaulted.deinit();
+    try std.testing.expectEqual(
+        sending.default_max_in_flight,
+        defaulted.sender_options.max_in_flight,
+    );
+    try std.testing.expect(sending.default_max_in_flight > 1);
 }

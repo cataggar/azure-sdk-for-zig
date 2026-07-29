@@ -17,8 +17,8 @@
             .hash = "azure_sdk_storage_blobs-0.2.0-I5lGdlJ7CgD0bdgR13OktiQ1moQ9O1QDCcPsgVdlb8lf",
         },
         .azure_sdk_amqp = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#12ee60bac9ca2233b4a0083309fd167b3a9f261c",
-            .hash = "azure_sdk_amqp-0.4.0-fUByf1kMBQCZMc-pdQEvU4BRbv-OwCRZh_jfdsf5gVyG",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#861257786bdc69df5a87f1cea758bf630126cf60",
+            .hash = "azure_sdk_amqp-0.4.0-fUByf9oLBgAV5AXiW7-2bYt3E0vLBZZZ5mS47NQoaPwD",
         },
         .serde = .{
             .url = "git+https://github.com/cataggar/serde.zig#73d872776b0361b6fc92f6cecd7ccf2f05e77cdd",

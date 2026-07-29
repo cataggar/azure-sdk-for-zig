@@ -123,6 +123,50 @@ owns the addresses it keys them by. When the broker refuses a delivery,
 `lastSendError` carries the AMQP condition and description that the Zig error
 cannot.
 
+### Sending several batches at once
+
+`sendBatch` waits for the broker to confirm before returning, so a caller with
+several batches ready pays a full round trip for each one. Across a link with
+any real latency that, and not the encoding, is what sets the ceiling.
+
+```zig
+try producer.sendBatches(allocator, &.{ batch_a, batch_b, batch_c });
+```
+
+`sendBatches` keeps several on the wire at once and collects the confirmations
+afterwards, so the round trip is paid once for the window rather than once per
+batch. Retries and connection recovery are exactly `sendBatch`'s.
+
+`max_in_flight` on `HubConnection.Options` sets how many a link may have
+unconfirmed, and defaults to 8. The ring is allocated once when the link
+attaches and costs a few dozen bytes a slot, and the blocking `sendBatch` still
+refuses to overlap with anything, so raising it only affects `sendBatches`.
+
+Both calls are at-least-once — a batch the broker accepted but could not
+acknowledge may be published twice — and overlapping widens that window. When a
+send fails, the batches behind it are already on the wire and may well be
+accepted, but their verdicts are abandoned unread; they are reported as not
+accepted and may be sent again. At most `max_in_flight` batches are ever at
+risk. The answer is the same as it is for `sendBatch`: give events an
+application property the consumer deduplicates on.
+
+Nothing is silently dropped in either direction: a batch counts as accepted
+only once the broker has said so.
+
+Batches are grouped into runs by partition, because each partition is its own
+link and only batches sharing one can overlap. Passing them already grouped —
+the natural order when they were built per partition — makes every batch
+eligible. A `null` partition is the gateway, a destination in its own right
+rather than a wildcard, so it forms runs of its own.
+
+For finer control, `SenderPool` exposes the pieces underneath: `sendAsync`
+returns a token without waiting, `confirm` collects the next verdict in send
+order and names it, `unconfirmed` reports how many are outstanding, and
+`sendPipelined` runs the window without retrying. It needs the link to itself:
+it reads the link's depth as its own and empties the ring when it finishes, so
+it returns `error.DeliveriesInFlight` rather than sharing a link whose verdicts
+someone else is still waiting for.
+
 ## Receiving
 
 A partition is read through one receiver link held open for the life of a

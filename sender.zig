@@ -39,6 +39,15 @@ pub fn entityPathFor(
 /// deinitialised; this pool only owns the addresses it keys them by. Reusing a
 /// link matters beyond the attach round trip: the peer's credit and the
 /// negotiated `max-message-size` are per link.
+/// How many batches a link keeps on the wire unconfirmed by default.
+///
+/// Eight covers a round trip an order of magnitude longer than the time it
+/// takes to encode a batch, which is the regime that matters, and costs a ring
+/// of eight slots per link. Raising it further trades memory and the number of
+/// batches whose fate is unknown after a failure for very little more
+/// throughput.
+pub const default_max_in_flight: u32 = 8;
+
 pub const SenderPool = struct {
     allocator: Allocator,
     session: *amqp.Session,
@@ -50,6 +59,8 @@ pub const SenderPool = struct {
     /// a payload, so it is recorded here as `Management` does for its status.
     /// Borrowed from the sender that failed and valid until its next send.
     last_rejection: ?amqp.Rejection = null,
+    /// How many batches a link may have on the wire unconfirmed.
+    max_in_flight: u32 = 1,
 
     const Entry = struct {
         address: []u8,
@@ -59,6 +70,17 @@ pub const SenderPool = struct {
     pub const Options = struct {
         deadline_ms: i64,
         link_id: []const u8 = "eventhubs",
+        /// How many batches a link may have on the wire unconfirmed.
+        ///
+        /// One makes every send wait a full round trip for the broker's
+        /// disposition, which caps a link at one batch per round trip however
+        /// large the batches are. Raising it lets `sendAsync`, and so
+        /// `sendPipelined`, keep that many batches in flight.
+        ///
+        /// The blocking `send` still refuses to overlap with anything, so this
+        /// only ever costs the ring: a few dozen bytes per slot, allocated
+        /// once when the link attaches. Zero is treated as one.
+        max_in_flight: u32 = default_max_in_flight,
     };
 
     pub fn init(allocator: Allocator, session: *amqp.Session, options: Options) SenderPool {
@@ -67,6 +89,7 @@ pub const SenderPool = struct {
             .session = session,
             .deadline_ms = options.deadline_ms,
             .link_id = options.link_id,
+            .max_in_flight = @max(options.max_in_flight, 1),
         };
     }
 
@@ -102,6 +125,7 @@ pub const SenderPool = struct {
             .name = name,
             .target_address = address,
             .desired_capabilities = &.{amqp.georeplication_capability},
+            .max_in_flight = self.max_in_flight,
         }, self.deadline_ms);
 
         self.entries.appendAssumeCapacity(.{ .address = owned, .sender = sender });
@@ -173,6 +197,177 @@ pub const SenderPool = struct {
             self.last_rejection = sender.rejection;
             return err;
         };
+    }
+
+    /// Write `batch` to `address` without waiting for the broker to confirm
+    /// it, returning the token that names the delivery.
+    ///
+    /// The bytes are on the wire when this returns, so `batch` and its
+    /// encoding may be released immediately; only the broker's verdict is
+    /// outstanding. Collect it with `confirm`, which reports outcomes in send
+    /// order and names each one, so a caller keeping several batches in flight
+    /// can tell exactly which batch was refused and resend that one.
+    ///
+    /// Returns `error.InFlightWindowFull` once `max_in_flight` batches on
+    /// `address` are unconfirmed; `confirm` retires one and makes room.
+    pub fn sendAsync(
+        self: *SenderPool,
+        allocator: Allocator,
+        address: []const u8,
+        batch: EventDataBatch,
+    ) !amqp.DeliveryToken {
+        if (batch.count() == 0) return SendError.EmptyBatch;
+
+        const sender = try self.senderFor(address);
+        const payload = try encodeBatchTransfer(allocator, batch);
+        defer allocator.free(payload);
+
+        return sender.sendBytesAsync(
+            payload,
+            .{ .message_format = batch_message_format },
+            self.deadline_ms,
+        );
+    }
+
+    /// Wait for the broker's verdict on the oldest unconfirmed batch on
+    /// `address`.
+    ///
+    /// A refusal comes back as `Settlement.outcome` rather than as an error,
+    /// because the point of pipelining is knowing *which* batch was refused;
+    /// `lastError` describes it until the next `confirm` on the same address.
+    /// An error here means the link itself failed.
+    pub fn confirm(self: *SenderPool, address: []const u8) !amqp.Settlement {
+        const sender = try self.senderFor(address);
+        const settlement = try sender.awaitSettlement(self.deadline_ms);
+        self.last_rejection = settlement.rejection;
+        return settlement;
+    }
+
+    /// How many batches on `address` are on the wire unconfirmed.
+    pub fn unconfirmed(self: *SenderPool, address: []const u8) !usize {
+        const sender = try self.senderFor(address);
+        return sender.inFlight();
+    }
+
+    /// The result of a pipelined send. Total rather than an error union: the
+    /// caller needs the accepted prefix even when it stopped early, since that
+    /// is exactly what it must not send again.
+    pub const PipelinedSend = struct {
+        /// How many batches, counting from the front, the broker accepted.
+        /// Deliveries settle in the order they were sent, so the accepted set
+        /// is always a prefix.
+        accepted: usize,
+        /// Why it stopped, or null when every batch was accepted. The batch at
+        /// index `accepted` is the one that failed; those after it were never
+        /// given a verdict.
+        err: ?anyerror = null,
+    };
+
+    /// Send every batch to `address`, keeping up to `max_in_flight` of them on
+    /// the wire at once.
+    ///
+    /// This is the throughput path: one round trip covers the whole window
+    /// instead of one batch. It does not retry — a caller wanting the Event
+    /// Hubs schedule should resend the unaccepted remainder through
+    /// `sendWithRetry`, which is what `ProducerClient.sendBatches` does.
+    ///
+    /// The link is always left idle, so the caller can fall straight back to
+    /// the blocking path. Anything still unconfirmed when this stops early is
+    /// abandoned, which means a batch the broker went on to accept can be sent
+    /// twice — the same at-least-once bargain a retry already makes.
+    pub fn sendPipelined(
+        self: *SenderPool,
+        allocator: Allocator,
+        address: []const u8,
+        batches: []const EventDataBatch,
+    ) PipelinedSend {
+        self.last_rejection = null;
+
+        // Checked before anything below can abandon the window: this call
+        // reads the link's depth as its own and empties the ring on the way
+        // out, so sharing the link would both misreport which batches landed
+        // and throw away a verdict its owner is still waiting for.
+        const already = self.unconfirmed(address) catch |err| {
+            return .{ .accepted = 0, .err = err };
+        };
+        if (already != 0) return .{ .accepted = 0, .err = error.DeliveriesInFlight };
+
+        var accepted: usize = 0;
+        const err = self.pipeline(allocator, address, batches, &accepted);
+
+        // Every exit runs this. The caller has been told its accepted prefix
+        // and will resend the rest, so a verdict arriving for the remainder
+        // now has nobody to report to. Dropping the window is also what lets
+        // the link be used again: a sender still holding unsettled deliveries
+        // refuses every blocking send, so without this one timed-out pipeline
+        // would wedge the fallback path it is supposed to hand off to.
+        self.abandonInFlight(address);
+
+        return .{ .accepted = accepted, .err = err };
+    }
+
+    /// The body of `sendPipelined`, split out so the window is emptied on
+    /// every path rather than at each of half a dozen returns.
+    fn pipeline(
+        self: *SenderPool,
+        allocator: Allocator,
+        address: []const u8,
+        batches: []const EventDataBatch,
+        accepted: *usize,
+    ) ?anyerror {
+        var sent: usize = 0;
+        while (sent < batches.len) {
+            const outstanding = sent - accepted.*;
+            // Retire the oldest to make room, so the window stays full rather
+            // than draining between batches.
+            if (outstanding >= self.max_in_flight) {
+                self.confirmOne(address) catch |err| return err;
+                accepted.* += 1;
+            }
+
+            _ = self.sendAsync(allocator, address, batches[sent]) catch |err| {
+                // The send failed, but the deliveries already on the wire are
+                // being judged on their own merits, so collect their verdicts
+                // instead of abandoning batches the broker is about to accept.
+                accepted.* += self.drain(address, sent - accepted.*);
+                return err;
+            };
+            sent += 1;
+        }
+
+        while (accepted.* < sent) {
+            self.confirmOne(address) catch |err| return err;
+            accepted.* += 1;
+        }
+        return null;
+    }
+
+    /// Collect one verdict, mapping a refusal onto an error the way `send`
+    /// does so that a pipelined failure classifies like a blocking one.
+    fn confirmOne(self: *SenderPool, address: []const u8) !void {
+        const settlement = try self.confirm(address);
+        if (settlement.outcome != .accepted) return error.SendRejected;
+    }
+
+    /// Collect up to `count` outstanding verdicts, stopping at the first that
+    /// is not an acceptance. Returns how many were accepted.
+    fn drain(self: *SenderPool, address: []const u8, count: usize) usize {
+        var accepted: usize = 0;
+        while (accepted < count) : (accepted += 1) {
+            self.confirmOne(address) catch return accepted;
+        }
+        return accepted;
+    }
+
+    /// Drop any verdicts still outstanding on `address`, leaving the link free
+    /// for a blocking send. Nothing to do if the link was never opened.
+    fn abandonInFlight(self: *SenderPool, address: []const u8) void {
+        for (self.entries.items) |entry| {
+            if (std.mem.eql(u8, entry.address, address)) {
+                entry.sender.abandonInFlight();
+                return;
+            }
+        }
     }
 
     /// Send under the Event Hubs retry schedule.
@@ -336,9 +531,20 @@ const Scripted = struct {
         clock: *driver.ManualClock,
         conn: *driver.Driver,
     ) !void {
+        return self.openWith(allocator, mem, clock, conn, .{ .deadline_ms = 10_000 });
+    }
+
+    fn openWith(
+        self: *Scripted,
+        allocator: Allocator,
+        mem: *MemoryTransport,
+        clock: *driver.ManualClock,
+        conn: *driver.Driver,
+        options: SenderPool.Options,
+    ) !void {
         self.* = .{ .fixture = try Fixture.init(allocator, mem, clock, conn) };
         errdefer self.fixture.deinit();
-        self.pool = SenderPool.init(allocator, &self.fixture.session, .{ .deadline_ms = 10_000 });
+        self.pool = SenderPool.init(allocator, &self.fixture.session, options);
     }
 
     fn deinit(self: *Scripted) void {
@@ -464,6 +670,176 @@ fn annotation(entries: []const amqp.uamqp.MapEntry, key: []const u8) ?amqp.uamqp
         if (std.mem.eql(u8, name, key)) return entry.value;
     }
     return null;
+}
+
+test "a pipelined send that stops early leaves the link fit for a blocking send" {
+    // The failure path hands off to `sendWithRetry`, which is a blocking send,
+    // and a sender still holding unsettled deliveries refuses those outright.
+    // So if the window were not emptied here, the very first pipelined failure
+    // would take the retry path down with it — permanently, for this link.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: driver.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptSender(peer, null, 4);
+    // Refuse the first batch. The second is on the wire by then and never
+    // gets a verdict; the third is never sent.
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 0,
+        .last = 0,
+        .settled = true,
+        .state = .{ .rejected = .{
+            .condition = "amqp:link:message-size-exceeded",
+            .description = "too big",
+        } },
+    } });
+    // The blocking send that follows takes delivery id 2: the abandoned
+    // deliveries spent 0 and 1, and ids never rewind.
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 2,
+        .last = 2,
+        .settled = true,
+        .state = .accepted,
+    } });
+
+    var conn = try driver.Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
+    defer conn.deinit();
+    var scripted: Scripted = undefined;
+    try scripted.openWith(allocator, &mem, &clock, &conn, .{
+        .deadline_ms = 10_000,
+        .max_in_flight = 2,
+    });
+    defer scripted.deinit();
+
+    var batches: [3]EventDataBatch = undefined;
+    for (&batches) |*b| b.* = try batchOf(allocator, &.{"hello"}, .{});
+    defer for (&batches) |*b| b.deinit(allocator);
+
+    const result = scripted.pool.sendPipelined(allocator, "my-hub", &batches);
+    try testing.expectEqual(@as(usize, 0), result.accepted);
+    try testing.expectEqual(@as(?anyerror, error.SendRejected), result.err);
+
+    // Nothing outstanding, so the caller can fall straight back to the
+    // retrying blocking path with the batches it was not told were accepted.
+    try testing.expectEqual(@as(usize, 0), try scripted.pool.unconfirmed("my-hub"));
+    try scripted.pool.send(allocator, "my-hub", batches[0]);
+}
+
+test "a fully accepted pipeline reports every batch and stays idle" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: driver.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptSender(peer, null, 4);
+    for (0..3) |i| {
+        try peer.push(0, .{ .disposition = .{
+            .role = .receiver,
+            .first = @intCast(i),
+            .last = @intCast(i),
+            .settled = true,
+            .state = .accepted,
+        } });
+    }
+
+    var conn = try driver.Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
+    defer conn.deinit();
+    var scripted: Scripted = undefined;
+    try scripted.openWith(allocator, &mem, &clock, &conn, .{
+        .deadline_ms = 10_000,
+        .max_in_flight = 2,
+    });
+    defer scripted.deinit();
+
+    var batches: [3]EventDataBatch = undefined;
+    for (&batches) |*b| b.* = try batchOf(allocator, &.{"hello"}, .{});
+    defer for (&batches) |*b| b.deinit(allocator);
+
+    const result = scripted.pool.sendPipelined(allocator, "my-hub", &batches);
+    try testing.expectEqual(@as(usize, 3), result.accepted);
+    try testing.expectEqual(@as(?anyerror, null), result.err);
+    try testing.expectEqual(@as(usize, 0), try scripted.pool.unconfirmed("my-hub"));
+}
+
+test "a pipelined send keeps the window full instead of draining between batches" {
+    // The point of the exercise: with a window of 3, all three batches are on
+    // the wire before the first verdict is collected, so the round trip is
+    // paid once rather than three times.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: driver.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptSender(peer, null, 4);
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 0,
+        .last = 2,
+        .settled = true,
+        .state = .accepted,
+    } });
+
+    var conn = try driver.Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
+    defer conn.deinit();
+    var scripted: Scripted = undefined;
+    try scripted.openWith(allocator, &mem, &clock, &conn, .{
+        .deadline_ms = 10_000,
+        .max_in_flight = 3,
+    });
+    defer scripted.deinit();
+
+    var batches: [3]EventDataBatch = undefined;
+    for (&batches) |*b| b.* = try batchOf(allocator, &.{"hello"}, .{});
+    defer for (&batches) |*b| b.deinit(allocator);
+
+    // One disposition covering all three is the only thing the peer sends, so
+    // this passes only if nothing waited for a verdict mid-flight.
+    const result = scripted.pool.sendPipelined(allocator, "my-hub", &batches);
+    try testing.expectEqual(@as(usize, 3), result.accepted);
+    try testing.expectEqual(@as(?anyerror, null), result.err);
+}
+
+test "a window of zero is read as one rather than stalling every send" {
+    // A caller computing the window — from a config value, say — can land on
+    // zero, and an unclamped zero makes the very first batch look like an
+    // overflow, so `sendPipelined` fails before sending anything.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: driver.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptSender(peer, null, 2);
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 0,
+        .last = 0,
+        .settled = true,
+        .state = .accepted,
+    } });
+
+    var conn = try driver.Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
+    defer conn.deinit();
+    var scripted: Scripted = undefined;
+    try scripted.openWith(allocator, &mem, &clock, &conn, .{
+        .deadline_ms = 10_000,
+        .max_in_flight = 0,
+    });
+    defer scripted.deinit();
+
+    var batch = try batchOf(allocator, &.{"hello"}, .{});
+    defer batch.deinit(allocator);
+
+    const batches = [_]EventDataBatch{batch};
+    const result = scripted.pool.sendPipelined(allocator, "my-hub", &batches);
+    try testing.expectEqual(@as(usize, 1), result.accepted);
+    try testing.expectEqual(@as(?anyerror, null), result.err);
 }
 
 test "a rejected batch surfaces the broker's condition" {
