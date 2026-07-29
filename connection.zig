@@ -35,7 +35,10 @@ pub const sasl_anonymous = "ANONYMOUS";
 /// Initial response Go sends for anonymous SASL (`sasl.go:75`).
 pub const sasl_anonymous_response = "anonymous";
 
-pub const ConnectionError = error{
+/// Includes the encoder's failure modes by union rather than by restating
+/// them, so a value the encoder cannot represent surfaces as itself instead of
+/// being flattened into a transport error.
+pub const ConnectionError = perf.EncodeError || error{
     OutOfMemory,
     ConnectionFailed,
     ConnectionClosed,

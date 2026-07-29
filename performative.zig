@@ -25,7 +25,9 @@ pub const SaslCode = uamqp.definitions.SaslCode;
 /// Descriptor code for `error` (§2.8.15), which uamqp omits.
 pub const error_descriptor: u64 = 0x000000000000001d;
 
-pub const EncodeError = error{OutOfMemory};
+/// Aliased to uamqp's error set rather than restated, so a new encoder
+/// failure mode cannot silently fail to compile here again.
+pub const EncodeError = encoder.EncodeError;
 
 pub const DecodeError = error{
     OutOfMemory,

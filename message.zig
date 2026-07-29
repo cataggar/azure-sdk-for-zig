@@ -20,7 +20,9 @@ const descriptor = uamqp.definitions.descriptor;
 
 pub const Fields = perf.Fields;
 
-pub const EncodeError = error{OutOfMemory};
+/// Aliased to uamqp's error set rather than restated, so a new encoder
+/// failure mode cannot silently fail to compile here again.
+pub const EncodeError = encoder.EncodeError;
 
 pub const DecodeError = error{
     OutOfMemory,
