@@ -683,6 +683,33 @@ pub const Receiver = struct {
         self.credit -|= 1;
     }
 
+    /// Drop the entries the cursor has already passed.
+    ///
+    /// The cursor alone would let `ready` grow without bound: it only shrinks
+    /// when the caller happens to consume the exact last queued delivery, and
+    /// a receiver that stays even one delivery behind — an app pumping the
+    /// session itself, or two links on one session consumed in turn — never
+    /// hits that. Compacting once the consumed run reaches half the array
+    /// bounds it by the live backlog while still moving each entry at most
+    /// once per two `receive` calls, so draining stays amortised O(1).
+    fn compactReady(self: *Receiver) void {
+        if (self.ready_head == self.ready.items.len) {
+            self.ready.clearRetainingCapacity();
+            self.ready_head = 0;
+            return;
+        }
+        if (self.ready_head * 2 < self.ready.items.len) return;
+
+        const live = self.ready.items.len - self.ready_head;
+        std.mem.copyForwards(
+            Delivery,
+            self.ready.items[0..live],
+            self.ready.items[self.ready_head..],
+        );
+        self.ready.shrinkRetainingCapacity(live);
+        self.ready_head = 0;
+    }
+
     /// Free the delivery handed out by the previous `receive`, whose "valid
     /// until the next `receive`" window has just closed.
     fn releaseCurrent(self: *Receiver) void {
@@ -775,10 +802,7 @@ pub const Receiver = struct {
 
         const delivery = self.ready.items[self.ready_head];
         self.ready_head += 1;
-        if (self.ready_head == self.ready.items.len) {
-            self.ready.clearRetainingCapacity();
-            self.ready_head = 0;
-        }
+        self.compactReady();
 
         // Only now that a replacement is in hand, so a `receive` that fails or
         // times out leaves the previously returned delivery readable, as it
@@ -1551,14 +1575,75 @@ test "receive hands out the queued buffer rather than copying it" {
     try testing.expectEqual(receiver.ready.items[0].payload.ptr, first.payload.ptr);
     try testing.expectEqual(receiver.ready.items[0].tag.ptr, first.tag.ptr);
 
+    // The second receive puts the consumed run at half the array, so the live
+    // tail is shifted down and the cursor resets.
     _ = try receiver.receive(10_000);
-    try testing.expectEqual(@as(usize, 2), receiver.ready_head);
+    try testing.expectEqual(@as(usize, 0), receiver.ready_head);
+    try testing.expectEqual(@as(usize, 1), receiver.ready.items.len);
 
     const last = try receiver.receive(10_000);
     try testing.expectEqual(@as(u32, 2), last.id);
     // Fully drained, so the queue resets rather than growing without bound.
     try testing.expectEqual(@as(usize, 0), receiver.ready.items.len);
     try testing.expectEqual(@as(usize, 0), receiver.ready_head);
+}
+
+test "a partially drained queue stays bounded by the backlog" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+
+    const count = 400;
+    var i: u32 = 0;
+    while (i < count) : (i += 1) {
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = i,
+            .delivery_tag = "t",
+            .message_format = 0,
+            .settled = true,
+            .more = false,
+        }, "event");
+    }
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 512,
+    }, 10_000);
+
+    while (receiver.ready.items.len < count) _ = try fixture.session.pump(10_000);
+
+    // Consume all but one. A cursor that only reset on an exactly empty queue
+    // would still be holding all 400 entries, 399 of them dead, and would go
+    // on accruing them for the life of the link.
+    i = 0;
+    while (i < count - 1) : (i += 1) {
+        const delivery = try receiver.receive(10_000);
+        try testing.expectEqual(i, delivery.id);
+    }
+
+    const backlog = receiver.ready.items.len - receiver.ready_head;
+    try testing.expectEqual(@as(usize, 1), backlog);
+    try testing.expect(receiver.ready.items.len <= 2 * backlog);
+
+    const last = try receiver.receive(10_000);
+    try testing.expectEqual(@as(u32, count - 1), last.id);
 }
 
 test "draining an already queued backlog allocates nothing" {
