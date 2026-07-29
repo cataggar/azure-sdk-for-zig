@@ -52,6 +52,7 @@ pub const Receiver = link.Receiver;
 pub const ReceiverOptions = link.ReceiverOptions;
 pub const Delivery = link.Delivery;
 pub const Rejection = link.Rejection;
+pub const SettleBatch = link.SettleBatch;
 pub const LinkError = link.LinkError;
 pub const openSender = link.openSender;
 pub const openReceiver = link.openReceiver;
