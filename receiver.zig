@@ -197,10 +197,20 @@ pub const PartitionClient = struct {
         }
 
         var events: std.ArrayList(ReceivedEventData) = .empty;
+        // `count` is exactly how many will be appended on the success path, and
+        // a `ReceivedEventData` is large enough that regrowing a 300-deep
+        // prefetch means repeatedly copying tens of kilobytes.
+        try events.ensureTotalCapacityPrecise(allocator, count);
         errdefer {
             for (events.items) |*e| e.deinit(allocator);
             events.deinit(allocator);
         }
+
+        // One disposition per message meant a frame on the wire per event; a
+        // full prefetch window cost hundreds of round trips of bookkeeping.
+        // `SettleBatch` coalesces the ids into runs and only breaks a run
+        // where another link on the session took an id in between.
+        var settling = amqp.SettleBatch.init(self.receiver, .accepted);
 
         while (events.items.len < count) {
             const delivery = self.receiver.receive(self.deadline_ms) catch |err| {
@@ -223,8 +233,12 @@ pub const PartitionClient = struct {
             }
 
             try events.append(allocator, received);
-            try self.receiver.accept(delivery);
+            try settling.add(delivery);
         }
+
+        // Anything decoded but not settled here is redelivered rather than
+        // lost, so failing before the flush errs in the safe direction.
+        try settling.flush();
 
         if (events.items.len > 0) {
             try self.advancePast(events.items[events.items.len - 1].sequence_number);
@@ -665,6 +679,60 @@ test "receiveEvents decodes events and advances past the last one" {
         "amqp.annotation.x-opt-sequence-number > '12'",
         scripted.client.filterExpression(),
     );
+}
+
+test "receiveEvents settles a whole batch in one disposition" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock = driver.ManualClock{};
+    var conn = try driver.Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
+    defer conn.deinit();
+
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+    try scriptAttach(peer);
+
+    const batch = 32;
+    var i: u32 = 0;
+    while (i < batch) : (i += 1) {
+        try pushEvent(allocator, peer, i, @as(i64, i) + 1, "event");
+    }
+
+    var scripted: Scripted = undefined;
+    try scripted.open(allocator, &mem, &clock, &conn, .{});
+    defer scripted.deinit();
+
+    mem.clearWritten();
+    const events = try scripted.client.receiveEvents(allocator, batch);
+    defer event_data.freeReceivedEvents(allocator, events);
+    try testing.expectEqual(@as(usize, batch), events.len);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+
+    var dispositions: usize = 0;
+    var covered_first: ?u32 = null;
+    var covered_last: ?u32 = null;
+    for (frames.bodies.items) |body| {
+        if (amqp.performative.peekDescriptor(body) != amqp.performative.descriptor.disposition) continue;
+        dispositions += 1;
+        var decoded = try amqp.performative.decode(allocator, body);
+        defer decoded.deinit();
+        const d = decoded.performative.disposition;
+        try testing.expectEqual(amqp.performative.Role.receiver, d.role);
+        try testing.expect(d.settled);
+        try testing.expectEqual(amqp.performative.DeliveryState.accepted, d.state.?);
+        covered_first = d.first;
+        covered_last = d.last orelse d.first;
+    }
+
+    // Settling one at a time put a frame on the wire per event, so a 300-deep
+    // prefetch cost 300 round trips of nothing but bookkeeping. AMQP 1.0
+    // §2.6.10 lets one disposition cover a contiguous `first..last` run, which
+    // is what every other client does.
+    try testing.expectEqual(@as(usize, 1), dispositions);
+    try testing.expectEqual(@as(u32, 0), covered_first.?);
+    try testing.expectEqual(@as(u32, batch - 1), covered_last.?);
 }
 
 test "a quiet partition returns the events that did arrive" {
