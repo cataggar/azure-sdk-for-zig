@@ -114,6 +114,9 @@ defer allocator.free(bytes);
   contiguous run in a single disposition
 - pipelined sends: a configurable number of deliveries may be unsettled at
   once, so a link is not limited to one message per round trip
+- session flow control: transfer ids advance per frame, and the peer's
+  `incoming-window` is seeded from its `begin`, rebased on every flow, and
+  waited on rather than overrun
 - the Event Hubs link properties the Go and Rust clients send —
   `com.microsoft:receiver-name`, `com.microsoft:epoch`, and the
   `apache.org:selector-filter:string` filter used to pick a starting offset
@@ -216,6 +219,37 @@ as it was before.
 Deliveries settle in the order they were sent, and the ring holding them is
 allocated once at attach, so a silent peer costs a fixed amount of memory rather
 than a growing one.
+
+### Session flow control
+
+Session ids count transfer *frames*, not deliveries (§2.5.6). Every frame of a
+multi-frame delivery consumes one, even though only the first frame carries the
+delivery id, so a message split across seventeen frames advances the session by
+seventeen and the next delivery's id follows from there. Numbering by delivery
+instead leaves every later id short of the peer's count, and the peer's
+dispositions then name ids the sender never issued — its verdicts match nothing
+and the send waits out its deadline.
+
+The peer's `begin` and every `flow` state how many frames it can still absorb.
+That capacity is rebased onto what has already gone out:
+
+```
+remote-incoming-window = next-incoming-id(flow) + incoming-window(flow) - next-outgoing-id
+```
+
+The subtraction is the point. `incoming-window` describes the peer's room as of
+the id it names, so taking it at face value re-credits every frame sent since
+and lets a sender run past the window. A flow may omit `next-incoming-id` until
+the peer has seen a transfer, in which case the spec substitutes the session's
+first outgoing id. The result is serial arithmetic, so a peer that shrinks its
+window below what is already in flight yields a span in the top half of the id
+space rather than a negative — read raw, that is a window of nearly four
+billion.
+
+A sender waits for the peer to reopen a closed window before writing the next
+frame, including partway through a multi-frame delivery. Unlike a full in-flight
+ring, this is something waiting can actually resolve: the peer alone reopens it,
+and it does so with a flow the sender picks up while pumping.
 
 A handle in an inbound frame is scoped to the peer that sent it, so links are
 looked up by the handle the peer chose, never by our own. A session holding both
