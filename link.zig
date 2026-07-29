@@ -359,8 +359,16 @@ pub const Sender = struct {
     rejection: ?Rejection = null,
     detach_error: ?connection.RemoteError = null,
 
+    /// Scratch for one outgoing frame body, reused for every frame of every
+    /// send. Sized to the peer's `max-frame-size`, which `chunkBudget` has
+    /// already guaranteed is enough for a transfer performative plus its
+    /// chunk. Growing this per frame meant a doubling series of reallocs and
+    /// copies, up to the frame size, on every frame of every batch.
+    frame_buf: []u8 = &.{},
+
     pub fn deinit(self: *Sender) void {
         self.allocator.free(self.name);
+        if (self.frame_buf.len > 0) self.allocator.free(self.frame_buf);
         if (self.rejection) |r| r.deinit(self.allocator);
         if (self.detach_error) |e| e.deinit(self.allocator);
         self.allocator.destroy(self);
@@ -462,8 +470,18 @@ pub const Sender = struct {
 
         var offset: usize = 0;
         var first = true;
+        // At most two budgets exist for a delivery: the opening frame carries
+        // the delivery id, tag and message format, and every continuation
+        // carries none of them. Measuring per chunk re-encoded the same
+        // performative once per frame to learn the same two numbers.
+        const first_budget = try self.chunkBudget(delivery_id, &tag, true, options.message_format);
+        const cont_budget: usize = if (payload.len > first_budget)
+            try self.chunkBudget(delivery_id, &tag, false, options.message_format)
+        else
+            first_budget;
+
         while (first or offset < payload.len) {
-            const budget = try self.chunkBudget(delivery_id, &tag, first, options.message_format);
+            const budget = if (first) first_budget else cont_budget;
             const take = @min(budget, payload.len - offset);
             const more = offset + take < payload.len;
 
@@ -531,11 +549,25 @@ pub const Sender = struct {
     }
 
     fn sendTransfer(self: *Sender, xfer: perf.Transfer, chunk: []const u8) LinkError!void {
-        var buf = uamqp.encoder.Buffer.initDynamic(self.allocator);
-        defer buf.deinit();
+        var buf = uamqp.encoder.Buffer.initFixed(try self.frameBuffer());
         try perf.encodeTransfer(self.allocator, xfer, &buf);
-        try buf.writeAll(chunk);
+        // A fixed buffer never allocates, so the only way `writeAll` fails is
+        // running out of room — which `chunkBudget` is supposed to have made
+        // impossible. Report that as the frame problem it is rather than as a
+        // memory problem it is not.
+        buf.writeAll(chunk) catch return error.FrameTooLarge;
         try self.session.driver.sendFrame(.amqp, self.session.channel, buf.written());
+    }
+
+    /// The reusable frame scratch, grown if the peer's frame size demands it.
+    fn frameBuffer(self: *Sender) LinkError![]u8 {
+        const need = self.session.driver.maxOutgoingBody();
+        if (self.frame_buf.len >= need) return self.frame_buf;
+        self.frame_buf = if (self.frame_buf.len == 0)
+            try self.allocator.alloc(u8, need)
+        else
+            try self.allocator.realloc(self.frame_buf, need);
+        return self.frame_buf;
     }
 
     fn awaitCredit(self: *Sender, deadline_ms: i64) LinkError!void {
@@ -1215,6 +1247,89 @@ test "a formatted delivery split across frames keeps every frame within the limi
 
     try testing.expect(count > 1);
     try testing.expectEqualSlices(u8, big, reassembled.items);
+}
+
+test "a multi-frame send does not allocate per frame" {
+    // The transport and the scripted peer stay on the plain test allocator so
+    // that the count reflects the link layer only, not the growth of the
+    // in-memory wire.
+    var counting = CountingAllocator{ .child = testing.allocator };
+    const allocator = counting.allocator();
+
+    var mem = MemoryTransport.init(testing.allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = testing.allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 512);
+    try peer.push(0, .{ .attach = .{
+        .name = "producer",
+        .handle = 0,
+        .role = .receiver,
+        .initial_delivery_count = 0,
+    } });
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 1000,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+        .handle = 0,
+        .delivery_count = 0,
+        .link_credit = 10,
+    } });
+    var settled: u32 = 0;
+    while (settled < 2) : (settled += 1) {
+        try peer.push(0, .{ .disposition = .{
+            .role = .receiver,
+            .first = settled,
+            .last = settled,
+            .settled = true,
+            .state = .accepted,
+        } });
+    }
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+    }, 10_000);
+
+    // Twenty-odd frames at the spec-minimum frame size, so a per-frame cost
+    // is impossible to miss.
+    const big = try testing.allocator.alloc(u8, 8000);
+    defer testing.allocator.free(big);
+    @memset(big, 'x');
+
+    // The first send pays for the frame scratch once.
+    try sender.sendBytes(big, 10_000);
+    try testing.expect(sender.frame_buf.len >= driver.maxOutgoingBody());
+
+    const before = counting.allocs;
+    try sender.sendBytes(big, 10_000);
+    const spent = counting.allocs - before;
+
+    var frames = try EmittedFrames.parse(testing.allocator, mem.written());
+    defer frames.deinit();
+    var transfers: usize = 0;
+    for (frames.bodies.items) |body| {
+        if (perf.peekDescriptor(body) == perf.descriptor.transfer) transfers += 1;
+    }
+    // Both sends, so the second one alone sent half of these.
+    const per_send = transfers / 2;
+    try testing.expect(per_send > 15);
+
+    // One allocation per frame is left: the temporary `encodeDescribedList`
+    // builds for the performative's list body. The constant covers the two
+    // budget measurements and decoding the peer's disposition.
+    //
+    // Before the frame scratch and the hoisted budget this same send cost 88
+    // allocations rather than 24 — and at the spec-minimum 512-byte frame the
+    // old buffer only doubled three times. A real 64 KiB frame doubled ten.
+    try testing.expect(spent <= per_send + 8);
 }
 
 test "a rejected disposition surfaces the AMQP condition" {
