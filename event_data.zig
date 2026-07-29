@@ -105,16 +105,30 @@ pub const MessageId = union(enum) {
 /// AMQP simple type has to survive a round trip.
 pub const PropertyMap = struct {
     entries: std.StringArrayHashMapUnmanaged(AmqpValue) = .empty,
+    /// Whether the keys and values belong to the map or to whoever filled it.
+    ///
+    /// `put` copies, so the map frees what it holds. `putBorrowed` does not,
+    /// because a decoded event points every property at its own backing block
+    /// and `deinit` must then release only the map's own storage.
+    ///
+    /// Recording that here rather than leaving it to the caller to remember
+    /// is what keeps `deinit` correct on both, and so keeps `EventData.deinit`
+    /// — a public method on a public field of every received event — from
+    /// freeing interior pointers into a block it knows nothing about.
+    borrowed: bool = false,
 
     pub const empty: PropertyMap = .{};
 
     pub fn deinit(self: *PropertyMap, allocator: std.mem.Allocator) void {
-        var it = self.entries.iterator();
-        while (it.next()) |entry| {
-            allocator.free(entry.key_ptr.*);
-            entry.value_ptr.deinit(allocator);
+        if (!self.borrowed) {
+            var it = self.entries.iterator();
+            while (it.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                entry.value_ptr.deinit(allocator);
+            }
         }
         self.entries.deinit(allocator);
+        self.* = .empty;
     }
 
     /// Store a deep copy of `value` under a copy of `key`, replacing any
@@ -125,6 +139,11 @@ pub const PropertyMap = struct {
         key: []const u8,
         value: AmqpValue,
     ) !void {
+        // Mixing the two would leave the map half owning its contents, which
+        // no single `deinit` can then get right. Adding to a received event's
+        // properties means copying the event out first.
+        std.debug.assert(!self.borrowed);
+
         var cloned = try value.clone(allocator);
         errdefer cloned.deinit(allocator);
 
@@ -152,8 +171,7 @@ pub const PropertyMap = struct {
     ///
     /// `allocator` is used only for the map's own storage; the caller owns the
     /// key and value bytes and must keep them alive at least as long as the
-    /// map. A map filled this way must be released with `deinitEntries`, never
-    /// with `deinit`, which would try to free memory it does not own.
+    /// map, and `deinit` will not free them.
     ///
     /// `ReceivedEventData` is the only user: every property it decodes already
     /// lives in the event's backing block.
@@ -163,8 +181,11 @@ pub const PropertyMap = struct {
         key: []const u8,
         value: AmqpValue,
     ) !void {
+        std.debug.assert(self.borrowed or self.entries.count() == 0);
+
         const gop = try self.entries.getOrPut(allocator, key);
         gop.value_ptr.* = value;
+        self.borrowed = true;
     }
 
     /// Size the map for exactly `n` entries, so a run of `putBorrowed` neither
@@ -174,13 +195,6 @@ pub const PropertyMap = struct {
     /// super-linear growth factor on top of what it is asked for.
     pub fn reserveExact(self: *PropertyMap, allocator: std.mem.Allocator, n: usize) !void {
         try self.entries.entries.setCapacity(allocator, n);
-    }
-
-    /// Release the map's own storage and leave the keys and values alone. The
-    /// counterpart to `putBorrowed`.
-    pub fn deinitEntries(self: *PropertyMap, allocator: std.mem.Allocator) void {
-        self.entries.deinit(allocator);
-        self.* = .empty;
     }
 
     pub fn get(self: PropertyMap, key: []const u8) ?AmqpValue {
@@ -365,8 +379,8 @@ pub const ReceivedEventData = struct {
     /// and then released through one copy leaves the other holding freed
     /// pointers, because emptying one struct cannot reach the other.
     pub fn deinit(self: *ReceivedEventData, allocator: std.mem.Allocator) void {
-        self.event_data.properties.deinitEntries(allocator);
-        self.system_properties.deinitEntries(allocator);
+        self.event_data.properties.deinit(allocator);
+        self.system_properties.deinit(allocator);
         allocator.free(self.backing);
         self.* = .{};
     }
@@ -671,7 +685,9 @@ pub fn fromRawMessage(
     if (raw.application_properties) |entries| {
         // Exactly the number of puts that follow, so the map is sized once
         // rather than grown into, and never past what it holds.
-        try received.event_data.properties.reserveExact(allocator, layout.properties);
+        if (layout.properties > 0) {
+            try received.event_data.properties.reserveExact(allocator, layout.properties);
+        }
         for (entries) |entry| {
             const key = keyOf(entry.key) orelse continue;
             try received.event_data.properties.putBorrowed(
@@ -1607,6 +1623,51 @@ test "a decoded event outlives every byte it was decoded from" {
     try std.testing.expectEqualStrings("payload", decoded.body());
     try std.testing.expectEqualStrings("9001", decoded.offset.?);
     try std.testing.expectEqualStrings("contoso", decoded.properties().getString("tenant").?);
+}
+
+test "releasing a decoded event's EventData frees only the property map" {
+    const allocator = std.testing.allocator;
+
+    var properties = [_]MapEntry{
+        .{ .key = .{ .string = "tenant" }, .value = .{ .string = "contoso" } },
+    };
+    var decoded = try fromRawMessage(allocator, .{
+        .body = "payload",
+        .application_properties = &properties,
+    });
+    defer decoded.deinit(allocator);
+
+    // `event_data` is a public field and `EventData.deinit` a public method,
+    // so this call is reachable and used to be the correct way to release
+    // just the property map. Now that the keys and values are interior
+    // pointers into `backing`, it has to free the map's own storage and
+    // nothing else, or it hands the allocator memory it never issued.
+    decoded.event_data.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), decoded.properties().count());
+    // The block is untouched, and releasing the event still works.
+    try std.testing.expectEqualStrings("payload", decoded.body());
+}
+
+test "a borrowed property map survives being released twice" {
+    const allocator = std.testing.allocator;
+
+    var annotations = [_]MapEntry{
+        .{ .key = .{ .symbol = "x-opt-vendor" }, .value = .{ .string = "v" } },
+    };
+    var properties = [_]MapEntry{.{ .key = .{ .string = "k" }, .value = .{ .string = "v" } }};
+
+    var decoded = try fromRawMessage(allocator, .{
+        .body = "b",
+        .message_annotations = &annotations,
+        .application_properties = &properties,
+    });
+
+    decoded.event_data.properties.deinit(allocator);
+    decoded.system_properties.deinit(allocator);
+    decoded.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), decoded.system_properties.count());
 }
 
 test "a repeated application property key keeps the last value" {

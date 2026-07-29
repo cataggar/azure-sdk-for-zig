@@ -235,12 +235,18 @@ A `ReceivedEventData` owns its decoded bytes, but as a single block rather than
 a field at a time: the body, the ids, the annotations, and both property maps'
 keys and values all point into one allocation sized before anything is copied.
 Receiving an event costs two allocations instead of nine, and `deinit` — or
-`freeReceivedEvents` for a slice — releases the lot. `deinit` may be called
-twice, so handing an event on without giving up your own copy is safe.
+`freeReceivedEvents` for a slice — releases the lot.
 
-The fields are therefore not individually owned. Do not free one, replace one
-with allocated memory, or add to a received event's `properties` with
-`PropertyMap.put`; copy the event out first if you need to change it.
+The fields are therefore not individually owned: do not free one, or replace
+one with allocated memory. `PropertyMap` records whether it copied what it
+holds, so `deinit` stays correct on both a producer's map and a decoded one,
+and adding to a decoded event's properties trips an assertion rather than
+corrupting the block — copy the event out first if you need to change it.
+
+`deinit` empties the event, so calling it twice through the same value is
+harmless. That is not ownership tracking: a `ReceivedEventData` is a plain
+struct, and copying one by value and then releasing both copies is a double
+free. Copy it out, or treat the copy as a transfer.
 
 ## Batching
 
