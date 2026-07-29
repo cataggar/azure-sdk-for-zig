@@ -251,9 +251,15 @@ pub const Driver = struct {
     /// frame.
     ///
     /// Bodies were allocated and freed one per frame, which on a busy receiver
-    /// is a malloc/free pair for every message that arrives. The buffer grows
-    /// to the largest frame actually read — never to `acceptMaxFrameSize`,
-    /// which a peer can drive to 4 GiB by omitting `max-frame-size` (§2.7.1).
+    /// is a malloc/free pair for every message that arrives.
+    ///
+    /// The size comes from the frame header, so it is what the peer *claimed*
+    /// to be sending, not what it went on to send. `receiveFrame` rejects a
+    /// header above `acceptMaxFrameSize` — a value only this endpoint sets, so
+    /// the high-water mark is bounded by our own `max_frame_size` and never by
+    /// the peer. But one header a peer never follows with a body would
+    /// otherwise pin the whole of that for the life of the connection, so the
+    /// buffer is released when the body fails to arrive.
     body_buf: []u8 = &.{},
 
     const in_buf_len = 16 * 1024;
@@ -648,6 +654,13 @@ pub const Driver = struct {
                 self.body_buf = grown;
             }
             const body = self.body_buf[0..body_size];
+            // The header is the peer's claim; the body is the peer keeping it.
+            // Holding a buffer sized to a claim that never arrived would let
+            // one bogus header pin `max_frame_size` for the connection.
+            errdefer {
+                self.allocator.free(self.body_buf);
+                self.body_buf = &.{};
+            }
             try self.readExact(body, deadline_ms);
             return .{ .header = header, .body = body };
         }
@@ -1209,4 +1222,66 @@ test "the handshake survives allocation failure" {
 
 test "type check the Io-backed clock" {
     std.testing.refAllDecls(IoClock);
+}
+
+/// An AMQP frame header: size, data offset in 4-byte words, type, channel.
+fn frameHeaderBytes(size: u32, doff: u8, kind: u8, channel: u16) [8]u8 {
+    var out: [8]u8 = undefined;
+    std.mem.writeInt(u32, out[0..4], size, .big);
+    out[4] = doff;
+    out[5] = kind;
+    std.mem.writeInt(u16, out[6..8], channel, .big);
+    return out;
+}
+
+test "a header whose body never arrives does not pin the frame buffer" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: ManualClock = .{};
+
+    // The largest frame this endpoint accepts, and then nothing behind it.
+    // Sizing the buffer to a claim the peer never keeps would hand a peer a
+    // permanent 64 KiB — the whole of `max_frame_size` — for eight bytes.
+    const header = frameHeaderBytes(test_options.max_frame_size, 2, 0, 0);
+    try mem.pushPeerBytes(&header);
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+
+    try testing.expectError(error.ConnectionClosed, driver.receiveFrame(10_000));
+    try testing.expectEqual(@as(usize, 0), driver.body_buf.len);
+}
+
+test "the frame buffer grows to the largest body and is not resized below it" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: ManualClock = .{};
+
+    // A 512-byte body, then a 16-byte one. The second must reuse the buffer
+    // rather than resize it, and must be handed out at its own length — a
+    // frame sliced to the buffer instead of to its body would carry 496 bytes
+    // of the previous frame behind it.
+    const big = [_]u8{'a'} ** 512;
+    const small = [_]u8{'b'} ** 16;
+    inline for (.{ big, small }) |payload| {
+        const header = frameHeaderBytes(8 + payload.len, 2, 0, 0);
+        try mem.pushPeerBytes(&header);
+        try mem.pushPeerBytes(&payload);
+    }
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+
+    const first = try driver.receiveFrame(10_000);
+    try testing.expectEqual(@as(usize, 512), first.body.len);
+    try testing.expectEqualSlices(u8, &big, first.body);
+    const high_water = driver.body_buf.len;
+    try testing.expectEqual(@as(usize, 512), high_water);
+
+    const second = try driver.receiveFrame(10_000);
+    try testing.expectEqual(@as(usize, 16), second.body.len);
+    try testing.expectEqualSlices(u8, &small, second.body);
+    try testing.expectEqual(high_water, driver.body_buf.len);
 }
