@@ -199,8 +199,19 @@ on something only the blocked caller could do.
 A refused delivery comes back as `Settlement.outcome`, not as an error, because
 a pipelining caller needs to know *which* delivery the broker turned down —
 `sendBytes` keeps mapping the outcome onto `error.SendRejected` for callers that
-send one at a time. The default `max_in_flight` is 1, so a sender behaves
-exactly as it always has until it is asked for more.
+send one at a time. `Outcome` deliberately carries no payload: the peer's own
+`DeliveryState` holds slices decoded into the frame's arena, which is released
+before `pump` returns, so handing that union back would hand back freed memory.
+The condition behind a rejection is copied into `Settlement.rejection`, owned by
+the sender and valid until its next `awaitSettlement`.
+
+The default `max_in_flight` is 1, so a sender behaves exactly as it always has
+until it is asked for more. `sendBytes` waits for the oldest delivery, which is
+only its own when nothing else is outstanding, so it reports
+`error.DeliveriesInFlight` rather than mixing with `sendBytesAsync` and
+attributing one delivery's verdict to another. A send that never reaches a
+verdict retires its own entry, so a timed-out send leaves the sender as usable
+as it was before.
 
 Deliveries settle in the order they were sent, and the ring holding them is
 allocated once at attach, so a silent peer costs a fixed amount of memory rather

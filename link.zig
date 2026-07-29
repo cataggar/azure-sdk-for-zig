@@ -36,6 +36,9 @@ pub const LinkError = connection.ConnectionError || error{
     InFlightWindowFull,
     /// `awaitSettlement` was called with nothing on the wire to wait for.
     NoDeliveryInFlight,
+    /// A blocking `send` was attempted while pipelined deliveries were still
+    /// outstanding. Retire them with `awaitSettlement` first.
+    DeliveriesInFlight,
 };
 
 /// Set on a receiver so Event Hubs can name the owner in its error text.
@@ -348,6 +351,15 @@ pub const SenderOptions = struct {
 /// Identifies one delivery that has been written but not yet settled.
 pub const DeliveryToken = struct { id: u32 };
 
+/// What the peer decided about a delivery.
+///
+/// Deliberately payload-free. The peer's own `DeliveryState` carries slices
+/// decoded into the frame's arena, which `pump` releases before it returns, so
+/// handing that union to a caller would hand out freed memory. The detail that
+/// matters — a rejection's condition — is duplicated into `Rejection` instead
+/// and reported alongside.
+pub const Outcome = enum { accepted, rejected, released, modified };
+
 /// The peer's verdict on one delivery, paired with the token it answers.
 ///
 /// A non-accepted outcome is data, not an error: the transfer itself
@@ -356,7 +368,11 @@ pub const DeliveryToken = struct { id: u32 };
 /// outcome onto an error for callers that send one at a time.
 pub const Settlement = struct {
     token: DeliveryToken,
-    outcome: perf.DeliveryState,
+    outcome: Outcome,
+    /// Why a rejected delivery was refused, when the peer said. Owned by the
+    /// sender and valid until its next `awaitSettlement`, so copy anything
+    /// worth keeping past that point.
+    rejection: ?Rejection = null,
 };
 
 /// Per-delivery options.
@@ -370,7 +386,7 @@ pub const SendOptions = struct {
 /// One delivery written to the wire and not yet settled by the peer.
 const InFlight = struct {
     id: u32,
-    outcome: ?perf.DeliveryState = null,
+    outcome: ?Outcome = null,
     rejection: ?Rejection = null,
 };
 
@@ -472,29 +488,49 @@ pub const Sender = struct {
         // Delivery ids are serial numbers (§2.8.2), so a range that straddles
         // the 2^32 wrap has `last` numerically below `first` and the obvious
         // `id >= first and id <= last` silently matches nothing. Comparing the
-        // offsets from `first` instead keeps the containment test correct on
-        // both sides of the wrap; the same reasoning fixed the receiver in the
-        // settle path.
+        // offsets from `first` keeps the containment test correct on both
+        // sides of the wrap; the same reasoning fixed the receiver's settle
+        // path.
         const span = last -% first;
+        // That offset test alone would read a merely backwards range — a
+        // garbled `first = 10, last = 5` — as a span of nearly the whole id
+        // space and settle every delivery on the link with whatever state it
+        // carried. RFC 1982 leaves a distance of 2^31 or more undefined, and
+        // no session can have that many deliveries outstanding, so a span that
+        // large is nonsense rather than a wrap. Ignoring it matters because
+        // the first outcome to arrive wins: a bogus `accepted` would otherwise
+        // pre-empt the real rejection behind it and report a lost message as
+        // sent.
+        if (span >= 1 << 31) return;
+
         for (0..self.in_flight_len) |i| {
             const entry = self.entryAt(i);
             if (entry.outcome != null) continue;
             if (entry.id -% first > span) continue;
-            entry.outcome = state orelse .accepted;
-            if (state) |s| switch (s) {
-                .rejected => |maybe_err| {
-                    if (entry.rejection) |r| r.deinit(self.allocator);
-                    entry.rejection = null;
-                    if (maybe_err) |e| entry.rejection = .{
-                        .condition = try self.allocator.dupe(u8, e.condition),
+
+            const decided = state orelse .accepted;
+            entry.outcome = switch (decided) {
+                .accepted => .accepted,
+                .released => .released,
+                .modified => .modified,
+                .rejected => .rejected,
+            };
+            // An entry only reaches here while undecided, and an undecided
+            // entry has never been given a rejection.
+            std.debug.assert(entry.rejection == null);
+            if (decided == .rejected) {
+                if (decided.rejected) |e| {
+                    const condition = try self.allocator.dupe(u8, e.condition);
+                    errdefer self.allocator.free(condition);
+                    entry.rejection = .{
+                        .condition = condition,
                         .description = if (e.description) |d|
                             try self.allocator.dupe(u8, d)
                         else
                             null,
                     };
-                },
-                else => {},
-            };
+                }
+            }
         }
     }
 
@@ -528,7 +564,19 @@ pub const Sender = struct {
         options: SendOptions,
         deadline_ms: i64,
     ) LinkError!void {
+        // This call waits for the oldest delivery, so it is only waiting for
+        // its own if nothing else is outstanding. Mixing it with
+        // `sendBytesAsync` would either report another delivery's verdict as
+        // this one's or discard that delivery's verdict entirely, so refuse
+        // rather than guess. A caller that never pipelines never sees this.
+        if (self.in_flight_len != 0) return error.DeliveriesInFlight;
+
         const token = try self.sendBytesAsync(payload, options, deadline_ms);
+        // A send that never reaches a verdict — a timeout, a detach — used to
+        // leave no trace. Keeping the entry would wedge the sender: with the
+        // default window of one, every later send would find it full.
+        errdefer self.discardOldest();
+
         const settlement = try self.awaitSettlement(deadline_ms);
         std.debug.assert(settlement.token.id == token.id);
         switch (settlement.outcome) {
@@ -536,6 +584,16 @@ pub const Sender = struct {
             .rejected => return error.SendRejected,
             .released, .modified => return error.SendNotAccepted,
         }
+    }
+
+    /// Forget the oldest delivery without waiting for a verdict.
+    fn discardOldest(self: *Sender) void {
+        if (self.in_flight_len == 0) return;
+        const entry = self.entryAt(0);
+        if (entry.rejection) |r| r.deinit(self.allocator);
+        entry.rejection = null;
+        self.in_flight_head = (self.in_flight_head + 1) % self.in_flight.len;
+        self.in_flight_len -= 1;
     }
 
     /// Write a delivery to the wire and return without waiting for the peer
@@ -631,12 +689,22 @@ pub const Sender = struct {
         self.in_flight_head = (self.in_flight_head + 1) % self.in_flight.len;
         self.in_flight_len -= 1;
 
-        if (entry.rejection) |r| {
+        const outcome = entry.outcome.?;
+        // Replace the recorded rejection for every refusal, not only for one
+        // that named a condition. A `rejected` with no error field is legal,
+        // and leaving the previous delivery's condition in place would pair
+        // this refusal with an explanation belonging to an older message.
+        if (outcome == .rejected) {
             if (self.rejection) |old| old.deinit(self.allocator);
-            self.rejection = r;
+            self.rejection = entry.rejection;
             entry.rejection = null;
         }
-        return .{ .token = .{ .id = entry.id }, .outcome = entry.outcome.? };
+        std.debug.assert(entry.rejection == null);
+        return .{
+            .token = .{ .id = entry.id },
+            .outcome = outcome,
+            .rejection = if (outcome == .rejected) self.rejection else null,
+        };
     }
 
     /// How many payload bytes fit alongside the transfer performative.
@@ -1892,6 +1960,199 @@ test "a sender keeps one delivery in flight unless asked for more" {
         error.InFlightWindowFull,
         sender.sendBytesAsync("two", .{}, 10_000),
     );
+}
+
+test "a send that never reaches a verdict leaves the sender usable" {
+    // A timed-out send used to leave nothing behind. Keeping its ring entry
+    // would wedge a default sender: every later send would find the window
+    // full and fail with an error no existing caller handles.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptSenderAttach(peer, 10);
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+    }, 10_000);
+
+    // Nothing is scripted to answer the first send, so it fails.
+    try testing.expectError(error.ConnectionClosed, sender.sendBytes("one", 10_000));
+    try testing.expectEqual(@as(usize, 0), sender.inFlight());
+
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 1,
+        .last = 1,
+        .settled = true,
+        .state = .accepted,
+    } });
+    try sender.sendBytes("two", 10_000);
+}
+
+test "a blocking send refuses to run alongside pipelined deliveries" {
+    // `sendBytes` waits for the oldest delivery, which is only its own when
+    // nothing else is outstanding. Guessing would either report another
+    // delivery's verdict as this one's or swallow that delivery's verdict.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptSenderAttach(peer, 10);
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+        .max_in_flight = 4,
+    }, 10_000);
+
+    _ = try sender.sendBytesAsync("one", .{}, 10_000);
+    try testing.expectError(error.DeliveriesInFlight, sender.sendBytes("two", 10_000));
+}
+
+test "a backwards disposition range settles nothing" {
+    // A garbled `first = 10, last = 5` is a span of nearly the whole id space
+    // under serial arithmetic. Acting on it would settle every delivery on
+    // the link, and because the first outcome wins it would pre-empt the real
+    // rejection behind it and report a lost message as sent.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptSenderAttach(peer, 10);
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 10,
+        .last = 5,
+        .settled = true,
+        .state = .accepted,
+    } });
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 0,
+        .last = 0,
+        .settled = true,
+        .state = .{ .rejected = .{ .condition = "amqp:not-allowed", .description = null } },
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+    }, 10_000);
+
+    try testing.expectError(error.SendRejected, sender.sendBytes("payload", 10_000));
+    try testing.expectEqualStrings("amqp:not-allowed", sender.rejection.?.condition);
+}
+
+test "a rejection with no condition does not inherit the previous one" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptSenderAttach(peer, 10);
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 0,
+        .last = 0,
+        .settled = true,
+        .state = .{ .rejected = .{
+            .condition = "amqp:resource-limit-exceeded",
+            .description = null,
+        } },
+    } });
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 1,
+        .last = 1,
+        .settled = true,
+        .state = .{ .rejected = null },
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+    }, 10_000);
+
+    try testing.expectError(error.SendRejected, sender.sendBytes("one", 10_000));
+    try testing.expectEqualStrings(
+        "amqp:resource-limit-exceeded",
+        sender.rejection.?.condition,
+    );
+
+    try testing.expectError(error.SendRejected, sender.sendBytes("two", 10_000));
+    try testing.expect(sender.rejection == null);
+}
+
+test "a sender discarded with a rejected delivery still in flight frees it" {
+    // The rejection condition is heap allocated by the disposition that
+    // carried it, so a sender torn down before the delivery is retired has to
+    // release it. The leak checker in the test allocator is the assertion.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptSenderAttach(peer, 10);
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 0,
+        .last = 1,
+        .settled = true,
+        .state = .{ .rejected = .{
+            .condition = "amqp:resource-limit-exceeded",
+            .description = "quota",
+        } },
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+        .max_in_flight = 2,
+    }, 10_000);
+
+    _ = try sender.sendBytesAsync("one", .{}, 10_000);
+    _ = try sender.sendBytesAsync("two", .{}, 10_000);
+
+    // Retire only the first, leaving the second holding a rejection that the
+    // session teardown has to free.
+    const settlement = try sender.awaitSettlement(10_000);
+    try testing.expect(settlement.outcome == .rejected);
+    try testing.expectEqual(@as(usize, 1), sender.inFlight());
 }
 
 test "a message past the peer's max-message-size is refused before sending" {
