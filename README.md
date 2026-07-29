@@ -490,9 +490,10 @@ zig build bench -Doptimize=ReleaseFast
 ```
 
 Offline benchmarks for the encode and decode paths — building an AMQP message
-from an `EventData`, filling an `EventDataBatch`, and converting a received
-AMQP message back. Nothing touches the network, so a result is attributable to
-a code change rather than to service latency.
+from an `EventData`, filling an `EventDataBatch`, laying that batch out as a
+transfer payload, and converting a received AMQP message back. Nothing touches
+the network, so a result is attributable to a code change rather than to
+service latency.
 
 Prefer `allocs/op` and `B/op` as the regression signal: they are stable across
 machines, while wall-clock timings move on shared or virtualised hosts. The

@@ -487,9 +487,11 @@ fn encodeMessageSections(
         try encodeSection(&buffer, uamqp.definitions.descriptor.footer, .{ .map = entries });
     }
 
-    const encoded = try allocator.dupe(u8, buffer.written());
-    buffer.deinit();
-    return encoded;
+    // `toOwnedSlice` shrinks the buffer's own allocation to the written length
+    // and hands it over. Duplicating `written()` instead would allocate a
+    // second full-size buffer and copy every byte into it, on the per-event
+    // path of every batch.
+    return buffer.toOwnedSlice();
 }
 
 /// Append one data section per payload to an already encoded prefix.
@@ -503,17 +505,41 @@ pub fn encodeDataSections(
     prefix: []const u8,
     payloads: []const []u8,
 ) ![]u8 {
-    var buffer = uamqp.encoder.Buffer.initDynamic(allocator);
-    errdefer buffer.deinit();
+    // The exact size is plain arithmetic here — `dataSectionSize` is the same
+    // constant-overhead formula batching already charges per event — so the
+    // whole concatenation is one allocation. Growing a dynamic buffer instead
+    // costs a doubling series of reallocations across a batch that may reach
+    // the 1 MiB message limit, and then a full copy of the result.
+    var total: usize = prefix.len;
+    for (payloads) |payload| total += dataSectionSize(payload.len);
 
+    const bytes = try allocator.alloc(u8, total);
+    errdefer allocator.free(bytes);
+
+    var buffer = uamqp.encoder.Buffer.initFixed(bytes);
     try buffer.writeAll(prefix);
     for (payloads) |payload| {
         try encodeSection(&buffer, uamqp.definitions.descriptor.data, .{ .binary = payload });
     }
 
-    const encoded = try allocator.dupe(u8, buffer.written());
-    buffer.deinit();
-    return encoded;
+    // `dataSectionSize` is exact, so this holds; shrinking rather than
+    // asserting means a future disagreement returns correct bytes instead of a
+    // buffer with a garbage tail.
+    if (buffer.pos != total) return try allocator.realloc(bytes, buffer.pos);
+    return bytes;
+}
+
+/// Encoded size of the data section wrapping a payload of `payload_len` bytes:
+/// a described-type constructor, the descriptor, and a binary length prefix.
+/// Go's `calcActualSizeForPayload` uses the same constants.
+///
+/// Batching charges this per event without encoding anything, so it has to
+/// agree with what `encodeDataSections` writes; sharing one function rather
+/// than restating the constants is what keeps them from drifting apart.
+pub fn dataSectionSize(payload_len: usize) usize {
+    const vbin8_overhead = 5;
+    const vbin32_overhead = 8;
+    return if (payload_len < 256) vbin8_overhead + payload_len else vbin32_overhead + payload_len;
 }
 
 fn encodeSection(buffer: *uamqp.encoder.Buffer, code: u64, value: AmqpValue) !void {
@@ -1096,6 +1122,62 @@ test "encodeMessageEnvelope drops the body" {
 
     try std.testing.expect(envelope.len < full.len);
     try std.testing.expectEqualSlices(u8, envelope, full[0..envelope.len]);
+}
+
+test "dataSectionSize matches what encodeDataSections writes" {
+    const allocator = std.testing.allocator;
+
+    // `encodeDataSections` allocates exactly `dataSectionSize` per payload and
+    // encodes into a fixed buffer, so a disagreement would truncate the wire
+    // payload. The vbin8/vbin32 boundary is where the two would drift first.
+    const lengths = [_]usize{ 0, 1, 254, 255, 256, 257, 1024 };
+
+    for (lengths) |len| {
+        const payload = try allocator.alloc(u8, len);
+        defer allocator.free(payload);
+        @memset(payload, 0x5a);
+
+        const payloads = [_][]u8{payload};
+        const encoded = try encodeDataSections(allocator, "", &payloads);
+        defer allocator.free(encoded);
+
+        try std.testing.expectEqual(dataSectionSize(len), encoded.len);
+
+        var result = try uamqp.decoder.decode(allocator, encoded);
+        defer result.value.deinit(allocator);
+        try std.testing.expectEqual(
+            uamqp.definitions.descriptor.data,
+            result.value.described.descriptor.ulong,
+        );
+        try std.testing.expectEqualSlices(u8, payload, result.value.described.value.binary);
+        try std.testing.expectEqual(encoded.len, result.bytes_consumed);
+    }
+}
+
+test "encodeDataSections keeps the prefix and appends one section per payload" {
+    const allocator = std.testing.allocator;
+
+    var first = [_]u8{ 1, 2, 3 };
+    var second = [_]u8{ 4, 5 };
+    const payloads = [_][]u8{ &first, &second };
+
+    const encoded = try encodeDataSections(allocator, "PREFIX", &payloads);
+    defer allocator.free(encoded);
+
+    try std.testing.expectEqualSlices(u8, "PREFIX", encoded[0..6]);
+    try std.testing.expectEqual(
+        6 + dataSectionSize(first.len) + dataSectionSize(second.len),
+        encoded.len,
+    );
+
+    var offset: usize = 6;
+    for ([_][]const u8{ &first, &second }) |expected| {
+        var result = try uamqp.decoder.decode(allocator, encoded[offset..]);
+        defer result.value.deinit(allocator);
+        try std.testing.expectEqualSlices(u8, expected, result.value.described.value.binary);
+        offset += result.bytes_consumed;
+    }
+    try std.testing.expectEqual(encoded.len, offset);
 }
 
 test "trailing null fields are omitted from composite sections" {

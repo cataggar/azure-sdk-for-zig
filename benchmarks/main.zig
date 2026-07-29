@@ -59,6 +59,23 @@ fn benchBatchAdd1000(allocator: std.mem.Allocator) !void {
     try addToBatch(allocator, 1000);
 }
 
+/// Laying a full batch out on the wire: the envelope followed by one data
+/// section per event. This is what a `sendEventBatch` pays on top of the
+/// per-event `tryAdd` cost, and it is the only place a single allocation
+/// spans the whole batch.
+fn benchEncodeBatchTransfer(allocator: std.mem.Allocator) !void {
+    var batch = try eh.EventDataBatch.init(.{});
+    defer batch.deinit(allocator);
+
+    var i: usize = 0;
+    while (i < 1000) : (i += 1) {
+        _ = try batch.tryAdd(allocator, makeEvent());
+    }
+
+    const payload = try eh.sending.encodeBatchTransfer(allocator, batch);
+    allocator.free(payload);
+}
+
 /// The annotations Event Hubs stamps on every received event, plus a few
 /// application properties, so the decode path does representative work.
 var annotations = [_]uamqp.MapEntry{
@@ -107,6 +124,7 @@ pub fn main(init: std.process.Init) !void {
         .{ "batch.tryAdd x1", 10_000, benchBatchAdd1 },
         .{ "batch.tryAdd x100", 200, benchBatchAdd100 },
         .{ "batch.tryAdd x1000", 20, benchBatchAdd1000 },
+        .{ "encodeBatchTransfer x1000", 20, benchEncodeBatchTransfer },
         .{ "fromAmqpMessage", 10_000, benchFromAmqpMessage },
     };
 
