@@ -358,8 +358,12 @@ pub const ReceivedEventData = struct {
         return self.event_data.properties;
     }
 
-    /// Safe to call twice: the event is left empty, so a caller that hands
-    /// ownership on but keeps its own copy of the struct cannot double free.
+    /// Calling this twice on the same event is harmless: it is left empty, so
+    /// the second call has nothing to free.
+    ///
+    /// That is not ownership tracking. A `ReceivedEventData` copied by value
+    /// and then released through one copy leaves the other holding freed
+    /// pointers, because emptying one struct cannot reach the other.
     pub fn deinit(self: *ReceivedEventData, allocator: std.mem.Allocator) void {
         self.event_data.properties.deinitEntries(allocator);
         self.system_properties.deinitEntries(allocator);
@@ -1635,8 +1639,8 @@ test "deinit leaves an event that can be deinitialised again" {
     });
 
     decoded.deinit(allocator);
-    // Nothing is owned twice: an event handed on and then released by both
-    // sides must not double free. `testing.allocator` is the assertion.
+    // A second release of the same event must not free anything a second
+    // time. `testing.allocator` is the assertion.
     decoded.deinit(allocator);
 
     try std.testing.expectEqualStrings("", decoded.body());
