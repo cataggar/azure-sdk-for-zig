@@ -5,10 +5,12 @@
 //! order follows the OASIS AMQP 1.0 specification §2.7 and §5.3; trailing null
 //! fields are elided as §1.3 permits.
 //!
-//! Encoding is done directly rather than through `uamqp.encoder` because that
-//! encoder writes array elements of variable-width types without their length
-//! prefix, which no peer will accept. Decoding does use `uamqp.decoder`, whose
-//! array handling is correct.
+//! Compound values are encoded directly rather than through `uamqp.encoder`.
+//! That was originally necessary: the encoder wrote array elements of
+//! variable-width types without their length prefix, which no peer accepts.
+//! uamqp v0.3.0 fixed it, so this is now duplication rather than a
+//! workaround, and could be folded into `uamqp.encoder`. Decoding already
+//! uses `uamqp.decoder`.
 
 const std = @import("std");
 const uamqp = @import("uamqp");
