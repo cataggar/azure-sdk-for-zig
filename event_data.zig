@@ -226,13 +226,13 @@ pub const EventData = struct {
         var message = Message.init(allocator);
         errdefer freeAmqpMessage(allocator, &message);
 
-        // `Message.addBodyData` duplicates the body before growing its list and
-        // leaks that duplicate if the growth fails, so reserve first and append
-        // infallibly instead.
-        try message.body_data_sections.ensureUnusedCapacity(allocator, 1);
-        const owned_body = try allocator.dupe(u8, self.body);
-        message.body_type = .data;
-        message.body_data_sections.appendAssumeCapacity(.{ .bytes = owned_body });
+        // The body belongs to the message's arena, so `deinit` reclaims it.
+        // This used to reserve capacity and append with the caller's allocator
+        // to dodge `addBodyData` leaking its duplicate when the list failed to
+        // grow; since uamqp v0.3.0 the arena reclaims that duplicate anyway,
+        // and using the caller's allocator here would leak both the copy and
+        // the list, because `deinit` only releases the arena.
+        try message.addBodyData(self.body);
 
         // Go always attaches a properties section, even when every field is
         // unset, so the wire shape stays identical across SDKs. It is attached
@@ -343,8 +343,9 @@ pub fn freeReceivedEvents(allocator: std.mem.Allocator, events: []ReceivedEventD
 /// Free a message produced by `EventData.toAmqpMessage`, including any
 /// annotations added afterwards by `setPartitionKeyAnnotation`.
 ///
-/// Only the sections this module sets are released, because `Message.deinit`
-/// covers the body alone.
+/// Only the sections this module allocates with `allocator` are released here.
+/// The body is not among them: it lives in the message's arena, which
+/// `Message.deinit` releases.
 pub fn freeAmqpMessage(allocator: std.mem.Allocator, message: *Message) void {
     if (message.application_properties) |entries| {
         freeMapEntries(allocator, entries);
