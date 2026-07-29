@@ -635,23 +635,31 @@ pub const Receiver = struct {
     partial_tag: std.ArrayList(u8) = .empty,
     partial_settled: bool = false,
     /// Completed deliveries not yet handed to the caller.
+    ///
+    /// Drained with a head cursor rather than by removing the front element:
+    /// a prefetching receiver holds hundreds of deliveries, and shifting them
+    /// all down on every `receive` makes draining the queue quadratic.
     ready: std.ArrayList(Delivery) = .empty,
-    /// Backing storage for the delivery most recently returned.
-    current: std.ArrayList(u8) = .empty,
-    current_tag: std.ArrayList(u8) = .empty,
+    ready_head: usize = 0,
+    /// The delivery most recently returned. Owned here, not copied: `receive`
+    /// takes the buffers straight out of `ready` and frees them when the next
+    /// `receive` ends their "valid until" window.
+    current: ?[]const u8 = null,
+    current_tag: ?[]const u8 = null,
 
     pub fn deinit(self: *Receiver) void {
         self.allocator.free(self.name);
         if (self.detach_error) |e| e.deinit(self.allocator);
         self.partial.deinit(self.allocator);
         self.partial_tag.deinit(self.allocator);
-        for (self.ready.items) |d| {
+        // Everything before `ready_head` was already handed out, so its
+        // buffers belong to `current` and are freed by `releaseCurrent`.
+        for (self.ready.items[self.ready_head..]) |d| {
             self.allocator.free(d.payload);
             self.allocator.free(d.tag);
         }
         self.ready.deinit(self.allocator);
-        self.current.deinit(self.allocator);
-        self.current_tag.deinit(self.allocator);
+        self.releaseCurrent();
         self.allocator.destroy(self);
     }
 
@@ -662,7 +670,46 @@ pub const Receiver = struct {
         self.detach_error = try connection.RemoteError.dupe(self.allocator, e);
     }
 
+    /// Queue a completed delivery. The buffers stay the caller's until this
+    /// succeeds, so a failed append does not free them twice.
+    fn enqueue(self: *Receiver, id: u32, tag: []u8, payload: []u8, settled: bool) LinkError!void {
+        try self.ready.append(self.allocator, .{
+            .id = id,
+            .tag = tag,
+            .payload = payload,
+            .settled = settled,
+        });
+        self.delivery_count +%= 1;
+        self.credit -|= 1;
+    }
+
+    /// Free the delivery handed out by the previous `receive`, whose "valid
+    /// until the next `receive`" window has just closed.
+    fn releaseCurrent(self: *Receiver) void {
+        if (self.current) |payload| self.allocator.free(payload);
+        if (self.current_tag) |tag| self.allocator.free(tag);
+        self.current = null;
+        self.current_tag = null;
+    }
+
     fn acceptTransfer(self: *Receiver, t: perf.Transfer, chunk: []const u8) LinkError!void {
+        // A delivery that arrives whole in a single transfer — which is every
+        // delivery below the peer's frame size, so nearly all of them — does
+        // not need the reassembly buffer. Staging it there copies the body in
+        // and then copies it straight back out.
+        if (t.delivery_id) |id| {
+            if (!t.more and self.partial_id == null) {
+                if (self.maxMessageSize()) |limit| {
+                    if (chunk.len > limit) return error.MessageTooLarge;
+                }
+                const payload = try self.allocator.dupe(u8, chunk);
+                errdefer self.allocator.free(payload);
+                const tag = try self.allocator.dupe(u8, t.delivery_tag orelse "");
+                errdefer self.allocator.free(tag);
+                return self.enqueue(id, tag, payload, t.settled orelse false);
+            }
+        }
+
         if (t.delivery_id) |id| {
             // A new delivery starts here.
             self.partial.clearRetainingCapacity();
@@ -686,18 +733,13 @@ pub const Receiver = struct {
         const tag = try self.allocator.dupe(u8, self.partial_tag.items);
         errdefer self.allocator.free(tag);
 
-        try self.ready.append(self.allocator, .{
-            .id = self.partial_id.?,
-            .tag = tag,
-            .payload = payload,
-            .settled = self.partial_settled,
-        });
+        const id = self.partial_id.?;
+        const settled = self.partial_settled;
         self.partial.clearRetainingCapacity();
         self.partial_tag.clearRetainingCapacity();
         self.partial_id = null;
 
-        self.delivery_count +%= 1;
-        self.credit -|= 1;
+        try self.enqueue(id, tag, payload, settled);
     }
 
     /// The largest message the peer will send, or null when unlimited.
@@ -725,30 +767,31 @@ pub const Receiver = struct {
     ///
     /// The returned slices stay valid until the next `receive`.
     pub fn receive(self: *Receiver, deadline_ms: i64) LinkError!Delivery {
-        while (self.ready.items.len == 0) {
+        while (self.ready.items.len == self.ready_head) {
             if (!self.attached) return error.LinkDetached;
             try self.replenish();
             _ = try self.session.pump(deadline_ms);
         }
 
-        const delivery = self.ready.orderedRemove(0);
-        defer {
-            self.allocator.free(delivery.payload);
-            self.allocator.free(delivery.tag);
+        const delivery = self.ready.items[self.ready_head];
+        self.ready_head += 1;
+        if (self.ready_head == self.ready.items.len) {
+            self.ready.clearRetainingCapacity();
+            self.ready_head = 0;
         }
 
-        self.current.clearRetainingCapacity();
-        try self.current.appendSlice(self.allocator, delivery.payload);
-        self.current_tag.clearRetainingCapacity();
-        try self.current_tag.appendSlice(self.allocator, delivery.tag);
+        // Only now that a replacement is in hand, so a `receive` that fails or
+        // times out leaves the previously returned delivery readable, as it
+        // was when this held a reused scratch buffer.
+        self.releaseCurrent();
+
+        // The delivery already owns correctly sized buffers, so hand those to
+        // the caller instead of copying them into scratch storage.
+        self.current = delivery.payload;
+        self.current_tag = delivery.tag;
 
         try self.replenish();
-        return .{
-            .id = delivery.id,
-            .tag = self.current_tag.items,
-            .payload = self.current.items,
-            .settled = delivery.settled,
-        };
+        return delivery;
     }
 
     /// Settle a delivery with a terminal state.
@@ -1360,6 +1403,224 @@ test "a receiver reassembles a multi-frame delivery" {
     try testing.expectEqual(@as(u32, 4), d.first);
     try testing.expect(d.settled);
     try testing.expectEqual(perf.DeliveryState.accepted, d.state.?);
+}
+
+/// Counts allocations so a test can assert that a code path performs none.
+/// Deliberately local to the tests: `azure_sdk_amqp` depends on nothing but
+/// `uamqp`, and a benchmark harness is not worth changing that.
+const CountingAllocator = struct {
+    child: Allocator,
+    allocs: usize = 0,
+
+    fn allocator(self: *CountingAllocator) Allocator {
+        return .{ .ptr = self, .vtable = &.{
+            .alloc = alloc,
+            .resize = resize,
+            .remap = remap,
+            .free = free,
+        } };
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, a: std.mem.Alignment, ra: usize) ?[*]u8 {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        const result = self.child.rawAlloc(len, a, ra);
+        if (result != null) self.allocs += 1;
+        return result;
+    }
+
+    fn resize(ctx: *anyopaque, buf: []u8, a: std.mem.Alignment, new_len: usize, ra: usize) bool {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        return self.child.rawResize(buf, a, new_len, ra);
+    }
+
+    fn remap(ctx: *anyopaque, buf: []u8, a: std.mem.Alignment, new_len: usize, ra: usize) ?[*]u8 {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        const result = self.child.rawRemap(buf, a, new_len, ra);
+        // Only a move is a new allocation; growing in place is not.
+        if (result) |p| {
+            if (p != buf.ptr) self.allocs += 1;
+        }
+        return result;
+    }
+
+    fn free(ctx: *anyopaque, buf: []u8, a: std.mem.Alignment, ra: usize) void {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        self.child.rawFree(buf, a, ra);
+    }
+};
+
+test "a single-frame delivery bypasses the reassembly buffer" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    var i: u32 = 0;
+    while (i < 5) : (i += 1) {
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = i,
+            .delivery_tag = "t",
+            .message_format = 0,
+            .settled = true,
+            .more = false,
+        }, "event");
+    }
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 16,
+    }, 10_000);
+
+    i = 0;
+    while (i < 5) : (i += 1) {
+        const delivery = try receiver.receive(10_000);
+        try testing.expectEqualStrings("event", delivery.payload);
+    }
+
+    // Staging a whole-in-one-frame delivery in `partial` would copy the body
+    // in and straight back out. Never having allocated the buffer is the
+    // observable proof that neither copy happened.
+    try testing.expectEqual(@as(usize, 0), receiver.partial.capacity);
+    try testing.expectEqual(@as(usize, 0), receiver.partial_tag.capacity);
+}
+
+test "receive hands out the queued buffer rather than copying it" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    var i: u32 = 0;
+    while (i < 3) : (i += 1) {
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = i,
+            .delivery_tag = "t",
+            .message_format = 0,
+            .settled = true,
+            .more = false,
+        }, "event");
+    }
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 16,
+    }, 10_000);
+
+    // Queue every delivery before taking any, which is the state a
+    // prefetching receiver is normally in.
+    while (receiver.ready.items.len < 3) _ = try fixture.session.pump(10_000);
+
+    const first = try receiver.receive(10_000);
+
+    // Draining advances a cursor instead of shifting the queue down — which
+    // is what made draining a 300-deep prefetch quadratic.
+    try testing.expectEqual(@as(usize, 3), receiver.ready.items.len);
+    try testing.expectEqual(@as(usize, 1), receiver.ready_head);
+
+    // Same allocation, not a copy of it.
+    try testing.expectEqual(receiver.ready.items[0].payload.ptr, first.payload.ptr);
+    try testing.expectEqual(receiver.ready.items[0].tag.ptr, first.tag.ptr);
+
+    _ = try receiver.receive(10_000);
+    try testing.expectEqual(@as(usize, 2), receiver.ready_head);
+
+    const last = try receiver.receive(10_000);
+    try testing.expectEqual(@as(u32, 2), last.id);
+    // Fully drained, so the queue resets rather than growing without bound.
+    try testing.expectEqual(@as(usize, 0), receiver.ready.items.len);
+    try testing.expectEqual(@as(usize, 0), receiver.ready_head);
+}
+
+test "draining an already queued backlog allocates nothing" {
+    var counting = CountingAllocator{ .child = testing.allocator };
+    const allocator = counting.allocator();
+
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+
+    // Bodies grow, so a receiver that copied each delivery into one reused
+    // scratch buffer would have to keep reallocating it.
+    const count = 64;
+    var body: [8 + count * 4]u8 = undefined;
+    @memset(&body, 'x');
+
+    var i: u32 = 0;
+    while (i < count) : (i += 1) {
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = i,
+            .delivery_tag = "t",
+            .message_format = 0,
+            .settled = true,
+            .more = false,
+        }, body[0 .. 8 + i * 4]);
+    }
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 128,
+    }, 10_000);
+
+    // Queue the whole backlog first, so the receives below are pure drain.
+    while (receiver.ready.items.len < count) _ = try fixture.session.pump(10_000);
+
+    const first = try receiver.receive(10_000);
+    try testing.expectEqual(@as(usize, 8), first.payload.len);
+
+    counting.allocs = 0;
+    i = 1;
+    while (i < count) : (i += 1) {
+        const delivery = try receiver.receive(10_000);
+        try testing.expectEqual(i, delivery.id);
+        try testing.expectEqual(@as(usize, 8 + i * 4), delivery.payload.len);
+    }
+    try testing.expectEqual(@as(usize, 0), counting.allocs);
 }
 
 test "a prefetching receiver replenishes credit rather than stalling" {

@@ -105,7 +105,10 @@ defer allocator.free(bytes);
 - flow control, including credit rebasing onto our delivery count (§2.6.7) and
   draining, which waits for the sender to consume the outstanding credit
 - multi-frame transfers, split to the negotiated `max-frame-size` on send and
-  reassembled on receive
+  reassembled on receive. A delivery that arrives whole in one frame — nearly
+  all of them — skips reassembly entirely, and `receive` hands out the buffer
+  the delivery already owns rather than copying it into scratch storage, so a
+  received body is copied once rather than three times
 - settlement: accepted, rejected, and released outcomes, with a rejection
   surfacing the peer's error condition
 - the Event Hubs link properties the Go and Rust clients send —
@@ -129,6 +132,10 @@ const receiver = try amqp.openReceiver(&session, .{
 const delivery = try receiver.receive(deadline_ms);
 try receiver.accept(delivery);
 ```
+
+`delivery` stays valid until the next `receive` returns, so copy anything you
+need to keep. Prefetched deliveries queue up and are drained with a cursor
+rather than by shifting the queue, which keeps a deep prefetch window linear.
 
 A handle in an inbound frame is scoped to the peer that sent it, so links are
 looked up by the handle the peer chose, never by our own. A session holding both
