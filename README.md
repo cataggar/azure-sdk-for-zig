@@ -145,9 +145,13 @@ refuses to overlap with anything, so raising it only affects `sendBatches`.
 Both calls are at-least-once — a batch the broker accepted but could not
 acknowledge may be published twice — and overlapping widens that window. When a
 send fails, the batches behind it are already on the wire and may well be
-accepted, but their verdicts are abandoned unread, so they are re-sent. At most
-`max_in_flight` batches are ever at risk. The answer is the same as it is for
-`sendBatch`: give events an application property the consumer deduplicates on.
+accepted, but their verdicts are abandoned unread; they are reported as not
+accepted and may be sent again. At most `max_in_flight` batches are ever at
+risk. The answer is the same as it is for `sendBatch`: give events an
+application property the consumer deduplicates on.
+
+Nothing is silently dropped in either direction: a batch counts as accepted
+only once the broker has said so.
 
 Batches are grouped into runs by partition, because each partition is its own
 link and only batches sharing one can overlap. Passing them already grouped —

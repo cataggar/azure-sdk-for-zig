@@ -313,10 +313,12 @@ pub const LinkTransport = struct {
     /// ordinary retrying path — which also recovers the connection if that is
     /// what went wrong.
     ///
-    /// Retrying means a batch the broker accepted but did not get to report
-    /// can be published twice. That is already true of `sendBatch`, and a
-    /// consumer deduplicating on an application property is the answer in both
-    /// cases; batching more of them together does not change the bargain.
+    /// The resend loop stops at the first failure, which is usually the batch
+    /// the broker just refused — so the ones behind it in the window, whose
+    /// verdicts were abandoned unread, are often neither re-sent nor reported.
+    /// That costs nothing in safety: `accepted` only ever counts acceptances
+    /// the broker stated, so the caller is never told a batch landed when it
+    /// might not have.
     fn sendBatchesImpl(t: *AmqpTransport, allocator: std.mem.Allocator, target: []const u8, batches: []const EventDataBatch) !void {
         const self: *LinkTransport = @fieldParentPtr("transport", t);
         if (batches.len == 0) return;
@@ -781,11 +783,15 @@ pub const ProducerClient = struct {
     /// the broker accepted it but the acknowledgement was lost.
     ///
     /// Overlapping widens that window. When a send fails, the batches behind
-    /// it in the window are already on the wire and the broker may well accept
-    /// them, but their verdicts are abandoned unread — so they are re-sent,
-    /// and a consumer can see them twice. The number at risk is bounded by
-    /// `max_in_flight`, and the answer is the same as for `sendBatch`: give
-    /// events an application property the consumer can deduplicate on.
+    /// it are already on the wire and the broker may well accept them, but
+    /// their verdicts are abandoned unread. They are then reported as not
+    /// accepted and may be sent again, so a consumer can see them twice. The
+    /// number at risk is bounded by `max_in_flight`, and the answer is the
+    /// same as for `sendBatch`: give events an application property the
+    /// consumer can deduplicate on.
+    ///
+    /// Nothing is silently dropped either way: a batch is only ever counted as
+    /// accepted once the broker has said so.
     pub fn sendBatches(
         self: *ProducerClient,
         allocator: std.mem.Allocator,
