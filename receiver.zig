@@ -236,19 +236,21 @@ pub const PartitionClient = struct {
             // what would otherwise let a later failure in this iteration
             // free it twice.
             events.appendAssumeCapacity(received);
-            try settling.add(delivery);
+            // `add` is not merely bookkeeping: it puts the open run on the
+            // wire whenever a delivery id is not the one after the last,
+            // which is whenever another link on the session took an id in
+            // between. So it fails for the same reasons the flush below
+            // does, and is swallowed for the same reason — see there.
+            settling.add(delivery) catch {};
         }
 
         // Settling tells the peer these will not be asked for again. It is
         // advisory here: an unsettled delivery is redelivered, and a consumer
         // resumes from the sequence number rather than from AMQP settlement.
-        // So events that did arrive are never worth discarding merely to
-        // report that the disposition did not land — least of all on the
-        // break above, where the link that would carry it is the one that
-        // just failed.
-        settling.flush() catch |err| {
-            if (events.items.len == 0) return err;
-        };
+        // So a settle write that does not land is never worth the events that
+        // did arrive — least of all on the break above, where the link that
+        // would carry it is the one that just failed.
+        settling.flush() catch {};
 
         if (events.items.len > 0) {
             try self.advancePast(events.items[events.items.len - 1].sequence_number);
@@ -810,7 +812,7 @@ test "a broken connection still hands back the events that arrived" {
     try testing.expectEqualStrings("second", events[1].body());
 }
 
-test "a failed settlement mid-batch frees each event exactly once" {
+test "a settle write failing mid-batch costs no events either" {
     const allocator = testing.allocator;
     var mem = MemoryTransport.init(allocator);
     defer mem.deinit();
@@ -833,13 +835,15 @@ test "a failed settlement mid-batch frees each event exactly once" {
 
     mem.fail_write = true;
 
-    // Whatever comes back, the point is that nothing is freed twice and
-    // nothing leaks: `testing.allocator` fails the test either way.
-    const events = scripted.client.receiveEvents(allocator, 3) catch |err| {
-        try testing.expectEqual(anyerror.WriteFailed, err);
-        return;
-    };
-    event_data.freeReceivedEvents(allocator, events);
+    const events = try scripted.client.receiveEvents(allocator, 3);
+    defer event_data.freeReceivedEvents(allocator, events);
+
+    // The gap makes the settle write happen inside the loop rather than
+    // after it, which is the other place it can fail. It must cost the
+    // caller no more there than it does at the end.
+    try testing.expectEqual(@as(usize, 3), events.len);
+    try testing.expectEqualStrings("first", events[0].body());
+    try testing.expectEqualStrings("third", events[2].body());
 }
 
 test "disabled prefetch issues credit per receive" {
