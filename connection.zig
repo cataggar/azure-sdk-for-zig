@@ -657,6 +657,12 @@ pub const Driver = struct {
             // The header is the peer's claim; the body is the peer keeping it.
             // Holding a buffer sized to a claim that never arrived would let
             // one bogus header pin `max_frame_size` for the connection.
+            //
+            // Freeing costs nothing on a legitimate slow peer either, because
+            // there is no such retry to be had: the header lives only in this
+            // frame and `readExact` discards what it consumed, so a failed
+            // body read leaves the stream desynced and the next call parses
+            // body bytes as a header. Nothing here can resume mid-frame.
             errdefer {
                 self.allocator.free(self.body_buf);
                 self.body_buf = &.{};
