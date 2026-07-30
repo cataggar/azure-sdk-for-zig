@@ -6,9 +6,13 @@
 //! `azure_sdk_amqp` owns the wire codec.
 //!
 //! The decode side **borrows**: every slice on a `ServiceBusReceivedMessage`
-//! points into the `amqp.Message` it came from, which in turn points into the
-//! delivery payload. Nothing here allocates on decode, so a caller that needs
-//! a message to outlive its delivery must copy it.
+//! points into the arena its `amqp.Message` was decoded into, and dies when
+//! that arena does — at `Decoded.deinit`, or at the reset if the receive path
+//! uses `decodeMessageInto`. It does *not* borrow from the delivery payload:
+//! `azure_sdk_amqp`'s decoder dupes strings and binaries into the arena, so
+//! holding the payload bytes alive does not keep a received message valid.
+//! Nothing here allocates on decode, so a caller that needs a message to
+//! outlive its arena must copy it.
 
 const std = @import("std");
 const amqp = @import("azure_sdk_amqp");
@@ -77,11 +81,16 @@ pub const Scratch = struct {
 };
 
 /// Build the AMQP message for `msg`, borrowing its strings and `scratch`.
+///
+/// Releases anything `scratch` held from a previous call, so one `Scratch`
+/// can be hoisted out of a send loop — which is the point of it existing.
 pub fn toAmqpMessage(
     allocator: Allocator,
     msg: ServiceBusMessage,
     scratch: *Scratch,
 ) EncodeError!amqp.Message {
+    scratch.deinit();
+
     var count: usize = 0;
     if (msg.partition_key) |key| {
         scratch.annotations[count] = .{
@@ -223,7 +232,12 @@ pub fn fromAmqpMessage(msg: amqp.Message) ServiceBusReceivedMessage {
         .enqueued_time = timestampOf(lookup(annotations, annotation.enqueued_time)),
         .locked_until = timestampOf(lookup(annotations, annotation.locked_until)),
         .partition_key = textAnnotation(annotations, annotation.partition_key),
-        .delivery_count = msg.header.delivery_count,
+        // §3.2.1 counts *previous unsuccessful* attempts, so it is 0 on a
+        // first delivery; Service Bus's `DeliveryCount` — the number
+        // `MaxDeliveryCount` is compared against — is 1. Add one so the
+        // obvious comparison is right, matching the Go and .NET SDKs.
+        // A peeked message keeps the raw value, since it was never delivered.
+        .delivery_count = if (msg.header.delivery_count) |d| d +| 1 else null,
         .dead_letter_source = textAnnotation(annotations, annotation.dead_letter_source),
         .dead_letter_reason = textAnnotation(properties, application_property.dead_letter_reason),
         .dead_letter_description = textAnnotation(properties, application_property.dead_letter_description),
@@ -286,6 +300,22 @@ test "the standard properties round-trip through the wire" {
     var decoded = try amqp.decodeMessage(allocator, bytes);
     defer decoded.deinit();
 
+    // Assert against the AMQP sections directly, not through
+    // `fromAmqpMessage`. Reading a value back through this module's own
+    // mapping proves only that encode and decode agree with each other: a
+    // wrong-but-symmetric mapping (`session_id` to `reply-to-group-id`, say,
+    // which silently disables session-enabled queues) passes such a test.
+    const props = decoded.message.properties;
+    try testing.expectEqualStrings("m-1", props.message_id.?.string);
+    try testing.expectEqualStrings("c-1", props.correlation_id.?.string);
+    try testing.expectEqualStrings("text/plain", props.content_type.?);
+    try testing.expectEqualStrings("greetings", props.subject.?);
+    try testing.expectEqualStrings("somewhere", props.to.?);
+    try testing.expectEqualStrings("back-here", props.reply_to.?);
+    try testing.expectEqualStrings("session-7", props.group_id.?);
+    try testing.expectEqual(@as(?[]const u8, null), props.reply_to_group_id);
+    try testing.expectEqual(@as(?u32, 30_000), decoded.message.header.ttl);
+
     const got = fromAmqpMessage(decoded.message);
     try testing.expectEqualStrings("payload", got.body);
     try testing.expectEqualStrings("m-1", got.message_id.?);
@@ -295,7 +325,6 @@ test "the standard properties round-trip through the wire" {
     try testing.expectEqualStrings("somewhere", got.to.?);
     try testing.expectEqualStrings("back-here", got.reply_to.?);
     try testing.expectEqualStrings("session-7", got.session_id.?);
-    try testing.expectEqual(@as(?u32, 30_000), decoded.message.header.ttl);
 }
 
 test "partition key and scheduled time go into message annotations" {
@@ -313,14 +342,30 @@ test "partition key and scheduled time go into message annotations" {
     defer decoded.deinit();
 
     const annotations = decoded.message.message_annotations;
+    // Literal keys, not the module's constants: these strings are the
+    // contract with the broker, and a test that reads them back through the
+    // same constant it wrote cannot tell a right key from a wrong one.
     try testing.expectEqualStrings(
         "pk-3",
-        textOf(annotationOf(annotations, annotation.partition_key).?).?,
+        textOf(annotationOf(annotations, "x-opt-partition-key").?).?,
     );
     try testing.expectEqual(
         @as(i64, 1_700_000_000_000),
-        annotationOf(annotations, annotation.scheduled_enqueue_time).?.timestamp,
+        annotationOf(annotations, "x-opt-scheduled-enqueue-time").?.timestamp,
     );
+}
+
+test "the annotation and property keys are the ones the broker uses" {
+    // Pinned against the Go SDK's azservicebus/message.go. A typo in any of
+    // these is silent data loss that every round-trip test would still pass.
+    try testing.expectEqualStrings("x-opt-partition-key", annotation.partition_key);
+    try testing.expectEqualStrings("x-opt-scheduled-enqueue-time", annotation.scheduled_enqueue_time);
+    try testing.expectEqualStrings("x-opt-sequence-number", annotation.sequence_number);
+    try testing.expectEqualStrings("x-opt-enqueued-time", annotation.enqueued_time);
+    try testing.expectEqualStrings("x-opt-locked-until", annotation.locked_until);
+    try testing.expectEqualStrings("x-opt-deadletter-source", annotation.dead_letter_source);
+    try testing.expectEqualStrings("DeadLetterReason", application_property.dead_letter_reason);
+    try testing.expectEqualStrings("DeadLetterErrorDescription", application_property.dead_letter_description);
 }
 
 test "application properties round-trip" {
@@ -390,7 +435,7 @@ test "broker metadata is read from the annotations, header and properties" {
     try testing.expectEqual(@as(?i64, 42), got.sequence_number);
     try testing.expectEqual(@as(?i64, 1_700_000_000_000), got.enqueued_time);
     try testing.expectEqual(@as(?i64, 1_700_000_030_000), got.locked_until);
-    try testing.expectEqual(@as(?u32, 10), got.delivery_count);
+    try testing.expectEqual(@as(?u32, 11), got.delivery_count);
     try testing.expectEqualStrings("orders", got.dead_letter_source.?);
     try testing.expectEqualStrings("pk-9", got.partition_key.?);
     try testing.expectEqualStrings("MaxDeliveryCountExceeded", got.dead_letter_reason.?);
@@ -421,6 +466,50 @@ test "a message with no body decodes to an empty body" {
     // index straight into `sections[0]` would panic on.
     const no_sections = fromAmqpMessage(.{ .body = .{ .data = &.{} } });
     try testing.expectEqualStrings("", no_sections.body);
+}
+
+test "one scratch can be reused across messages without leaking" {
+    const allocator = testing.allocator;
+
+    // `Scratch` exists so a send loop can hoist it; the batch sender will do
+    // exactly that. Each call must release what the previous one allocated.
+    var scratch: Scratch = .{};
+    defer scratch.deinit();
+
+    for (0..3) |_| {
+        var msg = ServiceBusMessage.init(allocator, "payload");
+        defer msg.deinit();
+        try msg.application_properties.put("tenant", "contoso");
+        _ = try toAmqpMessage(allocator, msg, &scratch);
+    }
+
+    // A message with no properties must also clear the previous array,
+    // rather than leave it dangling behind a stale `properties` slice.
+    var plain = ServiceBusMessage.init(allocator, "payload");
+    defer plain.deinit();
+    const built = try toAmqpMessage(allocator, plain, &scratch);
+    try testing.expectEqual(@as(?Fields, null), built.application_properties);
+    try testing.expectEqual(@as(usize, 0), scratch.properties.len);
+}
+
+test "delivery count is the Service Bus count, not the raw AMQP one" {
+    // §3.2.1 counts previous *failed* attempts, so a first delivery arrives
+    // as 0 on the wire. Service Bus's DeliveryCount, which MaxDeliveryCount
+    // is compared against, is 1 there. Exposing the raw value would make the
+    // obvious `count >= max_delivery_count` check off by one.
+    const first = fromAmqpMessage(.{ .header = .{ .delivery_count = 0 } });
+    try testing.expectEqual(@as(?u32, 1), first.delivery_count);
+
+    const redelivered = fromAmqpMessage(.{ .header = .{ .delivery_count = 9 } });
+    try testing.expectEqual(@as(?u32, 10), redelivered.delivery_count);
+
+    const absent = fromAmqpMessage(.{});
+    try testing.expectEqual(@as(?u32, null), absent.delivery_count);
+
+    // Saturating, so a hostile or corrupt maxInt cannot wrap to 0 and make a
+    // message look freshly delivered forever.
+    const huge = fromAmqpMessage(.{ .header = .{ .delivery_count = std.math.maxInt(u32) } });
+    try testing.expectEqual(@as(?u32, std.math.maxInt(u32)), huge.delivery_count);
 }
 
 /// Counts allocations so a test can assert the cost of a call rather than

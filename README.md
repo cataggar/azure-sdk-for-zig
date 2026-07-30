@@ -43,9 +43,14 @@ is a mapping rather than a codec:
 | `dead_letter_reason`, `dead_letter_description` | application properties |
 
 Decoding **borrows**. Every slice on a `ServiceBusReceivedMessage` points into
-the AMQP message it came from, which points into the delivery payload, so a
-received message is valid exactly as long as its delivery is. Copy anything
-that must outlive it.
+the arena its AMQP message was decoded into, and dies with that arena. It does
+*not* point into the delivery payload — the decoder dupes strings and binaries
+out of it — so keeping the payload bytes alive does not keep a received message
+valid. Copy anything that must outlive the arena.
+
+`delivery_count` is the Service Bus count, 1 on a first delivery, not the raw
+AMQP field that counts previous failures and is 0 there. It compares directly
+against `MaxDeliveryCount`.
 
 Application properties are handed back as AMQP fields rather than as a map: a
 map would cost an allocation on every received message, and Service Bus allows
