@@ -757,9 +757,13 @@ pub fn encodeSaslOutcome(
 
 // ─────────────────────── Decoding ───────────────────────
 
-/// A decoded performative together with the arena backing its slices.
-pub const Decoded = struct {
-    arena: *std.heap.ArenaAllocator,
+/// A decoded performative, borrowing whatever allocator decoded it.
+///
+/// Separate from `Decoded` because the receive path decodes a performative per
+/// frame and keeps nothing from it: everything a session retains is duped out
+/// before the frame is done. Handing it an arena it can reset instead of one
+/// it has to create costs two fewer allocations per frame.
+pub const Borrowed = struct {
     performative: Performative,
     /// Bytes of `body` the performative occupied.
     ///
@@ -767,6 +771,14 @@ pub const Decoded = struct {
     /// performative, so the split has to be found by measuring the
     /// performative — and the decode that produced this already knows it.
     /// Reporting it saves the caller decoding the same bytes a second time.
+    bytes_consumed: usize,
+};
+
+/// A decoded performative together with the arena backing its slices.
+pub const Decoded = struct {
+    arena: *std.heap.ArenaAllocator,
+    performative: Performative,
+    /// Bytes of `body` the performative occupied. See `Borrowed`.
     bytes_consumed: usize,
 
     pub fn deinit(self: *Decoded) void {
@@ -777,25 +789,37 @@ pub const Decoded = struct {
     }
 };
 
-/// Decode a frame body into a performative.
+/// Decode a frame body into a performative, allocating from `allocator`.
+///
+/// Every slice in the result points into `allocator`, so this is meant for an
+/// arena the caller can reset or drop wholesale. `decode` wraps it with an
+/// arena of its own for callers that would rather not keep one.
 ///
 /// Returns `error.UnknownDescriptor` for performatives this driver does not
 /// model, which callers treat as "ignore and continue".
+pub fn decodeInto(allocator: Allocator, body: []const u8) DecodeError!Borrowed {
+    const result = decoder.decode(allocator, body) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.MalformedBody,
+    };
+    return .{
+        .performative = try fromValue(allocator, result.value),
+        .bytes_consumed = result.bytes_consumed,
+    };
+}
+
+/// Decode a frame body into a performative and the arena backing it.
 pub fn decode(allocator: Allocator, body: []const u8) DecodeError!Decoded {
     const arena = try allocator.create(std.heap.ArenaAllocator);
     errdefer allocator.destroy(arena);
     arena.* = .init(allocator);
     errdefer arena.deinit();
 
-    const result = decoder.decode(arena.allocator(), body) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return error.MalformedBody,
-    };
-    const performative = try fromValue(arena.allocator(), result.value);
+    const borrowed = try decodeInto(arena.allocator(), body);
     return .{
         .arena = arena,
-        .performative = performative,
-        .bytes_consumed = result.bytes_consumed,
+        .performative = borrowed.performative,
+        .bytes_consumed = borrowed.bytes_consumed,
     };
 }
 
