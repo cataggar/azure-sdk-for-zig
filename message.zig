@@ -263,6 +263,16 @@ pub const Decoded = struct {
 /// The result borrows nothing from `payload`: the decoder dupes strings,
 /// symbols and binaries into `allocator` rather than pointing into its input,
 /// so the message outlives the buffer it was read from.
+///
+/// Two things a caller has to know, because `Message` has no destructor and
+/// nothing here tracks what it allocated:
+///
+/// - `allocator` must be an arena the caller resets or drops. Handing this a
+///   general-purpose allocator directly leaks the whole message with no way to
+///   reclaim it — where `decode` would have been safe.
+/// - On error, what was already allocated is *not* rolled back. A caller
+///   reusing one arena across messages should reset it after a failed decode
+///   rather than decoding the next message on top.
 pub fn decodeInto(allocator: Allocator, payload: []const u8) DecodeError!Message {
     const a = allocator;
     var msg = Message{};
@@ -589,10 +599,22 @@ test "a decoded message borrows nothing from the payload it was read from" {
     const annotations = [_]MapEntry{
         .{ .key = .{ .symbol = "x-opt-offset" }, .value = .{ .string = "12345" } },
     };
+    // A compound value as well as flat strings. The decoder has a separate
+    // path for arrays — small ones are staged through a stack buffer — so an
+    // element that aliased its input would dangle into a dead frame rather
+    // than into merely freed memory, and the flat fields would not show it.
+    var array_items = [_]AmqpValue{
+        .{ .string = "first" },
+        .{ .string = "second" },
+    };
+    const nested = [_]MapEntry{
+        .{ .key = .{ .symbol = "x-opt-list" }, .value = .{ .array = &array_items } },
+    };
     const bytes = try encodeAlloc(allocator, .{
         .message_annotations = &annotations,
         .properties = .{ .message_id = .{ .string = "id-1" }, .to = "eh" },
         .application_properties = &app_props,
+        .delivery_annotations = &nested,
         .body = .{ .data = &.{"the body"} },
     });
 
@@ -614,6 +636,10 @@ test "a decoded message borrows nothing from the payload it was read from" {
     try testing.expectEqualStrings("7", msg.application_properties.?[0].value.string);
     try testing.expectEqualStrings("x-opt-offset", msg.message_annotations.?[0].key.symbol);
     try testing.expectEqualStrings("12345", msg.message_annotations.?[0].value.string);
+    const decoded_array = msg.delivery_annotations.?[0].value.array;
+    try testing.expectEqual(@as(usize, 2), decoded_array.len);
+    try testing.expectEqualStrings("first", decoded_array[0].string);
+    try testing.expectEqualStrings("second", decoded_array[1].string);
 }
 
 test "one arena reset per message decodes a batch without allocating per message" {
