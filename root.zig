@@ -5,13 +5,20 @@
 //! credit window, and settlement path. Administration runs over the
 //! `azure_sdk_core` HTTP pipeline.
 const std = @import("std");
-const core = @import("azure_sdk_core");
 const messaging_common = @import("azure_sdk_messaging_common");
 
 pub const ConnectionStringProperties = messaging_common.ConnectionStringProperties;
 
 pub const message_codec = @import("message.zig");
 pub const admin = @import("admin.zig");
+pub const transport = @import("amqp_transport.zig");
+
+// The real AMQP transport, re-exported so a consumer only imports the package.
+pub const AmqpTransport = transport.AmqpTransport;
+pub const Credential = transport.Credential;
+pub const ConnectionOptions = transport.ConnectionOptions;
+pub const CustomEndpoint = transport.CustomEndpoint;
+pub const TlsSettings = transport.TlsSettings;
 
 // Administration surface, re-exported so a consumer only imports the package.
 pub const QueueProperties = admin.QueueProperties;
@@ -34,6 +41,7 @@ pub const applicationPropertyOf = message_codec.applicationPropertyOf;
 test {
     _ = message_codec;
     _ = admin;
+    _ = transport;
 }
 
 // ─────────────────────── Models ───────────────────────
@@ -299,19 +307,16 @@ pub const MockServiceBusTransport = struct {
 pub const ServiceBusSenderClient = struct {
     fully_qualified_namespace: []const u8,
     entity_path: []const u8,
-    credential: ?*core.credentials.TokenCredential = null,
     amqp_transport: *ServiceBusAmqpTransport,
 
     pub fn init(
         fully_qualified_namespace: []const u8,
         entity_path: []const u8,
-        credential: *core.credentials.TokenCredential,
         amqp_transport: *ServiceBusAmqpTransport,
     ) ServiceBusSenderClient {
         return .{
             .fully_qualified_namespace = fully_qualified_namespace,
             .entity_path = entity_path,
-            .credential = credential,
             .amqp_transport = amqp_transport,
         };
     }
@@ -365,7 +370,6 @@ pub const ReceiverOptions = struct {
 pub const ServiceBusReceiverClient = struct {
     fully_qualified_namespace: []const u8,
     entity: EntityOptions,
-    credential: ?*core.credentials.TokenCredential = null,
     amqp_transport: *ServiceBusAmqpTransport,
     receive_mode: ReceiveMode,
     sub_queue: SubQueue,
@@ -373,14 +377,12 @@ pub const ServiceBusReceiverClient = struct {
     pub fn init(
         fully_qualified_namespace: []const u8,
         entity: EntityOptions,
-        credential: *core.credentials.TokenCredential,
         amqp_transport: *ServiceBusAmqpTransport,
         options: ReceiverOptions,
     ) ServiceBusReceiverClient {
         return .{
             .fully_qualified_namespace = fully_qualified_namespace,
             .entity = entity,
-            .credential = credential,
             .amqp_transport = amqp_transport,
             .receive_mode = options.receive_mode,
             .sub_queue = options.sub_queue,
@@ -394,9 +396,8 @@ pub const ServiceBusReceiverClient = struct {
         options: ReceiverOptions,
     ) !ServiceBusReceiverClient {
         const cs = try ConnectionStringProperties.parse(connection_string);
-        _ = cs;
         return .{
-            .fully_qualified_namespace = (try ConnectionStringProperties.parse(connection_string)).fully_qualified_namespace,
+            .fully_qualified_namespace = cs.fully_qualified_namespace,
             .entity = entity,
             .amqp_transport = amqp_transport,
             .receive_mode = options.receive_mode,
@@ -628,4 +629,32 @@ test "ReceiverClient subscription entity" {
     };
     const messages = try receiver.receiveMessages(allocator, 5);
     try std.testing.expectEqual(@as(usize, 0), messages.len);
+}
+
+test "a receiver reads its namespace from the connection string" {
+    var mock = MockServiceBusTransport.init();
+    const client = try ServiceBusReceiverClient.fromConnectionString(
+        "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=root;SharedAccessKey=c2VjcmV0",
+        .{ .queue = "orders" },
+        mock.asTransport(),
+        .{},
+    );
+    try std.testing.expectEqualStrings("ns.servicebus.windows.net", client.fully_qualified_namespace);
+    try std.testing.expectEqual(ReceiveMode.peek_lock, client.receive_mode);
+}
+
+test "a subscription address names the topic and the subscription" {
+    const allocator = std.testing.allocator;
+    const entity = EntityOptions{ .subscription = .{
+        .topic_name = "orders",
+        .subscription_name = "audit",
+    } };
+
+    const addr = try entity.formatAddress(allocator, .none);
+    defer allocator.free(addr);
+    try std.testing.expectEqualStrings("orders/Subscriptions/audit", addr);
+
+    const dead = try entity.formatAddress(allocator, .dead_letter);
+    defer allocator.free(dead);
+    try std.testing.expectEqualStrings("orders/Subscriptions/audit/$deadletterqueue", dead);
 }

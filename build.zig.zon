@@ -28,6 +28,7 @@
         "root.zig",
         "message.zig",
         "admin.zig",
+        "amqp_transport.zig",
         "README.md",
         "LICENSE.txt",
     },
