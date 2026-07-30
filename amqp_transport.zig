@@ -1533,8 +1533,10 @@ test "a link the broker detached is re-attached rather than written to again" {
     // that outcome is the one that reads it.
     try h.peer().push(0, .{ .detach = .{ .handle = 2, .closed = true } });
     try scriptAccept(h.peer(), 1, 1);
-    // The replacement link. `Session` allocates handles in order and the
-    // detached one is not reused, so this is handle 3.
+    // The peer's handle for the replacement link. A handle is scoped to
+    // whoever sent the frame (§2.6.2) and `applyAttach` matches on the link
+    // *name*, so this number is the peer's choice and says nothing about the
+    // client's — which the assertion below covers instead.
     try scriptSenderAttach(h.peer(), 3, "servicebus-sender-orders", 10);
     try scriptAccept(h.peer(), 2, 2);
 
@@ -1562,7 +1564,12 @@ test "a link the broker detached is re-attached rather than written to again" {
 
     var decoded = try amqp.performative.decode(allocator, attaches[0]);
     defer decoded.deinit();
-    try testing.expectEqualStrings("orders", decoded.performative.attach.target.?.address.?);
+    const replacement = decoded.performative.attach;
+    try testing.expectEqualStrings("orders", replacement.target.?.address.?);
+    // A fresh handle, not the unbound one. `$cbs` took 0 and 1 and the dead
+    // link took 2; reusing 2 while the peer still considers it detached is
+    // the collision the eviction exists to avoid.
+    try testing.expectEqual(@as(u32, 3), replacement.handle);
 
     // One entity, one link: the replacement took the old one's place rather
     // than accumulating beside it.
@@ -1641,4 +1648,37 @@ test "the emulator's audience names plaintext AMQP" {
     const per_entity = try audienceFor(allocator, transport.scheme, transport.fully_qualified_namespace, "invoices");
     defer allocator.free(per_entity);
     try testing.expectEqualStrings("amqp://localhost/invoices", per_entity);
+}
+
+test "a claim that cannot be put leaves nothing behind" {
+    // The audience is allocated before `$cbs` is asked and only becomes the
+    // link entry's property once the attach has succeeded. Everything between
+    // those two points is a path that has to release it: for a new entity
+    // `authorize` is a real round trip, so a write failure or a deadline
+    // there returns while the audience is still loose.
+    const allocator = testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    try scriptCbsExchange(h.peer(), allocator);
+    try scriptSenderAttach(h.peer(), 2, "servicebus-sender-orders", 10);
+    try scriptAccept(h.peer(), 1, 1);
+
+    try h.start(.{});
+
+    var msg = sb.ServiceBusMessage.init(allocator, "x");
+    defer msg.deinit();
+    try warmUp(&h, allocator, "orders");
+
+    // A second entity needs its own claim, and the put cannot be written.
+    h.mem.fail_write = true;
+    try testing.expectError(
+        error.WriteFailed,
+        h.transport.sendMessages(allocator, "invoices", &.{msg}),
+    );
+
+    // No half-built entry: the failed entity is not in the map, and the one
+    // that was already there is untouched.
+    try testing.expectEqual(@as(usize, 1), h.transport.senders.count());
+    try testing.expect(h.transport.senders.get("invoices") == null);
 }
