@@ -278,8 +278,11 @@ pub const Driver = struct {
     perf_arena: ?std.heap.ArenaAllocator = null,
 
     /// What `perf_arena` keeps between frames. Real performatives are a few
-    /// hundred bytes, so this is far above the steady state and the cap never
-    /// costs a re-allocation on live traffic — it only releases the outlier.
+    /// hundred bytes, so this is far above the steady state: below the limit
+    /// `retain_with_limit` is byte-for-byte `retain_capacity`, so the cap
+    /// costs nothing on live traffic. It bites on the *next* frame, not on
+    /// the outlier itself, so a connection that falls silent right after one
+    /// holds the peak until it is closed — bounded, but not immediate.
     pub const perf_arena_limit = 64 * 1024;
 
     const in_buf_len = 16 * 1024;
