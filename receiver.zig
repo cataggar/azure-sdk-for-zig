@@ -246,10 +246,10 @@ pub const PartitionClient = struct {
 
             const received = blk: {
                 // Decode into the client's scratch arena rather than a fresh
-                // one per message. Nothing survives the block: the decoded
-                // message points into the arena and into the driver's frame
-                // buffer, and `fromRawMessage` copies what it keeps into
-                // `allocator`.
+                // one per message. Nothing survives the block: the decode
+                // borrows nothing from `delivery.payload`, so the message is
+                // wholly arena-backed, and `fromRawMessage` copies what it
+                // keeps into `allocator`.
                 if (self.decode_arena == null) self.decode_arena = .init(self.allocator);
                 const arena = &self.decode_arena.?;
                 _ = arena.reset(.{ .retain_with_limit = decode_arena_limit });
@@ -829,20 +829,30 @@ test "receiveEvents settles a whole batch in one disposition" {
 }
 
 test "decoding a batch costs the same whatever the batch size" {
-    // `decodeMessage` charges an arena and its pages per message, and the
-    // receive loop discards each decode as soon as `fromRawMessage` has copied
-    // out of it. Decoding into one client-owned arena, reset per event, makes
-    // that cost fixed rather than per event.
+    // `decodeMessage` charged an arena and its pages to the *events*
+    // allocator, once per message, and the receive loop discarded each decode
+    // as soon as `fromRawMessage` had copied out of it. Decoding into one
+    // client-owned arena, reset per event, makes that cost fixed rather than
+    // per event.
     //
-    // Assert exactly that — two batches of very different sizes cost the same
-    // — rather than asserting a number. A number would pin the fixed cost
-    // (the filter expression `receiveEvents` re-renders once per call) and
-    // break for reasons that have nothing to do with this.
+    // So one counting allocator has to serve both the client and the events:
+    // counting only the client's would miss the allocations this removes
+    // entirely, and the test would pass against the very code it exists to
+    // rule out.
+    //
+    // What is asserted is the *marginal* cost of an event, which cancels
+    // every fixed cost of a call (the filter expression, the events list, the
+    // arena's own first growth) without having to know any of them. Two
+    // allocation per event is `fromRawMessage`'s one block — these events
+    // carry no application properties, so the property map allocates no
+    // storage of its own. The decode used to add three more on top of it.
     const allocator = testing.allocator;
     var counting = CountingAllocator.init(allocator);
+    const counted = counting.allocator();
 
     const small = 4;
     const large = 36;
+    const per_event = 1;
 
     var mem = MemoryTransport.init(allocator);
     defer mem.deinit();
@@ -860,26 +870,23 @@ test "decoding a batch costs the same whatever the batch size" {
     var scripted: Scripted = undefined;
     try scripted.open(allocator, &mem, &clock, &conn, .{});
     defer scripted.deinit();
-
-    // Count only the client's own allocator. The events themselves are handed
-    // back on `allocator` and are not what this is about.
-    scripted.client.allocator = counting.allocator();
+    scripted.client.allocator = counted;
 
     // Warm: the arena is the client's, so the first batch is the one that
     // builds it and every batch after finds it sized.
-    event_data.freeReceivedEvents(allocator, try scripted.client.receiveEvents(allocator, small));
+    event_data.freeReceivedEvents(counted, try scripted.client.receiveEvents(counted, small));
 
     const a = counting.allocations;
-    event_data.freeReceivedEvents(allocator, try scripted.client.receiveEvents(allocator, small));
+    event_data.freeReceivedEvents(counted, try scripted.client.receiveEvents(counted, small));
     const cost_small = counting.allocations - a;
 
     const b = counting.allocations;
-    const batch = try scripted.client.receiveEvents(allocator, large);
-    defer event_data.freeReceivedEvents(allocator, batch);
+    const batch = try scripted.client.receiveEvents(counted, large);
+    defer event_data.freeReceivedEvents(counted, batch);
     const cost_large = counting.allocations - b;
 
     try testing.expectEqual(@as(usize, large), batch.len);
-    try testing.expectEqual(cost_small, cost_large);
+    try testing.expectEqual(@as(usize, per_event * (large - small)), cost_large - cost_small);
 }
 
 test "one outsized event does not pin the decode arena" {
