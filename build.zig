@@ -16,11 +16,11 @@ pub fn build(b: *std.Build) void {
     });
     const common_mod = common_dep.module("azure_sdk_messaging_common");
 
-    const uamqp_dep = b.dependency("uamqp", .{});
-    const uamqp_mod = b.createModule(.{
-        .root_source_file = uamqp_dep.path("src/zig/uamqp.zig"),
+    const amqp_dep = b.dependency("azure_sdk_amqp", .{
         .target = target,
+        .optimize = optimize,
     });
+    const amqp_mod = amqp_dep.module("azure_sdk_amqp");
 
     const serde_dep = b.dependency("serde", .{
         .target = target,
@@ -28,15 +28,17 @@ pub fn build(b: *std.Build) void {
     });
     const serde_mod = serde_dep.module("serde");
 
+    const imports = [_]std.Build.Module.Import{
+        .{ .name = "azure_sdk_core", .module = core_mod },
+        .{ .name = "azure_sdk_messaging_common", .module = common_mod },
+        .{ .name = "azure_sdk_amqp", .module = amqp_mod },
+        .{ .name = "serde", .module = serde_mod },
+    };
+
     _ = b.addModule("azure_sdk_servicebus", .{
         .root_source_file = b.path("root.zig"),
         .target = target,
-        .imports = &.{
-            .{ .name = "azure_sdk_core", .module = core_mod },
-            .{ .name = "azure_sdk_messaging_common", .module = common_mod },
-            .{ .name = "uamqp", .module = uamqp_mod },
-            .{ .name = "serde", .module = serde_mod },
-        },
+        .imports = &imports,
     });
 
     const tests = b.addTest(.{
@@ -44,12 +46,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("root.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{
-                .{ .name = "azure_sdk_core", .module = core_mod },
-                .{ .name = "azure_sdk_messaging_common", .module = common_mod },
-                .{ .name = "uamqp", .module = uamqp_mod },
-                .{ .name = "serde", .module = serde_mod },
-            },
+            .imports = &imports,
         }),
     });
     const test_step = b.step("test", "Run Service Bus tests");
