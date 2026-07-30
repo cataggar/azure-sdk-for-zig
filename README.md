@@ -111,8 +111,62 @@ has expired is a question about the wall clock, since a token's expiry is a
 Unix timestamp; judging it on a monotonic clock would make every token look
 fresh forever.
 
-`receiveMessages`, `settleMessage`, `scheduleMessage` and `cancelScheduled`
-return `error.NotImplemented` until the receive and management paths land.
+`scheduleMessage` and `cancelScheduled` return `error.NotImplemented` until the
+management path lands.
+
+## Receiving and settling
+
+`receiveMessages` returns a `ReceivedMessages` batch, not a slice, because the
+batch owns the memory every message in it points into:
+
+```zig
+var batch = try client.receiveMessages(allocator, 10, .peek_lock);
+defer batch.deinit();
+
+for (batch.messages) |msg| {
+    try process(msg.body);
+}
+try client.settleMessages(allocator, batch.messages, .complete, .{});
+```
+
+One arena backs the whole batch, so a message costs the two copies
+`azure_sdk_amqp` makes of the delivery it came from and nothing else — the
+decode borrows nothing from the payload, which matters because a delivery is
+valid only until the next one is read. The batch owns its arena rather than
+sharing one held by the transport, since settlement happens after processing
+and a caller may legitimately hold batch N while receiving batch N+1. An empty
+poll allocates nothing at all, which is the steady state of a consumer on a
+quiet queue.
+
+Credit is a window, never one at a time: the link is attached with a prefetch
+of 300 by default and refills at half. Setting `prefetch` to 0 turns the window
+off, and each receive then asks for exactly what it wants.
+
+A receive that runs out of time with messages already in hand returns them
+rather than raising; so does one that fails partway. Only an empty batch can
+carry an error, and a timed-out empty batch is not an error either — there was
+simply nothing there.
+
+Settlement works on delivery *ids*, so a run of messages collapses into one
+disposition frame instead of one per message. The run breaks where it must:
+between entities, because an id is meaningful only on the link that issued it,
+and across gaps, because settling through a gap would settle another link's
+delivery. `completeMessage` and friends are the one-message spelling of the
+same call.
+
+| action | AMQP outcome |
+| --- | --- |
+| complete | `accepted` |
+| abandon | `modified`, neither flag set |
+| defer | `modified` with `undeliverable-here` |
+| dead-letter | `rejected`, condition `com.microsoft:dead-letter`, reason and description in `info` |
+
+`receive_and_delete` is emulated rather than negotiated. The AMQP form is
+`snd-settle-mode: settled` on the attach, which `azure_sdk_amqp` does not
+expose yet, so the transport accepts each delivery as it reads it — batched
+into one disposition — and settling such a message afterwards is a no-op. That
+makes it at-least-once where the broker's own mode is at-most-once: a
+disposition lost in flight means redelivery, not a dropped message.
 
 ## Development
 
