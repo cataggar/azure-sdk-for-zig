@@ -842,10 +842,11 @@ test "decoding a batch costs the same whatever the batch size" {
     //
     // What is asserted is the *marginal* cost of an event, which cancels
     // every fixed cost of a call (the filter expression, the events list, the
-    // arena's own first growth) without having to know any of them. Two
-    // allocation per event is `fromRawMessage`'s one block — these events
-    // carry no application properties, so the property map allocates no
-    // storage of its own. The decode used to add three more on top of it.
+    // arena's own first growth) without having to know any of them. The one
+    // allocation per event is `fromRawMessage`'s block — these events carry
+    // no application properties, so the property map allocates no storage of
+    // its own, and a fixture that gave them some would make this 2. The
+    // decode used to add three more on top of it.
     const allocator = testing.allocator;
     var counting = CountingAllocator.init(allocator);
     const counted = counting.allocator();
