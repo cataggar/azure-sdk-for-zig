@@ -188,11 +188,16 @@ pub const Session = struct {
         var decoded = try self.driver.decodeBody(inbound.body);
         defer decoded.deinit();
 
-        const body = inbound.body;
+        // The decode above already measured the performative, so the payload
+        // is the remainder. `bytes_consumed` is what the decoder read out of
+        // `body`, so it cannot exceed it, but a corrupt length would slice out
+        // of bounds rather than fail cleanly.
+        if (decoded.bytes_consumed > inbound.body.len) return error.MalformedFrame;
+        const payload = inbound.body[decoded.bytes_consumed..];
         switch (decoded.performative) {
             .flow => |f| try self.applyFlow(f),
             .disposition => |d| try self.applyDisposition(d),
-            .transfer => |t| try self.applyTransfer(t, body),
+            .transfer => |t| try self.applyTransfer(t, payload),
             .attach => |a| try self.applyAttach(a),
             .detach => |d| try self.applyDetach(d),
             .end => |e| {
@@ -331,7 +336,7 @@ pub const Session = struct {
         }
     }
 
-    fn applyTransfer(self: *Session, t: perf.Transfer, body: []const u8) LinkError!void {
+    fn applyTransfer(self: *Session, t: perf.Transfer, payload: []const u8) LinkError!void {
         // `incoming_window` is capacity, not a countdown, so it is not spent
         // here. This endpoint takes every transfer it is sent — the receiver
         // buffers the delivery and link credit is what bounds a peer — so the
@@ -343,9 +348,7 @@ pub const Session = struct {
         self.next_incoming_id +%= 1;
 
         const receiver = self.receiverFor(t.handle) orelse return error.UnknownHandle;
-        // The payload is whatever follows the performative in the frame.
-        const consumed = performativeLength(self.allocator, body) orelse return error.MalformedFrame;
-        try receiver.acceptTransfer(t, body[consumed..]);
+        try receiver.acceptTransfer(t, payload);
     }
 
     /// Emit a session `flow`, optionally carrying link credit.
@@ -370,7 +373,11 @@ pub const Session = struct {
 ///
 /// A transfer frame carries the message payload immediately after the
 /// performative, so the split has to be found by measuring the performative.
-/// Byte length of the performative at the head of `body`; the rest is payload.
+///
+/// The receive path does not use this: `perf.Decoded.bytes_consumed` reports
+/// the same number as a by-product of the decode that `pump` already performs,
+/// which is why decoding a second time here would be pure waste. It remains
+/// for peers and tests, which hold a frame body without having decoded it.
 pub fn performativeLength(allocator: Allocator, body: []const u8) ?usize {
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
@@ -4050,4 +4057,70 @@ test "closing a receiver the peer already detached sends no detach" {
     for (frames.bodies.items) |body| {
         try testing.expect(perf.peekDescriptor(body) != perf.descriptor.detach);
     }
+}
+
+test "a pumped transfer allocates only what it hands the caller" {
+    var counting = CountingAllocator{ .child = testing.allocator };
+    const allocator = counting.allocator();
+
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+
+    const count = 32;
+    const body = "0123456789" ** 20;
+    var i: u32 = 0;
+    while (i < count) : (i += 1) {
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = i,
+            .delivery_tag = "tag!",
+            .message_format = 0,
+            .settled = true,
+            .more = false,
+        }, body);
+    }
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        // Comfortably more than `count`, so no `flow` is emitted to top credit
+        // back up inside the window measured below.
+        .prefetch = 256,
+    }, 10_000);
+
+    // Pump one transfer to size the frame buffer and the queue, so the window
+    // below measures the steady state rather than one-off growth.
+    _ = try fixture.session.pump(10_000);
+    try receiver.ready.ensureTotalCapacity(allocator, count);
+
+    counting.allocs = 0;
+    var pumped: usize = 1;
+    while (pumped < count) : (pumped += 1) _ = try fixture.session.pump(10_000);
+    const spent = counting.allocs;
+
+    // Four per transfer, and each one ends up in something the caller reads:
+    // the arena that holds the decoded performative, that arena's first page,
+    // the payload, and the delivery tag.
+    //
+    // It was six. The frame body was allocated and freed per frame rather than
+    // read into a buffer the driver keeps, and the transfer performative was
+    // decoded a second time — into a throwaway arena, discarding everything
+    // but the length — purely to find where the payload started, which the
+    // first decode already reported as `bytes_consumed`.
+    try testing.expectEqual(@as(usize, 4 * (count - 1)), spent);
 }
