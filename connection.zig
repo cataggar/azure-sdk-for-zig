@@ -268,7 +268,19 @@ pub const Driver = struct {
     /// one keeps the page and pays neither. The handshake keeps `decodeBody`,
     /// which owns its arena, so the borrow is confined to the receive path
     /// where every retained field is provably duped out.
+    ///
+    /// Capped at `perf_arena_limit` rather than retained outright. A frame is
+    /// bounded by `acceptMaxFrameSize()`, but the decode is not bounded by the
+    /// frame: a list or map header costs a byte or two and buys 24 or 48 of
+    /// arena per element, so a hostile frame decodes to tens of times its own
+    /// size. Retaining outright would pin that peak for the life of the
+    /// connection, which is the trap `body_buf` above already has to dodge.
     perf_arena: ?std.heap.ArenaAllocator = null,
+
+    /// What `perf_arena` keeps between frames. Real performatives are a few
+    /// hundred bytes, so this is far above the steady state and the cap never
+    /// costs a re-allocation on live traffic — it only releases the outlier.
+    pub const perf_arena_limit = 64 * 1024;
 
     const in_buf_len = 16 * 1024;
 
@@ -698,14 +710,20 @@ pub const Driver = struct {
     /// Decode a frame body into a performative that lives until the next call.
     ///
     /// For the receive path, which handles a performative and is done with it
-    /// inside the frame: anything a session keeps — a link name, an error
-    /// condition, a delivery's payload and tag — it dupes out first. Reusing
-    /// one arena rather than building one per frame saves two allocations on
-    /// every frame that arrives.
+    /// inside the frame: anything a session keeps — an error condition, a
+    /// delivery's payload and tag — it dupes out first. Reusing one arena
+    /// rather than building one per frame saves two allocations on every frame
+    /// that arrives.
+    ///
+    /// The invalidator is any later call, and `Session.pump` makes one per
+    /// frame it reads — so a result must not be held across a `pump`, even
+    /// though `pump` is nowhere in this type's API. Reading one that has been
+    /// invalidated is silent corruption, not a use-after-free the testing
+    /// allocator would catch.
     pub fn decodeBodyReusing(self: *Driver, body: []const u8) ConnectionError!perf.Borrowed {
         if (self.perf_arena == null) self.perf_arena = .init(self.allocator);
         const arena = &self.perf_arena.?;
-        _ = arena.reset(.retain_capacity);
+        _ = arena.reset(.{ .retain_with_limit = perf_arena_limit });
         return perf.decodeInto(arena.allocator(), body) catch |e| switch (e) {
             error.OutOfMemory => error.OutOfMemory,
             else => error.MalformedFrame,

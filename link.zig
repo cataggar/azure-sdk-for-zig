@@ -4195,7 +4195,158 @@ test "what a session keeps from a performative outlives the frames after it" {
 
     try testing.expectEqualStrings(condition, sender.rejection.?.condition);
     try testing.expectEqualStrings(description, sender.rejection.?.description.?);
-    // The link name is duped at attach, but attach is decoded through the same
-    // arena, so it is the same hazard.
-    try testing.expectEqualStrings("producer", sender.name);
+}
+
+test "a queued single-frame delivery outlives the frames after it" {
+    // Companion to the test above, for the other thing the receive path keeps
+    // out of a performative: `acceptTransfer` dupes the tag off the transfer
+    // and the payload out of the frame body, then queues both. The multi-frame
+    // path is covered incidentally elsewhere, because reassembly pumps more
+    // frames before the delivery is read; the single-frame fast path is not,
+    // so a borrow there would survive every other test in this file.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    const tag = "\x00\x00\x00\x07";
+    const payload = "the body of a delivery nobody reads until later";
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 7,
+        .delivery_tag = tag,
+        .message_format = 0,
+        .settled = false,
+        .more = false,
+    }, payload);
+
+    // As in the test above: each entry fills the harness's 512-byte frame, and
+    // the frame is repeated, so the arena is written clean past wherever the
+    // transfer's tag landed rather than merely reset over it.
+    var pad: [4]uamqp.MapEntry = undefined;
+    for (&pad) |*entry| entry.* = .{
+        .key = .{ .symbol = "com.microsoft:padding" },
+        .value = .{ .string = "y" ** 64 },
+    };
+    var i: u32 = 0;
+    while (i < 16) : (i += 1) {
+        try peer.push(0, .{ .flow = .{
+            .next_incoming_id = 0,
+            .incoming_window = 1000 + i,
+            .next_outgoing_id = 1,
+            .outgoing_window = 1000,
+            .handle = 0,
+            .delivery_count = 0,
+            .link_credit = 5,
+            .properties = &pad,
+        } });
+    }
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 0,
+    }, 10_000);
+
+    // Queue the delivery, then bury it. `receive` would stop at the first one
+    // ready, so pump past it explicitly. A fixed count, not a drain on
+    // `mem.inbound_pos` — see the note in the test above.
+    while (receiver.ready.items.len == receiver.ready_head) _ = try fixture.session.pump(10_000);
+    var pumped: usize = 0;
+    while (pumped < 16) : (pumped += 1) _ = try fixture.session.pump(10_000);
+
+    const delivery = try receiver.receive(10_000);
+    try testing.expectEqual(@as(u32, 7), delivery.id);
+    try testing.expectEqualSlices(u8, tag, delivery.tag);
+    try testing.expectEqualStrings(payload, delivery.payload);
+}
+
+test "one hostile frame does not pin an oversized decode arena" {
+    // The receive arena is reused, so whatever it grows to it keeps. A frame
+    // is bounded by `max_frame_size`, but the *decode* is not bounded by the
+    // frame: a map header costs two bytes and buys 48 of arena per entry, so
+    // a legal frame decodes to many times its own size. Retaining outright
+    // would pin that peak for the life of the connection.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    const frame_size = 65536;
+    try scriptHandshake(peer, frame_size);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+
+    // ~5 encoded bytes each, 48 of `MapEntry` each once decoded.
+    const bloat = 3000;
+    const entries = try allocator.alloc(uamqp.MapEntry, bloat);
+    defer allocator.free(entries);
+    for (entries) |*entry| entry.* = .{
+        .key = .{ .symbol = "p" },
+        .value = .{ .null = {} },
+    };
+
+    var opts = test_options;
+    opts.max_frame_size = frame_size;
+
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 1000,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+        .handle = 0,
+        .delivery_count = 0,
+        .link_credit = 5,
+        .properties = entries,
+    } });
+    // One ordinary frame behind it, which is what releases the outlier.
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 1001,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+        .handle = 0,
+        .delivery_count = 0,
+        .link_credit = 5,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), opts);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    _ = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 0,
+    }, 10_000);
+
+    _ = try fixture.session.pump(10_000);
+    const peak = driver.perf_arena.?.queryCapacity();
+    _ = try fixture.session.pump(10_000);
+    const retained = driver.perf_arena.?.queryCapacity();
+
+    // Assert the size, not a symptom: the peak really did exceed the cap, and
+    // the next frame really did give it back.
+    try testing.expect(peak > Driver.perf_arena_limit);
+    try testing.expect(retained <= Driver.perf_arena_limit);
 }
