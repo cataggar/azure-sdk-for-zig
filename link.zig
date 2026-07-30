@@ -185,8 +185,7 @@ pub const Session = struct {
         const inbound = try self.driver.receiveFrame(deadline_ms);
         if (inbound.header.channel != self.remote_channel) return false;
 
-        var decoded = try self.driver.decodeBody(inbound.body);
-        defer decoded.deinit();
+        const decoded = try self.driver.decodeBodyReusing(inbound.body);
 
         // The decode above already measured the performative, so the payload
         // is the remainder. `bytes_consumed` is what the decoder read out of
@@ -4113,14 +4112,90 @@ test "a pumped transfer allocates only what it hands the caller" {
     while (pumped < count) : (pumped += 1) _ = try fixture.session.pump(10_000);
     const spent = counting.allocs;
 
-    // Four per transfer, and each one ends up in something the caller reads:
-    // the arena that holds the decoded performative, that arena's first page,
-    // the payload, and the delivery tag.
+    // Two per transfer, and both are what the caller is handed: the payload
+    // and the delivery tag. Nothing is allocated to decode the frame.
     //
     // It was six. The frame body was allocated and freed per frame rather than
-    // read into a buffer the driver keeps, and the transfer performative was
+    // read into a buffer the driver keeps; the transfer performative was
     // decoded a second time — into a throwaway arena, discarding everything
     // but the length — purely to find where the payload started, which the
-    // first decode already reported as `bytes_consumed`.
-    try testing.expectEqual(@as(usize, 4 * (count - 1)), spent);
+    // first decode already reported as `bytes_consumed`; and the performative
+    // arena was built per frame rather than reset.
+    try testing.expectEqual(@as(usize, 2 * (count - 1)), spent);
+}
+
+test "what a session keeps from a performative outlives the frames after it" {
+    // The receive path decodes every frame into one arena it resets, so a
+    // performative's slices are gone the moment the next frame arrives. That
+    // is only sound because everything the session retains is duped out first.
+    // A field that borrowed instead would read as intact here and as garbage
+    // in production, so drive real frames over it rather than trusting review.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    const condition = "amqp:link:message-size-exceeded";
+    const description = "The received message is larger than the maximum allowed size.";
+
+    try scriptSenderAttach(peer, 5);
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 0,
+        .last = 0,
+        .settled = true,
+        .state = .{ .rejected = .{ .condition = condition, .description = description } },
+    } });
+
+    // Frames behind the rejection, each decoding far more than the rejection
+    // did, so the arena is not merely reset but written clean past wherever
+    // the condition sat. Padding it lightly is not enough: an arena reset
+    // bumps from the start of a retained page, so a later frame that decodes
+    // to less than the earlier one leaves the tail of the earlier one intact
+    // and a borrowed slice reads as correct by luck. Each entry is sized to
+    // fill the harness's 512-byte frame, and the frame is repeated.
+    var pad: [4]uamqp.MapEntry = undefined;
+    for (&pad) |*entry| entry.* = .{
+        .key = .{ .symbol = "com.microsoft:padding" },
+        .value = .{ .string = "y" ** 64 },
+    };
+
+    var i: u32 = 0;
+    while (i < 16) : (i += 1) {
+        try peer.push(0, .{ .flow = .{
+            .next_incoming_id = 0,
+            .incoming_window = 1000 + i,
+            .next_outgoing_id = 1,
+            .outgoing_window = 1000,
+            .handle = 0,
+            .delivery_count = 0,
+            .link_credit = 5,
+            .properties = &pad,
+        } });
+    }
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+    }, 10_000);
+
+    try testing.expectError(error.SendRejected, sender.sendBytes("payload", 10_000));
+    // Pump a fixed count. `mem.inbound_pos` is where the *transport* has been
+    // read to, and the driver slurps up to 16 KiB into `in_buf` ahead of
+    // parsing, so draining on it would exit before parsing a single one of
+    // these frames and the test would pass without testing anything.
+    var pumped: usize = 0;
+    while (pumped < 16) : (pumped += 1) _ = try fixture.session.pump(10_000);
+
+    try testing.expectEqualStrings(condition, sender.rejection.?.condition);
+    try testing.expectEqualStrings(description, sender.rejection.?.description.?);
+    // The link name is duped at attach, but attach is decoded through the same
+    // arena, so it is the same hazard.
+    try testing.expectEqualStrings("producer", sender.name);
 }

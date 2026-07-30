@@ -261,6 +261,14 @@ pub const Driver = struct {
     /// otherwise pin the whole of that for the life of the connection, so the
     /// buffer is released when the body fails to arrive.
     body_buf: []u8 = &.{},
+    /// Backs the performative `decodeBodyReusing` hands out, reset per frame.
+    ///
+    /// A fresh arena per frame is two allocations — the arena struct and its
+    /// first page — for a performative nothing outlives the frame. Resetting
+    /// one keeps the page and pays neither. The handshake keeps `decodeBody`,
+    /// which owns its arena, so the borrow is confined to the receive path
+    /// where every retained field is provably duped out.
+    perf_arena: ?std.heap.ArenaAllocator = null,
 
     const in_buf_len = 16 * 1024;
 
@@ -280,6 +288,7 @@ pub const Driver = struct {
     }
 
     pub fn deinit(self: *Driver) void {
+        if (self.perf_arena) |*a| a.deinit();
         self.allocator.free(self.body_buf);
         self.handlers.deinit(self.allocator);
         self.allocator.free(self.in_buf);
@@ -681,6 +690,23 @@ pub const Driver = struct {
     /// Decode a frame body into a performative.
     pub fn decodeBody(self: *Driver, body: []const u8) ConnectionError!perf.Decoded {
         return perf.decode(self.allocator, body) catch |e| switch (e) {
+            error.OutOfMemory => error.OutOfMemory,
+            else => error.MalformedFrame,
+        };
+    }
+
+    /// Decode a frame body into a performative that lives until the next call.
+    ///
+    /// For the receive path, which handles a performative and is done with it
+    /// inside the frame: anything a session keeps — a link name, an error
+    /// condition, a delivery's payload and tag — it dupes out first. Reusing
+    /// one arena rather than building one per frame saves two allocations on
+    /// every frame that arrives.
+    pub fn decodeBodyReusing(self: *Driver, body: []const u8) ConnectionError!perf.Borrowed {
+        if (self.perf_arena == null) self.perf_arena = .init(self.allocator);
+        const arena = &self.perf_arena.?;
+        _ = arena.reset(.retain_capacity);
+        return perf.decodeInto(arena.allocator(), body) catch |e| switch (e) {
             error.OutOfMemory => error.OutOfMemory,
             else => error.MalformedFrame,
         };
