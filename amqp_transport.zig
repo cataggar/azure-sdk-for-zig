@@ -763,8 +763,11 @@ pub const AmqpTransport = struct {
     /// them. The one case with no good answer is a message that cannot be
     /// decoded at the head of the batch: it is returned as an error, and
     /// because the caller never gets a handle to it, it cannot be
-    /// dead-lettered either. Poison-message handling needs the raw delivery,
-    /// which this signature has nowhere to put.
+    /// dead-lettered either. Under `peek_lock` that is a loop rather than a
+    /// one-off — the delivery is consumed from the ready queue but left
+    /// unsettled, so it returns when the lock lapses and stops the batch at
+    /// the same place again. Breaking it needs the raw delivery, which this
+    /// signature has nowhere to put.
     pub fn receiveMessages(
         self: *AmqpTransport,
         allocator: Allocator,
@@ -817,7 +820,7 @@ pub const AmqpTransport = struct {
             // a `Delivery` is valid only until the next `receive`, which the
             // next turn of this loop performs. The decode borrows nothing
             // from the payload, so what lands in the arena outlives it.
-            self.takeDelivery(
+            takeDelivery(
                 allocator,
                 &arena,
                 &messages,
@@ -852,8 +855,13 @@ pub const AmqpTransport = struct {
     /// Split out so that every allocation a message needs sits behind a single
     /// `catch` in the loop above: a failure here must leave the messages
     /// already taken intact, which a bare `try` in the loop would not do.
+    ///
+    /// Free-standing rather than a method, so that the only entity slice in
+    /// scope is the caller's. The `receivers` map key is the tempting thing to
+    /// borrow and the wrong one — `dropReceiver` frees it at the next
+    /// re-attach, while a batch taken before it may still be in the caller's
+    /// hands.
     fn takeDelivery(
-        self: *AmqpTransport,
         allocator: Allocator,
         arena: *?*std.heap.ArenaAllocator,
         messages: *std.ArrayList(sb.ServiceBusReceivedMessage),
@@ -862,7 +870,6 @@ pub const AmqpTransport = struct {
         max_count: u32,
         delivery: amqp.Delivery,
     ) !void {
-        _ = self;
         if (arena.* == null) {
             const owned = try allocator.create(std.heap.ArenaAllocator);
             errdefer allocator.destroy(owned);
@@ -2516,6 +2523,36 @@ test "a message that will not decode keeps the ones already taken" {
     try h.transport.settleMessages(allocator, batch.messages, .complete, .{});
 }
 
+test "a batch that fails on its very first message frees the arena it had started" {
+    // The head-of-batch case the doc comment calls out. It is the only path
+    // that creates the arena and then returns an error, so it is the only
+    // thing keeping `receiveMessages`' `errdefer` honest — the test above
+    // always has a message in hand and so always takes the `break` arm.
+    const allocator = testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    try scriptEntityReceiver(&h, allocator, "orders");
+    try h.peer().pushTransfer(0, .{
+        .handle = 2,
+        .delivery_id = first_incoming_id,
+        .delivery_tag = "t",
+        .message_format = 0,
+        .settled = false,
+        .more = false,
+    }, &[_]u8{ 0x00, 0x53, 0x7e, 0x40 });
+
+    try h.start(.{});
+
+    // The arena and its first page are already allocated by the time the
+    // decode fails, so without the `errdefer` this leaks and the testing
+    // allocator fails the test rather than the assertion doing it.
+    try testing.expectError(
+        error.UnexpectedSection,
+        h.transport.receiveMessages(allocator, "orders", 2, .peek_lock),
+    );
+}
+
 test "a broken connection with nothing in hand is an error, not an empty batch" {
     const allocator = testing.allocator;
     var h = try Harness.init(allocator);
@@ -2743,6 +2780,10 @@ test "a received message costs a bounded number of allocations, whatever the bat
     // arena, the message list and the entity copy are all paid for once.
     // It comes in a little under, because the receiver's ready queue has
     // finished growing by the time the larger batch runs.
+    // Both bounds below sit at zero or one allocation of slack, which is what
+    // makes them worth having — but it also means a std growth-policy change
+    // or a different arena page split will trip them while nothing here has
+    // regressed. Check what moved before assuming it was this package.
     const marginal = cost_large - cost_small;
     try testing.expect(marginal <= (large - small) * amqp_receive_allocs_per_delivery);
 
@@ -2886,4 +2927,44 @@ test "a batch does not borrow the entity name it was asked for" {
 
     // And it still routes: a borrowed name would look up "zzzzzz".
     try h.transport.settleMessages(allocator, batch.messages, .complete, .{});
+}
+
+test "a batch's entity survives the link it was received on being replaced" {
+    // `dropReceiver` frees the `receivers` map key. A batch that borrowed it
+    // rather than copying would have every message's `entity` dangling from
+    // the next re-attach onwards, and `settleMessages` hashes that slice to
+    // find the link — so the failure would be a lookup against freed memory,
+    // not a crash.
+    //
+    // The replacement key is the same six bytes as the one just freed, so on
+    // an ordinary allocator a dangling pointer would very likely still read
+    // "orders" and the test would pass for the wrong reason. An allocator
+    // that never hands freed memory back is what makes this decide anything.
+    var debug: std.heap.DebugAllocator(.{
+        .never_unmap = true,
+        .retain_metadata = true,
+    }) = .init;
+    defer _ = debug.deinit();
+    const allocator = debug.allocator();
+
+    var h = try Harness.initSplit(allocator, testing.allocator);
+    defer h.deinit();
+
+    try scriptEntityReceiver(&h, allocator, "orders");
+    try pushMessage(h.peer(), allocator, 2, first_incoming_id, "t", "a", 1);
+    try h.peer().push(0, .{ .detach = .{ .handle = 2, .closed = true } });
+    try scriptReceiverAttach(h.peer(), 3, "servicebus-receiver-orders");
+    try pushMessage(h.peer(), allocator, 3, first_incoming_id + 1, "t", "b", 2);
+
+    try h.start(.{});
+
+    var held = try h.transport.receiveMessages(allocator, "orders", 1, .peek_lock);
+    defer held.deinit();
+
+    // A mode change drops the old link, and with it the key the map was
+    // holding for "orders".
+    var replaced = try h.transport.receiveMessages(allocator, "orders", 1, .receive_and_delete);
+    defer replaced.deinit();
+
+    try testing.expectEqualStrings("orders", held.messages[0].entity.?);
 }

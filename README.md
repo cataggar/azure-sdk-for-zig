@@ -152,7 +152,9 @@ that will not decode. Only an empty batch can carry an error, and a timed-out
 empty batch is not an error either — there was simply nothing there. The one
 case with no good answer is an undecodable message at the *head* of a batch:
 it surfaces as an error, and since the caller never gets a handle to it, it
-cannot be dead-lettered either.
+cannot be dead-lettered either. Under peek-lock that recurs rather than
+happening once — the message is left unsettled, so it comes back when the lock
+lapses and stops the batch at the same place again.
 
 Settlement works on delivery *ids*, so a run of messages collapses into one
 disposition frame instead of one per message. Ids are allocated by the session
