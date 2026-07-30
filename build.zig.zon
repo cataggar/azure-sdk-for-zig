@@ -5,20 +5,20 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .azure_sdk_core = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#b7b47b2b172fa069fdb3979e8dea395f97c008a8",
-            .hash = "azure_sdk_core-0.1.3-eFY0Eu3NBQCWhAf8JkUhPNkV_vNq_w68JXIUYNFAEamz",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#1d73a90eefef7caa705509a3c40cfaceb09513c0",
+            .hash = "azure_sdk_core-0.2.0-eFY0EkI6BgAXeSYiGU0DIKpU112vANE7f5Qln9zfErfT",
         },
         .azure_sdk_messaging_common = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#51c5ec8e181abd59a0f8180fc4c37b9ddc8a2bcb",
-            .hash = "azure_sdk_messaging_common-0.1.0-YklmSnoYAACqhTFKLjL7ZX1jSngsgJRYKAhYkgx4J_RU",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#381b11a05c271b66d6496f9fc3aa9c1633a3c5aa",
+            .hash = "azure_sdk_messaging_common-0.2.0-YklmSkWIAADy4QHeNJAVUdRq-xKFeRx75G1TjE5lMeHR",
         },
-        .uamqp = .{
-            .url = "git+https://github.com/cataggar/azure-uamqp-zig#1121d1e68dde8d188516083555cc7e1553b0f595",
-            .hash = "uamqp-0.1.0-lXMcafDqAQD3LSUZbUbyfrWhQfGG7OevKFUwhWxvGZDU",
+        .azure_sdk_amqp = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#b0bf347c4da5ccb9cb63772011c98a769d838f74",
+            .hash = "azure_sdk_amqp-0.4.0-fUByf6x_BgAoO05o4uHh89hyi9PiEKQzfvtT4ucPs-Ts",
         },
         .serde = .{
-            .url = "git+https://github.com/cataggar/serde.zig#7012f58c7ddf490125852e1d22006b552a1693c7",
-            .hash = "serde-1.0.1-1DszT-e9DABp6u1PoDvGFzeGaST2hRp2KGtGn_CkIl0J",
+            .url = "git+https://github.com/cataggar/serde.zig#73d872776b0361b6fc92f6cecd7ccf2f05e77cdd",
+            .hash = "serde-1.0.1-1DszT1XhDACnteUU3yWahMMjLjkJqB34hwROPIfhZc7l",
         },
     },
     .paths = .{
@@ -26,6 +26,8 @@
         "build.zig",
         "build.zig.zon",
         "root.zig",
+        "message.zig",
+        "admin.zig",
         "README.md",
         "LICENSE.txt",
     },
