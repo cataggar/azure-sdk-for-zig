@@ -62,6 +62,11 @@ pub const max_outgoing_annotations = 2;
 /// Keeping it out here is what lets a message with no application properties
 /// encode without allocating at all — the case that dominates, and the one a
 /// per-message `StringHashMap` would have taxed.
+///
+/// **One message at a time.** Each `toAmqpMessage` overwrites the annotations
+/// and body in place and frees the property array, so the message the
+/// previous call returned is dead. Encode it before building the next, or
+/// use a second `Scratch`.
 pub const Scratch = struct {
     annotations: [max_outgoing_annotations]MapEntry = undefined,
     /// The one-element slice the body's data section is built from.
@@ -236,7 +241,10 @@ pub fn fromAmqpMessage(msg: amqp.Message) ServiceBusReceivedMessage {
         // first delivery; Service Bus's `DeliveryCount` — the number
         // `MaxDeliveryCount` is compared against — is 1. Add one so the
         // obvious comparison is right, matching the Go and .NET SDKs.
-        // A peeked message keeps the raw value, since it was never delivered.
+        //
+        // This applies to peeked messages too, as Go does; .NET instead
+        // gives a peek the raw value. A peek path that wants that has to
+        // read `header.delivery_count` itself — there is no flag here.
         .delivery_count = if (msg.header.delivery_count) |d| d +| 1 else null,
         .dead_letter_source = textAnnotation(annotations, annotation.dead_letter_source),
         .dead_letter_reason = textAnnotation(properties, application_property.dead_letter_reason),
