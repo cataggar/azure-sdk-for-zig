@@ -196,6 +196,26 @@ pub const ConnectionOptions = struct {
     }
 };
 
+/// The audience a token is requested for, and the CBS name it is put under.
+///
+/// `messaging_common.audienceFor` always writes `amqps://`, but the emulator
+/// serves plaintext AMQP, so the scheme is a parameter here — matching Event
+/// Hubs, which carries the same helper for the same reason. Caller owns the
+/// result.
+fn audienceFor(
+    allocator: Allocator,
+    scheme: []const u8,
+    fully_qualified_namespace: []const u8,
+    entity: ?[]const u8,
+) Allocator.Error![]u8 {
+    if (entity) |path| {
+        if (path.len > 0) {
+            return std.fmt.allocPrint(allocator, "{s}://{s}/{s}", .{ scheme, fully_qualified_namespace, path });
+        }
+    }
+    return std.fmt.allocPrint(allocator, "{s}://{s}/", .{ scheme, fully_qualified_namespace });
+}
+
 /// Wall-clock milliseconds since the Unix epoch.
 fn wallClockMs() i64 {
     var threaded: std.Io.Threaded = .init_single_threaded;
@@ -230,6 +250,15 @@ const Generation = struct {
     }
 };
 
+/// One entity's sender link, with the audience its claim is put under.
+///
+/// The audience is derived from the entity and never changes, so it is built
+/// once with the link rather than reformatted on every send.
+const EntityLink = struct {
+    sender: *amqp.Sender,
+    audience: []u8,
+};
+
 /// A real Service Bus AMQP transport.
 ///
 /// Holds interior pointers — the vtable it hands out points back at itself —
@@ -241,6 +270,9 @@ pub const AmqpTransport = struct {
     fully_qualified_namespace: []const u8,
     credential: Credential,
     options: ConnectionOptions = .{},
+    /// The AMQP URI scheme audiences are written with. Plaintext only for the
+    /// emulator, which has no TLS to name.
+    scheme: []const u8 = "amqps",
 
     /// Set once dialled. Null until the first operation needs the wire.
     generation: ?*Generation = null,
@@ -250,11 +282,11 @@ pub const AmqpTransport = struct {
 
     cbs: ?*amqp.Cbs = null,
     token_source: TokenSource = undefined,
-    /// Sender links by entity. Both keys and values are owned.
-    senders: std.StringHashMapUnmanaged(*amqp.Sender) = .empty,
+    /// Sender links by entity. Keys and everything in the value are owned.
+    senders: std.StringHashMapUnmanaged(EntityLink) = .empty,
     /// Reused across every send, so encoding amortises to no allocation.
     encode_buf: amqp.encoder.Buffer = undefined,
-    scratch: message_codec.Scratch = .{},
+    scratch: message_codec.Scratch = undefined,
     /// Wall-clock milliseconds, for deciding whether a cached CBS token has
     /// gone stale. Separate from the driver's clock, which is monotonic and
     /// says nothing about a token's Unix expiry. Injected so a test can pin
@@ -293,6 +325,7 @@ pub const AmqpTransport = struct {
             .borrowed_session = options.session,
         };
         self.encode_buf = amqp.encoder.Buffer.initDynamic(options.allocator);
+        self.scratch = .init(options.allocator);
         self.token_source = .{ .credential = &self.credential };
     }
 
@@ -318,8 +351,9 @@ pub const AmqpTransport = struct {
         // audience a link asks for. So the signature is scoped to whatever
         // the connection string named and the per-entity audience is still
         // what goes to `$cbs`.
-        const audience = try messaging_common.audienceFor(
+        const audience = try audienceFor(
             allocator,
+            properties.scheme(),
             properties.fully_qualified_namespace,
             properties.entity_path,
         );
@@ -334,6 +368,7 @@ pub const AmqpTransport = struct {
         var connection = options;
         // The emulator serves plaintext AMQP and has no certificate.
         if (properties.emulator) connection.use_tls = false;
+        const scheme = properties.scheme();
 
         self.init(.{
             .allocator = allocator,
@@ -343,6 +378,7 @@ pub const AmqpTransport = struct {
             .connection = connection,
         });
         self.owned_audience = audience;
+        self.scheme = scheme;
         return properties.entity_path;
     }
 
@@ -387,7 +423,8 @@ pub const AmqpTransport = struct {
         if (self.currentSession()) |current| {
             var it = self.senders.iterator();
             while (it.next()) |entry| {
-                current.closeSender(entry.value_ptr.*, 0);
+                current.closeSender(entry.value_ptr.sender, 0);
+                self.allocator.free(entry.value_ptr.audience);
                 self.allocator.free(entry.key_ptr.*);
             }
         }
@@ -479,7 +516,7 @@ pub const AmqpTransport = struct {
     fn authorize(
         self: *AmqpTransport,
         current: *amqp.Session,
-        entity: []const u8,
+        audience: []const u8,
         deadline_ms: i64,
     ) !void {
         const cbs = self.cbs orelse blk: {
@@ -488,24 +525,43 @@ pub const AmqpTransport = struct {
             break :blk opened;
         };
 
-        const audience = try messaging_common.audienceFor(
-            self.allocator,
-            self.fully_qualified_namespace,
-            entity,
-        );
-        defer self.allocator.free(audience);
-
         try cbs.authorize(audience, self.token_source.provider(), self.nowMsFn(), deadline_ms);
     }
 
-    /// The sender link for `entity`, attaching on first use.
+    /// The authorised sender link for `entity`, attaching on first use and
+    /// re-attaching one the broker has detached.
+    ///
+    /// A cached link cannot be handed back unchecked. The broker detaches a
+    /// sender for ordinary reasons — a claim that lapsed before its renewal
+    /// landed, an entity disabled or moved — and §2.6.1 unbinds the handle
+    /// when it does. Writing a transfer on an unbound handle is
+    /// `amqp:session:unattached-handle`, which ends the *session* and so
+    /// takes down every other entity's link with it.
     fn senderFor(
         self: *AmqpTransport,
         current: *amqp.Session,
         entity: []const u8,
         deadline_ms: i64,
     ) !*amqp.Sender {
-        if (self.senders.get(entity)) |sender| return sender;
+        if (self.senders.getPtr(entity)) |existing| {
+            if (existing.sender.attached) {
+                try self.authorize(current, existing.audience, deadline_ms);
+                return existing.sender;
+            }
+            self.dropSender(current, entity);
+        }
+
+        const audience = try audienceFor(
+            self.allocator,
+            self.scheme,
+            self.fully_qualified_namespace,
+            entity,
+        );
+        errdefer self.allocator.free(audience);
+
+        // Before the attach, not after: the broker refuses to attach a link
+        // whose audience has no live claim.
+        try self.authorize(current, audience, deadline_ms);
 
         const name = try std.fmt.allocPrint(
             self.allocator,
@@ -523,8 +579,16 @@ pub const AmqpTransport = struct {
 
         const key = try self.allocator.dupe(u8, entity);
         errdefer self.allocator.free(key);
-        try self.senders.put(self.allocator, key, sender);
+        try self.senders.put(self.allocator, key, .{ .sender = sender, .audience = audience });
         return sender;
+    }
+
+    /// Forget `entity`'s link, releasing everything the entry owned.
+    fn dropSender(self: *AmqpTransport, current: *amqp.Session, entity: []const u8) void {
+        const removed = self.senders.fetchRemove(entity) orelse return;
+        current.closeSender(removed.value.sender, 0);
+        self.allocator.free(removed.value.audience);
+        self.allocator.free(removed.key);
     }
 
     /// Wait for the oldest delivery and map its outcome the way a
@@ -550,7 +614,6 @@ pub const AmqpTransport = struct {
 
         const current = try self.session();
         const deadline_ms = self.deadlineFrom(current);
-        try self.authorize(current, entity, deadline_ms);
         const sender = try self.senderFor(current, entity, deadline_ms);
         const window = @max(self.options.max_in_flight, 1);
 
@@ -570,7 +633,7 @@ pub const AmqpTransport = struct {
             // frame before it returns, so the bytes are on the wire and the
             // buffer is free to be overwritten by the next message.
             self.encode_buf.reset();
-            const amqp_message = try message_codec.toAmqpMessage(allocator, message, &self.scratch);
+            const amqp_message = try message_codec.toAmqpMessage(message, &self.scratch);
             try amqp.message_codec.encode(allocator, amqp_message, &self.encode_buf);
 
             _ = try sender.sendBytesAsync(self.encode_buf.written(), .{}, deadline_ms);
@@ -692,6 +755,34 @@ const StubCredential = struct {
     }
 };
 
+/// A credential whose token owns its bytes, as the shared-key signer's does.
+///
+/// `StubCredential` hands back a literal, so `AccessToken.deinit` is a no-op
+/// against it and the release path in `TokenSource` goes unexercised. A real
+/// SAS credential mints a fresh signature on every call, and failing to
+/// release it would leak one per claim renewal — forever, on a long-lived
+/// client.
+const OwningStubCredential = struct {
+    credential: core.credentials.TokenCredential = .{ .getTokenFn = get },
+    allocator: Allocator,
+    calls: usize = 0,
+
+    fn get(
+        c: *core.credentials.TokenCredential,
+        request_context: core.credentials.TokenRequestContext,
+        ctx: core.context.Context,
+    ) anyerror!core.credentials.AccessToken {
+        _ = .{ request_context, ctx };
+        const self: *OwningStubCredential = @alignCast(@fieldParentPtr("credential", c));
+        self.calls += 1;
+        return .{
+            .token = try self.allocator.dupe(u8, "minted-sas-signature"),
+            .expires_on = stub_token_expires_on,
+            .allocator = self.allocator,
+        };
+    }
+};
+
 /// Script the peer's side of the CBS link pair and its put-token reply.
 ///
 /// `Cbs.open` takes handles 0 and 1, so the first entity link is handle 2.
@@ -805,6 +896,7 @@ fn emittedAttaches(allocator: Allocator, written: []const u8) ![]const []const u
 /// A transport wired to a scripted peer, with everything it borrows.
 const Harness = struct {
     allocator: Allocator,
+    io_allocator: Allocator,
     mem: *MemoryTransport,
     clock: *amqp.ManualClock,
     driver: *amqp.Driver,
@@ -813,9 +905,17 @@ const Harness = struct {
     transport: *AmqpTransport,
 
     fn init(allocator: Allocator) !Harness {
+        return initSplit(allocator, allocator);
+    }
+
+    /// `io_allocator` backs the in-memory socket's own buffers, which grow
+    /// with the number of bytes the peer exchanges rather than with anything
+    /// the client decides. A measurement passes an uncounted allocator here,
+    /// so the harness's bookkeeping stays out of the client's cost.
+    fn initSplit(allocator: Allocator, io_allocator: Allocator) !Harness {
         test_now_ms = stub_token_expires_on * std.time.ms_per_s - 3_600_000;
-        const mem = try allocator.create(MemoryTransport);
-        mem.* = MemoryTransport.init(allocator);
+        const mem = try io_allocator.create(MemoryTransport);
+        mem.* = MemoryTransport.init(io_allocator);
         const clock = try allocator.create(amqp.ManualClock);
         clock.* = .{};
         const driver = try allocator.create(amqp.Driver);
@@ -825,6 +925,7 @@ const Harness = struct {
         const transport = try allocator.create(AmqpTransport);
         return .{
             .allocator = allocator,
+            .io_allocator = io_allocator,
             .mem = mem,
             .clock = clock,
             .driver = driver,
@@ -872,7 +973,7 @@ const Harness = struct {
         self.allocator.destroy(self.session);
         self.allocator.destroy(self.driver);
         self.allocator.destroy(self.clock);
-        self.allocator.destroy(self.mem);
+        self.io_allocator.destroy(self.mem);
     }
 };
 
@@ -1046,10 +1147,14 @@ test "a rejected delivery is an error and leaves the link usable" {
         h.transport.sendMessages(allocator, "orders", &.{msg}),
     );
 
-    // A refusal must not wedge the sender: nothing is left in flight, so the
-    // next send finds a free window rather than waiting for a verdict that
-    // will never arrive.
-    try testing.expectEqual(@as(usize, 0), h.transport.senders.get("orders").?.inFlight());
+    // `awaitSettlement` retires the only entry before it reports the refusal,
+    // so this holds however the transport behaves — it records the state, it
+    // does not test it. The abandon path is tested where a *batch* fails
+    // partway and entries really are left behind.
+    try testing.expectEqual(@as(usize, 0), h.transport.senders.get("orders").?.sender.inFlight());
+
+    // What this does test: a refusal is the message's verdict, not the link's,
+    // so the next send goes out on the same link.
     try h.transport.sendMessages(allocator, "orders", &.{msg});
 }
 
@@ -1225,10 +1330,10 @@ test "a send costs the same per message however many are sent" {
     var counting = perf.CountingAllocator.init(testing.allocator);
     const allocator = counting.allocator();
 
-    var h = try Harness.init(allocator);
+    var h = try Harness.initSplit(allocator, testing.allocator);
     defer h.deinit();
 
-    try scriptCbsExchange(h.peer(), allocator);
+    try scriptCbsExchange(h.peer(), testing.allocator);
     try scriptSenderAttach(h.peer(), 2, "servicebus-sender-orders", 200);
     // One range per `sendMessages` call: the put-token took delivery 0, so the
     // warm-up is delivery 1 and each batch follows on. A range decides every
@@ -1243,9 +1348,16 @@ test "a send costs the same per message however many are sent" {
 
     var msg = sb.ServiceBusMessage.init(allocator, body);
     defer msg.deinit();
+    // With application properties, which is how Service Bus messages usually
+    // travel and the only branch of `toAmqpMessage` that reaches the heap. A
+    // fixture without them would leave that branch untaken and the claim
+    // below unmeasured.
+    try msg.application_properties.put("tenant", "contoso");
+    try msg.application_properties.put("region", "westus");
 
-    // Warm up with a message of the size that follows, so the encode buffer
-    // has already reached its high-water mark before either measured batch.
+    // Warm up with a message of the shape that follows, so the encode buffer
+    // and the property array have both reached their high-water mark before
+    // either measured batch.
     // Growing it inside the small batch would be a one-off charged to the
     // subtrahend, which would understate the marginal cost.
     try h.transport.sendMessages(allocator, "orders", &.{msg});
@@ -1262,8 +1374,9 @@ test "a send costs the same per message however many are sent" {
     const cost_large = counting.count;
 
     // Every marginal allocation is the dependency's. Building the message and
-    // encoding it add none: `Scratch` overwrites its fixed arrays in place and
-    // `encode_buf.reset()` only rewinds a cursor.
+    // encoding it add none: `Scratch` overwrites its annotations and body in
+    // place, keeps the property array it already grew, and `encode_buf.reset()`
+    // only rewinds a cursor.
     const per_message = (cost_large - cost_small) / (large - small);
     try testing.expectEqual(@as(u64, amqp_sender_allocs_per_delivery), per_message);
 
@@ -1304,7 +1417,7 @@ test "a send that fails partway leaves no delivery stuck on the link" {
         h.transport.sendMessages(allocator, "orders", &batch),
     );
 
-    const sender = h.transport.senders.get("orders").?;
+    const sender = h.transport.senders.get("orders").?.sender;
     try testing.expectEqual(@as(usize, 0), sender.inFlight());
 
     // And the link still works: delivery 5 is the next id after the three
@@ -1402,4 +1515,130 @@ test "a sender attaches to the entity, not to its own link name" {
     try testing.expectEqualStrings("servicebus-sender-orders", attach.name);
     try testing.expectEqual(amqp.performative.Role.sender, attach.role);
     try testing.expectEqualStrings("orders", attach.target.?.address.?);
+}
+
+test "a link the broker detached is re-attached rather than written to again" {
+    // §2.6.1 unbinds the handle at detach, so a transfer sent on it is
+    // `amqp:session:unattached-handle` and the peer must end the *session* —
+    // taking every other entity's link down with it. A cached sender handed
+    // back unchecked does exactly that, and does it forever, since nothing
+    // else ever removes the entry.
+    const allocator = testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    try scriptCbsExchange(h.peer(), allocator);
+    try scriptSenderAttach(h.peer(), 2, "servicebus-sender-orders", 10);
+    // The detach lands before the outcome, so the send that is waiting for
+    // that outcome is the one that reads it.
+    try h.peer().push(0, .{ .detach = .{ .handle = 2, .closed = true } });
+    try scriptAccept(h.peer(), 1, 1);
+    // The replacement link. `Session` allocates handles in order and the
+    // detached one is not reused, so this is handle 3.
+    try scriptSenderAttach(h.peer(), 3, "servicebus-sender-orders", 10);
+    try scriptAccept(h.peer(), 2, 2);
+
+    try h.start(.{});
+
+    var msg = sb.ServiceBusMessage.init(allocator, "x");
+    defer msg.deinit();
+
+    try testing.expectError(
+        error.LinkDetached,
+        h.transport.sendMessages(allocator, "orders", &.{msg}),
+    );
+    try testing.expect(!h.transport.senders.get("orders").?.sender.attached);
+
+    // The next send replaces the link instead of writing on the dead handle,
+    // and the claim is still cached so no second round trip to `$cbs`.
+    h.mem.clearWritten();
+    try h.transport.sendMessages(allocator, "orders", &.{msg});
+    try testing.expect(h.transport.senders.get("orders").?.sender.attached);
+    try testing.expectEqual(@as(usize, 1), h.credential.calls);
+
+    const attaches = try emittedAttaches(allocator, h.mem.written());
+    defer allocator.free(attaches);
+    try testing.expectEqual(@as(usize, 1), attaches.len);
+
+    var decoded = try amqp.performative.decode(allocator, attaches[0]);
+    defer decoded.deinit();
+    try testing.expectEqualStrings("orders", decoded.performative.attach.target.?.address.?);
+
+    // One entity, one link: the replacement took the old one's place rather
+    // than accumulating beside it.
+    try testing.expectEqual(@as(usize, 1), h.transport.senders.count());
+}
+
+test "an owned token is released when the next one is minted" {
+    const allocator = testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    var owning = OwningStubCredential{ .allocator = allocator };
+
+    try scriptCbsExchange(h.peer(), allocator);
+    try scriptSenderAttach(h.peer(), 2, "servicebus-sender-orders", 10);
+    try scriptAccept(h.peer(), 1, 1);
+    try scriptAccept(h.peer(), 2, 2);
+    const props = [_]amqp.MapEntry{
+        .{ .key = .{ .string = "statusCode" }, .value = .{ .int = 202 } },
+        .{ .key = .{ .string = "statusDescription" }, .value = .{ .string = "Accepted" } },
+    };
+    const reply = try amqp.encodeMessageAlloc(allocator, .{
+        .properties = .{ .correlation_id = .{ .string = "cbs-reply-to-servicebus:2" } },
+        .application_properties = &props,
+    });
+    defer allocator.free(reply);
+    try h.peer().pushTransfer(0, .{
+        .handle = 1,
+        .delivery_id = 1,
+        .delivery_tag = "r",
+        .message_format = 0,
+        .settled = true,
+        .more = false,
+    }, reply);
+    try scriptAccept(h.peer(), 3, 3);
+
+    try h.start(.{});
+    // Swap in the owning credential before anything mints a token.
+    h.transport.credential = .{ .token = &owning.credential };
+
+    var msg = sb.ServiceBusMessage.init(allocator, "x");
+    defer msg.deinit();
+    try h.transport.sendMessages(allocator, "orders", &.{msg});
+
+    // Expire the claim so the second send mints a second token. The first
+    // must have been released by then; `testing.allocator` fails the test if
+    // it was not, which is the whole point of this fixture.
+    test_now_ms = stub_token_expires_on * std.time.ms_per_s + 1;
+    try h.transport.sendMessages(allocator, "orders", &.{msg});
+    try testing.expectEqual(@as(usize, 2), owning.calls);
+}
+
+test "the emulator's audience names plaintext AMQP" {
+    // The emulator serves plaintext AMQP and the signature is computed over
+    // the audience, so writing `amqps://` here would sign and present a
+    // resource the broker never serves. Event Hubs carries the same helper
+    // for the same reason.
+    const allocator = testing.allocator;
+
+    var transport: AmqpTransport = undefined;
+    const entity = try transport.initFromConnectionString(
+        allocator,
+        null,
+        "Endpoint=sb://localhost;SharedAccessKeyName=root;SharedAccessKey=c2VjcmV0;UseDevelopmentEmulator=true;EntityPath=orders",
+        .{},
+    );
+    defer transport.deinit();
+
+    try testing.expectEqualStrings("orders", entity.?);
+    try testing.expectEqualStrings("amqp", transport.scheme);
+    try testing.expectEqualStrings("amqp://localhost/orders", transport.owned_audience.?);
+    try testing.expect(!transport.options.use_tls);
+
+    // And the audience a link asks `$cbs` for uses the same scheme, or the
+    // broker would not match it against what was signed.
+    const per_entity = try audienceFor(allocator, transport.scheme, transport.fully_qualified_namespace, "invoices");
+    defer allocator.free(per_entity);
+    try testing.expectEqualStrings("amqp://localhost/invoices", per_entity);
 }
