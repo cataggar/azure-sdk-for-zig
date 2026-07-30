@@ -51,4 +51,29 @@ pub fn build(b: *std.Build) void {
     });
     const test_step = b.step("test", "Run Service Bus tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
+
+    // Offline encode/decode/receive benchmarks. Built with the tests so a
+    // signature change cannot silently rot them, but only run on demand: they
+    // are far too slow for every `zig build test`.
+    const sdk_mod = b.modules.get("azure_sdk_servicebus").?;
+    const benchmarks = b.addExecutable(.{
+        .name = "servicebus-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmarks/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "azure_sdk_core", .module = core_mod },
+                .{ .name = "azure_sdk_servicebus", .module = sdk_mod },
+                // For the scripted peer the receive benchmarks read from.
+                .{ .name = "azure_sdk_amqp", .module = amqp_mod },
+            },
+        }),
+    });
+    const bench_step = b.step(
+        "bench",
+        "Run Service Bus encode/decode benchmarks (use -Doptimize=ReleaseFast)",
+    );
+    bench_step.dependOn(&b.addRunArtifact(benchmarks).step);
+    test_step.dependOn(&benchmarks.step);
 }

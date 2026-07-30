@@ -254,6 +254,37 @@ is surfaced as `error.MessageLockLost` rather than as a generic failure,
 because it is the one refusal a caller can act on — the message is back on the
 queue and will be redelivered, so there is nothing to retry.
 
+## Benchmarks
+
+```bash
+zig build bench -Doptimize=ReleaseFast
+```
+
+Offline benchmarks for the encode, decode and management paths — building an
+AMQP message from a `ServiceBusMessage`, encoding it as a transfer payload,
+converting a received one back, and building and reading the two management
+bodies that carry a whole batch. Nothing touches the network, so a result is
+attributable to a code change rather than to service latency.
+
+The last two run the whole receive path against a scripted peer: frames off
+the transport, deliveries reassembled, messages decoded, Service Bus messages
+converted, the batch arena filled. That loop is where a consumer actually
+spends its time, and none of it is visible one message at a time. Both cases
+replay the same thousand-transfer script and differ only in how many messages
+they ask for, so subtracting them and dividing by 999 gives the cost of one
+received message with all the fixed setup cancelled out.
+
+Prefer `allocs/op` and `B/op` as the regression signal: they are stable across
+machines, while wall-clock timings move on shared or virtualised hosts. Two of
+them are the ones worth watching. `toAmqpMessage` reads **0 allocs/op** — a
+send loop hoists the `Scratch` out of it, so a message with no application
+properties costs nothing to prepare — and `fromAmqpMessage` also reads **0**,
+because the received message borrows the decoded one rather than copying it.
+Either turning non-zero means an allocation moved into a per-message path.
+
+The benchmarks are built (but not run) by `zig build test`, so a signature
+change cannot silently rot them.
+
 ## Development
 
 ```bash
