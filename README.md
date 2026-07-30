@@ -25,6 +25,7 @@ management REST API and is unrelated to the AMQP path.
 | `root.zig` | models, clients, and the AMQP transport interface |
 | `amqp_transport.zig` | the AMQP transport: dial, CBS, cached session and links |
 | `message.zig` | Service Bus ↔ AMQP message translation |
+| `management.zig` | the `$management` request and reply wire format |
 | `admin.zig` | administration client and its Atom XML parsing |
 
 ## Messages on the wire
@@ -181,6 +182,64 @@ expose yet, so the transport accepts each delivery as it reads it — batched
 into one disposition — and settling such a message afterwards is a no-op. That
 makes it at-least-once where the broker's own mode is at-most-once: a
 disposition lost in flight means redelivery, not a dropped message.
+
+## Management operations
+
+Scheduling, cancelling, lock renewal and peeking are not link operations. They
+are requests to the entity's `$management` node, carried over a request/reply
+link pair with the operation named in `application-properties` and its
+arguments in the body. `azure_sdk_amqp`'s `RpcLink` provides the pair and the
+correlation; `management.zig` provides the wire format, as pure functions over
+values so it is testable without a broker.
+
+```zig
+// Enqueue at a time in the future; the number comes back so it can be cancelled.
+const seq = try sender.scheduleMessage(allocator, msg, when_ms);
+try sender.cancelScheduledMessage(allocator, seq);
+
+// Extend a lock that is about to lapse, and read what the broker granted.
+const expires_at_ms = try receiver.renewMessageLock(allocator, batch.messages[0]);
+
+// Look without taking.
+var peeked = try receiver.peekMessages(allocator, from_sequence_number, 10);
+defer peeked.deinit();
+```
+
+The batched forms — `scheduleMessages` and `cancelScheduledMessages` — put the
+whole run in one request, so a hundred scheduled messages cost one round trip
+rather than a hundred. `scheduleMessages` writes one sequence number per
+message into a caller-supplied `out` and returns how many it wrote; the
+singular form is that call with a one-element array.
+
+The `$management` node is **per entity**, so each entity gets its own link
+pair, cached and reused across operations exactly as its sender and receiver
+are. The CBS claim is on the entity, not on the management address. A pair the
+broker has detached is replaced rather than written to again: §2.6.1 unbinds
+the handle at detach, and a transfer on an unbound handle ends the session and
+takes every other entity's link with it.
+
+Each operation names the link it acts on behalf of in `associated-link-name`,
+which is how the broker routes it to the same partition and session as the
+message: the **sender** for scheduling and cancelling, the **receiver** for
+lock renewal and peeking. When no such link is open there is nothing to
+associate with and the property is omitted.
+
+A **peeked message is not a delivery.** It holds no lock, carries no delivery
+id or tag, and cannot be settled — to act on one, receive it. Its
+`delivery_count` is the header's own value rather than the received path's
+`+ 1`; that increment exists because a delivery in hand is one the header has
+not counted yet, and a peek has no delivery. A peek that runs past the end of
+the queue answers `204` with no body at all and comes back as an empty batch
+holding no arena, not as an error.
+
+Lock renewal identifies the message by its delivery tag, which the broker
+sends as a .NET `Guid` — the first three fields little-endian — while the AMQP
+`uuid` it must be sent back as is RFC 4122 big-endian. The transport swaps
+them. Getting this wrong fails *silently*: the broker simply reports a lock it
+does not recognise. A lock that has already lapsed comes back as `410`, which
+is surfaced as `error.MessageLockLost` rather than as a generic failure,
+because it is the one refusal a caller can act on — the message is back on the
+queue and will be redelivered, so there is nothing to retry.
 
 ## Development
 

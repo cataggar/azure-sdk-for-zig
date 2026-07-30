@@ -11,6 +11,7 @@ pub const ConnectionStringProperties = messaging_common.ConnectionStringProperti
 
 pub const message_codec = @import("message.zig");
 pub const admin = @import("admin.zig");
+pub const management = @import("management.zig");
 pub const transport = @import("amqp_transport.zig");
 
 // The real AMQP transport, re-exported so a consumer only imports the package.
@@ -41,6 +42,7 @@ pub const applicationPropertyOf = message_codec.applicationPropertyOf;
 test {
     _ = message_codec;
     _ = admin;
+    _ = management;
     _ = transport;
 }
 
@@ -254,8 +256,25 @@ pub const ServiceBusAmqpTransport = struct {
     /// costs a frame per message. Messages need not share an entity — the
     /// implementation is expected to break the run wherever they do not.
     settleMessagesFn: *const fn (self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, messages: []const ServiceBusReceivedMessage, action: DispositionAction, dead_letter: DeadLetterOptions) anyerror!void,
-    scheduleMessageFn: *const fn (self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, message: ServiceBusMessage, enqueue_time: i64) anyerror!i64,
-    cancelScheduledFn: *const fn (self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, sequence_number: i64) anyerror!void,
+    /// Schedule a run of messages, writing one sequence number per message
+    /// into `out` and returning how many were written.
+    ///
+    /// Writes into a caller slice rather than returning an allocation because
+    /// the count is known before the call — it is `messages.len` — so the
+    /// common case of scheduling one message needs no allocation at all.
+    scheduleMessagesFn: *const fn (self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, messages: []const ServiceBusMessage, enqueue_time: i64, out: []i64) anyerror!usize,
+    /// Cancel a run of scheduled messages by sequence number.
+    cancelScheduledFn: *const fn (self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, sequence_numbers: []const i64) anyerror!void,
+    /// Renew the peek-lock on `message`, returning when the new lock expires
+    /// in milliseconds since the epoch.
+    ///
+    /// Takes the whole message rather than a token because the renewal needs
+    /// both the lock token, which is the delivery tag, and the entity the
+    /// message arrived from.
+    renewMessageLockFn: *const fn (self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, message: ServiceBusReceivedMessage) anyerror!i64,
+    /// Read up to `max_count` messages from `from_sequence_number` onwards
+    /// without locking or removing any of them.
+    peekMessagesFn: *const fn (self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, from_sequence_number: i64, max_count: u32) anyerror!ReceivedMessages,
     closeFn: *const fn (self: *ServiceBusAmqpTransport) void,
 
     pub fn sendMessages(self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, messages: []const ServiceBusMessage) !void {
@@ -270,12 +289,20 @@ pub const ServiceBusAmqpTransport = struct {
         return self.settleMessagesFn(self, allocator, messages, action, dead_letter);
     }
 
-    pub fn scheduleMessage(self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, message: ServiceBusMessage, enqueue_time: i64) !i64 {
-        return self.scheduleMessageFn(self, allocator, entity, message, enqueue_time);
+    pub fn scheduleMessages(self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, messages: []const ServiceBusMessage, enqueue_time: i64, out: []i64) !usize {
+        return self.scheduleMessagesFn(self, allocator, entity, messages, enqueue_time, out);
     }
 
-    pub fn cancelScheduled(self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, sequence_number: i64) !void {
-        return self.cancelScheduledFn(self, allocator, entity, sequence_number);
+    pub fn cancelScheduled(self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, sequence_numbers: []const i64) !void {
+        return self.cancelScheduledFn(self, allocator, entity, sequence_numbers);
+    }
+
+    pub fn renewMessageLock(self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, message: ServiceBusReceivedMessage) !i64 {
+        return self.renewMessageLockFn(self, allocator, message);
+    }
+
+    pub fn peekMessages(self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, from_sequence_number: i64, max_count: u32) !ReceivedMessages {
+        return self.peekMessagesFn(self, allocator, entity, from_sequence_number, max_count);
     }
 
     pub fn close(self: *ServiceBusAmqpTransport) void {
@@ -292,7 +319,14 @@ pub const MockServiceBusTransport = struct {
     last_settle_action: ?DispositionAction = null,
     last_dead_letter: DeadLetterOptions = .{},
     schedule_result: i64 = 1001,
+    scheduled_count: u32 = 0,
+    cancelled_count: u32 = 0,
+    renew_result: i64 = 0,
+    renew_calls: u32 = 0,
+    last_peek_from: i64 = 0,
+    last_peek_count: u32 = 0,
     receive_result: []ServiceBusReceivedMessage = &.{},
+    peek_result: []ServiceBusReceivedMessage = &.{},
     transport: ServiceBusAmqpTransport,
 
     pub fn init() MockServiceBusTransport {
@@ -301,8 +335,10 @@ pub const MockServiceBusTransport = struct {
                 .sendMessagesFn = &sendMessagesImpl,
                 .receiveMessagesFn = &receiveMessagesImpl,
                 .settleMessagesFn = &settleMessagesImpl,
-                .scheduleMessageFn = &scheduleMessageImpl,
+                .scheduleMessagesFn = &scheduleMessagesImpl,
                 .cancelScheduledFn = &cancelScheduledImpl,
+                .renewMessageLockFn = &renewMessageLockImpl,
+                .peekMessagesFn = &peekMessagesImpl,
                 .closeFn = &closeImpl,
             },
         };
@@ -340,20 +376,36 @@ pub const MockServiceBusTransport = struct {
         self.last_dead_letter = dead_letter;
     }
 
-    fn scheduleMessageImpl(t: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, message: ServiceBusMessage, enqueue_time: i64) !i64 {
-        _ = allocator;
-        _ = entity;
-        _ = message;
-        _ = enqueue_time;
+    fn scheduleMessagesImpl(t: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, messages: []const ServiceBusMessage, enqueue_time: i64, out: []i64) !usize {
+        _ = .{ allocator, entity, enqueue_time };
         const self: *MockServiceBusTransport = @fieldParentPtr("transport", t);
-        return self.schedule_result;
+        const n = @min(messages.len, out.len);
+        for (out[0..n], 0..) |*slot, i| slot.* = self.schedule_result + @as(i64, @intCast(i));
+        self.scheduled_count += @intCast(messages.len);
+        return n;
     }
 
-    fn cancelScheduledImpl(t: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, sequence_number: i64) !void {
-        _ = allocator;
-        _ = entity;
-        _ = sequence_number;
-        _ = t;
+    fn cancelScheduledImpl(t: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, sequence_numbers: []const i64) !void {
+        _ = .{ allocator, entity };
+        const self: *MockServiceBusTransport = @fieldParentPtr("transport", t);
+        self.cancelled_count += @intCast(sequence_numbers.len);
+    }
+
+    fn renewMessageLockImpl(t: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, message: ServiceBusReceivedMessage) !i64 {
+        _ = .{ allocator, message };
+        const self: *MockServiceBusTransport = @fieldParentPtr("transport", t);
+        self.renew_calls += 1;
+        return self.renew_result;
+    }
+
+    fn peekMessagesImpl(t: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, from_sequence_number: i64, max_count: u32) !ReceivedMessages {
+        _ = .{ allocator, entity };
+        const self: *MockServiceBusTransport = @fieldParentPtr("transport", t);
+        self.last_peek_from = from_sequence_number;
+        self.last_peek_count = max_count;
+        // No arena, as in `receiveMessagesImpl`: the result is the caller's
+        // own fixture and `deinit` must not try to free it.
+        return .{ .messages = self.peek_result };
     }
 
     fn closeImpl(t: *ServiceBusAmqpTransport) void {
@@ -408,12 +460,35 @@ pub const ServiceBusSenderClient = struct {
 
     /// Schedule a message for later delivery. Returns the sequence number.
     pub fn scheduleMessage(self: *ServiceBusSenderClient, allocator: std.mem.Allocator, message: ServiceBusMessage, enqueue_time: i64) !i64 {
-        return self.amqp_transport.scheduleMessage(allocator, self.entity_path, message, enqueue_time);
+        var out: [1]i64 = undefined;
+        const n = try self.scheduleMessages(allocator, &.{message}, enqueue_time, &out);
+        if (n != 1) return error.MalformedReply;
+        return out[0];
+    }
+
+    /// Schedule a run of messages, writing one sequence number per message
+    /// into `out` and returning how many were written.
+    ///
+    /// One round trip for the whole run, where calling `scheduleMessage` per
+    /// message costs one each.
+    pub fn scheduleMessages(
+        self: *ServiceBusSenderClient,
+        allocator: std.mem.Allocator,
+        messages: []const ServiceBusMessage,
+        enqueue_time: i64,
+        out: []i64,
+    ) !usize {
+        return self.amqp_transport.scheduleMessages(allocator, self.entity_path, messages, enqueue_time, out);
     }
 
     /// Cancel a previously scheduled message.
     pub fn cancelScheduledMessage(self: *ServiceBusSenderClient, allocator: std.mem.Allocator, sequence_number: i64) !void {
-        return self.amqp_transport.cancelScheduled(allocator, self.entity_path, sequence_number);
+        return self.cancelScheduledMessages(allocator, &.{sequence_number});
+    }
+
+    /// Cancel a run of previously scheduled messages in one round trip.
+    pub fn cancelScheduledMessages(self: *ServiceBusSenderClient, allocator: std.mem.Allocator, sequence_numbers: []const i64) !void {
+        return self.amqp_transport.cancelScheduled(allocator, self.entity_path, sequence_numbers);
     }
 
     pub fn close(self: *ServiceBusSenderClient) void {
@@ -508,6 +583,32 @@ pub const ServiceBusReceiverClient = struct {
     /// Defer a message for later retrieval by sequence number.
     pub fn deferMessage(self: *ServiceBusReceiverClient, allocator: std.mem.Allocator, message: ServiceBusReceivedMessage) !void {
         return self.settleMessages(allocator, &.{message}, .defer_msg, .{});
+    }
+
+    /// Extend the peek-lock on a message, returning when the new lock expires
+    /// in milliseconds since the epoch.
+    ///
+    /// Only meaningful in `peek_lock` mode; `receive_and_delete` takes no lock
+    /// to renew.
+    pub fn renewMessageLock(self: *ServiceBusReceiverClient, allocator: std.mem.Allocator, message: ServiceBusReceivedMessage) !i64 {
+        return self.amqp_transport.renewMessageLock(allocator, message);
+    }
+
+    /// Read up to `max_count` messages from `from_sequence_number` onwards
+    /// without locking or removing them.
+    ///
+    /// Peeking does not settle, so a peeked message cannot be completed or
+    /// abandoned — it carries no delivery id. To act on one, receive it.
+    /// Free the result with `ReceivedMessages.deinit`.
+    pub fn peekMessages(
+        self: *ServiceBusReceiverClient,
+        allocator: std.mem.Allocator,
+        from_sequence_number: i64,
+        max_count: u32,
+    ) !ReceivedMessages {
+        const address = try self.entity.formatAddress(allocator, self.sub_queue);
+        defer allocator.free(address);
+        return self.amqp_transport.peekMessages(allocator, address, from_sequence_number, max_count);
     }
 
     pub fn close(self: *ServiceBusReceiverClient) void {
