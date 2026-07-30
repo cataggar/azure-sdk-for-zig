@@ -269,18 +269,30 @@ attributable to a code change rather than to service latency.
 The last two run the whole receive path against a scripted peer: frames off
 the transport, deliveries reassembled, messages decoded, Service Bus messages
 converted, the batch arena filled. That loop is where a consumer actually
-spends its time, and none of it is visible one message at a time. Both cases
-replay the same thousand-transfer script and differ only in how many messages
-they ask for, so subtracting them and dividing by 999 gives the cost of one
-received message with all the fixed setup cancelled out.
+spends its time, and none of it is visible one message at a time. The two
+share a byte-identical handshake, CBS exchange and attach and differ only in
+how many transfers follow, so subtracting them and dividing by 999 leaves the
+cost of one received message.
 
-Prefer `allocs/op` and `B/op` as the regression signal: they are stable across
-machines, while wall-clock timings move on shared or virtualised hosts. Two of
-them are the ones worth watching. `toAmqpMessage` reads **0 allocs/op** — a
-send loop hoists the `Scratch` out of it, so a message with no application
-properties costs nothing to prepare — and `fromAmqpMessage` also reads **0**,
-because the received message borrows the decoded one rather than copying it.
-Either turning non-zero means an allocation moved into a per-message path.
+Prefer `allocs/op` as the regression signal. It is stable across machines,
+whereas timings move on shared or virtualised hosts — and the suite opens with
+an empty `baseline` case precisely so the small timings can be read against
+the harness floor rather than taken at face value. Two of the numbers carry a
+claim worth defending:
+
+- **`toAmqpMessage + properties` at 0 allocs/op.** The property array is the
+  one thing `Scratch` allocates, and `sendMessages` keeps one `Scratch` across
+  a whole batch, so it grows once and is reused. Rebuild it per call instead
+  and this reads 1. (`toAmqpMessage` without properties reads 0 either way,
+  which is why the property case is the one that means anything.)
+- **Exactly 2 allocations per received message.** `azure_sdk_amqp` dupes the
+  payload and the delivery tag; this package adds nothing that scales with the
+  batch, since the arena, the message list and the entity copy are each paid
+  once. The bound already has a test; the benchmark is what makes it a number.
+
+`fromAmqpMessage`'s 0 is *not* in that list. It takes no allocator, so no other
+answer is representable — the guard against a copy creeping in is its
+signature, not its reading.
 
 The benchmarks are built (but not run) by `zig build test`, so a signature
 change cannot silently rot them.

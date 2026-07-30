@@ -173,8 +173,16 @@ pub fn toAmqpMessage(
 
 /// Encode `msg` as the bare AMQP message bytes of one transfer.
 ///
-/// One allocation for the encoded bytes, plus one more only when the message
-/// carries application properties.
+/// A convenience entry point, and a few allocations rather than one: the
+/// `Scratch` is built and dropped per call, so a message with application
+/// properties pays for its property array every time, and
+/// `amqp.encodeMessageAlloc` fills a growing buffer and then dupes it to size,
+/// so the rest tracks the payload's length. `zig build bench` measures four
+/// for a property-free message and six with three properties.
+///
+/// A send loop should not use this. `AmqpTransport.sendMessages` keeps one
+/// `Scratch` across the batch, which drops the per-message property array to
+/// nothing.
 pub fn encode(allocator: Allocator, msg: ServiceBusMessage) EncodeError![]u8 {
     var scratch: Scratch = .init(allocator);
     defer scratch.deinit();

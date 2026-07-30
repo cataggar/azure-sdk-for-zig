@@ -36,22 +36,50 @@ fn makeMessage(allocator: std.mem.Allocator) sb.ServiceBusMessage {
 
 // ─────────────────── Encode ───────────────────
 
+/// The `Scratch` a send loop keeps across messages, as `sendMessages` does
+/// with `&self.scratch`. Hoisting it here is not a convenience: it is the
+/// arrangement under test, and the two `toAmqpMessage` cases below are only
+/// meaningful because this outlives them.
+var send_scratch: sb.message_codec.Scratch = undefined;
+
+/// A message carrying application properties, built once. Filling the
+/// `StringHashMap` allocates, and doing it inside a measured function charges
+/// that to the codec — which is a fixture cost, not a cost a sender pays per
+/// message.
+var message_with_properties: sb.ServiceBusMessage = undefined;
+
 /// What a send loop pays per message with the `Scratch` hoisted out of it,
-/// which is the arrangement `sendMessages` uses. Nothing is allocated per
-/// message unless it carries application properties, so this should read
-/// zero allocations per op — that is the property worth watching.
+/// which is the arrangement `sendMessages` uses. A message with no
+/// application properties never touches the scratch buffer at all, so this
+/// reads zero — but so would a version that rebuilt the scratch per call,
+/// because `Scratch.init` is lazy. The case below is the one that tells them
+/// apart.
 fn benchToAmqpMessage(allocator: std.mem.Allocator) !void {
     var msg = makeMessage(allocator);
     defer msg.deinit();
 
-    var scratch: sb.message_codec.Scratch = .init(allocator);
-    defer scratch.deinit();
+    const amqp_msg = try sb.toAmqpMessage(msg, &send_scratch);
+    std.mem.doNotOptimizeAway(&amqp_msg);
+}
 
-    const amqp_msg = try sb.toAmqpMessage(msg, &scratch);
+/// The same conversion for a message that *does* carry application
+/// properties. This is the discriminating case: the property array is the one
+/// thing `Scratch` allocates, and a hoisted scratch grows to the largest count
+/// seen and is never shrunk, so it is paid once for the whole loop rather than
+/// once per message. Zero here is a real claim about `sendMessages`; rebuild
+/// the scratch per call instead and it reads one.
+fn benchToAmqpMessageWithProperties(allocator: std.mem.Allocator) !void {
+    _ = allocator;
+    const amqp_msg = try sb.toAmqpMessage(message_with_properties, &send_scratch);
     std.mem.doNotOptimizeAway(&amqp_msg);
 }
 
 /// The same message all the way to the bytes of one transfer.
+///
+/// Most of this is the dependency: `amqp.encodeMessageAlloc` fills a growing
+/// buffer and then dupes it to size, so the count tracks how many times that
+/// buffer doubles on the way to the final length rather than anything this
+/// package does.
 fn benchEncodeMessage(allocator: std.mem.Allocator) !void {
     var msg = makeMessage(allocator);
     defer msg.deinit();
@@ -60,18 +88,15 @@ fn benchEncodeMessage(allocator: std.mem.Allocator) !void {
     allocator.free(bytes);
 }
 
-/// A message carrying application properties, which is the one shape that
-/// makes `Scratch` allocate. It grows to the largest count seen and is never
-/// shrunk, so the cost is paid once per loop rather than once per message —
-/// the difference between this and `toAmqpMessage` is that one allocation.
+/// `encodeMessage` is the convenience entry point, and unlike `sendMessages`
+/// it builds a fresh `Scratch` per call and drops it. So the property array is
+/// paid on every op here — there is no amortisation to be had, which is
+/// exactly why the send path does not use this function.
+///
+/// The gap to `encodeMessage` is that array plus one more turn of the encode
+/// buffer's growth, the properties having made the payload longer.
 fn benchEncodeWithProperties(allocator: std.mem.Allocator) !void {
-    var msg = makeMessage(allocator);
-    defer msg.deinit();
-    try msg.application_properties.put("tenant", "contoso");
-    try msg.application_properties.put("region", "westus2");
-    try msg.application_properties.put("priority", "high");
-
-    const bytes = try sb.encodeMessage(allocator, msg);
+    const bytes = try sb.encodeMessage(allocator, message_with_properties);
     allocator.free(bytes);
 }
 
@@ -79,7 +104,13 @@ fn benchEncodeWithProperties(allocator: std.mem.Allocator) !void {
 
 /// Receive-side conversion. The AMQP message is decoded once and borrowed, so
 /// this measures only what a consumer pays turning it into a Service Bus
-/// message — which borrows rather than copies, and so should not allocate.
+/// message.
+///
+/// Its `0.00 allocs/op` is not a measurement and must not be read as one:
+/// `fromAmqpMessage` takes no allocator, so the counting allocator cannot
+/// reach it and no other answer is representable. The guard against a copy
+/// creeping in is the signature, and it is `zig build test` compiling this
+/// file that enforces it. The timing is the only number here worth reading.
 var decoded_message: amqp.Message = undefined;
 
 fn benchFromAmqpMessage(allocator: std.mem.Allocator) !void {
@@ -140,10 +171,23 @@ fn benchReadPeekedMessages(allocator: std.mem.Allocator) !void {
 // The peer is a byte script built once, so an iteration pays a memcpy for it
 // rather than re-encoding a thousand transfers into the measurement.
 //
-// Both cases replay the same script and differ only in how many messages they
-// ask for, so the handshake, the CBS exchange, the attach and that memcpy are
-// identical in each. Subtract them and divide by 999 and what is left is one
-// received message, with every fixed cost cancelled out.
+// The two cases share a byte-identical handshake, CBS exchange and attach, and
+// differ only in how many transfers follow. Subtract them, divide by 999, and
+// what is left is one received message with the setup cancelled out.
+//
+// Each case gets a script holding exactly the transfers it consumes, and that
+// is load-bearing rather than tidy. `AmqpTransport.deinit` closes the receiver,
+// and `Receiver.detach` pumps until the peer detaches; a scripted peer never
+// does, so the loop drains whatever is still buffered — decoding and duping
+// every transfer nobody asked for. Hand the x1 case a thousand-transfer script
+// and its teardown quietly decodes about ninety of them, which does not cancel
+// because it *shrinks* as the count grows. Measured, that reported 1.81
+// allocations per message where the truth is 2.00.
+//
+// What is left uncancelled is the memcpy of the longer script, ~270 KB. It is
+// one allocation in either case, so allocations subtract exactly; it costs the
+// x1000 case a few microseconds of the ~1.3 ms it spends, so the per-message
+// timing is an overstatement of roughly two percent.
 
 const bench_entity = "orders";
 const bench_link_id = "servicebus";
@@ -179,8 +223,10 @@ const BenchCredential = struct {
 };
 
 /// The peer's whole side of the conversation: handshake, the `$cbs` pair and
-/// its put-token reply, the entity attach, and one transfer per message.
-var receive_script: []u8 = &.{};
+/// its put-token reply, the entity attach, and one transfer per message. The
+/// two differ only in that trailing run of transfers.
+var receive_script_one: []u8 = &.{};
+var receive_script_many: []u8 = &.{};
 
 fn buildReceiveScript(allocator: std.mem.Allocator, count: u32) ![]u8 {
     var scratch = amqp.MemoryTransport.init(allocator);
@@ -284,11 +330,11 @@ fn buildReceiveScript(allocator: std.mem.Allocator, count: u32) ![]u8 {
     return allocator.dupe(u8, scratch.inbound.items);
 }
 
-/// Receive every message the script holds, through the public transport.
-fn receiveScripted(allocator: std.mem.Allocator, count: u32) !void {
+/// Receive every message `script` holds, through the public transport.
+fn receiveScripted(allocator: std.mem.Allocator, script: []const u8, count: u32) !void {
     var mem = amqp.MemoryTransport.init(allocator);
     defer mem.deinit();
-    try mem.pushPeerBytes(receive_script);
+    try mem.pushPeerBytes(script);
 
     var clock: amqp.ManualClock = .{};
     var driver = try amqp.Driver.init(
@@ -327,14 +373,23 @@ fn receiveScripted(allocator: std.mem.Allocator, count: u32) !void {
 }
 
 fn benchReceive1(allocator: std.mem.Allocator) !void {
-    return receiveScripted(allocator, 1);
+    return receiveScripted(allocator, receive_script_one, 1);
 }
 
 fn benchReceive1000(allocator: std.mem.Allocator) !void {
-    return receiveScripted(allocator, bench_receive_count);
+    return receiveScripted(allocator, receive_script_many, bench_receive_count);
 }
 
 const bench_receive_count: u32 = 1000;
+
+/// The harness floor. `benchmarkAllocating` times a call through a function
+/// pointer and reads a counter either side of it, and that is not free; the
+/// cases here that come in under a hundred nanoseconds are within small
+/// multiples of it. Measuring it on the same machine in the same run beats
+/// asserting a number in a comment that nobody re-checks.
+fn benchNothing(allocator: std.mem.Allocator) !void {
+    _ = allocator;
+}
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
@@ -360,8 +415,19 @@ pub fn main(init: std.process.Init) !void {
     defer peek_arena.deinit();
     peek_reply = try buildPeekReply(peek_arena.allocator(), encoded, 100);
 
-    receive_script = try buildReceiveScript(allocator, bench_receive_count);
-    defer allocator.free(receive_script);
+    receive_script_one = try buildReceiveScript(allocator, 1);
+    defer allocator.free(receive_script_one);
+    receive_script_many = try buildReceiveScript(allocator, bench_receive_count);
+    defer allocator.free(receive_script_many);
+
+    send_scratch = .init(allocator);
+    defer send_scratch.deinit();
+
+    message_with_properties = makeMessage(allocator);
+    defer message_with_properties.deinit();
+    try message_with_properties.application_properties.put("tenant", "contoso");
+    try message_with_properties.application_properties.put("region", "westus2");
+    try message_with_properties.application_properties.put("priority", "high");
 
     std.debug.print("Service Bus benchmarks (mode: {s})\n", .{@tagName(builtin.mode)});
     if (builtin.mode == .Debug) {
@@ -373,7 +439,10 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const cases = .{
+        // First, so every reading below can be compared against it.
+        .{ "baseline (empty body)", 10_000, benchNothing },
         .{ "toAmqpMessage", 10_000, benchToAmqpMessage },
+        .{ "toAmqpMessage + properties", 10_000, benchToAmqpMessageWithProperties },
         .{ "encodeMessage", 10_000, benchEncodeMessage },
         .{ "encodeMessage + properties", 10_000, benchEncodeWithProperties },
         .{ "fromAmqpMessage", 10_000, benchFromAmqpMessage },
@@ -381,6 +450,8 @@ pub fn main(init: std.process.Init) !void {
         .{ "management.readPeekedMessages x100", 2_000, benchReadPeekedMessages },
         // Connection setup dominates the x1 case; the difference between the
         // two, divided by 999, is what one message costs on the receive path.
+        // Neither leaves an unread transfer buffered at teardown — see above
+        // for why that matters.
         .{ "receive x1 (scripted peer)", 500, benchReceive1 },
         .{ "receive x1000 (scripted peer)", 20, benchReceive1000 },
     };
