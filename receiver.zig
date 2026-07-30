@@ -82,6 +82,25 @@ pub const PartitionClient = struct {
     /// `amqp:link:stolen` here. Its strings belong to the receiver, so read it
     /// before the session is torn down.
     last_error: ?errors.EventHubsError = null,
+    /// Scratch for decoding a received message, reset per event.
+    ///
+    /// `fromRawMessage` copies everything it keeps into the caller's
+    /// allocator, so a decoded message is dead by the end of its iteration —
+    /// but `decodeMessage` charges an arena and its pages for each one. One
+    /// arena reset per event costs that once. It lives on the client rather
+    /// than in `receiveEvents` because a caller asking for a few events at a
+    /// time is the common shape, and a per-call arena would be cold every
+    /// call.
+    ///
+    /// Capped rather than retained outright: an event may be up to a megabyte
+    /// and decoding expands it, so the largest event ever received would
+    /// otherwise stay pinned per partition for the life of the client.
+    decode_arena: ?std.heap.ArenaAllocator = null,
+
+    /// What `decode_arena` keeps between events. Below it,
+    /// `retain_with_limit` is byte-for-byte `retain_capacity`, so ordinary
+    /// traffic pays nothing for the cap.
+    pub const decode_arena_limit = 256 * 1024;
 
     pub const Args = struct {
         /// `{hub}/ConsumerGroups/{group}/Partitions/{id}`.
@@ -164,6 +183,8 @@ pub const PartitionClient = struct {
     pub fn deinit(self: *PartitionClient) void {
         self.allocator.free(self.filter_expression);
         self.filter_expression = &.{};
+        if (self.decode_arena) |*a| a.deinit();
+        self.decode_arena = null;
     }
 
     /// Detach the link and release the client.
@@ -224,9 +245,16 @@ pub const PartitionClient = struct {
             };
 
             const received = blk: {
-                var decoded = try amqp.decodeMessage(allocator, delivery.payload);
-                defer decoded.deinit();
-                break :blk try event_data.fromRawMessage(allocator, rawFrom(&decoded.message));
+                // Decode into the client's scratch arena rather than a fresh
+                // one per message. Nothing survives the block: the decode
+                // borrows nothing from `delivery.payload`, so the message is
+                // wholly arena-backed, and `fromRawMessage` copies what it
+                // keeps into `allocator`.
+                if (self.decode_arena == null) self.decode_arena = .init(self.allocator);
+                const arena = &self.decode_arena.?;
+                _ = arena.reset(.{ .retain_with_limit = decode_arena_limit });
+                const message = try amqp.decodeMessageInto(arena.allocator(), delivery.payload);
+                break :blk try event_data.fromRawMessage(allocator, rawFrom(&message));
             };
 
             // Capacity for `count` was reserved up front and the loop runs
@@ -554,6 +582,59 @@ fn pushEvent(
     }, payload);
 }
 
+/// Push one event split across transfer frames, which is how anything larger
+/// than the negotiated frame size actually arrives.
+fn pushChunkedEvent(
+    allocator: Allocator,
+    peer: Peer,
+    id: u32,
+    sequence_number: i64,
+    body: []const u8,
+    chunk_len: usize,
+) !void {
+    var annotations = [_]amqp.MapEntry{
+        .{
+            .key = .{ .symbol = event_data.sequence_number_annotation },
+            .value = .{ .long = sequence_number },
+        },
+        .{
+            .key = .{ .symbol = event_data.offset_annotation },
+            .value = .{ .string = "100" },
+        },
+    };
+    const bodies = [_][]const u8{body};
+    const payload = try amqp.encodeMessageAlloc(allocator, .{
+        .message_annotations = &annotations,
+        .body = .{ .data = &bodies },
+    });
+    defer allocator.free(payload);
+
+    const tag = [_]u8{@intCast(id)};
+    var offset: usize = 0;
+    var first = true;
+    while (offset < payload.len) {
+        const take = @min(chunk_len, payload.len - offset);
+        const more = offset + take < payload.len;
+        if (first) {
+            try peer.pushTransfer(0, .{
+                .handle = 0,
+                .delivery_id = id,
+                .delivery_tag = &tag,
+                .message_format = 0,
+                .settled = true,
+                .more = more,
+            }, payload[offset..][0..take]);
+            first = false;
+        } else {
+            try peer.pushTransfer(0, .{
+                .handle = 0,
+                .more = more,
+            }, payload[offset..][0..take]);
+        }
+        offset += take;
+    }
+}
+
 /// The attach the client wrote, decoded. Caller must `deinit` it.
 fn sentAttach(allocator: Allocator, mem: *MemoryTransport) !amqp.performative.Decoded {
     var frames = try EmittedFrames.parse(allocator, mem.written());
@@ -745,6 +826,106 @@ test "receiveEvents settles a whole batch in one disposition" {
     try testing.expectEqual(@as(usize, 1), dispositions);
     try testing.expectEqual(@as(u32, 0), covered_first.?);
     try testing.expectEqual(@as(u32, batch - 1), covered_last.?);
+}
+
+test "decoding a batch costs the same whatever the batch size" {
+    // `decodeMessage` charged an arena and its pages to the *events*
+    // allocator, once per message, and the receive loop discarded each decode
+    // as soon as `fromRawMessage` had copied out of it. Decoding into one
+    // client-owned arena, reset per event, makes that cost fixed rather than
+    // per event.
+    //
+    // So one counting allocator has to serve both the client and the events:
+    // counting only the client's would miss the allocations this removes
+    // entirely, and the test would pass against the very code it exists to
+    // rule out.
+    //
+    // What is asserted is the *marginal* cost of an event, which cancels
+    // every fixed cost of a call (the filter expression, the events list, the
+    // arena's own first growth) without having to know any of them. The one
+    // allocation per event is `fromRawMessage`'s block — these events carry
+    // no application properties, so the property map allocates no storage of
+    // its own, and a fixture that gave them some would make this 2. The
+    // decode used to add three more on top of it.
+    const allocator = testing.allocator;
+    var counting = CountingAllocator.init(allocator);
+    const counted = counting.allocator();
+
+    const small = 4;
+    const large = 36;
+    const per_event = 1;
+
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock = driver.ManualClock{};
+    var conn = try driver.Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
+    defer conn.deinit();
+
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+    try scriptAttach(peer);
+    var i: u32 = 0;
+    while (i < small + small + large) : (i += 1) {
+        try pushEvent(allocator, peer, i, @as(i64, i) + 1, "event");
+    }
+
+    var scripted: Scripted = undefined;
+    try scripted.open(allocator, &mem, &clock, &conn, .{});
+    defer scripted.deinit();
+    scripted.client.allocator = counted;
+
+    // Warm: the arena is the client's, so the first batch is the one that
+    // builds it and every batch after finds it sized.
+    event_data.freeReceivedEvents(counted, try scripted.client.receiveEvents(counted, small));
+
+    const a = counting.allocations;
+    event_data.freeReceivedEvents(counted, try scripted.client.receiveEvents(counted, small));
+    const cost_small = counting.allocations - a;
+
+    const b = counting.allocations;
+    const batch = try scripted.client.receiveEvents(counted, large);
+    defer event_data.freeReceivedEvents(counted, batch);
+    const cost_large = counting.allocations - b;
+
+    try testing.expectEqual(@as(usize, large), batch.len);
+    try testing.expectEqual(@as(usize, per_event * (large - small)), cost_large - cost_small);
+}
+
+test "one outsized event does not pin the decode arena" {
+    // The decode arena is reused, so whatever it grows to it keeps. An Event
+    // Hubs event may be up to a megabyte, and every partition holds a client,
+    // so retaining outright would let one outlier pin that per partition for
+    // as long as the consumer runs.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock = driver.ManualClock{};
+    var conn = try driver.Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
+    defer conn.deinit();
+
+    const big = try allocator.alloc(u8, PartitionClient.decode_arena_limit + 64 * 1024);
+    defer allocator.free(big);
+    @memset(big, 'x');
+
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+    try scriptAttach(peer);
+    // 300 bytes a frame, as a real one would arrive under a negotiated frame
+    // size far smaller than the message.
+    try pushChunkedEvent(allocator, peer, 0, 1, big, 300);
+    try pushEvent(allocator, peer, 1, 2, "back to normal");
+
+    var scripted: Scripted = undefined;
+    try scripted.open(allocator, &mem, &clock, &conn, .{});
+    defer scripted.deinit();
+
+    event_data.freeReceivedEvents(allocator, try scripted.client.receiveEvents(allocator, 1));
+    const peak = scripted.client.decode_arena.?.queryCapacity();
+    event_data.freeReceivedEvents(allocator, try scripted.client.receiveEvents(allocator, 1));
+    const retained = scripted.client.decode_arena.?.queryCapacity();
+
+    // Assert the size, not a symptom: the outlier really did exceed the cap,
+    // and the ordinary event behind it really did give it back.
+    try testing.expect(peak > PartitionClient.decode_arena_limit);
+    try testing.expect(retained <= PartitionClient.decode_arena_limit);
 }
 
 test "a quiet partition returns the events that did arrive" {
@@ -975,3 +1156,48 @@ test "a pool reuses one link and resumes where it left off" {
     }
     try testing.expectEqual(@as(usize, 1), attaches);
 }
+
+/// Counts allocations so a test can assert that a code path performs none.
+const CountingAllocator = struct {
+    parent: Allocator,
+    allocations: usize = 0,
+
+    fn init(parent: Allocator) CountingAllocator {
+        return .{ .parent = parent };
+    }
+
+    fn allocator(self: *CountingAllocator) Allocator {
+        return .{ .ptr = self, .vtable = &.{
+            .alloc = alloc,
+            .resize = resize,
+            .remap = remap,
+            .free = free,
+        } };
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ra: usize) ?[*]u8 {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        self.allocations += 1;
+        return self.parent.rawAlloc(len, alignment, ra);
+    }
+
+    fn resize(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) bool {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        return self.parent.rawResize(buf, alignment, new_len, ra);
+    }
+
+    fn remap(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) ?[*]u8 {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        const out = self.parent.rawRemap(buf, alignment, new_len, ra);
+        // Only a move is a new allocation; growing in place is not.
+        if (out) |p| if (p != buf.ptr) {
+            self.allocations += 1;
+        };
+        return out;
+    }
+
+    fn free(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, ra: usize) void {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        self.parent.rawFree(buf, alignment, ra);
+    }
+};
