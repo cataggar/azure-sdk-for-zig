@@ -298,6 +298,11 @@ const dead_letter_condition = "com.microsoft:dead-letter";
 /// it has to be the caller's intent rather than whatever number arrived.
 pub const max_receive_count: u32 = 5000;
 
+/// How much of a management call's remaining deadline is kept back from the
+/// broker, so that a broker that has run out of time still has the return leg
+/// left to say so in.
+const server_timeout_buffer_ms: i64 = 1000;
+
 /// A real Service Bus AMQP transport.
 ///
 /// Holds interior pointers — the vtable it hands out points back at itself —
@@ -1038,10 +1043,13 @@ pub const AmqpTransport = struct {
             self.dropManagement(current, entity);
         }
 
-        // The claim is on the entity, not on `<entity>/$management`. The
-        // management link acts on the entity's own messages and the broker
-        // authorises it under the entity's token, which is what the Go and
-        // .NET clients put.
+        // The claim is on the entity, not on `<entity>/$management`: the
+        // broker matches a token's resource against the link address by
+        // prefix, so the entity's token covers the node beneath it. This is
+        // what the Python client relies on, and it is why Go's second claim
+        // for the management path and .NET's single claim *only* for the
+        // management path both work — the three do not agree, so the token is
+        // demonstrably accepted either way round.
         const audience = try audienceFor(
             self.allocator,
             self.scheme,
@@ -1057,19 +1065,16 @@ pub const AmqpTransport = struct {
         const address = try std.fmt.allocPrint(self.allocator, "{s}/$management", .{entity});
         defer self.allocator.free(address);
 
-        // The link id has to vary per entity: it is what distinguishes this
-        // pair's private reply address from every other pair's, and two links
-        // sharing a reply address would each be handed the other's replies.
-        const link_id = try std.fmt.allocPrint(
-            self.allocator,
-            "{s}-{s}",
-            .{ self.options.link_id, entity },
-        );
-        defer self.allocator.free(link_id);
-
+        // The link id is the transport's, not one per entity. `RpcLink`
+        // derives both link names and the private reply address from the
+        // address, which already carries the entity, so every pair is
+        // distinct without repeating it — and `RpcLink` formats each
+        // correlation id as `{reply_to}:{n}` into a 64-byte buffer, falling
+        // back to a bare `{n}` when that does not fit. Doubling the entity
+        // into `reply_to` would spend that budget on nothing.
         const rpc = try amqp.RpcLink.open(current, .{
             .address = address,
-            .link_id = link_id,
+            .link_id = self.options.link_id,
         }, deadline_ms);
         errdefer closeRpc(current, rpc);
 
@@ -1114,6 +1119,28 @@ pub const AmqpTransport = struct {
         return cached.receiver.name;
     }
 
+    /// The `com.microsoft:server-timeout` to send with a request whose own
+    /// deadline is `deadline_ms`.
+    ///
+    /// What is left of the deadline, less a second, rather than the whole
+    /// configured budget: the broker's timer starts when the request lands,
+    /// which is after the dial, the claim and the attach this call may have
+    /// had to do first. Sending the whole budget would have the broker give
+    /// up strictly later than the caller, which is the case the property
+    /// exists to avoid — the caller times out first and the broker is left
+    /// working on an answer nobody is waiting for. The second is the same
+    /// buffer Go's `serverTimeoutBuffer` takes off, and for the same reason:
+    /// expiring together is not enough, because the reply still needs the
+    /// return leg. Under a second left there is no room for the broker to
+    /// answer first, so this clamps to zero and the buffer simply stops
+    /// helping.
+    fn serverTimeoutMs(current: *amqp.Session, deadline_ms: i64) u32 {
+        const remaining = deadline_ms -| current.driver.clock.nowMillis();
+        const budget = remaining -| server_timeout_buffer_ms;
+        if (budget <= 0) return 0;
+        return @intCast(@min(budget, std.math.maxInt(u32)));
+    }
+
     /// Perform one management operation and return its reply.
     ///
     /// The caller owns the reply and must `deinit` it. Everything the reply's
@@ -1138,11 +1165,7 @@ pub const AmqpTransport = struct {
         n += 1;
         props[n] = .{
             .key = .{ .string = management.property.server_timeout },
-            // A uint of milliseconds. The broker gives up on its side at the
-            // same point this client does, so a slow operation fails once
-            // rather than leaving the broker working on an answer nobody is
-            // waiting for.
-            .value = .{ .uint = @intCast(@max(self.options.deadline_ms, 0) & 0xffff_ffff) },
+            .value = .{ .uint = serverTimeoutMs(current, deadline_ms) },
         };
         n += 1;
         if (associated_link) |name| {
@@ -1299,9 +1322,8 @@ pub const AmqpTransport = struct {
         max_count: u32,
     ) !sb.ReceivedMessages {
         if (max_count == 0) return .{};
-        // Bounded for the same reason a receive is: the count becomes a
-        // precise reservation, so it has to be the caller's intent rather than
-        // whatever number arrived.
+        // The same ceiling a receive has, and here it also keeps the count
+        // inside the `int` the broker reads it as.
         if (max_count > max_receive_count) return error.InvalidCount;
 
         const current = try self.session();
@@ -1330,7 +1352,11 @@ pub const AmqpTransport = struct {
 
         // An empty peek answers 204 with no body at all, which `readPeekedMessages`
         // reports as an empty slice rather than as malformed.
-        const encoded = try management.readPeekedMessages(a, response.msg().body);
+        const returned = try management.readPeekedMessages(a, response.msg().body);
+        // `message-count` is a request, not a guarantee. The caller asked for
+        // at most this many and sized whatever it does next accordingly, so a
+        // broker that answers with more does not get to hand them on.
+        const encoded = returned[0..@min(returned.len, max_count)];
         if (encoded.len == 0) {
             arena.deinit();
             allocator.destroy(arena);
@@ -1555,12 +1581,27 @@ fn scriptCbsExchange(peer: Peer, allocator: Allocator) !void {
 /// delivery `n - 1` in its own direction. Split out of `scriptCbsExchange`
 /// because a second audience needs another claim but not another handshake.
 fn scriptCbsReply(peer: Peer, allocator: Allocator, n: u32) !void {
+    return scriptCbsReplyAt(peer, allocator, n, n - 1, n - 1);
+}
+
+/// `scriptCbsReply` with the delivery ids spelled out.
+///
+/// Delivery ids belong to the session, not to the link, so once another link
+/// has sent or received anything the `n`th claim is no longer the `n`th
+/// delivery in either direction.
+fn scriptCbsReplyAt(
+    peer: Peer,
+    allocator: Allocator,
+    n: u32,
+    request_id: u32,
+    reply_id: u32,
+) !void {
     // The broker settles the request before the reply lands on the receiver
     // link.
     try peer.push(0, .{ .disposition = .{
         .role = .receiver,
-        .first = n - 1,
-        .last = n - 1,
+        .first = request_id,
+        .last = request_id,
         .settled = true,
         .state = .accepted,
     } });
@@ -1577,7 +1618,7 @@ fn scriptCbsReply(peer: Peer, allocator: Allocator, n: u32) !void {
     defer allocator.free(reply);
     try peer.pushTransfer(0, .{
         .handle = 1,
-        .delivery_id = n - 1,
+        .delivery_id = reply_id,
         .delivery_tag = "r",
         .message_format = 0,
         .settled = true,
@@ -3378,8 +3419,8 @@ fn managementAddress(allocator: Allocator, entity: []const u8) ![]u8 {
 fn managementCorrelation(allocator: Allocator, entity: []const u8, n: u32) ![]u8 {
     return std.fmt.allocPrint(
         allocator,
-        "{s}/$management-reply-to-servicebus-{s}:{d}",
-        .{ entity, entity, n },
+        "{s}/$management-reply-to-servicebus:{d}",
+        .{ entity, n },
     );
 }
 
@@ -3392,14 +3433,14 @@ fn scriptManagementAttach(peer: Peer, allocator: Allocator, entity: []const u8, 
     defer allocator.free(address);
     const sender_name = try std.fmt.allocPrint(
         allocator,
-        "{s}-sender-servicebus-{s}",
-        .{ address, entity },
+        "{s}-sender-servicebus",
+        .{address},
     );
     defer allocator.free(sender_name);
     const receiver_name = try std.fmt.allocPrint(
         allocator,
-        "{s}-receiver-servicebus-{s}",
-        .{ address, entity },
+        "{s}-receiver-servicebus",
+        .{address},
     );
     defer allocator.free(receiver_name);
 
@@ -3495,9 +3536,10 @@ test "scheduling sends the whole encoded message and reads back its sequence num
         propertyOf(request.message, "operation").?.string,
     );
     // A uint of milliseconds, which is the shape .NET puts and the broker
-    // reads. A long here is silently ignored.
+    // reads. A long here is silently ignored. The value is the deadline less
+    // the buffer kept back for the return leg, not the whole 60s budget.
     try testing.expectEqual(
-        @as(u32, 60_000),
+        @as(u32, 59_000),
         propertyOf(request.message, "com.microsoft:server-timeout").?.uint,
     );
 
@@ -3773,7 +3815,7 @@ test "an empty peek is an empty batch, and keeps no arena for it" {
     try testing.expect(batch.arena == null);
 }
 
-test "a peek larger than the transport allows is refused rather than reserved for" {
+test "a peek larger than the broker's count field allows is refused rather than truncated" {
     const allocator = testing.allocator;
     var h = try Harness.init(allocator);
     defer h.deinit();
@@ -4175,4 +4217,114 @@ test "closing detaches the management links and drops them from the session" {
     const detaches = try emittedDetaches(allocator, h.mem.written());
     defer allocator.free(detaches);
     try testing.expectEqual(@as(usize, 4), detaches.len);
+}
+
+test "a broker that returns more than was peeked for does not get to hand them on" {
+    // `message-count` is what the request asks for, not a promise about the
+    // reply. A caller that asked for two sized whatever it does next for two,
+    // so a longer reply is cut back rather than passed through.
+    const allocator = testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
+
+    try scriptCbsExchange(h.peer(), allocator);
+    try scriptManagementAttach(h.peer(), allocator, "orders", 2);
+    const body = try peekReplyBody(scratch.allocator(), 500, 0, 5);
+    try pushManagementReply(h.peer(), allocator, "orders", 3, 1, 1, 1, 200, body);
+
+    try h.start(.{});
+
+    var batch = try h.transport.peekMessages(allocator, "orders", 500, 2);
+    defer batch.deinit();
+
+    try testing.expectEqual(@as(usize, 2), batch.count());
+    try testing.expectEqualStrings("peeked-0", batch.messages[0].body);
+    try testing.expectEqualStrings("peeked-1", batch.messages[1].body);
+}
+
+test "two entities' management pairs are told apart by address, not by link id" {
+    // Every management pair is opened with the transport's one link id, so
+    // what keeps two entities' replies apart is the address: `RpcLink` derives
+    // the link names and the private reply address from it, and the address
+    // carries the entity. If that were not enough, each pair would be handed
+    // the other's replies — so this scripts both and checks each answer
+    // reaches the call that asked for it.
+    const allocator = testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
+
+    try scriptCbsExchange(h.peer(), allocator);
+    try scriptManagementAttach(h.peer(), allocator, "orders", 2);
+    const orders_body = try peekReplyBody(scratch.allocator(), 500, 0, 1);
+    try pushManagementReply(h.peer(), allocator, "orders", 3, 1, 1, 1, 200, orders_body);
+
+    try scriptCbsReplyAt(h.peer(), allocator, 2, 2, 2);
+    try scriptManagementAttach(h.peer(), allocator, "billing", 4);
+    const billing_body = try peekReplyBody(scratch.allocator(), 900, 0, 1);
+    try pushManagementReply(h.peer(), allocator, "billing", 5, 1, 3, 3, 200, billing_body);
+
+    try h.start(.{});
+
+    var first = try h.transport.peekMessages(allocator, "orders", 500, 5);
+    defer first.deinit();
+    var second = try h.transport.peekMessages(allocator, "billing", 900, 5);
+    defer second.deinit();
+
+    // The sequence numbers are what say which entity answered: each reply
+    // reached the pair that asked for it rather than the other one.
+    try testing.expectEqual(@as(?i64, 500), first.messages[0].sequence_number);
+    try testing.expectEqual(@as(?i64, 900), second.messages[0].sequence_number);
+    try testing.expectEqual(@as(usize, 2), h.transport.managers.count());
+}
+
+test "the server timeout is what is left of the deadline, less the return leg" {
+    // The broker's timer starts when the request lands, which is after the
+    // dial, the claim and the attach the call may have had to do first.
+    // Sending the whole configured budget would have the broker give up
+    // strictly later than the caller — the case the property exists to
+    // prevent — so what goes out is measured against the clock at the moment
+    // the request is built, not at the moment the deadline was taken.
+    const allocator = testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    try harness.scriptHandshake(h.peer(), max_frame_size);
+    try h.start(.{});
+
+    const deadline = h.transport.deadlineFrom(h.session);
+
+    // Nothing has been spent yet: the whole budget less the return leg.
+    try testing.expectEqual(
+        @as(u32, 60_000 - 1_000),
+        AmqpTransport.serverTimeoutMs(h.session, deadline),
+    );
+
+    // Setup spent four seconds, and the broker only gets what is left.
+    h.clock.advance(4_000);
+    try testing.expectEqual(
+        @as(u32, 60_000 - 4_000 - 1_000),
+        AmqpTransport.serverTimeoutMs(h.session, deadline),
+    );
+
+    // Under a second left there is no room for the broker to answer first, so
+    // the buffer stops helping rather than underflowing into a huge unsigned
+    // timeout — which is how a broker would read a negative value.
+    h.clock.advance(55_500);
+    try testing.expectEqual(
+        @as(u32, 0),
+        AmqpTransport.serverTimeoutMs(h.session, deadline),
+    );
+
+    // And past the deadline entirely, still zero rather than wrapping.
+    h.clock.advance(10_000);
+    try testing.expectEqual(
+        @as(u32, 0),
+        AmqpTransport.serverTimeoutMs(h.session, deadline),
+    );
 }

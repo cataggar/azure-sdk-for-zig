@@ -213,10 +213,22 @@ singular form is that call with a one-element array.
 
 The `$management` node is **per entity**, so each entity gets its own link
 pair, cached and reused across operations exactly as its sender and receiver
-are. The CBS claim is on the entity, not on the management address. A pair the
+are. The CBS claim is on the entity rather than on the management address; the
+broker prefix-matches a token's resource against the link address, so the
+entity's token covers the node beneath it. The reference clients do not agree
+on this — Go claims both, .NET claims only the management address, Python only
+the entity — which is itself the evidence that either is accepted. A pair the
 broker has detached is replaced rather than written to again: §2.6.1 unbinds
 the handle at detach, and a transfer on an unbound handle ends the session and
 takes every other entity's link with it.
+
+Every pair is opened with the transport's one link id, not one per entity:
+`RpcLink` derives the link names and the private reply address from the
+address, which already carries the entity. `com.microsoft:server-timeout` is
+what remains of the call's deadline less a second, not the whole configured
+budget — the broker's timer starts when the request lands, after whatever
+dialling, claiming and attaching the call had to do first, and the second is
+the return leg the reply still needs to get back in.
 
 Each operation names the link it acts on behalf of in `associated-link-name`,
 which is how the broker routes it to the same partition and session as the
@@ -230,7 +242,8 @@ id or tag, and cannot be settled — to act on one, receive it. Its
 `+ 1`; that increment exists because a delivery in hand is one the header has
 not counted yet, and a peek has no delivery. A peek that runs past the end of
 the queue answers `204` with no body at all and comes back as an empty batch
-holding no arena, not as an error.
+holding no arena, not as an error. `max_count` is a request rather than a
+guarantee, so the batch is capped at it whatever the broker returns.
 
 Lock renewal identifies the message by its delivery tag, which the broker
 sends as a .NET `Guid` — the first three fields little-endian — while the AMQP
