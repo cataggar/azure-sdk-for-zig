@@ -599,10 +599,11 @@ test "a decoded message borrows nothing from the payload it was read from" {
     const annotations = [_]MapEntry{
         .{ .key = .{ .symbol = "x-opt-offset" }, .value = .{ .string = "12345" } },
     };
-    // A compound value as well as flat strings. The decoder has a separate
-    // path for arrays — small ones are staged through a stack buffer — so an
-    // element that aliased its input would dangle into a dead frame rather
-    // than into merely freed memory, and the flat fields would not show it.
+    // A compound value as well as flat strings, so the array path is covered
+    // and not just `decodeVariable8`. What this deterministically catches is
+    // an array element aliasing the payload; a borrow of the stack scratch
+    // small arrays are staged through would dangle into a frame this test
+    // never writes to, so that variant is caught only opportunistically.
     var array_items = [_]AmqpValue{
         .{ .string = "first" },
         .{ .string = "second" },
