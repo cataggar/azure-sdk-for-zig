@@ -4328,3 +4328,40 @@ test "the server timeout is what is left of the deadline, less the return leg" {
         AmqpTransport.serverTimeoutMs(h.session, deadline),
     );
 }
+
+test "what reaches the wire comes from the clock, not from the configured budget" {
+    // The unit test above pins the arithmetic; this one pins that the wire
+    // sees the result of it. A timeout computed from `deadline_ms` alone
+    // would be the same number on every call however long the claim and the
+    // attach took, and a clock that ticks on every read is what tells the two
+    // apart: the value that goes out has to be strictly under the budget less
+    // the buffer, because setup has already read the clock several times by
+    // the point the request is built.
+    //
+    // How far under is not asserted. That depends on how many times the dial,
+    // claim and attach path happens to read the clock, which belongs to
+    // `azure_sdk_amqp` and would make this test fail on a change with nothing
+    // to do with it. So what is checked is the side of the boundary: time was
+    // spent, and there is still something left to give the broker.
+    const allocator = testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    try scriptCbsExchange(h.peer(), allocator);
+    try scriptManagementAttach(h.peer(), allocator, "orders", 2);
+    try pushManagementReply(h.peer(), allocator, "orders", 3, 1, 1, 1, 200, null);
+
+    try h.start(.{});
+    h.clock.auto_advance_ms = 100;
+
+    try h.transport.cancelScheduled(allocator, "orders", &.{77});
+
+    var request = try requestAt(allocator, h.mem.written(), 1);
+    defer request.deinit();
+    const sent = propertyOf(request.message, "com.microsoft:server-timeout").?.uint;
+
+    // Off the clock at build time this is strictly under; off the configured
+    // budget it would be exactly the boundary.
+    try testing.expect(sent < 60_000 - server_timeout_buffer_ms);
+    try testing.expect(sent > 0);
+}
