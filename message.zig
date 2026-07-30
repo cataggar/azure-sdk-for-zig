@@ -59,15 +59,23 @@ pub const max_outgoing_annotations = 2;
 /// Scratch a caller lends to `toAmqpMessage` for the sections it must build.
 ///
 /// The returned message borrows from this, so it has to outlive the message.
-/// Keeping it out here is what lets a message with no application properties
-/// encode without allocating at all — the case that dominates, and the one a
-/// per-message `StringHashMap` would have taxed.
+/// Keeping it out here is what lets a message encode without allocating at
+/// all — the case that dominates a send loop, and the one a per-message
+/// `StringHashMap` would have taxed.
 ///
-/// **One message at a time.** Each `toAmqpMessage` overwrites the annotations
-/// and body in place and frees the property array, so the message the
+/// The property array keeps whatever capacity it has reached, so a loop of
+/// similar messages allocates on the first one and never again. It is held
+/// on the `Scratch`'s own allocator rather than on whichever allocator a
+/// caller passes per operation: an operation-scoped arena would otherwise be
+/// left holding this buffer after the operation returned, and the free would
+/// go through an allocator that no longer exists.
+///
+/// **One message at a time.** Each `toAmqpMessage` overwrites the
+/// annotations, the body and the property array in place, so the message the
 /// previous call returned is dead. Encode it before building the next, or
 /// use a second `Scratch`.
 pub const Scratch = struct {
+    allocator: Allocator,
     annotations: [max_outgoing_annotations]MapEntry = undefined,
     /// The one-element slice the body's data section is built from.
     ///
@@ -75,27 +83,35 @@ pub const Scratch = struct {
     /// pointing at that copy's `body` field would dangle the moment it
     /// returned. The section lives here instead, alongside the caller.
     body: [1][]const u8 = undefined,
+    /// Grown to the largest property count seen, never shrunk.
     properties: []MapEntry = &.{},
-    allocator: ?Allocator = null,
+
+    pub fn init(allocator: Allocator) Scratch {
+        return .{ .allocator = allocator };
+    }
 
     pub fn deinit(self: *Scratch) void {
-        if (self.allocator) |allocator| allocator.free(self.properties);
+        self.allocator.free(self.properties);
         self.properties = &.{};
-        self.allocator = null;
+    }
+
+    /// Room for `n` properties, reusing what the last message left behind.
+    fn propertyRoom(self: *Scratch, n: usize) Allocator.Error![]MapEntry {
+        if (self.properties.len < n) {
+            self.properties = try self.allocator.realloc(self.properties, n);
+        }
+        return self.properties[0..n];
     }
 };
 
 /// Build the AMQP message for `msg`, borrowing its strings and `scratch`.
 ///
-/// Releases anything `scratch` held from a previous call, so one `Scratch`
+/// Overwrites whatever `scratch` held from a previous call, so one `Scratch`
 /// can be hoisted out of a send loop — which is the point of it existing.
 pub fn toAmqpMessage(
-    allocator: Allocator,
     msg: ServiceBusMessage,
     scratch: *Scratch,
 ) EncodeError!amqp.Message {
-    scratch.deinit();
-
     var count: usize = 0;
     if (msg.partition_key) |key| {
         scratch.annotations[count] = .{
@@ -113,10 +129,9 @@ pub fn toAmqpMessage(
     }
 
     const property_count = msg.application_properties.count();
+    var entries: []MapEntry = &.{};
     if (property_count > 0) {
-        const entries = try allocator.alloc(MapEntry, property_count);
-        scratch.properties = entries;
-        scratch.allocator = allocator;
+        entries = try scratch.propertyRoom(property_count);
         var it = msg.application_properties.iterator();
         var i: usize = 0;
         while (it.next()) |entry| : (i += 1) {
@@ -149,7 +164,9 @@ pub fn toAmqpMessage(
             .content_type = msg.content_type,
             .group_id = msg.session_id,
         },
-        .application_properties = if (property_count > 0) scratch.properties else null,
+        // `entries`, not `scratch.properties`: the buffer keeps the capacity
+        // a longer message left behind, so only this prefix belongs to `msg`.
+        .application_properties = if (property_count > 0) entries else null,
         .body = .{ .data = &scratch.body },
     };
 }
@@ -159,9 +176,9 @@ pub fn toAmqpMessage(
 /// One allocation for the encoded bytes, plus one more only when the message
 /// carries application properties.
 pub fn encode(allocator: Allocator, msg: ServiceBusMessage) EncodeError![]u8 {
-    var scratch: Scratch = .{};
+    var scratch: Scratch = .init(allocator);
     defer scratch.deinit();
-    const amqp_msg = try toAmqpMessage(allocator, msg, &scratch);
+    const amqp_msg = try toAmqpMessage(msg, &scratch);
     return amqp.encodeMessageAlloc(allocator, amqp_msg);
 }
 
@@ -271,8 +288,8 @@ test "building the AMQP message allocates only for application properties" {
     plain.scheduled_enqueue_time = 1_700_000_000_000;
 
     var counting = CountingAllocator.init(allocator);
-    var scratch: Scratch = .{};
-    _ = try toAmqpMessage(counting.allocator(), plain, &scratch);
+    var scratch: Scratch = .init(counting.allocator());
+    _ = try toAmqpMessage(plain, &scratch);
     scratch.deinit();
     try testing.expectEqual(@as(usize, 0), counting.allocs);
 
@@ -282,10 +299,27 @@ test "building the AMQP message allocates only for application properties" {
     try with_properties.application_properties.put("region", "westus");
 
     counting = CountingAllocator.init(allocator);
-    var scratch2: Scratch = .{};
-    _ = try toAmqpMessage(counting.allocator(), with_properties, &scratch2);
-    scratch2.deinit();
+    var scratch2: Scratch = .init(counting.allocator());
+    defer scratch2.deinit();
+    _ = try toAmqpMessage(with_properties, &scratch2);
     try testing.expectEqual(@as(usize, 1), counting.allocs);
+
+    // And the second message of a loop reuses that array rather than
+    // allocating its own: the property buffer keeps the capacity it reached.
+    // This is what makes a send loop free of per-message allocation, so it is
+    // asserted here rather than left to the transport to claim.
+    _ = try toAmqpMessage(with_properties, &scratch2);
+    try testing.expectEqual(@as(usize, 1), counting.allocs);
+
+    // Even one that carries fewer properties than the buffer now holds.
+    var fewer = ServiceBusMessage.init(allocator, "hello");
+    defer fewer.deinit();
+    try fewer.application_properties.put("tenant", "contoso");
+    const built = try toAmqpMessage(fewer, &scratch2);
+    try testing.expectEqual(@as(usize, 1), counting.allocs);
+    // The message must describe its own properties, not the slack the buffer
+    // kept from the longer message before it.
+    try testing.expectEqual(@as(usize, 1), built.application_properties.?.len);
 }
 
 test "the standard properties round-trip through the wire" {
@@ -481,23 +515,22 @@ test "one scratch can be reused across messages without leaking" {
 
     // `Scratch` exists so a send loop can hoist it; the batch sender will do
     // exactly that. Each call must release what the previous one allocated.
-    var scratch: Scratch = .{};
+    var scratch: Scratch = .init(allocator);
     defer scratch.deinit();
 
     for (0..3) |_| {
         var msg = ServiceBusMessage.init(allocator, "payload");
         defer msg.deinit();
         try msg.application_properties.put("tenant", "contoso");
-        _ = try toAmqpMessage(allocator, msg, &scratch);
+        _ = try toAmqpMessage(msg, &scratch);
     }
 
-    // A message with no properties must also clear the previous array,
-    // rather than leave it dangling behind a stale `properties` slice.
+    // A message with no properties must report none, rather than hand back
+    // the array the previous message left in the buffer.
     var plain = ServiceBusMessage.init(allocator, "payload");
     defer plain.deinit();
-    const built = try toAmqpMessage(allocator, plain, &scratch);
+    const built = try toAmqpMessage(plain, &scratch);
     try testing.expectEqual(@as(?Fields, null), built.application_properties);
-    try testing.expectEqual(@as(usize, 0), scratch.properties.len);
 }
 
 test "delivery count is the Service Bus count, not the raw AMQP one" {
