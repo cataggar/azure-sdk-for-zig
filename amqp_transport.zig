@@ -2944,7 +2944,10 @@ test "a batch's entity survives the link it was received on being replaced" {
         .never_unmap = true,
         .retain_metadata = true,
     }) = .init;
-    defer _ = debug.deinit();
+    // Checked rather than discarded: this is the only test that re-attaches
+    // while a batch from the old link is still held, so it is the one place a
+    // leak on that path would show.
+    defer testing.expect(debug.deinit() == .ok) catch @panic("leak");
     const allocator = debug.allocator();
 
     var h = try Harness.initSplit(allocator, testing.allocator);
