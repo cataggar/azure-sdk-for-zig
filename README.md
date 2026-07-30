@@ -111,8 +111,76 @@ has expired is a question about the wall clock, since a token's expiry is a
 Unix timestamp; judging it on a monotonic clock would make every token look
 fresh forever.
 
-`receiveMessages`, `settleMessage`, `scheduleMessage` and `cancelScheduled`
-return `error.NotImplemented` until the receive and management paths land.
+`scheduleMessage` and `cancelScheduled` return `error.NotImplemented` until the
+management path lands.
+
+## Receiving and settling
+
+`receiveMessages` returns a `ReceivedMessages` batch, not a slice, because the
+batch owns the memory every message in it points into:
+
+```zig
+var batch = try client.receiveMessages(allocator, 10);
+defer batch.deinit();
+
+for (batch.messages) |msg| {
+    try process(msg.body);
+}
+try client.settleMessages(allocator, batch.messages, .complete, .{});
+```
+
+Nothing is allocated until a message actually arrives, so an empty poll — the
+steady state of a consumer on a quiet queue — costs no page. Once one does,
+one arena backs the whole batch, so a message costs the two copies
+`azure_sdk_amqp` makes of the delivery it came from and nothing else — the
+decode borrows nothing from the payload, which matters because a delivery is
+valid only until the next one is read. The batch owns its arena rather than
+sharing one held by the transport, since settlement happens after processing
+and a caller may legitimately hold batch N while receiving batch N+1.
+
+`max_count` is capped at 5000, the same ceiling Event Hubs puts on a receive:
+it sizes both a credit grant and a precise reservation, so it has to be the
+caller's intent rather than whatever number happened to arrive.
+
+Credit is a window, never one at a time: the link is attached with a prefetch
+of 300 by default and refills at half. Setting `prefetch` to 0 turns the window
+off, and each receive then asks for exactly what it wants.
+
+A receive that runs out of time with messages already in hand returns them
+rather than raising; so does one that fails partway, including on a message
+that will not decode. Only an empty batch can carry an error, and a timed-out
+empty batch is not an error either — there was simply nothing there. The one
+case with no good answer is an undecodable message at the *head* of a batch:
+it surfaces as an error, and since the caller never gets a handle to it, it
+cannot be dead-lettered either. Under peek-lock that recurs rather than
+happening once — the message is left unsettled, so it comes back when the lock
+lapses and stops the batch at the same place again.
+
+Settlement works on delivery *ids*, so a run of messages collapses into one
+disposition frame instead of one per message. Ids are allocated by the session
+rather than the link, and a `disposition` carries no handle, so a range is not
+confined to the link it is sent through — which is why the run has to break in
+two places. Across **gaps**, because a gap means another link on the session
+took an id in between and settling through it would decide that link's
+delivery. And between **entities**, because whether the ids should be settled
+at all is a property of the link: a `receive_and_delete` entity's messages were
+settled as they were read, and folding them into a neighbouring `peek_lock`
+range would settle them twice. `completeMessage` and friends are the
+one-message spelling of the same call.
+
+| action | AMQP outcome |
+| --- | --- |
+| complete | `accepted` |
+| abandon | `modified`, neither flag set |
+| defer | `modified` with `undeliverable-here` |
+| dead-letter | `rejected`, condition `com.microsoft:dead-letter`, reason and description in `info` |
+
+`receive_and_delete` is emulated rather than negotiated. The AMQP form is
+`snd-settle-mode: settled` on the attach, which `azure_sdk_amqp` does not
+expose yet, so the transport accepts each delivery as it reads it — batched
+into one disposition — and settling such a message afterwards is a no-op. That
+makes it at-least-once where the broker's own mode is at-most-once: a
+disposition lost in flight means redelivery, not a dropped message.
 
 ## Development
 

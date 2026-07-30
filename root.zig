@@ -130,8 +130,8 @@ pub const ServiceBusMessage = struct {
 
 /// A received Service Bus message with broker-assigned metadata.
 ///
-/// Every slice borrows from the delivery the message was decoded out of, so a
-/// received message is valid exactly as long as that delivery is. See
+/// Every slice borrows from the `ReceivedMessages` batch the message came in,
+/// so a received message is valid exactly as long as that batch is. See
 /// `message.zig`.
 pub const ServiceBusReceivedMessage = struct {
     body: []const u8,
@@ -160,8 +160,58 @@ pub const ServiceBusReceivedMessage = struct {
     /// values that a string map could not hold. Read them with
     /// `applicationPropertyOf`.
     application_properties: ?message_codec.Fields = null,
-    /// Opaque delivery tag for message settlement.
+    /// Opaque delivery tag, which for Service Bus is the message's lock
+    /// token. Carried for the management operations that take one, such as
+    /// renewing a lock.
     delivery_tag: ?[]const u8 = null,
+    /// The AMQP delivery id, which is what a disposition names.
+    ///
+    /// Settlement works on ids rather than tags: a disposition covers a
+    /// `first`..`last` range (§2.7.6), so a whole batch settles in one frame
+    /// where tags would need one lookup and one frame each.
+    delivery_id: ?u32 = null,
+    /// The entity this message was received from, so settlement can find the
+    /// link it arrived on. Owned by the batch, like every other slice here.
+    entity: ?[]const u8 = null,
+};
+
+/// A batch of received messages and the storage they were decoded into.
+///
+/// The batch owns an arena and every message points into it, so releasing one
+/// message is not a thing that can be done — free the batch when the last of
+/// its messages has been settled or copied out.
+///
+/// A batch owning its own arena, rather than the transport reusing one across
+/// calls, is what makes it safe to receive again while an earlier batch is
+/// still in hand: settlement happens after processing, and a shared arena
+/// would turn the second receive into a silent overwrite of the first batch.
+pub const ReceivedMessages = struct {
+    messages: []ServiceBusReceivedMessage = &.{},
+    /// Null for a batch that allocated nothing, including every empty one.
+    arena: ?*std.heap.ArenaAllocator = null,
+
+    pub fn deinit(self: *ReceivedMessages) void {
+        if (self.arena) |arena| {
+            const child = arena.child_allocator;
+            arena.deinit();
+            child.destroy(arena);
+        }
+        self.* = .{};
+    }
+
+    pub fn count(self: ReceivedMessages) usize {
+        return self.messages.len;
+    }
+};
+
+/// What to record on a message being moved to the dead-letter queue.
+///
+/// Both land in the rejection's `info` map, where the broker copies them onto
+/// the dead-lettered message as `DeadLetterReason` and
+/// `DeadLetterErrorDescription`.
+pub const DeadLetterOptions = struct {
+    reason: ?[]const u8 = null,
+    error_description: ?[]const u8 = null,
 };
 
 /// Batch of outgoing messages with size tracking.
@@ -196,8 +246,14 @@ pub const ServiceBusMessageBatch = struct {
 /// Internal transport interface for Service Bus AMQP operations.
 pub const ServiceBusAmqpTransport = struct {
     sendMessagesFn: *const fn (self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, messages: []const ServiceBusMessage) anyerror!void,
-    receiveMessagesFn: *const fn (self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, max_count: u32, mode: ReceiveMode) anyerror![]ServiceBusReceivedMessage,
-    settleMessageFn: *const fn (self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, delivery_tag: []const u8, action: DispositionAction, reason: ?[]const u8) anyerror!void,
+    receiveMessagesFn: *const fn (self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, max_count: u32, mode: ReceiveMode) anyerror!ReceivedMessages,
+    /// Settle a run of messages in one go.
+    ///
+    /// Takes a slice rather than a message at a time because a disposition
+    /// names a range: settling a drained prefetch window one call at a time
+    /// costs a frame per message. Messages need not share an entity — the
+    /// implementation is expected to break the run wherever they do not.
+    settleMessagesFn: *const fn (self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, messages: []const ServiceBusReceivedMessage, action: DispositionAction, dead_letter: DeadLetterOptions) anyerror!void,
     scheduleMessageFn: *const fn (self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, message: ServiceBusMessage, enqueue_time: i64) anyerror!i64,
     cancelScheduledFn: *const fn (self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, sequence_number: i64) anyerror!void,
     closeFn: *const fn (self: *ServiceBusAmqpTransport) void,
@@ -206,12 +262,12 @@ pub const ServiceBusAmqpTransport = struct {
         return self.sendMessagesFn(self, allocator, entity, messages);
     }
 
-    pub fn receiveMessages(self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, max_count: u32, mode: ReceiveMode) ![]ServiceBusReceivedMessage {
+    pub fn receiveMessages(self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, max_count: u32, mode: ReceiveMode) !ReceivedMessages {
         return self.receiveMessagesFn(self, allocator, entity, max_count, mode);
     }
 
-    pub fn settleMessage(self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, delivery_tag: []const u8, action: DispositionAction, reason: ?[]const u8) !void {
-        return self.settleMessageFn(self, allocator, delivery_tag, action, reason);
+    pub fn settleMessages(self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, messages: []const ServiceBusReceivedMessage, action: DispositionAction, dead_letter: DeadLetterOptions) !void {
+        return self.settleMessagesFn(self, allocator, messages, action, dead_letter);
     }
 
     pub fn scheduleMessage(self: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, message: ServiceBusMessage, enqueue_time: i64) !i64 {
@@ -232,7 +288,9 @@ pub const MockServiceBusTransport = struct {
     send_called: bool = false,
     send_count: u32 = 0,
     settle_calls: u32 = 0,
+    settled_messages: u32 = 0,
     last_settle_action: ?DispositionAction = null,
+    last_dead_letter: DeadLetterOptions = .{},
     schedule_result: i64 = 1001,
     receive_result: []ServiceBusReceivedMessage = &.{},
     transport: ServiceBusAmqpTransport,
@@ -242,7 +300,7 @@ pub const MockServiceBusTransport = struct {
             .transport = .{
                 .sendMessagesFn = &sendMessagesImpl,
                 .receiveMessagesFn = &receiveMessagesImpl,
-                .settleMessageFn = &settleMessageImpl,
+                .settleMessagesFn = &settleMessagesImpl,
                 .scheduleMessageFn = &scheduleMessageImpl,
                 .cancelScheduledFn = &cancelScheduledImpl,
                 .closeFn = &closeImpl,
@@ -262,22 +320,24 @@ pub const MockServiceBusTransport = struct {
         self.send_count += @intCast(messages.len);
     }
 
-    fn receiveMessagesImpl(t: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, max_count: u32, mode: ReceiveMode) ![]ServiceBusReceivedMessage {
+    fn receiveMessagesImpl(t: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, max_count: u32, mode: ReceiveMode) !ReceivedMessages {
         _ = allocator;
         _ = entity;
         _ = max_count;
         _ = mode;
         const self: *MockServiceBusTransport = @fieldParentPtr("transport", t);
-        return self.receive_result;
+        // No arena: the result is the caller's own fixture, so `deinit` on
+        // the batch must not try to free it.
+        return .{ .messages = self.receive_result };
     }
 
-    fn settleMessageImpl(t: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, delivery_tag: []const u8, action: DispositionAction, reason: ?[]const u8) !void {
+    fn settleMessagesImpl(t: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, messages: []const ServiceBusReceivedMessage, action: DispositionAction, dead_letter: DeadLetterOptions) !void {
         _ = allocator;
-        _ = delivery_tag;
-        _ = reason;
         const self: *MockServiceBusTransport = @fieldParentPtr("transport", t);
         self.settle_calls += 1;
+        self.settled_messages += @intCast(messages.len);
         self.last_settle_action = action;
+        self.last_dead_letter = dead_letter;
     }
 
     fn scheduleMessageImpl(t: *ServiceBusAmqpTransport, allocator: std.mem.Allocator, entity: []const u8, message: ServiceBusMessage, enqueue_time: i64) !i64 {
@@ -405,35 +465,49 @@ pub const ServiceBusReceiverClient = struct {
         };
     }
 
-    /// Receive messages from the entity.
-    pub fn receiveMessages(self: *ServiceBusReceiverClient, allocator: std.mem.Allocator, max_count: u32) ![]ServiceBusReceivedMessage {
+    /// Receive up to `max_count` messages from the entity.
+    ///
+    /// Free the result with `ReceivedMessages.deinit`; every message in it
+    /// borrows from the batch.
+    pub fn receiveMessages(self: *ServiceBusReceiverClient, allocator: std.mem.Allocator, max_count: u32) !ReceivedMessages {
         const address = try self.entity.formatAddress(allocator, self.sub_queue);
         defer allocator.free(address);
         return self.amqp_transport.receiveMessages(allocator, address, max_count, self.receive_mode);
     }
 
+    /// Settle a run of messages with one disposition where they allow it.
+    ///
+    /// The single-message helpers below are this with a one-element slice, so
+    /// a caller draining a batch should prefer this: it is the difference
+    /// between one frame and one per message.
+    pub fn settleMessages(
+        self: *ServiceBusReceiverClient,
+        allocator: std.mem.Allocator,
+        messages: []const ServiceBusReceivedMessage,
+        action: DispositionAction,
+        dead_letter: DeadLetterOptions,
+    ) !void {
+        return self.amqp_transport.settleMessages(allocator, messages, action, dead_letter);
+    }
+
     /// Complete (acknowledge) a received message.
     pub fn completeMessage(self: *ServiceBusReceiverClient, allocator: std.mem.Allocator, message: ServiceBusReceivedMessage) !void {
-        const tag = message.delivery_tag orelse return error.MissingDeliveryTag;
-        return self.amqp_transport.settleMessage(allocator, tag, .complete, null);
+        return self.settleMessages(allocator, &.{message}, .complete, .{});
     }
 
     /// Abandon a message, releasing the lock.
     pub fn abandonMessage(self: *ServiceBusReceiverClient, allocator: std.mem.Allocator, message: ServiceBusReceivedMessage) !void {
-        const tag = message.delivery_tag orelse return error.MissingDeliveryTag;
-        return self.amqp_transport.settleMessage(allocator, tag, .abandon, null);
+        return self.settleMessages(allocator, &.{message}, .abandon, .{});
     }
 
     /// Move a message to the dead-letter queue.
-    pub fn deadLetterMessage(self: *ServiceBusReceiverClient, allocator: std.mem.Allocator, message: ServiceBusReceivedMessage, reason: ?[]const u8) !void {
-        const tag = message.delivery_tag orelse return error.MissingDeliveryTag;
-        return self.amqp_transport.settleMessage(allocator, tag, .dead_letter, reason);
+    pub fn deadLetterMessage(self: *ServiceBusReceiverClient, allocator: std.mem.Allocator, message: ServiceBusReceivedMessage, options: DeadLetterOptions) !void {
+        return self.settleMessages(allocator, &.{message}, .dead_letter, options);
     }
 
     /// Defer a message for later retrieval by sequence number.
     pub fn deferMessage(self: *ServiceBusReceiverClient, allocator: std.mem.Allocator, message: ServiceBusReceivedMessage) !void {
-        const tag = message.delivery_tag orelse return error.MissingDeliveryTag;
-        return self.amqp_transport.settleMessage(allocator, tag, .defer_msg, null);
+        return self.settleMessages(allocator, &.{message}, .defer_msg, .{});
     }
 
     pub fn close(self: *ServiceBusReceiverClient) void {
@@ -567,8 +641,9 @@ test "ReceiverClient receiveMessages" {
         .receive_mode = .peek_lock,
         .sub_queue = .none,
     };
-    const messages = try receiver.receiveMessages(allocator, 10);
-    try std.testing.expectEqual(@as(usize, 0), messages.len);
+    var messages = try receiver.receiveMessages(allocator, 10);
+    defer messages.deinit();
+    try std.testing.expectEqual(@as(usize, 0), messages.count());
 }
 
 test "ReceiverClient completeMessage" {
@@ -598,11 +673,13 @@ test "ReceiverClient deadLetterMessage" {
         .sub_queue = .none,
     };
     const msg = ServiceBusReceivedMessage{ .body = "bad", .delivery_tag = "tag-2" };
-    try receiver.deadLetterMessage(allocator, msg, "poisoned");
+    try receiver.deadLetterMessage(allocator, msg, .{ .reason = "poisoned", .error_description = "unparseable body" });
     try std.testing.expectEqual(DispositionAction.dead_letter, amqp.last_settle_action.?);
+    try std.testing.expectEqualStrings("poisoned", amqp.last_dead_letter.reason.?);
+    try std.testing.expectEqualStrings("unparseable body", amqp.last_dead_letter.error_description.?);
 }
 
-test "ReceiverClient completeMessage missing tag" {
+test "settling a run of messages is one call, not one per message" {
     const allocator = std.testing.allocator;
     var amqp = MockServiceBusTransport.init();
     var receiver = ServiceBusReceiverClient{
@@ -612,9 +689,14 @@ test "ReceiverClient completeMessage missing tag" {
         .receive_mode = .peek_lock,
         .sub_queue = .none,
     };
-    const msg = ServiceBusReceivedMessage{ .body = "test" };
-    const result = receiver.completeMessage(allocator, msg);
-    try std.testing.expectError(error.MissingDeliveryTag, result);
+    const batch = [_]ServiceBusReceivedMessage{
+        .{ .body = "a", .delivery_id = 0 },
+        .{ .body = "b", .delivery_id = 1 },
+        .{ .body = "c", .delivery_id = 2 },
+    };
+    try receiver.settleMessages(allocator, &batch, .complete, .{});
+    try std.testing.expectEqual(@as(u32, 1), amqp.settle_calls);
+    try std.testing.expectEqual(@as(u32, 3), amqp.settled_messages);
 }
 
 test "ReceiverClient subscription entity" {
@@ -627,8 +709,9 @@ test "ReceiverClient subscription entity" {
         .receive_mode = .receive_and_delete,
         .sub_queue = .none,
     };
-    const messages = try receiver.receiveMessages(allocator, 5);
-    try std.testing.expectEqual(@as(usize, 0), messages.len);
+    var messages = try receiver.receiveMessages(allocator, 5);
+    defer messages.deinit();
+    try std.testing.expectEqual(@as(usize, 0), messages.count());
 }
 
 test "a receiver reads its namespace from the connection string" {
