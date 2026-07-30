@@ -252,14 +252,29 @@ pub const Decoded = struct {
     }
 };
 
-/// Decode a whole message payload, which is a concatenation of sections.
-pub fn decode(allocator: Allocator, payload: []const u8) DecodeError!Decoded {
-    const arena = try allocator.create(std.heap.ArenaAllocator);
-    errdefer allocator.destroy(arena);
-    arena.* = .init(allocator);
-    errdefer arena.deinit();
-
-    const a = arena.allocator();
+/// Decode a whole message payload, allocating from `allocator`.
+///
+/// Every slice in the result points into `allocator`, so this is meant for an
+/// arena the caller can reset or drop wholesale. A receive loop that resets one
+/// arena per message pays nothing per message once it is warm, where `decode`
+/// pays an arena struct and its first pages every time. `decode` wraps this
+/// with an arena of its own for callers that would rather not keep one.
+///
+/// The result borrows nothing from `payload`: the decoder dupes strings,
+/// symbols and binaries into `allocator` rather than pointing into its input,
+/// so the message outlives the buffer it was read from.
+///
+/// Two things a caller has to know, because `Message` has no destructor and
+/// nothing here tracks what it allocated:
+///
+/// - `allocator` must be an arena the caller resets or drops. Handing this a
+///   general-purpose allocator directly leaks the whole message with no way to
+///   reclaim it — where `decode` would have been safe.
+/// - On error, what was already allocated is *not* rolled back. A caller
+///   reusing one arena across messages should reset it after a failed decode
+///   rather than decoding the next message on top.
+pub fn decodeInto(allocator: Allocator, payload: []const u8) DecodeError!Message {
+    const a = allocator;
     var msg = Message{};
 
     var data: std.ArrayList([]const u8) = .empty;
@@ -307,7 +322,17 @@ pub fn decode(allocator: Allocator, payload: []const u8) DecodeError!Decoded {
         msg.body = .{ .sequence = sequences.items };
     }
 
-    return .{ .arena = arena, .message = msg };
+    return msg;
+}
+
+/// Decode a whole message payload into an arena the result owns.
+pub fn decode(allocator: Allocator, payload: []const u8) DecodeError!Decoded {
+    const arena = try allocator.create(std.heap.ArenaAllocator);
+    errdefer allocator.destroy(arena);
+    arena.* = .init(allocator);
+    errdefer arena.deinit();
+
+    return .{ .arena = arena, .message = try decodeInto(arena.allocator(), payload) };
 }
 
 fn listOf(value: AmqpValue) DecodeError![]const AmqpValue {
@@ -560,3 +585,137 @@ test "decoding survives allocation failure" {
     };
     try testing.checkAllAllocationFailures(testing.allocator, Case.run, .{});
 }
+
+test "a decoded message borrows nothing from the payload it was read from" {
+    // `decodeInto` exists so a receive loop can reset one arena per message
+    // instead of building one, which is only sound if the message does not
+    // point back into the frame buffer the payload came out of — a buffer the
+    // driver overwrites on the very next frame. Prove it by freeing the
+    // payload before reading the message.
+    const allocator = testing.allocator;
+    const app_props = [_]MapEntry{
+        .{ .key = .{ .string = "partition" }, .value = .{ .string = "7" } },
+    };
+    const annotations = [_]MapEntry{
+        .{ .key = .{ .symbol = "x-opt-offset" }, .value = .{ .string = "12345" } },
+    };
+    // A compound value as well as flat strings, so the array path is covered
+    // and not just `decodeVariable8`. What this deterministically catches is
+    // an array element aliasing the payload; a borrow of the stack scratch
+    // small arrays are staged through would dangle into a frame this test
+    // never writes to, so that variant is caught only opportunistically.
+    var array_items = [_]AmqpValue{
+        .{ .string = "first" },
+        .{ .string = "second" },
+    };
+    const nested = [_]MapEntry{
+        .{ .key = .{ .symbol = "x-opt-list" }, .value = .{ .array = &array_items } },
+    };
+    const bytes = try encodeAlloc(allocator, .{
+        .message_annotations = &annotations,
+        .properties = .{ .message_id = .{ .string = "id-1" }, .to = "eh" },
+        .application_properties = &app_props,
+        .delivery_annotations = &nested,
+        .body = .{ .data = &.{"the body"} },
+    });
+
+    var arena: std.heap.ArenaAllocator = .init(allocator);
+    defer arena.deinit();
+    const msg = try decodeInto(arena.allocator(), bytes);
+
+    // Scribble as well as free. Under the testing allocator a borrow trips the
+    // use-after-free check first, but that check is a property of the harness;
+    // the scribble is what makes the read a demonstrably wrong answer under
+    // any allocator, which is the thing production actually does.
+    @memset(bytes, 0xAA);
+    allocator.free(bytes);
+
+    try testing.expectEqualStrings("the body", msg.body.data[0]);
+    try testing.expectEqualStrings("eh", msg.properties.to.?);
+    try testing.expectEqualStrings("id-1", msg.properties.message_id.?.string);
+    try testing.expectEqualStrings("partition", msg.application_properties.?[0].key.string);
+    try testing.expectEqualStrings("7", msg.application_properties.?[0].value.string);
+    try testing.expectEqualStrings("x-opt-offset", msg.message_annotations.?[0].key.symbol);
+    try testing.expectEqualStrings("12345", msg.message_annotations.?[0].value.string);
+    const decoded_array = msg.delivery_annotations.?[0].value.array;
+    try testing.expectEqual(@as(usize, 2), decoded_array.len);
+    try testing.expectEqualStrings("first", decoded_array[0].string);
+    try testing.expectEqualStrings("second", decoded_array[1].string);
+}
+
+test "one arena reset per message decodes a batch without allocating per message" {
+    // The point of the entry point: over a prefetch window the per-message
+    // arena cost amortises to nothing, where `decode` pays it every time.
+    const allocator = testing.allocator;
+    var counting = CountingAllocator{ .child = allocator };
+    const app_props = [_]MapEntry{
+        .{ .key = .{ .string = "k" }, .value = .{ .string = "v" } },
+    };
+    const bytes = try encodeAlloc(allocator, .{
+        .properties = .{ .to = "eh" },
+        .application_properties = &app_props,
+        .body = .{ .data = &.{"a 40-byte-ish body, near enough for this"} },
+    });
+    defer allocator.free(bytes);
+
+    var arena: std.heap.ArenaAllocator = .init(counting.allocator());
+    defer arena.deinit();
+
+    // Warm the arena. Two rounds, not one: the first decode may land across
+    // two pages, and the first reset consolidates them into a single node — so
+    // counting from after one decode still sees that consolidation.
+    _ = try decodeInto(arena.allocator(), bytes);
+    _ = arena.reset(.retain_capacity);
+    _ = try decodeInto(arena.allocator(), bytes);
+
+    const before = counting.allocs;
+    var i: usize = 0;
+    while (i < 64) : (i += 1) {
+        _ = arena.reset(.retain_capacity);
+        const msg = try decodeInto(arena.allocator(), bytes);
+        try testing.expectEqualStrings("eh", msg.properties.to.?);
+    }
+    try testing.expectEqual(@as(usize, 0), counting.allocs - before);
+}
+
+/// Counts allocations so a test can assert that a code path performs none.
+const CountingAllocator = struct {
+    child: Allocator,
+    allocs: usize = 0,
+
+    fn allocator(self: *CountingAllocator) Allocator {
+        return .{ .ptr = self, .vtable = &.{
+            .alloc = alloc,
+            .resize = resize,
+            .remap = remap,
+            .free = free,
+        } };
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ra: usize) ?[*]u8 {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        const out = self.child.rawAlloc(len, alignment, ra);
+        if (out != null) self.allocs += 1;
+        return out;
+    }
+
+    fn resize(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) bool {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        return self.child.rawResize(buf, alignment, new_len, ra);
+    }
+
+    fn remap(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) ?[*]u8 {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        const out = self.child.rawRemap(buf, alignment, new_len, ra);
+        // Only a move is a new allocation; an in-place grow is not.
+        if (out) |p| if (p != buf.ptr) {
+            self.allocs += 1;
+        };
+        return out;
+    }
+
+    fn free(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, ra: usize) void {
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        self.child.rawFree(buf, alignment, ra);
+    }
+};

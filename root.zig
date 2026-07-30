@@ -89,6 +89,7 @@ pub const MessageProperties = message_codec.Properties;
 pub const encodeMessage = message_codec.encode;
 pub const encodeMessageAlloc = message_codec.encodeAlloc;
 pub const decodeMessage = message_codec.decode;
+pub const decodeMessageInto = message_codec.decodeInto;
 
 // Re-export AMQP type system.
 pub const AmqpValue = uamqp.AmqpValue;
