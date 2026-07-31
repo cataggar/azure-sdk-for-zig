@@ -377,10 +377,23 @@ pub const Session = struct {
 /// the same number as a by-product of the decode that `pump` already performs,
 /// which is why decoding a second time here would be pure waste. It remains
 /// for peers and tests, which hold a frame body without having decoded it.
-pub fn performativeLength(allocator: Allocator, body: []const u8) ?usize {
+///
+/// Distinguishing `error.OutOfMemory` from `error.MalformedFrame` still matters
+/// now that only peers and tests call this, because `checkAllAllocationFailures`
+/// injects the former deliberately. Collapsing the two — as returning `?usize`
+/// did — makes an injected failure indistinguishable from the peer sending
+/// garbage. Until #333 that was a live receive-path bug; what is left is that
+/// every caller that consumed the optional unwrapped it with `.?`, so an
+/// injected failure aborted the test process on a null unwrap instead of being
+/// reported as the allocation failure it was. (`transferPayload` forwarded the
+/// null instead, which merely moved the unwrap to its own callers.)
+pub fn performativeLength(allocator: Allocator, body: []const u8) connection.ConnectionError!usize {
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
-    const result = uamqp.decoder.decode(arena.allocator(), body) catch return null;
+    const result = uamqp.decoder.decode(arena.allocator(), body) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.MalformedFrame,
+    };
     return result.bytes_consumed;
 }
 
@@ -1492,7 +1505,7 @@ test "a message past max-frame-size is split and reassembles to the original" {
             try testing.expectEqual(@as(?[]const u8, null), t.delivery_tag);
         }
 
-        const consumed = performativeLength(allocator, body).?;
+        const consumed = try performativeLength(allocator, body);
         try reassembled.appendSlice(allocator, body[consumed..]);
         if (!t.more) saw_final = true;
     }
@@ -1565,7 +1578,7 @@ test "a delivery carries the requested message format" {
     defer decoded.deinit();
     try testing.expectEqual(@as(u32, 0x80013700), decoded.performative.transfer.message_format.?);
 
-    const consumed = performativeLength(allocator, transfers[0]).?;
+    const consumed = try performativeLength(allocator, transfers[0]);
     try testing.expectEqualStrings("payload", transfers[0][consumed..]);
 }
 
@@ -1639,7 +1652,7 @@ test "a formatted delivery split across frames keeps every frame within the limi
             try testing.expectEqual(@as(?u32, null), decoded.performative.transfer.message_format);
         }
 
-        const consumed = performativeLength(allocator, body).?;
+        const consumed = try performativeLength(allocator, body);
         try reassembled.appendSlice(allocator, body[consumed..]);
         try testing.expect(body.len + frame.frame_header_size <= 512);
     }
@@ -2921,6 +2934,125 @@ fn rejectedSendUnderAllocator(allocator: Allocator) !void {
     };
 }
 
+fn multiFrameReceiveUnderAllocator(allocator: Allocator) !void {
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 4,
+        .delivery_tag = "\x00\x00\x00\x04",
+        .message_format = 0,
+        .settled = false,
+        .more = true,
+    }, "part-one|");
+    try peer.pushTransfer(0, .{ .handle = 0, .more = true }, "part-two|");
+    try peer.pushTransfer(0, .{ .handle = 0, .more = false }, "part-three");
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 0,
+    }, 10_000);
+
+    const delivery = try receiver.receive(10_000);
+    try testing.expectEqualStrings("part-one|part-two|part-three", delivery.payload);
+    try receiver.accept(delivery);
+}
+
+test "reassembling a delivery leaks nothing however the allocator fails" {
+    // A multi-frame delivery is the receive path's allocating shape: the
+    // payload buffer grows per frame, and on completion the payload and the
+    // delivery tag are each duped out of their own reassembly buffer. Every
+    // one of those is a place a failure could leave a half-built delivery
+    // behind.
+    //
+    // Until #333 this could not have passed: `applyTransfer` measured the
+    // performative through `performativeLength` and turned the injected
+    // failure into `error.MalformedFrame`. So this is regression cover for
+    // #333, not for the signature change this commit makes — it passes
+    // either way, and fails if the pre-#333 measurement is reinstated.
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        multiFrameReceiveUnderAllocator,
+        .{},
+    );
+}
+
+fn inspectWrittenPayloadUnderAllocator(allocator: Allocator) !void {
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptSenderAttach(peer, 10);
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+    }, 10_000);
+
+    mem.clearWritten();
+    _ = try sender.sendBytesAsync("payload", .{}, 10_000);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    // Through `of` rather than indexing `bodies`, because `of` is how a test
+    // that selects frames by descriptor reaches a body, and `of` leaked its
+    // list when an append failed. That is a different defect from the sentinel
+    // — `of` reported the failure faithfully and merely stranded memory on
+    // the way out — but for those tests it was an independent blocker, so
+    // fixing `transferPayload` alone would have left the road closed one step
+    // earlier. Tests that walk `bodies` directly, which most here do, met only
+    // the sentinel.
+    const transfers = try frames.of(allocator, perf.descriptor.transfer);
+    defer allocator.free(transfers);
+    const payload = try harness.transferPayload(allocator, transfers[0]);
+    try testing.expectEqualStrings("payload", payload);
+}
+
+test "inspecting what was written survives a failing allocator" {
+    // Regression cover for both of the things that stopped
+    // `checkAllAllocationFailures` being pointed at a test that inspects
+    // written bytes: `performativeLength` answering `?usize`, and
+    // `EmittedFrames.of` stranding its list. Note that this is a different
+    // set of tests from "the receive path" the issue named — #333 had
+    // already cleared that, as the test above shows.
+    //
+    // Splitting a transfer's payload from its performative means decoding the
+    // performative again, which allocates, so an injected failure lands here.
+    // While that answered `?usize` the failure was indistinguishable from a
+    // malformed frame, and since every caller that consumed it unwrapped it,
+    // the injection aborted the test process on a null unwrap.
+    //
+    // Revert the signature and this does not fail — it panics. Drop the
+    // `errdefer` in `of` and it fails with a leak instead.
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        inspectWrittenPayloadUnderAllocator,
+        .{},
+    );
+}
+
 test "a rejected send leaks nothing however the allocator fails" {
     // Recording a rejection allocates twice, and the second dupe failing is
     // the only way to observe a half-built `Rejection`. Assigning the struct
@@ -3843,7 +3975,7 @@ test "a message round-trips from the sender's encoding to the receiver's payload
     try testing.expectEqual(@as(usize, 1), frames.bodies.items.len);
 
     const body = frames.bodies.items[0];
-    const consumed = performativeLength(allocator, body).?;
+    const consumed = try performativeLength(allocator, body);
     var decoded = try message.decode(allocator, body[consumed..]);
     defer decoded.deinit();
 

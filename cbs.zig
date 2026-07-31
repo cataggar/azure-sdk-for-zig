@@ -426,7 +426,7 @@ fn sentPutTokenProperties(allocator: Allocator, written: []const u8) !message.De
     defer allocator.free(transfers);
     try testing.expectEqual(@as(usize, 1), transfers.len);
 
-    const payload = harness.transferPayload(allocator, transfers[0]).?;
+    const payload = try harness.transferPayload(allocator, transfers[0]);
     return message.decode(allocator, payload);
 }
 
