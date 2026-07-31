@@ -230,6 +230,14 @@ pub const Session = struct {
         return null;
     }
 
+    /// A receiver this endpoint has detached but the peer may not have.
+    fn detachedReceiverFor(self: *Session, handle: u32) ?*Receiver {
+        for (self.receivers.items) |r| {
+            if (!r.attached and r.remote_handle == handle) return r;
+        }
+        return null;
+    }
+
     fn applyFlow(self: *Session, f: perf.Flow) LinkError!void {
         self.next_incoming_id = f.next_outgoing_id;
         self.remote_incoming_window = self.windowFrom(f.next_incoming_id, f.incoming_window);
@@ -255,12 +263,19 @@ pub const Session = struct {
                 // A drain response advances the sender's count over whatever
                 // credit went unused, so its count is authoritative.
                 if (f.delivery_count) |their_count| r.delivery_count = their_count;
-                r.credit = credit;
+                r.grant(credit);
             } else if (f.delivery_count) |their_count| {
-                const limit = their_count +% credit;
-                r.credit = limit -% r.delivery_count;
+                // Serial arithmetic (RFC 1982). A flow whose count lags the
+                // transfers already on the wire — an ordinary crossing, not a
+                // malformed frame — leaves a negative remainder, and read as
+                // `u32` that wraps to billions. Taking it as signed and
+                // clamping keeps a lagging flow from handing this endpoint
+                // effectively unlimited credit, which would make any bound
+                // built on credit meaningless.
+                const remaining: i32 = @bitCast(their_count +% credit -% r.delivery_count);
+                r.grant(if (remaining > 0) @intCast(remaining) else 0);
             } else {
-                r.credit = credit;
+                r.grant(credit);
             }
         }
         if (f.echo) try self.sendFlow(null);
@@ -346,7 +361,17 @@ pub const Session = struct {
         // once-per-session budget that stops a conformant peer for good.
         self.next_incoming_id +%= 1;
 
-        const receiver = self.receiverFor(t.handle) orelse return error.UnknownHandle;
+        const receiver = self.receiverFor(t.handle) orelse {
+            // A link detached locally keeps receiving until the peer notices,
+            // and `refuseOverrun` detaches without waiting for it precisely
+            // because the peer is misbehaving. `pump` is shared with every
+            // other link on the session, so failing here would let one bad
+            // link take down the CBS and `$management` links beside it. The
+            // straggler is dropped; the session window was already advanced
+            // above, so accounting stays correct.
+            if (self.detachedReceiverFor(t.handle) != null) return;
+            return error.UnknownHandle;
+        };
         try receiver.acceptTransfer(t, payload);
     }
 
@@ -970,7 +995,22 @@ pub const ReceiverOptions = struct {
     /// Credit issued on attach and topped back up as deliveries arrive. Zero
     /// disables prefetch, leaving credit to `issueCredit`.
     prefetch: u32 = 300,
+    /// How far past its granted credit a peer may run before the link is
+    /// detached with `amqp:link:transfer-limit-exceeded`.
+    ///
+    /// A peer can legitimately have transfers in flight when its credit runs
+    /// out, so an overrun is absorbed rather than refused — but something
+    /// has to bound it, because this endpoint advertises a constant
+    /// `incoming-window` and so relies on link credit alone for backpressure
+    /// (#326). Null derives a bound from `prefetch`; zero disables only the
+    /// detach, not the charging, so an overrunning peer is still granted less
+    /// but is never torn down.
+    max_overrun: ?u32 = null,
 };
+
+/// The floor for a derived `max_overrun`, so a receiver driving credit by
+/// hand rather than by prefetch still has a bound.
+const min_overrun_allowance: u32 = 64;
 
 /// One received message, valid until the next `receive`.
 pub const Delivery = struct {
@@ -990,6 +1030,11 @@ pub const Receiver = struct {
 
     credit: u32 = 0,
     prefetch: u32 = 0,
+    /// Deliveries accepted beyond the credit granted, not yet charged against
+    /// a later grant. Debt, not a counter: it is what the peer owes, and it is
+    /// paid off by reducing the next grant rather than by consuming messages.
+    overrun: u32 = 0,
+    max_overrun: u32 = 0,
     drain: bool = false,
     delivery_count: u32 = 0,
     max_message_size: ?u64 = null,
@@ -1046,7 +1091,9 @@ pub const Receiver = struct {
             .settled = settled,
         });
         self.delivery_count +%= 1;
-        self.credit -|= 1;
+        // Not `-|= 1`: saturating here is what let an overrun vanish, since
+        // credit simply stayed at zero however far past it the peer ran.
+        if (self.credit == 0) self.overrun += 1 else self.credit -= 1;
     }
 
     /// Drop the entries the cursor has already passed.
@@ -1086,6 +1133,20 @@ pub const Receiver = struct {
     }
 
     fn acceptTransfer(self: *Receiver, t: perf.Transfer, chunk: []const u8) LinkError!void {
+        // Checked before anything is duped, so a refused delivery costs no
+        // allocation. This bounds *deliveries accepted past credit*, not
+        // bytes: a single delivery's reassembly is bounded only by
+        // `maxMessageSize()`, which comes from the peer's own attach and is
+        // absent — meaning unlimited — if the peer omits it.
+        //
+        // Only where a delivery starts, so that refusing cannot strand frames
+        // already reassembled. The condition survives mutation, because
+        // `overrun` rises only in `enqueue` (delivery completion) and `grant`
+        // only lowers it, so it cannot cross the bound part-way through a
+        // delivery. It is a guard against that stopping being true, not
+        // behaviour any test can currently distinguish.
+        if (t.delivery_id != null) try self.refuseOverrun();
+
         // A delivery that arrives whole in a single transfer — which is every
         // delivery below the peer's frame size, so nearly all of them — does
         // not need the reassembly buffer. Staging it there copies the body in
@@ -1142,9 +1203,25 @@ pub const Receiver = struct {
     }
 
     /// Grant `count` more credit to the peer.
+    ///
+    /// Anything the peer already took beyond its last grant is charged against
+    /// this one, so credit stays a running authorisation rather than resetting
+    /// and forgiving the overrun.
     pub fn issueCredit(self: *Receiver, count: u32) LinkError!void {
-        self.credit += count;
+        self.grant(self.credit +| count);
         try self.session.sendFlow(self);
+    }
+
+    /// Set credit to `amount`, charging any outstanding overrun against it.
+    ///
+    /// The single place credit is established. `replenish` and `issueCredit`
+    /// go through it, and so does `Session.applyFlow`, where the peer rebases
+    /// credit onto this endpoint's delivery count: a peer must not be able to
+    /// clear the debt it ran up simply by asserting a new window.
+    fn grant(self: *Receiver, amount: u32) void {
+        const charged = @min(self.overrun, amount);
+        self.overrun -= charged;
+        self.credit = amount - charged;
     }
 
     /// Top prefetch credit back up once half of it has been consumed, so a
@@ -1152,8 +1229,53 @@ pub const Receiver = struct {
     fn replenish(self: *Receiver) LinkError!void {
         if (self.prefetch == 0) return;
         if (self.credit > self.prefetch / 2) return;
-        self.credit = self.prefetch;
+        // A peer that ran past its last grant is granted that much less now,
+        // so it is slowed rather than handed the same window again. Run far
+        // enough past and the charge cancels the window entirely, which is
+        // what "stop granting credit" means here; keep going and
+        // `refuseOverrun` ends the link.
+        self.grant(self.prefetch);
+        // No flow when the charge cancelled the whole window. A peer only gets
+        // here by ignoring credit already, so announcing zero to it buys
+        // nothing and would put a frame on the wire per `receive` for as long
+        // as it misbehaves. A peer merely racing a flow is usually charged
+        // less than a window and is still told its reduced credit below.
+        if (self.credit == 0) return;
         try self.session.sendFlow(self);
+    }
+
+    /// Tear the link down once a peer has run too far past its credit.
+    ///
+    /// `LinkError.CreditExceeded` was declared from the start and never raised
+    /// (#327), which read as enforcement that did not exist. This is the only
+    /// thing that raises it.
+    fn refuseOverrun(self: *Receiver) LinkError!void {
+        if (self.max_overrun == 0) return;
+        if (self.overrun < self.max_overrun) return;
+        // Every path that establishes credit charges the debt first, so this
+        // should be unreachable — and it survives mutation for that reason.
+        // It stays a guard rather than an assert because `credit` is computed
+        // from values the peer supplies in a flow, and an assert on an
+        // invariant a remote peer participates in is a way to be aborted
+        // remotely rather than a way to be correct.
+        if (self.credit > 0) return;
+
+        // Detached locally before the frame goes out, so that a send failure
+        // does not leave the link looking attached and retrying this on every
+        // subsequent transfer. The caller then sees the send error rather than
+        // `CreditExceeded`, which is the more urgent of the two.
+        self.attached = false;
+        try self.session.driver.sendPerformative(.amqp, self.session.channel, .{
+            .detach = .{
+                .handle = self.handle,
+                .closed = true,
+                .err = .{
+                    .condition = "amqp:link:transfer-limit-exceeded",
+                    .description = "peer sent more transfers than the credit granted",
+                },
+            },
+        });
+        return error.CreditExceeded;
     }
 
     /// Wait for the next complete delivery.
@@ -1334,6 +1456,8 @@ pub fn openReceiver(
         .name = name,
         .handle = session.allocateHandle(),
         .prefetch = options.prefetch,
+        .max_overrun = options.max_overrun orelse
+            @max(options.prefetch, min_overrun_allowance),
     };
 
     try session.receivers.append(session.allocator, receiver);
@@ -4481,4 +4605,678 @@ test "one hostile frame does not pin an oversized decode arena" {
     // the next frame really did give it back.
     try testing.expect(peak > Driver.perf_arena_limit);
     try testing.expect(retained <= Driver.perf_arena_limit);
+}
+
+test "a peer that overruns its credit is absorbed and charged for it" {
+    // #327: the receive path enqueued unconditionally and decremented credit
+    // with a saturating `-|= 1`, so a peer past its grant was buffered and the
+    // overrun left no trace -- credit simply sat at zero.
+    //
+    // A peer can legitimately have transfers in flight when credit runs out,
+    // so those are still accepted. What changes is that they are remembered
+    // and charged against the next grant, rather than forgiven.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    // Two more than the two credits that will be granted.
+    var i: u32 = 0;
+    while (i < 4) : (i += 1) {
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = i,
+            .delivery_tag = "t",
+            .message_format = 0,
+            .settled = true,
+            .more = false,
+        }, "event");
+    }
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    // Prefetch off, so credit moves only when this test moves it and nothing
+    // is topped up behind the assertions.
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 0,
+    }, 10_000);
+    try receiver.issueCredit(2);
+
+    i = 0;
+    while (i < 4) : (i += 1) {
+        const delivery = try receiver.receive(10_000);
+        try testing.expectEqualStrings("event", delivery.payload);
+    }
+
+    // All four accepted, and the two beyond the grant are recorded as debt
+    // rather than lost to saturation.
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    try testing.expectEqual(@as(u32, 2), receiver.overrun);
+
+    mem.clearWritten();
+    try receiver.issueCredit(3);
+
+    // Three asked for, two owed, so one is actually granted -- and the peer is
+    // told one, not three.
+    try testing.expectEqual(@as(u32, 1), receiver.credit);
+    try testing.expectEqual(@as(u32, 0), receiver.overrun);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const flows = try frames.of(allocator, perf.descriptor.flow);
+    defer allocator.free(flows);
+    try testing.expectEqual(@as(usize, 1), flows.len);
+    var decoded = try perf.decode(allocator, flows[0]);
+    defer decoded.deinit();
+    try testing.expectEqual(@as(u32, 1), decoded.performative.flow.link_credit.?);
+}
+
+test "a peer that keeps overrunning is detached with transfer-limit-exceeded" {
+    // The backstop. Charging the overrun slows a peer that is listening; a
+    // peer that ignores credit outright is not slowed by anything, and #327
+    // was filed because nothing bounded what it could make this endpoint
+    // allocate. `LinkError.CreditExceeded` was declared for this and had never
+    // been raised anywhere in the package.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    // Far past the one credit granted and the overrun allowance of four.
+    var i: u32 = 0;
+    while (i < 20) : (i += 1) {
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = i,
+            .delivery_tag = "t",
+            .message_format = 0,
+            .settled = true,
+            .more = false,
+        }, "event");
+    }
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 0,
+        .max_overrun = 4,
+    }, 10_000);
+    try receiver.issueCredit(1);
+
+    mem.clearWritten();
+    // One within credit, then four absorbed as overrun. The sixth is the one
+    // that would take the peer past the allowance, and it is refused before
+    // anything is duped for it.
+    i = 0;
+    while (i < 5) : (i += 1) {
+        _ = try receiver.receive(10_000);
+    }
+    try testing.expectEqual(@as(u32, 4), receiver.overrun);
+    try testing.expectError(error.CreditExceeded, receiver.receive(10_000));
+    try testing.expect(!receiver.attached);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const detaches = try frames.of(allocator, perf.descriptor.detach);
+    defer allocator.free(detaches);
+    try testing.expectEqual(@as(usize, 1), detaches.len);
+    var decoded = try perf.decode(allocator, detaches[0]);
+    defer decoded.deinit();
+    const d = decoded.performative.detach;
+    try testing.expect(d.closed);
+    try testing.expectEqualStrings("amqp:link:transfer-limit-exceeded", d.err.?.condition);
+}
+
+test "a prefetching receiver charges an overrun against its next top-up" {
+    // The default receiver replenishes rather than being credited by hand, so
+    // this is where "stop granting further credit" actually has to happen.
+    //
+    // The overrun is built by pumping the session directly instead of calling
+    // `receive`, which is not contrived: it is what an app pumping the session
+    // itself does, and what happens whenever two links share one session and
+    // are consumed in turn. `replenish` only runs inside `receive`, so credit
+    // is not topped up between arrivals.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    const prefetch: u32 = 2;
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    var i: u32 = 0;
+    while (i < 6) : (i += 1) {
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = i,
+            .delivery_tag = "t",
+            .message_format = 0,
+            .settled = true,
+            .more = false,
+        }, "event");
+    }
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = prefetch,
+    }, 10_000);
+
+    while (receiver.ready.items.len < 6) _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    try testing.expectEqual(@as(u32, 4), receiver.overrun);
+
+    // Two top-ups' worth of debt, so two `receive` calls put nothing on the
+    // wire: the charge cancels the whole window each time.
+    mem.clearWritten();
+    _ = try receiver.receive(10_000);
+    _ = try receiver.receive(10_000);
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    try testing.expectEqual(@as(u32, 0), receiver.overrun);
+
+    var silent = try EmittedFrames.parse(allocator, mem.written());
+    defer silent.deinit();
+    const none = try silent.of(allocator, perf.descriptor.flow);
+    defer allocator.free(none);
+    try testing.expectEqual(@as(usize, 0), none.len);
+
+    // Debt cleared, so the next one grants the full window again.
+    _ = try receiver.receive(10_000);
+    try testing.expectEqual(prefetch, receiver.credit);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const flows = try frames.of(allocator, perf.descriptor.flow);
+    defer allocator.free(flows);
+    try testing.expectEqual(@as(usize, 1), flows.len);
+    var decoded = try perf.decode(allocator, flows[0]);
+    defer decoded.deinit();
+    try testing.expectEqual(prefetch, decoded.performative.flow.link_credit.?);
+}
+
+test "the overrun bound is on by default, not only when asked for" {
+    // The bound above is set explicitly by its test, so it would pass just as
+    // well if `openReceiver` derived nothing and left every real receiver
+    // unbounded -- which is the case #327 is actually about, since no caller
+    // in this repo or its dependents passes `max_overrun`.
+    //
+    // With prefetch off and no credit ever issued, every delivery is an
+    // overrun: the peer ignoring credit outright, which is the case charging
+    // cannot slow because there is no next grant to charge against.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    var i: u32 = 0;
+    while (i < min_overrun_allowance + 8) : (i += 1) {
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = i,
+            .delivery_tag = "t",
+            .message_format = 0,
+            .settled = true,
+            .more = false,
+        }, "event");
+    }
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 0,
+    }, 10_000);
+    try testing.expectEqual(min_overrun_allowance, receiver.max_overrun);
+
+    var received: u32 = 0;
+    while (receiver.receive(10_000)) |_| {
+        received += 1;
+    } else |e| {
+        try testing.expectEqual(error.CreditExceeded, e);
+    }
+    // Bounded at the allowance rather than buffering all seventy-two.
+    try testing.expectEqual(min_overrun_allowance, received);
+    try testing.expect(!receiver.attached);
+}
+
+test "a prefetching receiver derives its overrun bound from the window" {
+    // A 300-deep prefetch legitimately has far more in flight than a 4-deep
+    // one, so a fixed allowance would either throttle the large window or fail
+    // to bound the small one. The floor only applies below it.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    for ([_][]const u8{ "wide", "narrow", "loose" }, 0..) |name, h| {
+        try peer.push(0, .{ .attach = .{
+            .name = name,
+            .handle = @intCast(h),
+            .role = .sender,
+            .initial_delivery_count = 0,
+        } });
+    }
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const wide = try openReceiver(&fixture.session, .{
+        .name = "wide",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 1024,
+    }, 10_000);
+    try testing.expectEqual(@as(u32, 1024), wide.max_overrun);
+
+    const narrow = try openReceiver(&fixture.session, .{
+        .name = "narrow",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/1",
+        .prefetch = 4,
+    }, 10_000);
+    try testing.expectEqual(min_overrun_allowance, narrow.max_overrun);
+
+    // Zero is the documented escape hatch back to advisory credit.
+    const loose = try openReceiver(&fixture.session, .{
+        .name = "loose",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/2",
+        .prefetch = 4,
+        .max_overrun = 0,
+    }, 10_000);
+    try testing.expectEqual(@as(u32, 0), loose.max_overrun);
+}
+
+test "a peer cannot clear the debt it ran up by sending a flow" {
+    // Regression test for a bug this change introduced and review caught.
+    //
+    // `Session.applyFlow` is a third writer of `Receiver.credit`, alongside
+    // `replenish` and `issueCredit`. The first version of this change taught
+    // only the latter two to charge the overrun, and then asserted that credit
+    // and debt were never both outstanding -- an invariant the peer could
+    // break from the wire. Worse than unenforced: in a ReleaseSafe build the
+    // assert aborted the process, so a credit-ignoring peer went from causing
+    // unbounded buffering to being able to kill the endpoint remotely.
+    //
+    // The flow scripted below is an ordinary one, not a malformed frame: its
+    // `delivery-count` simply lags the transfers already on the wire, which is
+    // what a flow crossing transfers in flight looks like. Read as `u32` the
+    // remainder wrapped to about four billion credits, which would also have
+    // made the overrun bound unreachable.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    var i: u32 = 0;
+    while (i < 4) : (i += 1) {
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = i,
+            .delivery_tag = "t",
+            .message_format = 0,
+            .settled = true,
+            .more = false,
+        }, "event");
+    }
+    // Lags the four transfers already sent.
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 100,
+        .next_outgoing_id = 4,
+        .outgoing_window = 100,
+        .handle = 0,
+        .delivery_count = 2,
+        .link_credit = 0,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 4,
+        .delivery_tag = "t",
+        .message_format = 0,
+        .settled = true,
+        .more = false,
+    }, "event");
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 0,
+        .max_overrun = 4,
+    }, 10_000);
+
+    i = 0;
+    while (i < 4) : (i += 1) _ = try receiver.receive(10_000);
+    try testing.expectEqual(@as(u32, 4), receiver.overrun);
+
+    // The lagging flow grants nothing rather than wrapping, and leaves the
+    // debt standing, so the bound still fires on the next delivery.
+    try testing.expectError(error.CreditExceeded, receiver.receive(10_000));
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    try testing.expect(!receiver.attached);
+}
+
+test "a flow that does grant credit has the debt charged against it" {
+    // The other half: a peer flow is a legitimate way to establish credit, and
+    // it must go through the same charging as `issueCredit` rather than
+    // resetting the count and forgiving what was already taken.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    var i: u32 = 0;
+    while (i < 3) : (i += 1) {
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = i,
+            .delivery_tag = "t",
+            .message_format = 0,
+            .settled = true,
+            .more = false,
+        }, "event");
+    }
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 100,
+        .next_outgoing_id = 3,
+        .outgoing_window = 100,
+        .handle = 0,
+        .link_credit = 10,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 0,
+    }, 10_000);
+
+    i = 0;
+    while (i < 3) : (i += 1) _ = try receiver.receive(10_000);
+    try testing.expectEqual(@as(u32, 3), receiver.overrun);
+
+    while (receiver.credit == 0) _ = try fixture.session.pump(10_000);
+    // Ten asserted by the peer, three already taken, so seven are usable.
+    try testing.expectEqual(@as(u32, 7), receiver.credit);
+    try testing.expectEqual(@as(u32, 0), receiver.overrun);
+}
+
+test "a link torn down for overrunning does not take its session's other links with it" {
+    // `refuseOverrun` detaches locally without waiting for the peer, because
+    // the peer is by definition not cooperating. It therefore keeps sending
+    // for a handle this endpoint no longer considers attached, and `pump` is
+    // shared: CBS and `$management` sit on the same session as a consumer in
+    // both dependent packages. Erroring on the straggler would let one bad
+    // link take those down with it.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    for ([_][]const u8{ "hostile", "healthy" }, 0..) |name, h| {
+        try peer.push(0, .{ .attach = .{
+            .name = name,
+            .handle = @intCast(h),
+            .role = .sender,
+            .initial_delivery_count = 0,
+        } });
+    }
+    var i: u32 = 0;
+    while (i < 3) : (i += 1) {
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = i,
+            .delivery_tag = "t",
+            .message_format = 0,
+            .settled = true,
+            .more = false,
+        }, "hostile");
+    }
+    // Arrives after this endpoint has already given up on handle 0.
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 3,
+        .delivery_tag = "t",
+        .message_format = 0,
+        .settled = true,
+        .more = false,
+    }, "straggler");
+    try peer.pushTransfer(0, .{
+        .handle = 1,
+        .delivery_id = 4,
+        .delivery_tag = "t",
+        .message_format = 0,
+        .settled = true,
+        .more = false,
+    }, "good");
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const hostile = try openReceiver(&fixture.session, .{
+        .name = "hostile",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 0,
+        .max_overrun = 2,
+    }, 10_000);
+    const healthy = try openReceiver(&fixture.session, .{
+        .name = "healthy",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/1",
+        .prefetch = 0,
+    }, 10_000);
+    try healthy.issueCredit(4);
+
+    _ = try hostile.receive(10_000);
+    _ = try hostile.receive(10_000);
+    try testing.expectError(error.CreditExceeded, hostile.receive(10_000));
+    try testing.expect(!hostile.attached);
+
+    // The straggler for the dead handle is dropped rather than failing the
+    // shared pump, so this still arrives.
+    const delivery = try healthy.receive(10_000);
+    try testing.expectEqualStrings("good", delivery.payload);
+    try testing.expect(healthy.attached);
+}
+
+test "an overrun bound of zero disables the detach but not the charging" {
+    // `max_overrun = 0` is documented as an escape hatch. The test above only
+    // asserted that the field round-trips, which would have passed just as
+    // well if the zero check had been deleted and every such receiver detached
+    // on its first delivery.
+    //
+    // It disables the detach only. Charging is the policy, not the backstop,
+    // so an overrunning peer is still granted less -- which is why calling
+    // this "advisory credit" or "the old behaviour" would be wrong.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    var i: u32 = 0;
+    while (i < min_overrun_allowance + 8) : (i += 1) {
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = i,
+            .delivery_tag = "t",
+            .message_format = 0,
+            .settled = true,
+            .more = false,
+        }, "event");
+    }
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 0,
+        .max_overrun = 0,
+    }, 10_000);
+
+    // Far past what the derived bound would have been, with no detach.
+    i = 0;
+    while (i < min_overrun_allowance + 8) : (i += 1) _ = try receiver.receive(10_000);
+    try testing.expect(receiver.attached);
+    try testing.expectEqual(min_overrun_allowance + 8, receiver.overrun);
+
+    // Still charged, so this is not the pre-#327 behaviour.
+    try receiver.issueCredit(4);
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    try testing.expectEqual(min_overrun_allowance + 4, receiver.overrun);
+}
+
+test "a flow that names a delivery count has the debt charged against it too" {
+    // The branch above it. A flow carrying `delivery-count` is rebased onto
+    // this endpoint's own count before the credit is taken, and that rebase
+    // sits between the peer's number and the charge -- which is exactly where
+    // a grant can be established without the debt being charged against it.
+    // The sibling test covers the count-less branch, and the lagging-flow test
+    // covers the clamp, but neither can see this one: with the clamp in place
+    // a lagging flow grants zero, and zero is charged the same either way.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    var i: u32 = 0;
+    while (i < 3) : (i += 1) {
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = i,
+            .delivery_tag = "t",
+            .message_format = 0,
+            .settled = true,
+            .more = false,
+        }, "event");
+    }
+    // Names the count this endpoint has itself reached, so the rebase is a
+    // no-op and the whole ten survives the clamp.
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 100,
+        .next_outgoing_id = 3,
+        .outgoing_window = 100,
+        .handle = 0,
+        .delivery_count = 3,
+        .link_credit = 10,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 0,
+    }, 10_000);
+
+    i = 0;
+    while (i < 3) : (i += 1) _ = try receiver.receive(10_000);
+    try testing.expectEqual(@as(u32, 3), receiver.overrun);
+    try testing.expectEqual(@as(u32, 3), receiver.delivery_count);
+
+    while (receiver.credit == 0) _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(u32, 7), receiver.credit);
+    try testing.expectEqual(@as(u32, 0), receiver.overrun);
 }
