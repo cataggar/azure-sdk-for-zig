@@ -30,6 +30,7 @@
         "admin.zig",
         "amqp_transport.zig",
         "management.zig",
+        "benchmarks",
         "README.md",
         "LICENSE.txt",
     },

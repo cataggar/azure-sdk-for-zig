@@ -254,6 +254,56 @@ is surfaced as `error.MessageLockLost` rather than as a generic failure,
 because it is the one refusal a caller can act on — the message is back on the
 queue and will be redelivered, so there is nothing to retry.
 
+## Benchmarks
+
+```bash
+zig build bench -Doptimize=ReleaseFast
+```
+
+Offline benchmarks for the encode, decode and management paths — building an
+AMQP message from a `ServiceBusMessage`, encoding it as a transfer payload,
+converting a received one back, and building and reading the two management
+bodies that carry a whole batch. Nothing touches the network, so a result is
+attributable to a code change rather than to service latency.
+
+Two of them run the whole receive path against a scripted peer: frames off the
+transport, deliveries reassembled, messages decoded, Service Bus messages
+converted, the batch arena filled. That loop is where a consumer actually
+spends its time, and none of it is visible one message at a time. The two share
+a byte-identical handshake, CBS exchange and attach and differ only in how many
+transfers follow, so subtracting them and dividing by 999 leaves the cost of
+one received message.
+
+One cost does not cancel: handing the peer the longer script copies ~180 KB
+into a freshly mapped buffer, and faulting those pages in costs far more than
+the copy. It is one allocation either way, so the allocation subtraction is
+exact, but on this machine it is ~87 us — about seven percent of what the
+x1000 case spends. The `script fixture` case measures it so you can subtract it
+too rather than take a number here on trust.
+
+Prefer `allocs/op` as the regression signal. It is stable across machines,
+whereas timings move on shared or virtualised hosts — and the suite opens with
+an empty `baseline` case precisely so the small timings can be read against
+the harness floor rather than taken at face value. Two of the numbers carry a
+claim worth defending:
+
+- **`toAmqpMessage + properties` at 0 allocs/op.** The property array is the
+  one thing `Scratch` allocates, and `sendMessages` keeps one `Scratch` across
+  a whole batch, so it grows once and is reused. Rebuild it per call instead
+  and this reads 1. (`toAmqpMessage` without properties reads 0 either way,
+  which is why the property case is the one that means anything.)
+- **Exactly 2 allocations per received message.** `azure_sdk_amqp` dupes the
+  payload and the delivery tag; this package adds nothing that scales with the
+  batch, since the arena, the message list and the entity copy are each paid
+  once. The bound already has a test; the benchmark is what makes it a number.
+
+`fromAmqpMessage`'s 0 is *not* in that list. It takes no allocator, so no other
+answer is representable — the guard against a copy creeping in is its
+signature, not its reading.
+
+The benchmarks are built (but not run) by `zig build test`, so a signature
+change cannot silently rot them.
+
 ## Development
 
 ```bash
