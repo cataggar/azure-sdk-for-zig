@@ -1811,7 +1811,7 @@ test "a send authorises the entity before it puts the message on the wire" {
     // so the CBS put-token has to precede the message.
     try testing.expectEqual(@as(usize, 2), transfers.len);
 
-    var claim = try amqp.decodeMessage(allocator, harness.transferPayload(allocator, transfers[0]).?);
+    var claim = try amqp.decodeMessage(allocator, try harness.transferPayload(allocator, transfers[0]));
     defer claim.deinit();
     try testing.expectEqualStrings("put-token", propertyOf(claim.message, "operation").?.string);
     try testing.expectEqualStrings(
@@ -1820,7 +1820,7 @@ test "a send authorises the entity before it puts the message on the wire" {
     );
     try testing.expectEqualStrings("stub-jwt", claim.message.body.value.string);
 
-    var decoded = try amqp.decodeMessage(allocator, harness.transferPayload(allocator, transfers[1]).?);
+    var decoded = try amqp.decodeMessage(allocator, try harness.transferPayload(allocator, transfers[1]));
     defer decoded.deinit();
 
     const got = message_codec.fromAmqpMessage(decoded.message);
@@ -3494,7 +3494,7 @@ fn pushManagementReply(
 fn requestAt(allocator: Allocator, written: []const u8, index: usize) !amqp.message_codec.Decoded {
     const transfers = try emittedTransfers(allocator, written);
     defer allocator.free(transfers);
-    return amqp.decodeMessage(allocator, harness.transferPayload(allocator, transfers[index]).?);
+    return amqp.decodeMessage(allocator, try harness.transferPayload(allocator, transfers[index]));
 }
 
 test "scheduling sends the whole encoded message and reads back its sequence number" {
