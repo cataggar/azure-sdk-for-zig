@@ -152,6 +152,39 @@ try receiver.accept(delivery);
 need to keep. Prefetched deliveries queue up and are drained with a cursor
 rather than by shifting the queue, which keeps a deep prefetch window linear.
 
+A receiver accepts messages up to `max_message_size`, 128 MiB by default. That
+clears the largest message Azure will hand us with room to spare — Event Hubs
+allows 1 MB, or up to 20 MB on Dedicated, and Service Bus 256 KB standard /
+100 MB premium, and a broker adds annotations on delivery, so a limit of
+exactly 100 MiB would have no room for them.
+
+The limit is declared in our `attach` *and* enforced during reassembly, and it
+needs both halves: declaring it lets a conformant sender fail the message on
+its own side, while §2.7.3 makes respecting the field the sender's obligation,
+so only local enforcement makes it a bound. A message past it detaches the link
+with `amqp:link:message-size-exceeded`.
+
+```zig
+const receiver = try amqp.openReceiver(&session, .{
+    .name = link_name,
+    .source_address = "myhub/ConsumerGroups/$Default/Partitions/0",
+    .max_message_size = 4 * 1024 * 1024,
+}, deadline_ms);
+```
+
+Only your limit is enforced. A peer's own declared `max-message-size` is
+recorded but not applied: it is a threshold the peer picks, with no room for
+the annotations a broker adds on delivery, and going over detaches the link.
+Applying it would buy a tighter ceiling but not a qualitatively different one,
+since unbounded growth is already closed by your limit — and that tightening
+does not pay for tearing links down on a number the peer chose. Setting yours
+to `null` restores unlimited reassembly, which is what let a sender open a
+delivery, never end it, and grow the buffer until the process died.
+
+This bounds one message. A receiver holds up to its outstanding credit plus
+`max_overrun` completed deliveries at once, so the memory one link can tie up
+is that product: at the default prefetch, ~600 times this.
+
 Settling one delivery at a time costs a frame per message, which at a 300-deep
 prefetch is 300 frames of bookkeeping. A disposition can name a `first`..`last`
 range instead, and `SettleBatch` builds those runs safely — delivery ids belong

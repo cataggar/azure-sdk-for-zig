@@ -331,7 +331,7 @@ pub const Session = struct {
         for (self.receivers.items) |r| {
             if (std.mem.eql(u8, r.name, a.name)) {
                 r.remote_handle = a.handle;
-                r.max_message_size = a.max_message_size;
+                r.peer_max_message_size = a.max_message_size;
                 r.attached = true;
                 return;
             }
@@ -646,8 +646,7 @@ pub const Sender = struct {
 
     /// The largest message the peer will take, or null when unlimited.
     pub fn maxMessageSize(self: *const Sender) ?u64 {
-        const size = self.max_message_size orelse return null;
-        return if (size == 0) null else size;
+        return normalizeMaxMessageSize(self.max_message_size);
     }
 
     fn recordDetach(self: *Sender, err: ?perf.AmqpError) LinkError!void {
@@ -1061,11 +1060,48 @@ pub const ReceiverOptions = struct {
     /// detach, not the charging, so an overrunning peer is still granted less
     /// but is never torn down.
     max_overrun: ?u32 = null,
+    /// The largest message this receiver will accept, declared in our `attach`
+    /// and enforced during reassembly.
+    ///
+    /// Both halves are needed. Declaring it makes a conformant sender fail the
+    /// message on its own side, which is the outcome everyone wants; enforcing
+    /// it locally is what makes it a *bound*, because §2.7.3 makes respecting
+    /// the field the sender's obligation and a peer under no obligation to be
+    /// honest is exactly the one this defends against.
+    ///
+    /// Null means unlimited, which is what let a delivery that never ends grow
+    /// the reassembly buffer until the process died (#347). The peer's own
+    /// declaration is not consulted; `Receiver.maxMessageSize` says why.
+    ///
+    /// This bounds one message. A receiver holds up to its outstanding credit
+    /// plus `max_overrun` completed deliveries at once, so raising this
+    /// multiplies against that: at the default prefetch, ~600 of these.
+    max_message_size: ?u64 = default_max_message_size,
 };
 
 /// The floor for a derived `max_overrun`, so a receiver driving credit by
 /// hand rather than by prefetch still has a bound.
 const min_overrun_allowance: u32 = 64;
+
+/// Default ceiling on a single received message, in bytes.
+///
+/// Sized to clear the largest message Azure will hand us with room to spare:
+/// Event Hubs allows 1 MB, or up to 20 MB on Dedicated clusters, and Service
+/// Bus 256 KB standard / 100 MB premium. 100 MiB would equal that last figure
+/// to the byte, leaving none for the annotations a broker adds on delivery
+/// (`x-opt-sequence-number`, `x-opt-enqueued-time`, and friends), and going
+/// over detaches the link rather than returning something retryable.
+///
+/// This bounds one message. A receiver holds up to its outstanding credit plus
+/// `max_overrun` completed deliveries at once, so the memory one link can tie
+/// up is that product — with the default prefetch, ~600 x this.
+pub const default_max_message_size: u64 = 128 * 1024 * 1024;
+
+/// §2.7.3: an absent *or zero* `max-message-size` means no limit.
+fn normalizeMaxMessageSize(size: ?u64) ?u64 {
+    const n = size orelse return null;
+    return if (n == 0) null else n;
+}
 
 /// One received message, valid until the next `receive`.
 pub const Delivery = struct {
@@ -1092,7 +1128,14 @@ pub const Receiver = struct {
     max_overrun: u32 = 0,
     drain: bool = false,
     delivery_count: u32 = 0,
+    /// The limit declared in our `attach`; see `maxMessageSize` for the rule
+    /// actually enforced, and `ReceiverOptions.max_message_size` for what null
+    /// means.
     max_message_size: ?u64 = null,
+    /// What the peer declared in its own `attach`, recorded but not enforced;
+    /// `maxMessageSize` says why. It is the largest message the *peer*
+    /// supports, which is a bound on a sender rather than on us.
+    peer_max_message_size: ?u64 = null,
     detach_error: ?connection.RemoteError = null,
 
     /// Bytes of the delivery currently being assembled.
@@ -1190,9 +1233,9 @@ pub const Receiver = struct {
     fn acceptTransfer(self: *Receiver, t: perf.Transfer, chunk: []const u8) LinkError!void {
         // Checked before anything is duped, so a refused delivery costs no
         // allocation. This bounds *deliveries accepted past credit*, not
-        // bytes: a single delivery's reassembly is bounded only by
-        // `maxMessageSize()`, which comes from the peer's own attach and is
-        // absent — meaning unlimited — if the peer omits it.
+        // bytes; reassembly is bounded separately by `maxMessageSize()`, which
+        // since #347 is our own declared limit. The peer's declaration is
+        // recorded but never consulted.
         //
         // Only where a delivery starts, so that refusing cannot strand frames
         // already reassembled. The condition survives mutation, because
@@ -1209,7 +1252,7 @@ pub const Receiver = struct {
         if (t.delivery_id) |id| {
             if (!t.more and self.partial_id == null) {
                 if (self.maxMessageSize()) |limit| {
-                    if (chunk.len > limit) return error.MessageTooLarge;
+                    if (chunk.len > limit) try self.refuseOversize();
                 }
                 const payload = try self.allocator.dupe(u8, chunk);
                 errdefer self.allocator.free(payload);
@@ -1230,7 +1273,7 @@ pub const Receiver = struct {
         if (self.partial_id == null) return error.MalformedFrame;
 
         if (self.maxMessageSize()) |limit| {
-            if (self.partial.items.len + chunk.len > limit) return error.MessageTooLarge;
+            if (self.partial.items.len + chunk.len > limit) try self.refuseOversize();
         }
         try self.partial.appendSlice(self.allocator, chunk);
 
@@ -1251,10 +1294,25 @@ pub const Receiver = struct {
         try self.enqueue(id, tag, payload, settled);
     }
 
-    /// The largest message the peer will send, or null when unlimited.
+    /// The largest message this receiver will accept, or null when unlimited.
+    ///
+    /// Our own declared limit only. The peer's declaration is recorded in
+    /// `peer_max_message_size` and deliberately not enforced: it would be a
+    /// threshold the peer picks, with no headroom for the annotations a broker
+    /// adds on delivery, and exceeding it here tears the link down — the same
+    /// trade rejected when sizing `default_max_message_size`.
+    ///
+    /// It would buy a tighter ceiling, not a qualitatively different one:
+    /// against a peer declaring 1 MB it would cap a message at 1 MB rather
+    /// than 128 MiB. But unbounded growth is already closed by the limit
+    /// above, and that marginal tightening does not pay for detaching on a
+    /// threshold the peer chose.
+    ///
+    /// §2.7.3 would permit it: a sender that declares 1 MB and delivers 2 MB
+    /// is violating its own declaration. Permitted is not obliged, and what we
+    /// are obliged to defend is the limit we ourselves declared.
     pub fn maxMessageSize(self: *const Receiver) ?u64 {
-        const size = self.max_message_size orelse return null;
-        return if (size == 0) null else size;
+        return normalizeMaxMessageSize(self.max_message_size);
     }
 
     /// Grant `count` more credit to the peer.
@@ -1297,6 +1355,35 @@ pub const Receiver = struct {
         // less than a window and is still told its reduced credit below.
         if (self.credit == 0) return;
         try self.session.sendFlow(self);
+    }
+
+    /// Detach because the peer sent a message past our declared limit.
+    ///
+    /// A link error rather than a returned error the peer never hears about:
+    /// §2.7.3 makes exceeding a declared `max-message-size` a
+    /// `message-size-exceeded` link error, and a peer told nothing is free to
+    /// repeat it on the very next frame. The reassembly buffer is released
+    /// rather than merely cleared, since the whole point is to stop holding
+    /// the bytes.
+    fn refuseOversize(self: *Receiver) LinkError!void {
+        // Detached locally before the frame goes out, for the same reason as
+        // `refuseOverrun`: a send failure must not leave the link looking
+        // attached and retrying this on every subsequent transfer.
+        self.attached = false;
+        self.partial.clearAndFree(self.allocator);
+        self.partial_tag.clearAndFree(self.allocator);
+        self.partial_id = null;
+        try self.session.driver.sendPerformative(.amqp, self.session.channel, .{
+            .detach = .{
+                .handle = self.handle,
+                .closed = true,
+                .err = .{
+                    .condition = "amqp:link:message-size-exceeded",
+                    .description = "message exceeds the declared max-message-size",
+                },
+            },
+        });
+        return error.MessageTooLarge;
     }
 
     /// Tear the link down once a peer has run too far past its credit.
@@ -1513,6 +1600,7 @@ pub fn openReceiver(
         .prefetch = options.prefetch,
         .max_overrun = options.max_overrun orelse
             @max(options.prefetch, min_overrun_allowance),
+        .max_message_size = options.max_message_size,
     };
 
     try session.receivers.append(session.allocator, receiver);
@@ -1529,6 +1617,7 @@ pub fn openReceiver(
         },
         .target = .{ .address = options.target_address },
         .initial_delivery_count = 0,
+        .max_message_size = options.max_message_size,
         .desired_capabilities = options.desired_capabilities,
         .properties = options.properties,
     } });
@@ -5493,4 +5582,372 @@ test "abandoning with no room for verdicts still empties the window" {
     // error it could have discriminated is `DeliveriesInFlight`, which the
     // line above already rules out.
     try sender.sendBytes("c", 10_000);
+}
+
+test "an endless multi-frame delivery is bounded and detaches the link" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    // The peer declares no max-message-size, which before #347 meant the
+    // reassembly buffer had no limit at all.
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 4,
+        .delivery_tag = "\x00\x00\x00\x04",
+        .more = true,
+    }, "0123456789");
+    var i: usize = 0;
+    while (i < 8) : (i += 1) {
+        try peer.pushTransfer(0, .{ .handle = 0, .more = true }, "0123456789");
+    }
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 0,
+        .max_message_size = 32,
+    }, 10_000);
+    try receiver.issueCredit(1);
+
+    mem.clearWritten();
+    try testing.expectError(error.MessageTooLarge, receiver.receive(10_000));
+    try testing.expect(!receiver.attached);
+    // The bytes are released, not merely cleared: holding them is the problem.
+    try testing.expectEqual(@as(usize, 0), receiver.partial.capacity);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const detaches = try frames.of(allocator, perf.descriptor.detach);
+    defer allocator.free(detaches);
+    try testing.expectEqual(@as(usize, 1), detaches.len);
+    var decoded = try perf.decode(allocator, detaches[0]);
+    defer decoded.deinit();
+    const d = decoded.performative.detach;
+    try testing.expect(d.closed);
+    try testing.expectEqualStrings("amqp:link:message-size-exceeded", d.err.?.condition);
+}
+
+test "a single oversize transfer is refused without reassembly" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    // Whole in one frame, so it takes the fast path that skips `partial`
+    // entirely: a separate check from the reassembly one.
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 4,
+        .delivery_tag = "\x00\x00\x00\x04",
+        .more = false,
+    }, "this payload is comfortably past sixteen bytes");
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 0,
+        .max_message_size = 16,
+    }, 10_000);
+    try receiver.issueCredit(1);
+
+    try testing.expectError(error.MessageTooLarge, receiver.receive(10_000));
+    try testing.expect(!receiver.attached);
+}
+
+test "the peer's declaration is recorded but does not bound us" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    // The peer declares 8 and then delivers 28. That is the peer violating its
+    // own declaration, and §2.7.3 would let us call it a link error — but
+    // tearing the link down on a threshold the peer chose, with no room for
+    // the annotations a broker adds on delivery, is the trade this change
+    // exists to avoid making.
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .max_message_size = 8,
+        .initial_delivery_count = 0,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 4,
+        .delivery_tag = "\x00\x00\x00\x04",
+        .more = false,
+    }, "twenty-eight bytes of body..");
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 0,
+        .max_message_size = 1024,
+    }, 10_000);
+    try receiver.issueCredit(1);
+
+    // Kept apart: recording the peer's number must not overwrite ours, which
+    // is the confusion that left reassembly unbounded.
+    try testing.expectEqual(@as(u64, 8), receiver.peer_max_message_size.?);
+    try testing.expectEqual(@as(u64, 1024), receiver.max_message_size.?);
+    try testing.expectEqual(@as(u64, 1024), receiver.maxMessageSize().?);
+
+    const delivery = try receiver.receive(10_000);
+    try testing.expectEqualStrings("twenty-eight bytes of body..", delivery.payload);
+    try testing.expect(receiver.attached);
+}
+
+test "our limit applies when the peer declares a looser one" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    // Far looser than ours, so ours is the one that has to bind. A separate
+    // case because the failure mode is ours being ignored in favour of the
+    // peer's, which is #347 exactly.
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .max_message_size = 1 << 40,
+        .initial_delivery_count = 0,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 4,
+        .delivery_tag = "\x00\x00\x00\x04",
+        .more = false,
+    }, "twenty-eight bytes of body..");
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 0,
+        .max_message_size = 16,
+    }, 10_000);
+    try receiver.issueCredit(1);
+
+    try testing.expectEqual(@as(u64, 16), receiver.maxMessageSize().?);
+    try testing.expectError(error.MessageTooLarge, receiver.receive(10_000));
+    try testing.expect(!receiver.attached);
+}
+
+test "a receiver declares its own max-message-size in its attach" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    mem.clearWritten();
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 0,
+        .max_message_size = 4096,
+    }, 10_000);
+    try testing.expect(receiver.attached);
+
+    // Declaring it is what lets a conformant sender fail the message on its
+    // own side instead of putting it on the wire for us to refuse.
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const attaches = try frames.of(allocator, perf.descriptor.attach);
+    defer allocator.free(attaches);
+    try testing.expectEqual(@as(usize, 1), attaches.len);
+    var decoded = try perf.decode(allocator, attaches[0]);
+    defer decoded.deinit();
+    try testing.expectEqual(@as(u64, 4096), decoded.performative.attach.max_message_size.?);
+}
+
+test "a null max-message-size declares and enforces no limit" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+        .max_message_size = 8,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 4,
+        .delivery_tag = "\x00\x00\x00\x04",
+        .more = false,
+    }, "twenty-eight bytes of body..");
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    mem.clearWritten();
+    // Null is an explicit opt-out, not "fall back to the default".
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 0,
+        .max_message_size = null,
+    }, 10_000);
+    try testing.expectEqual(@as(?u64, null), receiver.maxMessageSize());
+
+    // Enforcement too, not just declaration. The peer declared 8 and sends 28:
+    // opting out has to mean no limit, not "fall back to whatever the peer
+    // said", which is the reading that left reassembly unbounded.
+    try receiver.issueCredit(1);
+    const delivery = try receiver.receive(10_000);
+    try testing.expectEqualStrings("twenty-eight bytes of body..", delivery.payload);
+    try testing.expect(receiver.attached);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const attaches = try frames.of(allocator, perf.descriptor.attach);
+    defer allocator.free(attaches);
+    var decoded = try perf.decode(allocator, attaches[0]);
+    defer decoded.deinit();
+    try testing.expectEqual(@as(?u64, null), decoded.performative.attach.max_message_size);
+}
+
+test "a receiver is bounded by default" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    mem.clearWritten();
+    // No `max_message_size` given. The whole point of #347 is that this case
+    // — the one every caller gets without thinking about it — is bounded.
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 0,
+    }, 10_000);
+    try testing.expectEqual(default_max_message_size, receiver.maxMessageSize().?);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const attaches = try frames.of(allocator, perf.descriptor.attach);
+    defer allocator.free(attaches);
+    var decoded = try perf.decode(allocator, attaches[0]);
+    defer decoded.deinit();
+    try testing.expectEqual(default_max_message_size, decoded.performative.attach.max_message_size.?);
+}
+
+test "a zero max-message-size means unlimited, not zero" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 4,
+        .delivery_tag = "\x00\x00\x00\x04",
+        .more = false,
+    }, "twenty-eight bytes of body..");
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    // §2.7.3 makes zero mean "no limit". Taking it literally would refuse every
+    // non-empty delivery and detach the link.
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh/ConsumerGroups/$default/Partitions/0",
+        .prefetch = 0,
+        .max_message_size = 0,
+    }, 10_000);
+    try receiver.issueCredit(1);
+
+    try testing.expectEqual(@as(?u64, null), receiver.maxMessageSize());
+    const delivery = try receiver.receive(10_000);
+    try testing.expectEqualStrings("twenty-eight bytes of body..", delivery.payload);
+    try testing.expect(receiver.attached);
 }
