@@ -341,7 +341,7 @@ test "a request carries the operation, type, name, and security token" {
     defer allocator.free(transfers);
     try testing.expectEqual(@as(usize, 1), transfers.len);
 
-    var decoded = try message.decode(allocator, harness.transferPayload(allocator, transfers[0]).?);
+    var decoded = try message.decode(allocator, try harness.transferPayload(allocator, transfers[0]));
     defer decoded.deinit();
     const props = decoded.message.application_properties.?;
 

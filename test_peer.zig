@@ -84,6 +84,11 @@ pub const EmittedFrames = struct {
     /// Bodies whose descriptor matches `code`.
     pub fn of(self: EmittedFrames, allocator: Allocator, code: u64) ![]const []const u8 {
         var out: std.ArrayList([]const u8) = .empty;
+        // `parse` above guards its list the same way. Without this, a failing
+        // `append` or `toOwnedSlice` strands the buffer. The error itself was
+        // always reported faithfully, which is why this stayed invisible until
+        // a test ran under `checkAllAllocationFailures`.
+        errdefer out.deinit(allocator);
         for (self.bodies.items) |b| {
             if (perf.peekDescriptor(b) == code) try out.append(allocator, b);
         }
@@ -144,7 +149,11 @@ pub fn scriptHandshake(peer: Peer, max_frame_size: u32) !void {
 }
 
 /// The message payload carried after a transfer performative in `body`.
-pub fn transferPayload(allocator: Allocator, body: []const u8) ?[]const u8 {
-    const consumed = link.performativeLength(allocator, body) orelse return null;
+///
+/// Returns an error rather than null so that a test running under
+/// `checkAllAllocationFailures` can tell an injected `error.OutOfMemory` from
+/// a frame that really is malformed.
+pub fn transferPayload(allocator: Allocator, body: []const u8) ![]const u8 {
+    const consumed = try link.performativeLength(allocator, body);
     return body[consumed..];
 }
