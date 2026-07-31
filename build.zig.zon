@@ -13,8 +13,8 @@
             .hash = "azure_sdk_messaging_common-0.2.0-YklmSkWIAADy4QHeNJAVUdRq-xKFeRx75G1TjE5lMeHR",
         },
         .azure_sdk_amqp = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#b0bf347c4da5ccb9cb63772011c98a769d838f74",
-            .hash = "azure_sdk_amqp-0.4.0-fUByf6x_BgAoO05o4uHh89hyi9PiEKQzfvtT4ucPs-Ts",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#bd5330d983ca75a56771a085659ec1136c9a81f6",
+            .hash = "azure_sdk_amqp-0.4.0-fUByfyWRBwDU9pQlQL3AnageJI-noNZtH_5PxOJAk90U",
         },
         .serde = .{
             .url = "git+https://github.com/cataggar/serde.zig#73d872776b0361b6fc92f6cecd7ccf2f05e77cdd",
