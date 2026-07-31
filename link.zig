@@ -476,6 +476,21 @@ pub const Settlement = struct {
     rejection: ?Rejection = null,
 };
 
+/// A delivery the peer had already decided when its window was abandoned.
+///
+/// Carries no rejection detail, deliberately. A `Rejection` is heap-owned and
+/// the sender holds exactly one slot for it, valid until the next
+/// `awaitSettlement`; there is nowhere to put a windowful, and handing them
+/// out individually would put a second, different ownership contract on a
+/// function whose whole job is to release things. The outcome is what decides
+/// whether a message must be sent again, which is what a caller abandoning a
+/// window needs. A rejection's condition still reaches the caller through
+/// `awaitSettlement` on the path where the peer answers in order.
+pub const DecidedDelivery = struct {
+    token: DeliveryToken,
+    outcome: Outcome,
+};
+
 /// Per-delivery options.
 pub const SendOptions = struct {
     /// The `message-format` field of the transfer (§2.7.5). Zero is a plain
@@ -563,8 +578,48 @@ pub const Sender = struct {
     /// The `Settlement` from the last `awaitSettlement` stays valid: this is
     /// not an `awaitSettlement`, so it does not disturb the rejection the
     /// sender is holding for the caller to read.
+    ///
+    /// This discards any verdict the peer had already returned for a delivery
+    /// behind an undecided one. Use `abandonInFlightInto` to collect those
+    /// first; it is the same call otherwise.
     pub fn abandonInFlight(self: *Sender) void {
-        while (self.in_flight_len > 0) self.discardOldest();
+        _ = self.abandonInFlightInto(&.{});
+    }
+
+    /// Abandon the window, reporting the deliveries the peer had already
+    /// decided.
+    ///
+    /// `Session.applyDisposition` records an outcome on whichever entry the
+    /// peer names, wherever it sits in the window, but `awaitSettlement`
+    /// retires strictly in send order and blocks while the oldest entry is
+    /// undecided. A peer that settles out of order therefore leaves decided
+    /// entries stranded *behind* an undecided head — and that is exactly the
+    /// state a caller is in when it gives up waiting and abandons.
+    ///
+    /// Plain `abandonInFlight` throws those verdicts away, so a caller
+    /// following the at-least-once advice sends again every message in the
+    /// window, including ones the peer had already accepted. Collecting them
+    /// first is what keeps that duplication down to the deliveries whose fate
+    /// is genuinely unknown (#330).
+    ///
+    /// Writes in send order and returns the number of decided deliveries,
+    /// which may exceed `out.len`: the excess is dropped, and a caller
+    /// comparing the result against `out.len` can tell that it was. Sizing
+    /// `out` to `inFlight()` before the call is always enough.
+    pub fn abandonInFlightInto(self: *Sender, out: []DecidedDelivery) usize {
+        var decided: usize = 0;
+        while (self.in_flight_len > 0) {
+            const entry = self.entryAt(0);
+            if (entry.outcome) |outcome| {
+                if (decided < out.len) out[decided] = .{
+                    .token = .{ .id = entry.id },
+                    .outcome = outcome,
+                };
+                decided += 1;
+            }
+            self.discardOldest();
+        }
+        return decided;
     }
 
     /// How many deliveries are written but not yet settled.
@@ -5279,4 +5334,163 @@ test "a flow that names a delivery count has the debt charged against it too" {
     while (receiver.credit == 0) _ = try fixture.session.pump(10_000);
     try testing.expectEqual(@as(u32, 7), receiver.credit);
     try testing.expectEqual(@as(u32, 0), receiver.overrun);
+}
+
+test "abandoning collects a verdict stranded behind an undecided delivery" {
+    // The case #330 is about. `applyDisposition` records on whichever entry
+    // the peer names, but `awaitSettlement` retires in send order and blocks
+    // on the head, so a verdict for a later delivery is held and unreachable.
+    // A caller that gives up on the head and abandons used to throw it away
+    // and then re-send a message the peer had said it accepted.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptSenderAttach(peer, 10);
+    // Answers the last delivery only. The head is never settled, which is
+    // what makes the verdict unreachable through `awaitSettlement`.
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 2,
+        .last = 2,
+        .settled = true,
+        .state = .accepted,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+        .max_in_flight = 4,
+    }, 10_000);
+
+    _ = try sender.sendBytesAsync("a", .{}, 10_000);
+    _ = try sender.sendBytesAsync("b", .{}, 10_000);
+    _ = try sender.sendBytesAsync("c", .{}, 10_000);
+    _ = try fixture.session.pump(10_000);
+
+    // Held by the sender and not reachable through `awaitSettlement`, which
+    // would pump for the head rather than return this.
+    try testing.expect(sender.entryAt(0).outcome == null);
+    try testing.expectEqual(Outcome.accepted, sender.entryAt(2).outcome.?);
+
+    var decided: [4]DecidedDelivery = undefined;
+    try testing.expectEqual(@as(usize, 1), sender.abandonInFlightInto(&decided));
+    try testing.expectEqual(@as(u32, 2), decided[0].token.id);
+    try testing.expectEqual(Outcome.accepted, decided[0].outcome);
+    try testing.expectEqual(@as(usize, 0), sender.inFlight());
+}
+
+test "collecting reports in send order and says how many verdicts did not fit" {
+    // A short buffer must not read as "that was all of them", or a caller
+    // sizing it wrong silently re-sends accepted messages again — the very
+    // thing collecting exists to stop. The count is of verdicts held, not of
+    // entries written, so the two disagree exactly when it matters.
+    //
+    // The dropped verdicts are rejections, so this also pins that an entry
+    // whose verdict does not fit still has its rejection released:
+    // `testing.allocator` fails the test otherwise.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptSenderAttach(peer, 10);
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 1,
+        .last = 3,
+        .settled = true,
+        .state = .{ .rejected = .{
+            .condition = "amqp:resource-limit-exceeded",
+            .description = "slow down",
+        } },
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+        .max_in_flight = 4,
+    }, 10_000);
+
+    for ([_][]const u8{ "a", "b", "c", "d" }) |body| {
+        _ = try sender.sendBytesAsync(body, .{}, 10_000);
+    }
+    _ = try fixture.session.pump(10_000);
+
+    var decided: [2]DecidedDelivery = undefined;
+    try testing.expectEqual(@as(usize, 3), sender.abandonInFlightInto(&decided));
+    // Send order, so the caller can line the verdicts up against the tokens
+    // it holds without sorting them.
+    try testing.expectEqual(@as(u32, 1), decided[0].token.id);
+    try testing.expectEqual(@as(u32, 2), decided[1].token.id);
+    try testing.expectEqual(Outcome.rejected, decided[0].outcome);
+    try testing.expectEqual(@as(usize, 0), sender.inFlight());
+}
+
+test "abandoning with no room for verdicts still empties the window" {
+    // `abandonInFlight` is this call with an empty buffer, so the discarding
+    // form has to keep working for callers that genuinely do not care --
+    // tearing a link down, say. Pins the delegation rather than trusting it.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptSenderAttach(peer, 10);
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 1,
+        .last = 1,
+        .settled = true,
+        .state = .{ .rejected = .{
+            .condition = "amqp:resource-limit-exceeded",
+            .description = "slow down",
+        } },
+    } });
+    // For the blocking send below, which takes the next id after the two
+    // abandoned ones.
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 2,
+        .last = 2,
+        .settled = true,
+        .state = .accepted,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+        .max_in_flight = 4,
+    }, 10_000);
+
+    _ = try sender.sendBytesAsync("a", .{}, 10_000);
+    _ = try sender.sendBytesAsync("b", .{}, 10_000);
+    _ = try fixture.session.pump(10_000);
+
+    sender.abandonInFlight();
+    try testing.expectEqual(@as(usize, 0), sender.inFlight());
+    // And the blocking send that the outstanding deliveries were refusing now
+    // completes. Swallowing the error instead would assert nothing: the only
+    // error it could have discriminated is `DeliveriesInFlight`, which the
+    // line above already rules out.
+    try sender.sendBytes("c", 10_000);
 }

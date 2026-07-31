@@ -51,6 +51,7 @@ pub const SendOptions = link.SendOptions;
 pub const DeliveryToken = link.DeliveryToken;
 pub const Settlement = link.Settlement;
 pub const Outcome = link.Outcome;
+pub const DecidedDelivery = link.DecidedDelivery;
 pub const Receiver = link.Receiver;
 pub const ReceiverOptions = link.ReceiverOptions;
 pub const Delivery = link.Delivery;
