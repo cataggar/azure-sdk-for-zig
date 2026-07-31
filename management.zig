@@ -733,7 +733,7 @@ const Scripted = struct {
 
         decoded.* = try amqp.decodeMessage(
             self.allocator,
-            harness.transferPayload(self.allocator, transfers[0]).?,
+            try harness.transferPayload(self.allocator, transfers[0]),
         );
         return decoded.message.application_properties.?;
     }

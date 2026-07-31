@@ -509,7 +509,7 @@ fn lastDelivery(allocator: Allocator, mem: *MemoryTransport) !SentDelivery {
             format = decoded.performative.transfer.message_format;
             seen = true;
         }
-        try payload.appendSlice(allocator, harness.transferPayload(allocator, body).?);
+        try payload.appendSlice(allocator, try harness.transferPayload(allocator, body));
     }
 
     return .{ .payload = try payload.toOwnedSlice(allocator), .message_format = format };
