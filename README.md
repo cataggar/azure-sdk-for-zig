@@ -232,10 +232,31 @@ than a growing one.
 `abandonInFlight` is the way out of a pipeline that failed partway. Waiting is
 what just failed, so the caller cannot wait the remaining deliveries out, and a
 sender still holding unsettled ones refuses every later blocking send — without
-it a single timed-out pipeline would wedge the link for good. The abandoned
-verdicts are lost and any disposition that arrives for them is ignored, so
-resending an abandoned delivery the broker went on to accept publishes it
-twice.
+it a single timed-out pipeline would wedge the link for good. Any disposition
+that arrives after the abandon is ignored, so resending an abandoned delivery
+the broker went on to accept publishes it twice.
+
+Some of those verdicts may already be in hand, though. A disposition is recorded
+on whichever delivery the peer names, wherever it sits in the window, while
+`awaitSettlement` retires in send order and blocks on the oldest — so a peer that
+answers out of order strands decided deliveries behind an undecided one, which is
+exactly the state a caller is in when it gives up and abandons.
+`abandonInFlightInto` abandons the window and writes those verdicts out first, in
+send order, returning how many were held. That may exceed the buffer length, so a
+short buffer does not read as "that was all of them"; sizing it to `inFlight()`
+before the call is always enough.
+
+```zig
+var decided: [8]amqp.DecidedDelivery = undefined;
+const n = sender.abandonInFlightInto(&decided);
+for (decided[0..@min(n, decided.len)]) |d| {
+    if (d.outcome == .accepted) markSent(d.token);
+}
+```
+
+`DecidedDelivery` carries no rejection detail: a `Rejection` is heap-owned and
+the sender holds one slot for it, so there is nowhere to put a windowful. The
+outcome is what decides whether a message has to be sent again.
 
 ### Session flow control
 
