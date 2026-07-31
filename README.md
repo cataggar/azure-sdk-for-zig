@@ -266,13 +266,20 @@ converting a received one back, and building and reading the two management
 bodies that carry a whole batch. Nothing touches the network, so a result is
 attributable to a code change rather than to service latency.
 
-The last two run the whole receive path against a scripted peer: frames off
-the transport, deliveries reassembled, messages decoded, Service Bus messages
+Two of them run the whole receive path against a scripted peer: frames off the
+transport, deliveries reassembled, messages decoded, Service Bus messages
 converted, the batch arena filled. That loop is where a consumer actually
-spends its time, and none of it is visible one message at a time. The two
-share a byte-identical handshake, CBS exchange and attach and differ only in
-how many transfers follow, so subtracting them and dividing by 999 leaves the
-cost of one received message.
+spends its time, and none of it is visible one message at a time. The two share
+a byte-identical handshake, CBS exchange and attach and differ only in how many
+transfers follow, so subtracting them and dividing by 999 leaves the cost of
+one received message.
+
+One cost does not cancel: handing the peer the longer script copies ~180 KB
+into a freshly mapped buffer, and faulting those pages in costs far more than
+the copy. It is one allocation either way, so the allocation subtraction is
+exact, but on this machine it is ~87 us — about seven percent of what the
+x1000 case spends. The `script fixture` case measures it so you can subtract it
+too rather than take a number here on trust.
 
 Prefer `allocs/op` as the regression signal. It is stable across machines,
 whereas timings move on shared or virtualised hosts — and the suite opens with

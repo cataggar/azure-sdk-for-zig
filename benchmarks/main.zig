@@ -184,10 +184,15 @@ fn benchReadPeekedMessages(allocator: std.mem.Allocator) !void {
 // because it *shrinks* as the count grows. Measured, that reported 1.81
 // allocations per message where the truth is 2.00.
 //
-// What is left uncancelled is the memcpy of the longer script, ~270 KB. It is
-// one allocation in either case, so allocations subtract exactly; it costs the
-// x1000 case a few microseconds of the ~1.3 ms it spends, so the per-message
-// timing is an overstatement of roughly two percent.
+// What is left uncancelled is handing the peer its script: ~180 KB copied into
+// a 270 KB buffer for x1000 against 540 bytes for x1. That is one allocation in
+// either case, so the allocation subtraction is exact — but it is nowhere near
+// free in time, because a freshly mapped 270 KB region is faulted in a page at
+// a time as the copy touches it, which costs far more than the copy. The
+// `script fixture` case below measures it, so the reader can subtract it rather
+// than trust a number written here; on this machine it is ~88 us, about seven
+// percent of what x1000 spends. Subtract it before dividing if the timing
+// matters as much as the allocation count.
 
 const bench_entity = "orders";
 const bench_link_id = "servicebus";
@@ -382,13 +387,25 @@ fn benchReceive1000(allocator: std.mem.Allocator) !void {
 
 const bench_receive_count: u32 = 1000;
 
-/// The harness floor. `benchmarkAllocating` times a call through a function
-/// pointer and reads a counter either side of it, and that is not free; the
-/// cases here that come in under a hundred nanoseconds are within small
-/// multiples of it. Measuring it on the same machine in the same run beats
-/// asserting a number in a comment that nobody re-checks.
+/// The harness floor. `benchmarkAllocating` brackets every iteration with two
+/// `std.Io` clock reads, and those go through a vtable, so the floor is real
+/// and machine-dependent; the cases here that come in under a hundred
+/// nanoseconds are within small multiples of it. The body inlines away to
+/// nothing — `func` is `comptime`, so there is no call to measure — which is
+/// what makes this the floor rather than a reading. Measuring it on the same
+/// machine in the same run beats asserting a number in a comment that nobody
+/// re-checks.
 fn benchNothing(allocator: std.mem.Allocator) !void {
     _ = allocator;
+}
+
+/// The one cost the x1/x1000 subtraction does not cancel: handing the peer the
+/// longer script. Measured here so it can be subtracted, for the reason given
+/// above the receive section.
+fn benchScriptPush(allocator: std.mem.Allocator) !void {
+    var mem = amqp.MemoryTransport.init(allocator);
+    defer mem.deinit();
+    try mem.pushPeerBytes(receive_script_many);
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -451,9 +468,10 @@ pub fn main(init: std.process.Init) !void {
         // Connection setup dominates the x1 case; the difference between the
         // two, divided by 999, is what one message costs on the receive path.
         // Neither leaves an unread transfer buffered at teardown — see above
-        // for why that matters.
+        // for why that matters, and for what `script fixture` is doing here.
         .{ "receive x1 (scripted peer)", 500, benchReceive1 },
         .{ "receive x1000 (scripted peer)", 20, benchReceive1000 },
+        .{ "script fixture (x1000 script)", 500, benchScriptPush },
     };
 
     inline for (cases) |case| {
