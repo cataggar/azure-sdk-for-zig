@@ -342,6 +342,14 @@ pub const EventData = struct {
 /// The consequence is that the fields are not individually owned: do not free
 /// one, replace one with allocated memory, or add to `properties` with
 /// `PropertyMap.put`. Free the event with `deinit` or `freeReceivedEvents`.
+///
+/// Read the two maps through `properties` and `systemProperties`, which return
+/// `*const` so that releasing one through the accessor is a compile error
+/// rather than a double free. Zig has no private fields, so `event_data` and
+/// `system_properties` are still reachable directly and copying either out by
+/// value still yields a map whose `deinit` frees storage the event will free
+/// again; the accessors make the path a caller is likely to find the safe one,
+/// they do not make the unsafe one unreachable.
 pub const ReceivedEventData = struct {
     event_data: EventData = .{},
     /// UTC time the service accepted the event, in Unix milliseconds.
@@ -373,8 +381,23 @@ pub const ReceivedEventData = struct {
         return self.event_data.correlation_id;
     }
 
-    pub fn properties(self: ReceivedEventData) PropertyMap {
-        return self.event_data.properties;
+    /// The event's application properties.
+    ///
+    /// Returned by pointer, not by value. A `PropertyMap` copy shares the
+    /// original's storage but not its identity, so `deinit` on the copy frees
+    /// that storage and empties only the copy, leaving the event holding a
+    /// dangling `entries` that `ReceivedEventData.deinit` then frees a second
+    /// time. `borrowed` does not save it: it suppresses freeing the keys and
+    /// values, never the map's own storage. A `*const` result makes that
+    /// mistake a compile error, because `deinit` needs a mutable pointer.
+    pub fn properties(self: *const ReceivedEventData) *const PropertyMap {
+        return &self.event_data.properties;
+    }
+
+    /// The annotations not surfaced as dedicated fields. `*const` for the
+    /// same reason as `properties`.
+    pub fn systemProperties(self: *const ReceivedEventData) *const PropertyMap {
+        return &self.system_properties;
     }
 
     /// Calling this twice on the same event is harmless: it is left empty, so
@@ -1673,6 +1696,40 @@ test "a borrowed property map survives being released twice" {
     decoded.deinit(allocator);
 
     try std.testing.expectEqual(@as(usize, 0), decoded.system_properties.count());
+}
+
+test "the property accessors alias the event's maps rather than copying them" {
+    const allocator = std.testing.allocator;
+
+    var annotations = [_]MapEntry{
+        .{ .key = .{ .symbol = "x-opt-vendor" }, .value = .{ .string = "v" } },
+    };
+    var properties = [_]MapEntry{.{ .key = .{ .string = "k" }, .value = .{ .string = "v" } }};
+    var decoded = try fromRawMessage(allocator, .{
+        .body = "b",
+        .message_annotations = &annotations,
+        .application_properties = &properties,
+    });
+    defer decoded.deinit(allocator);
+
+    const props = decoded.properties();
+    const system = decoded.systemProperties();
+    try std.testing.expectEqual(@as(usize, 1), props.count());
+    try std.testing.expectEqual(@as(usize, 1), system.count());
+
+    // Release both maps through the event. Each accessor result has to observe
+    // that, which is only true if it aliases the field. An accessor returning
+    // `PropertyMap` by value would hand back a copy that still reported one
+    // entry and still pointed at the storage just freed - and whose own
+    // `deinit` would free it a second time. That is the double free these
+    // signatures exist to prevent, so the staleness is what this asserts.
+    decoded.event_data.deinit(allocator);
+    decoded.system_properties.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), props.count());
+    try std.testing.expectEqual(@as(usize, 0), system.count());
+    // The backing block is untouched by either release.
+    try std.testing.expectEqualStrings("b", decoded.body());
 }
 
 test "a repeated application property key keeps the last value" {
