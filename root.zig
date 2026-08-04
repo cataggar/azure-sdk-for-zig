@@ -64,6 +64,7 @@ pub const SenderPool = sending.SenderPool;
 pub const default_max_in_flight = sending.default_max_in_flight;
 pub const SendError = sending.SendError;
 pub const entityPathFor = sending.entityPathFor;
+pub const entityPathInto = sending.entityPathInto;
 
 /// Metadata models and the `$management` operations that produce them. Both
 /// carry an optional arena, so a decoded value owns its strings and one built
@@ -747,6 +748,35 @@ pub const ProducerClient = struct {
         return self.credential.getToken(ctx);
     }
 
+    /// Scratch space for an entity path that is only needed long enough to
+    /// look a link up.
+    ///
+    /// Every send builds the same address to key `SenderPool` by, and it was
+    /// costing an allocation each time. This holds it inline for any name
+    /// Event Hubs accepts and only allocates for one it would not, so the
+    /// longer name keeps working rather than becoming a client-side error.
+    const EntityPath = struct {
+        buf: [sending.entity_path_buffer_len]u8 = undefined,
+        owned: ?[]u8 = null,
+
+        fn resolve(
+            self: *EntityPath,
+            allocator: std.mem.Allocator,
+            name: []const u8,
+            partition_id: ?[]const u8,
+        ) ![]const u8 {
+            return sending.entityPathInto(&self.buf, name, partition_id) catch {
+                const owned = try sending.entityPathFor(allocator, name, partition_id);
+                self.owned = owned;
+                return owned;
+            };
+        }
+
+        fn deinit(self: *EntityPath, allocator: std.mem.Allocator) void {
+            if (self.owned) |owned| allocator.free(owned);
+        }
+    };
+
     /// The AMQP address a batch is published to: the hub, letting the service
     /// pick a partition, or `{hub}/Partitions/{id}`. Caller owns the result.
     pub fn entityPath(
@@ -760,8 +790,9 @@ pub const ProducerClient = struct {
     /// Send a batch of events over AMQP.
     pub fn sendBatch(self: *ProducerClient, allocator: std.mem.Allocator, batch: EventDataBatch) !void {
         if (batch.count() == 0) return SendError.EmptyBatch;
-        const address = try self.entityPath(allocator, batch.partition_id);
-        defer allocator.free(address);
+        var entity_path: EntityPath = .{};
+        defer entity_path.deinit(allocator);
+        const address = try entity_path.resolve(allocator, self.options.event_hub_name, batch.partition_id);
         return self.amqp_transport.sendBatch(allocator, address, batch);
     }
 
@@ -809,8 +840,9 @@ pub const ProducerClient = struct {
                 batches[end].partition_id,
             )) : (end += 1) {}
 
-            const address = try self.entityPath(allocator, batches[start].partition_id);
-            defer allocator.free(address);
+            var entity_path: EntityPath = .{};
+            defer entity_path.deinit(allocator);
+            const address = try entity_path.resolve(allocator, self.options.event_hub_name, batches[start].partition_id);
             try self.amqp_transport.sendBatches(allocator, address, batches[start..end]);
 
             start = end;
@@ -831,8 +863,9 @@ pub const ProducerClient = struct {
         var new_batch = try EventDataBatch.init(options);
         errdefer new_batch.deinit(allocator);
 
-        const address = try self.entityPath(allocator, options.partition_id);
-        defer allocator.free(address);
+        var entity_path: EntityPath = .{};
+        defer entity_path.deinit(allocator);
+        const address = try entity_path.resolve(allocator, self.options.event_hub_name, options.partition_id);
 
         if (try self.amqp_transport.maxMessageSize(address)) |limit| {
             try new_batch.applyLinkMaxMessageSize(@intCast(limit));
@@ -2410,4 +2443,39 @@ test {
     _ = errors;
     _ = event_data;
     _ = checkpoint;
+}
+
+test "the entity path stays on the stack for a real hub and falls back for a long one" {
+    const allocator = std.testing.allocator;
+
+    {
+        var entity_path: ProducerClient.EntityPath = .{};
+        defer entity_path.deinit(allocator);
+        const address = try entity_path.resolve(allocator, "my-hub", "3");
+        try std.testing.expectEqualStrings("my-hub/Partitions/3", address);
+        // Nothing was allocated: the path points into the struct's own buffer.
+        try std.testing.expect(entity_path.owned == null);
+        try std.testing.expect(@intFromPtr(address.ptr) == @intFromPtr(&entity_path.buf));
+    }
+
+    {
+        var entity_path: ProducerClient.EntityPath = .{};
+        defer entity_path.deinit(allocator);
+        const address = try entity_path.resolve(allocator, "hub-with-no-partition", null);
+        try std.testing.expectEqualStrings("hub-with-no-partition", address);
+        try std.testing.expect(entity_path.owned == null);
+    }
+
+    {
+        // Longer than Event Hubs accepts, so the inline buffer cannot hold it.
+        // It has to keep working rather than become a client-side error, which
+        // is the whole reason the fallback exists.
+        const long_name = "n" ** (sending.entity_path_buffer_len + 16);
+        var entity_path: ProducerClient.EntityPath = .{};
+        defer entity_path.deinit(allocator);
+        const address = try entity_path.resolve(allocator, long_name, "7");
+        try std.testing.expectEqualStrings(long_name ++ "/Partitions/7", address);
+        // And this one did allocate, so `deinit` has something to release.
+        try std.testing.expect(entity_path.owned != null);
+    }
 }
