@@ -105,30 +105,92 @@ pub const MessageId = union(enum) {
 /// `map[string]any` and Rust as `HashMap<String, AmqpSimpleValue>`, so any
 /// AMQP simple type has to survive a round trip.
 pub const PropertyMap = struct {
-    entries: std.StringArrayHashMapUnmanaged(AmqpValue) = .empty,
-    /// Whether the keys and values belong to the map or to whoever filled it.
+    /// The map holds its contents one of exactly two ways, and never both.
     ///
-    /// `put` copies, so the map frees what it holds. `putBorrowed` does not,
-    /// because a decoded event points every property at its own backing block
-    /// and `deinit` must then release only the map's own storage.
+    /// A union rather than a hash map beside a flag: the two are mutually
+    /// exclusive, so sharing the storage makes that unrepresentable instead of
+    /// merely documented — and keeps `PropertyMap` the same size it was, which
+    /// matters because every `ReceivedEventData` carries two of them and a
+    /// received batch is an array of those.
+    storage: Storage = .{ .owned = .empty },
+
+    pub const Storage = union(enum) {
+        /// The map allocated and owns every key and value it holds.
+        owned: std.StringArrayHashMapUnmanaged(AmqpValue),
+        /// The keys, the values, *and these arrays* live in memory someone
+        /// else owns — in practice a decoded event's backing block. The map
+        /// then owns nothing at all: `deinit` frees nothing, and copying one
+        /// is harmless. That is what keeps `EventData.deinit` — a public
+        /// method on a public field of every received event — from freeing
+        /// interior pointers into a block it knows nothing about.
+        borrowed: Borrowed,
+    };
+
+    /// Key and value arrays carved out of the owner's memory and filled in
+    /// place. The arrays are the reservation; `len` is how much is live.
     ///
-    /// Recording that here rather than leaving it to the caller to remember
-    /// is what keeps `deinit` correct on both, and so keeps `EventData.deinit`
-    /// — a public method on a public field of every received event — from
-    /// freeing interior pointers into a block it knows nothing about.
-    borrowed: bool = false,
+    /// Flat rather than hashed because past `linear_scan_max` entries
+    /// `getOrPut` builds an index from the allocator it is handed, and sizing
+    /// that inside the block would mean depending on std internals. A scan is
+    /// what the hash map does below that threshold anyway, and an event
+    /// carries a handful of properties, so lookup stays O(n) in a small n.
+    pub const Borrowed = struct {
+        /// Reservations of `cap` entries each, of which `len` are live.
+        ///
+        /// Raw pointers and `u32` counts rather than two slices: the union
+        /// above is as large as its widest arm, and at three words this arm
+        /// would have widened `PropertyMap` past the hash map it shares space
+        /// with — costing every received event two words for a saving meant
+        /// to be free.
+        keys_ptr: [*][]const u8,
+        values_ptr: [*]AmqpValue,
+        len: u32 = 0,
+        cap: u32,
+
+        pub fn keys(self: Borrowed) [][]const u8 {
+            return self.keys_ptr[0..self.len];
+        }
+
+        pub fn values(self: Borrowed) []AmqpValue {
+            return self.values_ptr[0..self.len];
+        }
+    };
 
     pub const empty: PropertyMap = .{};
 
+    /// Reserve room in `block` for exactly `n` borrowed entries.
+    ///
+    /// Both arrays come out of `block`, so a decoded event costs no allocation
+    /// for its properties beyond the one block it already pays for.
+    pub fn initBorrowed(block: std.mem.Allocator, n: usize) !PropertyMap {
+        return .{ .storage = .{ .borrowed = .{
+            .keys_ptr = (try block.alloc([]const u8, n)).ptr,
+            .values_ptr = (try block.alloc(AmqpValue, n)).ptr,
+            .cap = std.math.cast(u32, n) orelse return error.OutOfMemory,
+        } } };
+    }
+
+    /// The borrowed arrays, or null when the map owns its contents.
+    pub fn borrowed(self: *const PropertyMap) ?Borrowed {
+        return switch (self.storage) {
+            .owned => null,
+            .borrowed => |b| b,
+        };
+    }
+
     pub fn deinit(self: *PropertyMap, allocator: std.mem.Allocator) void {
-        if (!self.borrowed) {
-            var it = self.entries.iterator();
-            while (it.next()) |entry| {
-                allocator.free(entry.key_ptr.*);
-                entry.value_ptr.deinit(allocator);
-            }
+        switch (self.storage) {
+            .owned => |*map| {
+                var it = map.iterator();
+                while (it.next()) |entry| {
+                    allocator.free(entry.key_ptr.*);
+                    entry.value_ptr.deinit(allocator);
+                }
+                map.deinit(allocator);
+            },
+            // Owns nothing, so there is nothing to release.
+            .borrowed => {},
         }
-        self.entries.deinit(allocator);
         self.* = .empty;
     }
 
@@ -141,9 +203,15 @@ pub const PropertyMap = struct {
         value: AmqpValue,
     ) !void {
         // Mixing the two would leave the map half owning its contents, which
-        // no single `deinit` can then get right. Adding to a received event's
-        // properties means copying the event out first.
-        std.debug.assert(!self.borrowed);
+        // no single `deinit` can then get right, and `get` reads only the
+        // borrowed side so the entry would be silently invisible as well.
+        // Adding to a received event's properties means copying it out first.
+        // An error rather than an assert: `std.debug.assert` is compiled out
+        // in ReleaseFast, which is how this library ships.
+        const map = switch (self.storage) {
+            .owned => |*owned| owned,
+            .borrowed => return error.PropertiesBorrowed,
+        };
 
         var cloned = try value.clone(allocator);
         errdefer cloned.deinit(allocator);
@@ -151,15 +219,10 @@ pub const PropertyMap = struct {
         const owned_key = try allocator.dupe(u8, key);
         errdefer allocator.free(owned_key);
 
-        const gop = try self.entries.getOrPut(allocator, owned_key);
+        const gop = try map.getOrPut(allocator, owned_key);
         if (gop.found_existing) {
             allocator.free(owned_key);
-            // The assert above is compiled out in ReleaseFast, which is how
-            // this library is built. Without this guard the same misuse is a
-            // leak for a new key but an invalid free for a colliding one, and
-            // overwriting a decoded property is the likelier mistake of the
-            // two. Degrade to the leak.
-            if (!self.borrowed) gop.value_ptr.deinit(allocator);
+            gop.value_ptr.deinit(allocator);
         }
         gop.value_ptr.* = cloned;
     }
@@ -173,43 +236,49 @@ pub const PropertyMap = struct {
         return self.put(allocator, key, .{ .string = value });
     }
 
-    /// Insert `key` and `value` without copying either.
+    /// Store `key` and `value` without copying either. The caller owns both
+    /// and must keep them alive at least as long as the map; `deinit` will
+    /// not free them.
     ///
-    /// `allocator` is used only for the map's own storage; the caller owns the
-    /// key and value bytes and must keep them alive at least as long as the
-    /// map, and `deinit` will not free them.
+    /// Requires `initBorrowed` first. Replacing an existing key rather than
+    /// appending matches `put`, so a message repeating a key decodes to the
+    /// same count and the same last-one-wins value either way.
     ///
-    /// `ReceivedEventData` is the only user: every property it decodes already
-    /// lives in the event's backing block.
-    pub fn putBorrowed(
-        self: *PropertyMap,
-        allocator: std.mem.Allocator,
-        key: []const u8,
-        value: AmqpValue,
-    ) !void {
-        std.debug.assert(self.borrowed or self.entries.count() == 0);
-
-        const gop = try self.entries.getOrPut(allocator, key);
-        gop.value_ptr.* = value;
-        self.borrowed = true;
-    }
-
-    /// Size the map for exactly `n` entries, so a run of `putBorrowed` neither
-    /// grows it nor leaves it holding slack it will never use.
-    ///
-    /// `setCapacity` rather than `ensureTotalCapacity`, which applies a
-    /// super-linear growth factor on top of what it is asked for.
-    pub fn reserveExact(self: *PropertyMap, allocator: std.mem.Allocator, n: usize) !void {
-        try self.entries.entries.setCapacity(allocator, n);
+    /// Reports a miscount as `OutOfMemory`, which is how an under-sized block
+    /// surfaces too — the reservation and the fill walk the same entries with
+    /// the same filter, so neither can happen without the other being wrong.
+    pub fn putBorrowed(self: *PropertyMap, key: []const u8, value: AmqpValue) !void {
+        const b = switch (self.storage) {
+            .owned => return error.OutOfMemory,
+            .borrowed => |*b| b,
+        };
+        for (b.keys(), 0..) |existing, i| {
+            if (std.mem.eql(u8, existing, key)) {
+                b.values()[i] = value;
+                return;
+            }
+        }
+        if (b.len == b.cap) return error.OutOfMemory;
+        b.keys_ptr[b.len] = key;
+        b.values_ptr[b.len] = value;
+        b.len += 1;
     }
 
     pub fn get(self: PropertyMap, key: []const u8) ?AmqpValue {
-        return self.entries.get(key);
+        switch (self.storage) {
+            .owned => |map| return map.get(key),
+            .borrowed => |b| {
+                for (b.keys(), b.values()) |k, v| {
+                    if (std.mem.eql(u8, k, key)) return v;
+                }
+                return null;
+            },
+        }
     }
 
     /// Convenience accessor for the common case of a string-valued property.
     pub fn getString(self: PropertyMap, key: []const u8) ?[]const u8 {
-        const value = self.entries.get(key) orelse return null;
+        const value = self.get(key) orelse return null;
         return switch (value) {
             .string, .symbol => |s| s,
             else => null,
@@ -217,15 +286,24 @@ pub const PropertyMap = struct {
     }
 
     pub fn count(self: PropertyMap) usize {
-        return self.entries.count();
+        return switch (self.storage) {
+            .owned => |map| map.count(),
+            .borrowed => |b| b.len,
+        };
     }
 
     pub fn keys(self: PropertyMap) []const []const u8 {
-        return self.entries.keys();
+        return switch (self.storage) {
+            .owned => |map| map.keys(),
+            .borrowed => |b| b.keys(),
+        };
     }
 
     pub fn values(self: PropertyMap) []const AmqpValue {
-        return self.entries.values();
+        return switch (self.storage) {
+            .owned => |map| map.values(),
+            .borrowed => |b| b.values(),
+        };
     }
 };
 
@@ -424,21 +502,21 @@ pub const BorrowedMessage = struct {
 /// populates on the service side.
 ///
 /// Every decoded byte — the body, the ids, the annotations, and both property
-/// maps' keys and values — lives in one `backing` block, so an event costs a
-/// single allocation rather than one per field. The maps keep their own index
-/// storage on the allocator, which is the only other thing `deinit` frees.
+/// maps' keys, values, and the arrays holding them — lives in one `backing`
+/// block, so an event is a single allocation and `deinit` is a single free.
 ///
 /// The consequence is that the fields are not individually owned: do not free
 /// one, replace one with allocated memory, or add to `properties` with
-/// `PropertyMap.put`. Free the event with `deinit` or `freeReceivedEvents`.
+/// `PropertyMap.put`, which refuses a borrowed map with
+/// `error.PropertiesBorrowed`. Free the event with `deinit` or
+/// `freeReceivedEvents`.
 ///
 /// Read the two maps through `properties` and `systemProperties`, which return
-/// `*const` so that releasing one through the accessor is a compile error
-/// rather than a double free. Zig has no private fields, so `event_data` and
-/// `system_properties` are still reachable directly and copying either out by
-/// value still yields a map whose `deinit` frees storage the event will free
-/// again; the accessors make the path a caller is likely to find the safe one,
-/// they do not make the unsafe one unreachable.
+/// `*const` so that releasing one through the accessor is a compile error.
+/// Zig has no private fields, so `event_data` and `system_properties` remain
+/// reachable directly — but a decoded map borrows the block and owns nothing,
+/// so copying one out by value is now harmless: the copy's `deinit` has
+/// nothing to free.
 pub const ReceivedEventData = struct {
     event_data: EventData = .{},
     /// UTC time the service accepted the event, in Unix milliseconds.
@@ -472,13 +550,13 @@ pub const ReceivedEventData = struct {
 
     /// The event's application properties.
     ///
-    /// Returned by pointer, not by value. A `PropertyMap` copy shares the
-    /// original's storage but not its identity, so `deinit` on the copy frees
-    /// that storage and empties only the copy, leaving the event holding a
-    /// dangling `entries` that `ReceivedEventData.deinit` then frees a second
-    /// time. `borrowed` does not save it: it suppresses freeing the keys and
-    /// values, never the map's own storage. A `*const` result makes that
-    /// mistake a compile error, because `deinit` needs a mutable pointer.
+    /// Returned by pointer, not by value, though a decoded event's map now
+    /// owns nothing and a copy of one is harmless. The signature still says
+    /// what the type means rather than what today's decode path happens to
+    /// produce: an *owned* map's copy shares its storage but not its identity,
+    /// so `deinit` on the copy frees that storage and empties only the copy.
+    /// A `*const` result makes that a compile error, because `deinit` needs a
+    /// mutable pointer.
     pub fn properties(self: *const ReceivedEventData) *const PropertyMap {
         return &self.event_data.properties;
     }
@@ -835,16 +913,13 @@ pub fn fromRawMessage(
         }
     }
 
-    if (raw.application_properties) |entries| {
-        // Exactly the number of puts that follow, so the map is sized once
-        // rather than grown into, and never past what it holds.
-        if (layout.properties > 0) {
-            try received.event_data.properties.reserveExact(allocator, layout.properties);
-        }
-        for (entries) |entry| {
+    if (layout.properties > 0) {
+        // Exactly the number of puts that follow, out of the block, so the
+        // map is sized once and costs no allocation of its own.
+        received.event_data.properties = try .initBorrowed(block, layout.properties);
+        for (raw.application_properties.?) |entry| {
             const key = keyOf(entry.key) orelse continue;
             try received.event_data.properties.putBorrowed(
-                allocator,
                 try block.dupe(u8, key),
                 try entry.value.clone(block),
             );
@@ -853,9 +928,9 @@ pub fn fromRawMessage(
 
     if (raw.message_annotations) |entries| {
         if (layout.system_properties > 0) {
-            try received.system_properties.reserveExact(allocator, layout.system_properties);
+            received.system_properties = try .initBorrowed(block, layout.system_properties);
         }
-        try applyAnnotations(allocator, block, entries, &received);
+        try applyAnnotations(block, entries, &received);
     }
 
     return received;
@@ -967,7 +1042,18 @@ fn plan(raw: RawMessage) Layout {
         }
     }
 
+    // Each map's own key and value arrays come out of the block too, so a
+    // decoded event allocates once however many properties it carries.
+    layout.bytes += borrowedMapSize(layout.properties);
+    layout.bytes += borrowedMapSize(layout.system_properties);
+
     return layout;
+}
+
+/// Room a borrowed map's own storage takes in the block.
+fn borrowedMapSize(n: usize) usize {
+    if (n == 0) return 0;
+    return reserve(n * @sizeOf([]const u8)) + reserve(n * @sizeOf(AmqpValue));
 }
 
 fn messageIdSize(value: AmqpValue) usize {
@@ -1021,7 +1107,6 @@ pub fn fromAmqpMessage(
 }
 
 fn applyAnnotations(
-    allocator: std.mem.Allocator,
     block: std.mem.Allocator,
     entries: []const MapEntry,
     received: *ReceivedEventData,
@@ -1056,7 +1141,6 @@ fn applyAnnotations(
                 received.offset = try block.dupe(u8, value);
             },
             .other => try received.system_properties.putBorrowed(
-                allocator,
                 try block.dupe(u8, key),
                 try entry.value.clone(block),
             ),
@@ -1675,7 +1759,7 @@ test "trailing null fields are omitted from composite sections" {
     try std.testing.expect(long.len > short.len);
 }
 
-test "a decoded event is one block plus its property maps" {
+test "a decoded event is exactly one allocation" {
     const allocator = std.testing.allocator;
 
     var counting = CountingAllocator.init(allocator);
@@ -1698,16 +1782,164 @@ test "a decoded event is one block plus its property maps" {
     });
     defer decoded.deinit(counting.allocator());
 
-    // One for the block, one for the property map. The annotations all map to
-    // dedicated fields, so `system_properties` stays empty and unallocated.
-    try std.testing.expectEqual(@as(usize, 2), counting.allocations);
+    // The block, and nothing else: the property map's own key and value
+    // arrays are carved out of it rather than allocated beside it.
+    try std.testing.expectEqual(@as(usize, 1), counting.allocations);
 
-    // And the map was sized for exactly what it holds, so that one allocation
-    // is neither grown into nor left holding slack.
-    try std.testing.expectEqual(
-        decoded.properties().count(),
-        decoded.event_data.properties.entries.entries.capacity,
+    // And it was reserved for exactly what it holds, so the block is neither
+    // grown into nor left carrying slack.
+    const borrowed = decoded.event_data.properties.borrowed().?;
+    try std.testing.expectEqual(decoded.properties().count(), borrowed.cap);
+    try std.testing.expectEqual(@as(u32, 2), borrowed.len);
+
+    // The block's *size*, not just the allocation count. An over-count is
+    // invisible to the count — sizing both arrays at twice what they need
+    // still decodes in one allocation, while costing ten times the bytes this
+    // borrowed representation saves. 152 is
+    //   8 body + 16 content type + 8 message id
+    // + 8 offset + 8 partition key  (their strings, copied into the dedicated
+    //                                fields those two annotations have)
+    // + 8 + 8 property keys + 8 property value (`int` needs no bytes)
+    // + 32 + 48 the key and value arrays themselves,
+    // each term rounded up to the block's 8-byte alignment.
+    try std.testing.expectEqual(@as(usize, 152), decoded.backing.len);
+
+    // The annotations all map to dedicated fields, so `system_properties`
+    // stays empty — and empty means no reservation at all, not an empty one.
+    try std.testing.expectEqual(@as(?PropertyMap.Borrowed, null), decoded.system_properties.borrowed());
+}
+
+test "the decode block has no alignment slack for a miscount to hide in" {
+    const allocator = std.testing.allocator;
+
+    // Every copied run is exactly a multiple of the block's 8-byte alignment,
+    // so nothing is rounded up and a miscount of a single byte moves the total
+    // rather than vanishing. "a decoded event is exactly one allocation" uses
+    // one-byte keys, where `reserve` rounds such a miscount away to nothing;
+    // it would cost 8 real bytes per key on a key whose length already sat on
+    // the boundary, so that test alone cannot see this class of over-count.
+    var properties = [_]MapEntry{
+        .{ .key = .{ .string = "keykey!!" }, .value = .{ .string = "valvalv!" } },
+    };
+    var decoded = try fromRawMessage(allocator, .{
+        .body = "bodybody",
+        .application_properties = &properties,
+    });
+    defer decoded.deinit(allocator);
+
+    // 8 body + 8 key + 8 value + 16 the key array + 24 the value array.
+    try std.testing.expectEqual(@as(usize, 64), decoded.backing.len);
+    try std.testing.expectEqualStrings("valvalv!", decoded.properties().getString("keykey!!").?);
+}
+
+test "the block is sized exactly for nested, binary and system-property terms" {
+    const allocator = std.testing.allocator;
+
+    // The two fixtures above pin only the terms they happen to carry, so an
+    // over-count in a path neither reaches is invisible to them: the recursive
+    // arms of `cloneSize`, `messageIdSize`'s binary arm, `correlation_id`, and
+    // the second `borrowedMapSize` for `system_properties`. A peer can send
+    // all of these. Every run here is a multiple of the block's 8-byte
+    // alignment, so no over-count is rounded away.
+    var list_items = [_]AmqpValue{ .{ .string = "aaaaaaaa" }, .{ .long = 1 } };
+    var map_entries = [_]MapEntry{
+        .{ .key = .{ .string = "kkkkkkkk" }, .value = .{ .string = "vvvvvvvv" } },
+    };
+    var descriptor: AmqpValue = .{ .symbol = "ssssssss" };
+    var described_value: AmqpValue = .{ .string = "dddddddd" };
+
+    var properties = [_]MapEntry{
+        .{ .key = .{ .string = "listlist" }, .value = .{ .list = &list_items } },
+        .{ .key = .{ .string = "mapmapma" }, .value = .{ .map = &map_entries } },
+        .{
+            .key = .{ .string = "descdesc" },
+            .value = .{ .described = .{ .descriptor = &descriptor, .value = &described_value } },
+        },
+    };
+    var annotations = [_]MapEntry{
+        .{ .key = .{ .symbol = "x-opt-ab" }, .value = .{ .string = "vvvvvvvv" } },
+        .{ .key = .{ .symbol = offset_annotation }, .value = .{ .string = "offsetof" } },
+        .{ .key = .{ .symbol = partition_key_annotation }, .value = .{ .string = "partkey!" } },
+    };
+
+    var decoded = try fromRawMessage(allocator, .{
+        .body = "bodybody",
+        .content_type = "ctypectp",
+        .message_id = .{ .binary = "msgidid!" },
+        .correlation_id = .{ .string = "corrcorr" },
+        .message_annotations = &annotations,
+        .application_properties = &properties,
+    });
+    defer decoded.deinit(allocator);
+
+    //     8 body + 8 content type + 8 binary message id + 8 correlation id
+    //  + 64 "listlist": 8 key + 48 the item array + 8 its one string
+    //  + 72 "mapmapma": 8 key + 48 the entry array + 8 + 8 its key and value
+    //  + 72 "descdesc": 8 key + 48 descriptor and value cells + 8 + 8 their
+    //                   strings
+    //  + 16 the one annotation with no dedicated field: 8 key + 8 value
+    //  +  8 offset + 8 partition key, copied into their dedicated fields
+    // + 120 the property arrays, 3 * (16 + 24)
+    //  + 40 the system-property arrays, 1 * (16 + 24)
+    try std.testing.expectEqual(@as(usize, 432), decoded.backing.len);
+}
+
+test "a borrowed property map owns nothing, so a copy of one is harmless" {
+    const allocator = std.testing.allocator;
+
+    var properties = [_]MapEntry{
+        .{ .key = .{ .string = "a" }, .value = .{ .string = "one" } },
+    };
+    var decoded = try fromRawMessage(allocator, .{
+        .body = "hello",
+        .application_properties = &properties,
+    });
+    defer decoded.deinit(allocator);
+
+    // The idiomatic mistake this design exists to make safe: take a copy and
+    // release it. `properties()` returns `*const` so the copy has to be
+    // written out by hand, which nothing stops a caller doing.
+    var copy = decoded.event_data.properties;
+    copy.deinit(allocator);
+
+    // The event still reads, because the copy freed nothing.
+    try std.testing.expectEqualStrings("one", decoded.properties().getString("a").?);
+}
+
+test "a borrowed property map refuses an owning put" {
+    const allocator = std.testing.allocator;
+
+    var properties = [_]MapEntry{
+        .{ .key = .{ .string = "a" }, .value = .{ .string = "one" } },
+    };
+    var decoded = try fromRawMessage(allocator, .{ .application_properties = &properties });
+    defer decoded.deinit(allocator);
+
+    // Half-owning the contents is what no single `deinit` can get right, and
+    // an assert would be compiled out in ReleaseFast.
+    try std.testing.expectError(
+        error.PropertiesBorrowed,
+        decoded.event_data.properties.putString(allocator, "b", "two"),
     );
+    try std.testing.expectEqual(@as(usize, 1), decoded.properties().count());
+}
+
+test "a repeated application property key decodes to one last-one-wins entry" {
+    const allocator = std.testing.allocator;
+
+    // A conformant peer does not send these, so this pins that the flat
+    // representation agrees with the hash-backed one rather than storing both
+    // and reading back the first.
+    var properties = [_]MapEntry{
+        .{ .key = .{ .string = "a" }, .value = .{ .string = "first" } },
+        .{ .key = .{ .string = "a" }, .value = .{ .string = "second" } },
+    };
+    var decoded = try fromRawMessage(allocator, .{ .application_properties = &properties });
+    defer decoded.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), decoded.properties().count());
+    try std.testing.expectEqualStrings("second", decoded.properties().getString("a").?);
+    try std.testing.expectEqual(@as(usize, 1), decoded.properties().keys().len);
 }
 
 test "every AMQP value shape fits the block it was measured for" {
@@ -1901,6 +2133,33 @@ test "releasing a decoded event's EventData frees only the property map" {
     try std.testing.expectEqualStrings("payload", decoded.body());
 }
 
+test "the borrowed representation does not enlarge the map" {
+    // The two representations are mutually exclusive, so they share storage in
+    // a union — which is only free while the borrowed arm is no wider than the
+    // hash map it shares space with. The first attempt here did not share at
+    // all: it put the flat arrays *beside* the map, taking `PropertyMap` from
+    // 48 bytes to 88 and `ReceivedEventData` from 264 to 344. That moved
+    // `receive x1000` from 1110672 to 1190672 B/op — 80000 bytes of widening,
+    // which against the pre-change base of 1122672 turned this change's saving
+    // of 12000 into a net regression of 68000.
+    //
+    // The bound is a literal rather than `@sizeOf(Owned)` because that is not
+    // the same number in the mode this runs in and the mode that ships:
+    // `std.ArrayHashMapUnmanaged` carries a `SafetyLock` in Debug, where it is
+    // 40 bytes, and is four words without it. Bounding against `@sizeOf(Owned)`
+    // would therefore admit a 40-byte arm on the strength of Debug — the mode
+    // `zig build test` uses by default — while in ReleaseFast that widens the
+    // union from 40 to 48 and costs 8 bytes on every map. One extra word is
+    // genuinely free, and this bound admits it; two are not, and it does not.
+    // The second assertion is what keeps the literal honest: if the hash map
+    // ever shrinks below four words, this fails rather than silently checking
+    // nothing.
+    const Owned = @FieldType(PropertyMap.Storage, "owned");
+    const owned_shipped_size = 4 * @sizeOf(usize);
+    try std.testing.expect(@sizeOf(PropertyMap.Borrowed) <= owned_shipped_size);
+    try std.testing.expect(owned_shipped_size <= @sizeOf(Owned));
+}
+
 test "a borrowed property map survives being released twice" {
     const allocator = std.testing.allocator;
 
@@ -1944,9 +2203,11 @@ test "the property accessors alias the event's maps rather than copying them" {
     // Release both maps through the event. Each accessor result has to observe
     // that, which is only true if it aliases the field. An accessor returning
     // `PropertyMap` by value would hand back a copy that still reported one
-    // entry and still pointed at the storage just freed - and whose own
-    // `deinit` would free it a second time. That is the double free these
-    // signatures exist to prevent, so the staleness is what this asserts.
+    // entry after the field it came from had been emptied. On a decoded event
+    // that copy is now harmless in itself, since a borrowed map owns nothing
+    // to free twice; but the aliasing is what the `*const` signatures buy, and
+    // it is what keeps these same accessors safe on an *owned* map, where the
+    // copy's `deinit` would release the map's storage a second time.
     decoded.event_data.deinit(allocator);
     decoded.system_properties.deinit(allocator);
 
@@ -1995,7 +2256,7 @@ test "deinit leaves an event that can be deinitialised again" {
 }
 
 /// Counts the allocations a decode makes, which is the property under test in
-/// `"a decoded event is one block plus its property maps"`.
+/// `"a decoded event is exactly one allocation"`.
 const CountingAllocator = struct {
     parent: std.mem.Allocator,
     allocations: usize = 0,
