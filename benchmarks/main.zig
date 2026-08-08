@@ -77,6 +77,287 @@ fn benchEncodeBatchTransfer(allocator: std.mem.Allocator) !void {
     allocator.free(payload);
 }
 
+// ─────────────────── Send over a scripted peer ───────────────────
+//
+// The batch cases above stop at encoding. These drive the public sender pool
+// over a real AMQP connection driver and in-memory transport, with the peer
+// granting credit and accepting the deliveries. That measures the attach,
+// sender lookup, transfer write, settlement read, and cleanup work a producer
+// actually pays without touching the network.
+//
+// Each iteration builds its own batch or pipeline, connection, transport, peer
+// and pool. The peer script is copied in the same way as the receive script so
+// the measurement is the send path, not re-encoding the broker's canned frames.
+
+const bench_target = "my-hub";
+const bench_sender_link_name = bench_target ++ "-sender-eventhubs";
+const bench_pipeline_batches = 8;
+const bench_pipeline_events_per_batch = 100;
+
+var send_one_script: []u8 = &.{};
+var send_eight_script: []u8 = &.{};
+
+fn batchWithEvents(allocator: std.mem.Allocator, count: usize) !eh.EventDataBatch {
+    var batch = try eh.EventDataBatch.init(.{});
+    errdefer batch.deinit(allocator);
+
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        _ = try batch.tryAdd(allocator, makeEvent());
+    }
+    return batch;
+}
+
+fn scriptSenderPeer(peer: amqp.test_peer.Peer, deliveries: u32) !void {
+    try amqp.test_peer.scriptHandshake(peer, bench_max_frame);
+    try peer.push(0, .{ .attach = .{
+        .name = bench_sender_link_name,
+        .handle = 0,
+        .role = .receiver,
+        .initial_delivery_count = 0,
+    } });
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 1000,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+        .handle = 0,
+        .delivery_count = 0,
+        .link_credit = deliveries + 5,
+    } });
+}
+
+fn buildSendScript(
+    allocator: std.mem.Allocator,
+    deliveries: u32,
+    disposition_per_delivery: bool,
+) ![]u8 {
+    var scratch = amqp.MemoryTransport.init(allocator);
+    defer scratch.deinit();
+
+    const peer = amqp.test_peer.Peer{ .allocator = allocator, .mem = &scratch };
+    try scriptSenderPeer(peer, deliveries);
+    if (disposition_per_delivery) {
+        var id: u32 = 0;
+        while (id < deliveries) : (id += 1) {
+            try peer.push(0, .{ .disposition = .{
+                .role = .receiver,
+                .first = id,
+                .last = id,
+                .settled = true,
+                .state = .accepted,
+            } });
+        }
+    } else {
+        try peer.push(0, .{ .disposition = .{
+            .role = .receiver,
+            .first = 0,
+            .last = deliveries - 1,
+            .settled = true,
+            .state = .accepted,
+        } });
+    }
+
+    return allocator.dupe(u8, scratch.inbound.items);
+}
+
+const ObservedSend = struct {
+    batch_deliveries: usize = 0,
+};
+
+fn observeSend(written: []const u8) !ObservedSend {
+    var out: ObservedSend = .{};
+    var offset: usize = if (std.mem.startsWith(u8, written, "AMQP")) 8 else 0;
+
+    while (offset + uamqp.frame.frame_header_size <= written.len) {
+        const header = try uamqp.frame.FrameHeader.parse(
+            written[offset..][0..uamqp.frame.frame_header_size],
+        );
+        const header_len = @as(usize, header.doff) * 4;
+        const body_len = @as(usize, header.size) - header_len;
+        const body = written[offset + header_len ..][0..body_len];
+        offset += @intCast(header.size);
+
+        if (amqp.performative.peekDescriptor(body) != amqp.performative.descriptor.transfer) {
+            continue;
+        }
+
+        var decode_buf: [512]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&decode_buf);
+        var decoded = try amqp.performative.decode(fba.allocator(), body);
+        defer decoded.deinit();
+
+        const transfer = decoded.performative.transfer;
+        if (transfer.delivery_id != null and
+            transfer.message_format != null and
+            transfer.message_format.? == eh.batch_message_format)
+        {
+            out.batch_deliveries += 1;
+        }
+    }
+
+    return out;
+}
+
+/// One accepted batch with one event through `SenderPool.send`.
+fn benchSend1(allocator: std.mem.Allocator) !void {
+    try sendScripted(allocator, 1);
+}
+
+/// One accepted batch with 1000 events through `SenderPool.send`.
+fn benchSend1000(allocator: std.mem.Allocator) !void {
+    try sendScripted(allocator, 1000);
+}
+
+fn sendScripted(allocator: std.mem.Allocator, count: usize) !void {
+    var mem = amqp.MemoryTransport.init(allocator);
+    defer mem.deinit();
+    try mem.pushPeerBytes(send_one_script);
+
+    var clock: amqp.connection_driver.ManualClock = .{};
+    var conn = try amqp.connection_driver.Driver.init(
+        allocator,
+        mem.transport(),
+        clock.clock(),
+        bench_options,
+    );
+    defer conn.deinit();
+
+    var fixture = try amqp.test_peer.Fixture.init(allocator, &mem, &clock, &conn);
+    defer fixture.deinit();
+
+    var pool = eh.SenderPool.init(allocator, &fixture.session, .{
+        .deadline_ms = 10_000,
+    });
+    defer pool.deinit();
+
+    var batch = try batchWithEvents(allocator, count);
+    defer batch.deinit(allocator);
+
+    mem.clearWritten();
+    try pool.send(allocator, bench_target, batch);
+
+    const observed = try observeSend(mem.written());
+    if (observed.batch_deliveries != 1) return error.ShortSend;
+}
+
+/// Eight accepted 100-event batches through sequential `SenderPool.send`.
+///
+/// Paired with `benchSendPipelined`, which does identical work and differs
+/// only in whether the eight batches overlap. In steady state both cost
+/// exactly 1716 allocations and 386507 B per iteration, so pipelining
+/// changes neither. Its real benefit is one round trip per window rather
+/// than one per batch, and a `MemoryTransport` peer has zero round-trip
+/// latency, so that benefit is invisible here by construction. Do not read
+/// either line as evidence for or against pipelining. The timings are a
+/// worse trap than the counts: which of the two looks faster flips with
+/// run order, so the ops/s ranking here means nothing at all.
+///
+/// Whichever of the two runs first also pays one extra 95400 B allocation
+/// on each of its first several iterations. That is the scripted peer's own
+/// `MemoryTransport.outbound` growing from 54635 B, which the counting
+/// allocator charges only when the general purpose allocator cannot remap
+/// it in place; once such a span has been grown and freed, later remaps
+/// succeed in place and cost nothing. It settles at six such iterations, so
+/// at 20 iterations the first of the two lines reads 1716.30 / 415127
+/// rather than the steady state. It is the test peer's buffer, not the send
+/// path, and it follows run order rather than send mode: swapping the two
+/// cases moves it to the other one.
+fn benchSendSequential(allocator: std.mem.Allocator) !void {
+    var mem = amqp.MemoryTransport.init(allocator);
+    defer mem.deinit();
+    try mem.pushPeerBytes(send_eight_script);
+
+    var clock: amqp.connection_driver.ManualClock = .{};
+    var conn = try amqp.connection_driver.Driver.init(
+        allocator,
+        mem.transport(),
+        clock.clock(),
+        bench_options,
+    );
+    defer conn.deinit();
+
+    var fixture = try amqp.test_peer.Fixture.init(allocator, &mem, &clock, &conn);
+    defer fixture.deinit();
+
+    var pool = eh.SenderPool.init(allocator, &fixture.session, .{
+        .deadline_ms = 10_000,
+        .max_in_flight = bench_pipeline_batches,
+    });
+    defer pool.deinit();
+
+    var batches: [bench_pipeline_batches]eh.EventDataBatch = undefined;
+    var initialized: usize = 0;
+    defer for (batches[0..initialized]) |*batch| batch.deinit(allocator);
+    for (&batches) |*batch| {
+        batch.* = try batchWithEvents(
+            allocator,
+            bench_pipeline_events_per_batch,
+        );
+        initialized += 1;
+    }
+
+    mem.clearWritten();
+    for (&batches) |batch| {
+        try pool.send(allocator, bench_target, batch);
+    }
+
+    const observed = try observeSend(mem.written());
+    if (observed.batch_deliveries != batches.len) return error.ShortSend;
+}
+
+/// Eight accepted 100-event batches through `SenderPool.sendPipelined`.
+///
+/// See `benchSendSequential` for the paired comparison, for what these two
+/// lines do and do not establish about pipelining, and for the one-time
+/// cost carried by whichever of the two runs first.
+fn benchSendPipelined(allocator: std.mem.Allocator) !void {
+    var mem = amqp.MemoryTransport.init(allocator);
+    defer mem.deinit();
+    try mem.pushPeerBytes(send_eight_script);
+
+    var clock: amqp.connection_driver.ManualClock = .{};
+    var conn = try amqp.connection_driver.Driver.init(
+        allocator,
+        mem.transport(),
+        clock.clock(),
+        bench_options,
+    );
+    defer conn.deinit();
+
+    var fixture = try amqp.test_peer.Fixture.init(allocator, &mem, &clock, &conn);
+    defer fixture.deinit();
+
+    var pool = eh.SenderPool.init(allocator, &fixture.session, .{
+        .deadline_ms = 10_000,
+        .max_in_flight = bench_pipeline_batches,
+    });
+    defer pool.deinit();
+
+    var batches: [bench_pipeline_batches]eh.EventDataBatch = undefined;
+    var initialized: usize = 0;
+    // One cleanup covering both a partially and a fully built array. A
+    // separate `errdefer` for the partial case would still be armed once the
+    // whole-array `defer` was registered, so any later error return would
+    // deinit every batch twice.
+    defer for (batches[0..initialized]) |*batch| batch.deinit(allocator);
+    for (&batches) |*batch| {
+        batch.* = try batchWithEvents(
+            allocator,
+            bench_pipeline_events_per_batch,
+        );
+        initialized += 1;
+    }
+
+    mem.clearWritten();
+    const result = pool.sendPipelined(allocator, bench_target, &batches);
+    if (result.err) |err| return err;
+    if (result.accepted != batches.len) return error.ShortSend;
+
+    const observed = try observeSend(mem.written());
+    if (observed.batch_deliveries != batches.len) return error.ShortSend;
+}
+
 /// The annotations Event Hubs stamps on every received event, plus a few
 /// application properties, so the decode path does representative work.
 var annotations = [_]uamqp.MapEntry{
@@ -102,7 +383,8 @@ fn benchFromAmqpMessage(allocator: std.mem.Allocator) !void {
 
 // ─────────────────── Receive over a scripted peer ───────────────────
 //
-// Everything above measures one message in isolation. This measures the loop:
+// The earlier decode cases measure one message in isolation. This measures the
+// loop:
 // frames off the transport, deliveries reassembled, messages decoded, events
 // converted, dispositions written back. That is where a receiver actually
 // spends its time, and where the batching and buffering work in this package
@@ -234,6 +516,10 @@ pub fn main(init: std.process.Init) !void {
 
     receive_script = try buildReceiveScript(allocator, bench_receive_events);
     defer allocator.free(receive_script);
+    send_one_script = try buildSendScript(allocator, 1, false);
+    defer allocator.free(send_one_script);
+    send_eight_script = try buildSendScript(allocator, bench_pipeline_batches, true);
+    defer allocator.free(send_eight_script);
 
     std.debug.print("Event Hubs benchmarks (mode: {s})\n", .{@tagName(builtin.mode)});
     if (builtin.mode == .Debug) {
@@ -250,6 +536,10 @@ pub fn main(init: std.process.Init) !void {
         .{ "batch.tryAdd x100", 200, benchBatchAdd100 },
         .{ "batch.tryAdd x1000", 20, benchBatchAdd1000 },
         .{ "encodeBatchTransfer x1000", 20, benchEncodeBatchTransfer },
+        .{ "send x1 (scripted peer)", 500, benchSend1 },
+        .{ "send x1000 (scripted peer)", 20, benchSend1000 },
+        .{ "send x8x100 (scripted peer)", 20, benchSendSequential },
+        .{ "sendPipelined x8x100 (scripted peer)", 20, benchSendPipelined },
         .{ "fromAmqpMessage", 10_000, benchFromAmqpMessage },
         // Session setup dominates the x1 case; the difference between the two,
         // divided by 999, is what one event costs on the receive path.
