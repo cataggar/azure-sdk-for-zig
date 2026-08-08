@@ -589,6 +589,34 @@ fn encodeMessageSections(
     var buffer = uamqp.encoder.Buffer.initDynamic(allocator);
     errdefer buffer.deinit();
 
+    try encodeMessageSectionsInto(&buffer, message, include_body);
+
+    // `toOwnedSlice` shrinks the buffer's own allocation to the written length
+    // and hands it over. Duplicating `written()` instead would allocate a
+    // second full-size buffer and copy every byte into it.
+    return buffer.toOwnedSlice();
+}
+
+/// Encode a message into a buffer the caller owns.
+///
+/// A batch reuses one buffer across every event it encodes, so the per-event
+/// path allocates nothing once that buffer has grown to fit the largest event
+/// seen. `encodeMessage` starts from an empty dynamic buffer instead and pays
+/// `Buffer.ensureCapacity`'s 64-then-double series on every call.
+///
+/// Appends at the buffer's current position; the caller resets it.
+pub fn encodeMessageIntoBuffer(
+    buffer: *uamqp.encoder.Buffer,
+    message: *const Message,
+) !void {
+    return encodeMessageSectionsInto(buffer, message, true);
+}
+
+fn encodeMessageSectionsInto(
+    buffer: *uamqp.encoder.Buffer,
+    message: *const Message,
+    include_body: bool,
+) !void {
     if (message.header) |header| {
         var fields = [_]AmqpValue{
             .{ .boolean = header.durable },
@@ -597,19 +625,19 @@ fn encodeMessageSections(
             .{ .boolean = header.first_acquirer },
             .{ .uint = header.delivery_count },
         };
-        try encodeSection(&buffer, uamqp.definitions.descriptor.header, .{
+        try encodeSection(buffer, uamqp.definitions.descriptor.header, .{
             .list = trimTrailingNulls(&fields),
         });
     }
 
     if (message.delivery_annotations) |entries| {
-        try encodeSection(&buffer, uamqp.definitions.descriptor.delivery_annotations, .{
+        try encodeSection(buffer, uamqp.definitions.descriptor.delivery_annotations, .{
             .map = entries,
         });
     }
 
     if (message.message_annotations) |entries| {
-        try encodeSection(&buffer, uamqp.definitions.descriptor.message_annotations, .{
+        try encodeSection(buffer, uamqp.definitions.descriptor.message_annotations, .{
             .map = entries,
         });
     }
@@ -630,13 +658,13 @@ fn encodeMessageSections(
             if (properties.group_sequence) |v| .{ .uint = v } else .null,
             optionalString(properties.reply_to_group_id),
         };
-        try encodeSection(&buffer, uamqp.definitions.descriptor.properties, .{
+        try encodeSection(buffer, uamqp.definitions.descriptor.properties, .{
             .list = trimTrailingNulls(&fields),
         });
     }
 
     if (message.application_properties) |entries| {
-        try encodeSection(&buffer, uamqp.definitions.descriptor.application_properties, .{
+        try encodeSection(buffer, uamqp.definitions.descriptor.application_properties, .{
             .map = entries,
         });
     }
@@ -645,58 +673,66 @@ fn encodeMessageSections(
         switch (message.body_type) {
             .none => {},
             .data => for (message.body_data_sections.items) |section| {
-                try encodeSection(&buffer, uamqp.definitions.descriptor.data, .{
+                try encodeSection(buffer, uamqp.definitions.descriptor.data, .{
                     .binary = section.bytes,
                 });
             },
             .sequence => for (message.body_sequence_sections.items) |sequence| {
-                try encodeSection(&buffer, uamqp.definitions.descriptor.amqp_sequence, .{
+                try encodeSection(buffer, uamqp.definitions.descriptor.amqp_sequence, .{
                     .list = sequence,
                 });
             },
             .value => if (message.body_value) |value| {
-                try encodeSection(&buffer, uamqp.definitions.descriptor.amqp_value, value);
+                try encodeSection(buffer, uamqp.definitions.descriptor.amqp_value, value);
             },
         }
     }
 
     if (message.footer) |entries| {
-        try encodeSection(&buffer, uamqp.definitions.descriptor.footer, .{ .map = entries });
+        try encodeSection(buffer, uamqp.definitions.descriptor.footer, .{ .map = entries });
     }
-
-    // `toOwnedSlice` shrinks the buffer's own allocation to the written length
-    // and hands it over. Duplicating `written()` instead would allocate a
-    // second full-size buffer and copy every byte into it, on the per-event
-    // path of every batch.
-    return buffer.toOwnedSlice();
 }
 
-/// Append one data section per payload to an already encoded prefix.
+/// Append one data section per payload to an already encoded prefix, with the
+/// payloads held as one concatenated blob.
 ///
 /// This is how an Event Hubs batch is laid out: the envelope from
 /// `encodeMessageEnvelope` followed by the contained messages, each wrapped in
 /// its own data section. `EventData.toAmqpMessage` produces no footer, so
 /// nothing in the envelope has to follow the body.
-pub fn encodeDataSections(
+///
+/// A batch stores its encoded events as one buffer plus an end offset per
+/// event, so that adding an event allocates nothing once the blob has
+/// capacity. `ends` holds each payload's end offset in `blob`, so payload `i`
+/// runs from `ends[i-1]` (or 0) to `ends[i]`.
+pub fn encodeDataSectionsFromBlob(
     allocator: std.mem.Allocator,
     prefix: []const u8,
-    payloads: []const []u8,
+    blob: []const u8,
+    ends: []const usize,
 ) ![]u8 {
-    // The exact size is plain arithmetic here — `dataSectionSize` is the same
+    // The exact size is plain arithmetic — `dataSectionSize` is the same
     // constant-overhead formula batching already charges per event — so the
     // whole concatenation is one allocation. Growing a dynamic buffer instead
     // costs a doubling series of reallocations across a batch that may reach
     // the 1 MiB message limit, and then a full copy of the result.
     var total: usize = prefix.len;
-    for (payloads) |payload| total += dataSectionSize(payload.len);
+    var start: usize = 0;
+    for (ends) |end| {
+        total += dataSectionSize(end - start);
+        start = end;
+    }
 
     const bytes = try allocator.alloc(u8, total);
     errdefer allocator.free(bytes);
 
     var buffer = uamqp.encoder.Buffer.initFixed(bytes);
     try buffer.writeAll(prefix);
-    for (payloads) |payload| {
+    start = 0;
+    for (ends) |end| {
+        const payload = blob[start..end];
         try encodeSection(&buffer, uamqp.definitions.descriptor.data, .{ .binary = payload });
+        start = end;
     }
 
     // `dataSectionSize` is exact, so this holds; shrinking rather than
@@ -711,8 +747,8 @@ pub fn encodeDataSections(
 /// Go's `calcActualSizeForPayload` uses the same constants.
 ///
 /// Batching charges this per event without encoding anything, so it has to
-/// agree with what `encodeDataSections` writes; sharing one function rather
-/// than restating the constants is what keeps them from drifting apart.
+/// agree with what `encodeDataSectionsFromBlob` writes; sharing one function
+/// rather than restating the constants is what keeps them from drifting apart.
 pub fn dataSectionSize(payload_len: usize) usize {
     const vbin8_overhead = 5;
     const vbin32_overhead = 8;
@@ -1560,12 +1596,13 @@ test "encodeMessageEnvelope drops the body" {
     try std.testing.expectEqualSlices(u8, envelope, full[0..envelope.len]);
 }
 
-test "dataSectionSize matches what encodeDataSections writes" {
+test "dataSectionSize matches what encodeDataSectionsFromBlob writes" {
     const allocator = std.testing.allocator;
 
-    // `encodeDataSections` allocates exactly `dataSectionSize` per payload and
-    // encodes into a fixed buffer, so a disagreement would truncate the wire
-    // payload. The vbin8/vbin32 boundary is where the two would drift first.
+    // `encodeDataSectionsFromBlob` allocates exactly `dataSectionSize` per
+    // payload and encodes into a fixed buffer, so a disagreement would truncate
+    // the wire payload. The vbin8/vbin32 boundary is where the two would drift
+    // first.
     const lengths = [_]usize{ 0, 1, 254, 255, 256, 257, 1024 };
 
     for (lengths) |len| {
@@ -1573,8 +1610,8 @@ test "dataSectionSize matches what encodeDataSections writes" {
         defer allocator.free(payload);
         @memset(payload, 0x5a);
 
-        const payloads = [_][]u8{payload};
-        const encoded = try encodeDataSections(allocator, "", &payloads);
+        const ends = [_]usize{len};
+        const encoded = try encodeDataSectionsFromBlob(allocator, "", payload, &ends);
         defer allocator.free(encoded);
 
         try std.testing.expectEqual(dataSectionSize(len), encoded.len);
@@ -1590,14 +1627,15 @@ test "dataSectionSize matches what encodeDataSections writes" {
     }
 }
 
-test "encodeDataSections keeps the prefix and appends one section per payload" {
+test "encodeDataSectionsFromBlob keeps the prefix and appends one section per payload" {
     const allocator = std.testing.allocator;
 
-    var first = [_]u8{ 1, 2, 3 };
-    var second = [_]u8{ 4, 5 };
-    const payloads = [_][]u8{ &first, &second };
+    const first = [_]u8{ 1, 2, 3 };
+    const second = [_]u8{ 4, 5 };
+    const blob = first ++ second;
+    const ends = [_]usize{ first.len, first.len + second.len };
 
-    const encoded = try encodeDataSections(allocator, "PREFIX", &payloads);
+    const encoded = try encodeDataSectionsFromBlob(allocator, "PREFIX", &blob, &ends);
     defer allocator.free(encoded);
 
     try std.testing.expectEqualSlices(u8, "PREFIX", encoded[0..6]);

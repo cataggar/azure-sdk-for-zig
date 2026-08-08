@@ -456,7 +456,12 @@ pub const SenderPool = struct {
 /// never produces a footer, so the data sections simply follow it.
 pub fn encodeBatchTransfer(allocator: Allocator, batch: EventDataBatch) ![]u8 {
     const envelope = batch.envelope orelse return SendError.EmptyBatch;
-    return event_data.encodeDataSections(allocator, envelope, batch.marshaled.items);
+    return event_data.encodeDataSectionsFromBlob(
+        allocator,
+        envelope,
+        batch.blob.items,
+        batch.ends.items,
+    );
 }
 
 // ─────────────────────── Tests ───────────────────────
@@ -575,6 +580,155 @@ fn batchOf(allocator: Allocator, bodies: []const []const u8, options: batch_mod.
         try testing.expect(try out.tryAdd(allocator, event));
     }
     return out;
+}
+
+test "a rejected event leaves no trace in the encoded transfer" {
+    const allocator = testing.allocator;
+
+    // An event is encoded into the batch's scratch buffer before it is known
+    // to fit, so a batch that refused one must still encode exactly as a batch
+    // that was never offered it. Byte equality is what proves the refused
+    // event left nothing behind in the shared blob.
+    var event = EventData.init("z" ** 48);
+    defer event.deinit(allocator);
+
+    var filled = try EventDataBatch.init(.{ .max_bytes = 512 });
+    defer filled.deinit(allocator);
+    var accepted: usize = 0;
+    while (try filled.tryAdd(allocator, event)) : (accepted += 1) {}
+    try testing.expect(accepted > 1);
+    // The loop above stopped on a refusal, so one has already happened here.
+    try testing.expect(!try filled.tryAdd(allocator, event));
+
+    var clean = try EventDataBatch.init(.{ .max_bytes = 512 });
+    defer clean.deinit(allocator);
+    for (0..accepted) |_| try testing.expect(try clean.tryAdd(allocator, event));
+
+    try testing.expectEqual(clean.count(), filled.count());
+    try testing.expectEqual(clean.sizeInBytes(), filled.sizeInBytes());
+    // The blob itself, not just the sections cut from it: a refusal that
+    // appended before checking the fit leaves bytes here that no end offset
+    // names, and the encoded transfer alone cannot see them.
+    try testing.expectEqual(clean.blob.items.len, filled.blob.items.len);
+
+    const from_filled = try encodeBatchTransfer(allocator, filled);
+    defer allocator.free(from_filled);
+    const from_clean = try encodeBatchTransfer(allocator, clean);
+    defer allocator.free(from_clean);
+
+    try testing.expectEqualSlices(u8, from_clean, from_filled);
+}
+
+test "an event accepted after a refusal carries only its own bytes" {
+    const allocator = testing.allocator;
+
+    // An event is encoded before it is known to fit, so a commit ordered ahead
+    // of the fit check would leave the refused bytes in the blob with no end
+    // offset naming them. The next accepted event's section then starts at the
+    // previous end and runs to the new one, swallowing the refused event
+    // whole. Refusing at the end of a batch cannot show this: nothing is
+    // appended afterwards, so the stray bytes fall outside every section.
+    var small = EventData.init("small");
+    defer small.deinit(allocator);
+    var big = EventData.init("B" ** 600);
+    defer big.deinit(allocator);
+
+    var batch = try EventDataBatch.init(.{ .max_bytes = 512 });
+    defer batch.deinit(allocator);
+
+    try testing.expect(try batch.tryAdd(allocator, small));
+    try testing.expect(!try batch.tryAdd(allocator, big));
+    try testing.expect(try batch.tryAdd(allocator, small));
+
+    try testing.expectEqual(@as(usize, 2), batch.count());
+    for (0..2) |i| {
+        const payload = batch.payloadAt(i);
+        try testing.expect(std.mem.indexOf(u8, payload, "small") != null);
+        try testing.expect(std.mem.indexOf(u8, payload, "BBBB") == null);
+    }
+
+    // The two events are identical, so their sections are the same length and
+    // between them account for every byte of the blob.
+    try testing.expectEqual(batch.payloadAt(0).len, batch.payloadAt(1).len);
+    try testing.expectEqual(batch.blob.items.len, batch.payloadAt(0).len * 2);
+}
+
+test "a refused oversized event does not park its encoding on the batch" {
+    const allocator = testing.allocator;
+
+    // `scratch` is reused, so it keeps the high-water mark of every event
+    // *offered*, not every event adopted — and an event is encoded in full
+    // before its size is checked. Without a release on the refusal path a
+    // batch that refused one huge event would hold that encoding until
+    // `deinit`, which the per-event allocation this replaced never did.
+    var small = EventData.init("small");
+    defer small.deinit(allocator);
+    var huge = EventData.init("H" ** 200_000);
+    defer huge.deinit(allocator);
+
+    var batch = try EventDataBatch.init(.{ .max_bytes = 4096 });
+    defer batch.deinit(allocator);
+
+    try testing.expect(try batch.tryAdd(allocator, small));
+    try testing.expect(!try batch.tryAdd(allocator, huge));
+
+    // Nothing the batch can accept needs more than `max_size_bytes`.
+    try testing.expect(batch.scratch.data.len <= batch.max_size_bytes);
+
+    // Still usable afterwards: the release must not have left a buffer that
+    // the next event cannot encode into.
+    try testing.expect(try batch.tryAdd(allocator, small));
+    try testing.expectEqual(@as(usize, 2), batch.count());
+    try testing.expectEqual(batch.payloadAt(0).len, batch.payloadAt(1).len);
+    try testing.expectEqual(batch.blob.items.len, batch.payloadAt(0).len * 2);
+}
+
+test "scratch is reused across accepted events rather than released" {
+    const allocator = testing.allocator;
+
+    // Reuse is the entire point of `scratch` — it is what makes encoding cost
+    // nothing per event after the first. Releasing it on the accept path as
+    // well as the refusal path would be harmless for correctness, would leave
+    // every other test passing, and would quietly restore the per-event
+    // allocation this change exists to remove.
+    var small = EventData.init("small");
+    defer small.deinit(allocator);
+
+    var batch = try EventDataBatch.init(.{ .max_bytes = 4096 });
+    defer batch.deinit(allocator);
+
+    try testing.expect(try batch.tryAdd(allocator, small));
+    const after_first = batch.scratch.data.len;
+    try testing.expect(after_first > 0);
+
+    try testing.expect(try batch.tryAdd(allocator, small));
+    try testing.expectEqual(after_first, batch.scratch.data.len);
+}
+
+test "payloadAt returns each event's own encoded bytes" {
+    const allocator = testing.allocator;
+
+    const bodies = [_][]const u8{ "first", "second body", "third body is longest" };
+    var batch = try batchOf(allocator, &bodies, .{});
+    defer batch.deinit(allocator);
+
+    try testing.expectEqual(bodies.len, batch.count());
+
+    // Every payload must both differ from its neighbours and contain its own
+    // body, so an off-by-one in the end offsets cannot pass.
+    var total: usize = 0;
+    for (bodies, 0..) |body, i| {
+        const payload = batch.payloadAt(i);
+        try testing.expect(std.mem.indexOf(u8, payload, body) != null);
+        for (bodies, 0..) |other, j| {
+            if (i == j) continue;
+            try testing.expect(std.mem.indexOf(u8, payload, other) == null);
+        }
+        total += payload.len;
+    }
+
+    // The payloads tile the blob exactly, with no gap and no overlap.
+    try testing.expectEqual(batch.blob.items.len, total);
 }
 
 test "a batch goes out as one transfer whose data sections are the events" {

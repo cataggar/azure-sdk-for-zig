@@ -1,6 +1,7 @@
 //! Packing events into a single Event Hubs batch transfer.
 
 const std = @import("std");
+const uamqp = @import("uamqp");
 const event_data = @import("event_data.zig");
 
 const EventData = event_data.EventData;
@@ -41,9 +42,24 @@ pub const EventDataBatchOptions = struct {
 /// work this way; estimating from body length under-counts properties,
 /// annotations, and per-message framing.
 pub const EventDataBatch = struct {
-    /// Fully encoded sub-messages, each of which becomes one data section of
-    /// the batch transfer.
-    marshaled: std.ArrayList([]u8) = .empty,
+    /// Every encoded sub-message, concatenated. Each becomes one data section
+    /// of the batch transfer. Held as one buffer rather than a slice per event
+    /// so that adding an event allocates nothing once the blob has capacity.
+    ///
+    /// Slices into this are invalidated by any later `tryAdd`, so `payloadAt`
+    /// results must not be held across one.
+    blob: std.ArrayList(u8) = .empty,
+    /// End offset in `blob` of each encoded sub-message.
+    ends: std.ArrayList(usize) = .empty,
+    /// Reused across events so encoding one does not allocate. Once this has
+    /// grown to fit the largest event seen, every later event encodes into the
+    /// capacity already there.
+    scratch: uamqp.encoder.Buffer = .{
+        .data = &.{},
+        .pos = 0,
+        .allocator = null,
+        .is_fixed = false,
+    },
     /// Encoded non-body sections of the first event, which become the batch
     /// envelope. Go reuses the first message this way.
     envelope: ?[]u8 = null,
@@ -67,8 +83,10 @@ pub const EventDataBatch = struct {
     }
 
     pub fn deinit(self: *EventDataBatch, allocator: std.mem.Allocator) void {
-        for (self.marshaled.items) |encoded| allocator.free(encoded);
-        self.marshaled.deinit(allocator);
+        self.blob.deinit(allocator);
+        self.ends.deinit(allocator);
+        self.scratch.deinit();
+        self.scratch = .{ .data = &.{}, .pos = 0, .allocator = null, .is_fixed = false };
         if (self.envelope) |envelope| allocator.free(envelope);
         self.envelope = null;
         self.current_size = 0;
@@ -82,7 +100,7 @@ pub const EventDataBatch = struct {
         self: *EventDataBatch,
         link_max_bytes: usize,
     ) BatchError!void {
-        if (self.marshaled.items.len > 0) return BatchError.BatchNotEmpty;
+        if (self.ends.items.len > 0) return BatchError.BatchNotEmpty;
         if (self.requested_max_bytes) |requested| {
             if (requested > link_max_bytes) return BatchError.MaxBytesExceedsLinkLimit;
             return;
@@ -101,15 +119,18 @@ pub const EventDataBatch = struct {
         defer borrowed.deinit();
         const message = &borrowed.message;
 
-        // Both buffers are discarded unless the event is actually adopted,
-        // which includes the `false` return when it simply does not fit.
+        // Encoded into the reused scratch buffer rather than a fresh one, then
+        // copied into `blob` only once the event is known to fit. Nothing is
+        // committed before that check, so a rejected event needs no rollback.
+        self.scratch.allocator = allocator;
+        self.scratch.reset();
+        try event_data.encodeMessageIntoBuffer(&self.scratch, message);
+        const encoded = self.scratch.written();
+
         var adopted = false;
 
-        const encoded = try event_data.encodeMessage(allocator, message);
-        defer if (!adopted) allocator.free(encoded);
-
         // The first event also fixes the envelope, so its cost is charged here.
-        const is_first = self.marshaled.items.len == 0;
+        const is_first = self.ends.items.len == 0;
         const envelope: ?[]u8 = if (is_first)
             try event_data.encodeMessageEnvelope(allocator, message)
         else
@@ -121,19 +142,50 @@ pub const EventDataBatch = struct {
         const envelope_size = if (envelope) |bytes| bytes.len else 0;
         const projected = self.current_size + envelope_size + dataSectionSize(encoded.len);
         if (projected > self.max_size_bytes) {
+            self.releaseOversizedScratch();
             if (is_first) return BatchError.EventDataTooLarge;
             return false;
         }
 
-        try self.marshaled.append(allocator, encoded);
+        // Both reservations happen before either container is mutated, so a
+        // failure to grow one cannot leave the batch holding half an event.
+        try self.blob.ensureUnusedCapacity(allocator, encoded.len);
+        try self.ends.ensureUnusedCapacity(allocator, 1);
+        self.blob.appendSliceAssumeCapacity(encoded);
+        self.ends.appendAssumeCapacity(self.blob.items.len);
+
         if (envelope) |bytes| self.envelope = bytes;
         self.current_size = projected;
         adopted = true;
         return true;
     }
 
+    /// Release `scratch` when a refused event grew it past anything the batch
+    /// could ever accept.
+    ///
+    /// Reusing the buffer is what makes encoding free, but it also means the
+    /// buffer keeps the high-water mark of every event *offered*, not every
+    /// event adopted. The path this replaced allocated and freed each event's
+    /// encoding immediately, so refusing a 10 MiB event cost nothing after the
+    /// refusal; here it would park 10 MiB on the batch until `deinit`. An
+    /// accepted event has to fit in `max_size_bytes` by definition, so
+    /// anything above that is capacity no future event can use.
+    fn releaseOversizedScratch(self: *EventDataBatch) void {
+        if (self.scratch.data.len <= self.max_size_bytes) return;
+        self.scratch.deinit();
+        self.scratch = .{ .data = &.{}, .pos = 0, .allocator = null, .is_fixed = false };
+    }
+
     pub fn count(self: EventDataBatch) usize {
-        return self.marshaled.items.len;
+        return self.ends.items.len;
+    }
+
+    /// The encoded bytes of event `index`.
+    ///
+    /// Invalidated by any later `tryAdd`, which may move `blob`.
+    pub fn payloadAt(self: EventDataBatch, index: usize) []const u8 {
+        const start = if (index == 0) 0 else self.ends.items[index - 1];
+        return self.blob.items[start..self.ends.items[index]];
     }
 
     /// Encoded size of the batch as it would go on the wire.
