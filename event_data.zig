@@ -10,6 +10,7 @@ const uamqp = @import("uamqp");
 pub const AmqpValue = uamqp.AmqpValue;
 pub const MapEntry = uamqp.MapEntry;
 pub const Message = uamqp.message.Message;
+const DataSection = uamqp.message.DataSection;
 
 /// Message annotations Event Hubs stamps on every received event. Values match
 /// the Go SDK's `event_data.go` constants byte for byte.
@@ -328,6 +329,94 @@ pub const EventData = struct {
         }
 
         return message;
+    }
+};
+
+/// How many application properties a `BorrowedMessage` can describe without
+/// allocating. Eight covers the small tag sets events are normally stamped
+/// with; beyond it the entries go to the heap rather than being refused.
+pub const inline_property_slots: usize = 8;
+
+/// A `Message` whose sections alias an `EventData` instead of copying it.
+///
+/// `EventDataBatch.tryAdd` encodes and discards each AMQP message before it
+/// returns, while the caller's `EventData` outlives the call. This avoids
+/// paying for the owning `toAmqpMessage` conversion on that path.
+///
+/// `init` fills this object in place. Do not move or copy it afterwards: the
+/// message's body, annotation, and property slices point into this struct.
+pub const BorrowedMessage = struct {
+    message: Message,
+    body_storage: [1]DataSection,
+    annotation_storage: [1]MapEntry,
+    property_storage: [inline_property_slots]MapEntry,
+    heap_properties: ?[]MapEntry,
+    allocator: std.mem.Allocator,
+
+    pub fn init(
+        self: *BorrowedMessage,
+        allocator: std.mem.Allocator,
+        event: EventData,
+        partition_key: ?[]const u8,
+    ) !void {
+        self.* = .{
+            .message = Message.init(allocator),
+            .body_storage = undefined,
+            .annotation_storage = undefined,
+            .property_storage = undefined,
+            .heap_properties = null,
+            .allocator = allocator,
+        };
+        errdefer self.deinit();
+
+        self.body_storage[0] = .{ .bytes = event.body };
+        self.message.body_type = .data;
+        self.message.body_data_sections.items = self.body_storage[0..1];
+        self.message.body_data_sections.capacity = 1;
+
+        // Go always attaches a properties section, even when every field is
+        // unset, so the wire shape stays identical across SDKs.
+        self.message.properties = .{};
+        if (event.message_id) |message_id| {
+            self.message.properties.?.message_id = message_id.toAmqpValue();
+        }
+        if (event.correlation_id) |correlation_id| {
+            self.message.properties.?.correlation_id = correlation_id.toAmqpValue();
+        }
+        if (event.content_type) |content_type| {
+            self.message.properties.?.content_type = content_type;
+        }
+
+        const property_count = event.properties.count();
+        if (property_count > 0) {
+            const entries = if (property_count <= inline_property_slots)
+                self.property_storage[0..property_count]
+            else entries: {
+                const heap = try allocator.alloc(MapEntry, property_count);
+                self.heap_properties = heap;
+                break :entries heap;
+            };
+            for (event.properties.keys(), event.properties.values(), entries) |key, value, *entry| {
+                entry.* = .{ .key = .{ .string = key }, .value = value };
+            }
+            self.message.application_properties = entries;
+        }
+
+        if (partition_key) |key| {
+            self.annotation_storage[0] = .{
+                .key = .{ .symbol = partition_key_annotation },
+                .value = .{ .string = key },
+            };
+            self.message.message_annotations = self.annotation_storage[0..1];
+        }
+    }
+
+    pub fn deinit(self: *BorrowedMessage) void {
+        if (self.heap_properties) |entries| {
+            self.allocator.free(entries);
+            self.heap_properties = null;
+        }
+        self.message.deinit();
     }
 };
 
@@ -1302,6 +1391,103 @@ test "setPartitionKeyAnnotation stamps the annotation Event Hubs hashes" {
     var decoded = try fromAmqpMessage(allocator, &message);
     defer decoded.deinit(allocator);
     try std.testing.expectEqualStrings("pk-10", decoded.partition_key.?);
+}
+
+fn expectBorrowedMessageMatchesOwned(
+    allocator: std.mem.Allocator,
+    event: EventData,
+    partition_key: ?[]const u8,
+) !void {
+    var owned = try event.toAmqpMessage(allocator);
+    defer freeAmqpMessage(allocator, &owned);
+    if (partition_key) |key| try setPartitionKeyAnnotation(allocator, &owned, key);
+
+    const owned_encoded = try encodeMessage(allocator, &owned);
+    defer allocator.free(owned_encoded);
+    const owned_envelope = try encodeMessageEnvelope(allocator, &owned);
+    defer allocator.free(owned_envelope);
+
+    var borrowed: BorrowedMessage = undefined;
+    try borrowed.init(allocator, event, partition_key);
+    defer borrowed.deinit();
+
+    const borrowed_encoded = try encodeMessage(allocator, &borrowed.message);
+    defer allocator.free(borrowed_encoded);
+    const borrowed_envelope = try encodeMessageEnvelope(allocator, &borrowed.message);
+    defer allocator.free(borrowed_envelope);
+
+    try std.testing.expectEqualSlices(u8, owned_encoded, borrowed_encoded);
+    try std.testing.expectEqualSlices(u8, owned_envelope, borrowed_envelope);
+}
+
+test "BorrowedMessage encodes byte-identically to owning EventData conversion" {
+    const allocator = std.testing.allocator;
+
+    {
+        var event = EventData.init("plain");
+        defer event.deinit(allocator);
+        try expectBorrowedMessageMatchesOwned(allocator, event, null);
+    }
+    {
+        var event = EventData.init("typed");
+        defer event.deinit(allocator);
+        event.content_type = "application/json";
+        try expectBorrowedMessageMatchesOwned(allocator, event, null);
+    }
+    {
+        var event = EventData.init("string ids");
+        defer event.deinit(allocator);
+        event.message_id = .{ .string = "msg-1" };
+        event.correlation_id = .{ .string = "corr-1" };
+        try expectBorrowedMessageMatchesOwned(allocator, event, null);
+    }
+    {
+        var event = EventData.init("numeric ids");
+        defer event.deinit(allocator);
+        event.message_id = .{ .ulong = 42 };
+        event.correlation_id = .{ .ulong = 9001 };
+        try expectBorrowedMessageMatchesOwned(allocator, event, null);
+    }
+    {
+        var event = EventData.init("inline props");
+        defer event.deinit(allocator);
+        try event.setStringProperty(allocator, "tenant", "contoso");
+        try event.setProperty(allocator, "attempt", .{ .long = 3 });
+        try event.setProperty(allocator, "enabled", .{ .boolean = true });
+        try expectBorrowedMessageMatchesOwned(allocator, event, null);
+    }
+    {
+        var event = EventData.init("heap props");
+        defer event.deinit(allocator);
+        const keys = [_][]const u8{ "p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9" };
+        for (keys, 0..) |key, i| {
+            try event.setProperty(allocator, key, .{ .long = @intCast(i) });
+        }
+        try std.testing.expect(keys.len > inline_property_slots);
+        try expectBorrowedMessageMatchesOwned(allocator, event, null);
+    }
+    // The two counts either side of the inline/heap boundary, because an
+    // off-by-one in that comparison is invisible at 3 and at 10: taking the
+    // inline path for one property too many overruns `property_storage`,
+    // and taking the heap path one property too early still encodes
+    // correctly and so would go unnoticed.
+    inline for (.{ inline_property_slots, inline_property_slots + 1 }) |count| {
+        var event = EventData.init("boundary props");
+        defer event.deinit(allocator);
+        var buf: [8]u8 = undefined;
+        for (0..count) |i| {
+            const key = try std.fmt.bufPrint(&buf, "k{d}", .{i});
+            try event.setProperty(allocator, key, .{ .long = @intCast(i) });
+        }
+        try std.testing.expectEqual(count, event.properties.count());
+        try expectBorrowedMessageMatchesOwned(allocator, event, null);
+    }
+    {
+        var event = EventData.init("partitioned");
+        defer event.deinit(allocator);
+        event.content_type = "text/plain";
+        try expectBorrowedMessageMatchesOwned(allocator, event, "pk-1");
+    }
 }
 
 test "encodeMessage emits a data section in AMQP wire format" {
