@@ -8,8 +8,21 @@
 //!   zig build bench -Doptimize=ReleaseFast
 //!
 //! Allocation counts are the primary signal. Wall-clock numbers on a shared or
-//! virtualised host move between runs; `allocs/op` and `B/op` do not, so treat
-//! those as the regression gate and the timings as advisory.
+//! virtualised host move between runs; `allocs/op` and `B/op` are deterministic
+//! within one launch environment, so treat those as the regression gate and the
+//! timings as advisory.
+//!
+//! The thousand-event and eight-batch send cases carry a caveat —
+//! `batch.tryAdd x1000`, `encodeBatchTransfer x1000`, `send x1000`,
+//! `send x8x100` and `sendPipelined x8x100`. `EventDataBatch`
+//! grows its blob geometrically, and the counting allocator charges a
+//! reallocation only when the block actually moves, so both `allocs/op` and
+//! `B/op` for those cases depend on the heap layout the process starts with:
+//! the same binary reports different figures under `zig build bench` and under
+//! direct exec, including in the second decimal of `allocs/op`. They repeat
+//! exactly when the launch is held fixed. Compare across commits only with both
+//! sides launched the same way. The one-event, hundred-event and receive cases
+//! were identical in every launch environment measured.
 //!
 //! Everything is driven through the package's public API, so these measure
 //! what a consumer actually pays.
@@ -244,25 +257,30 @@ fn sendScripted(allocator: std.mem.Allocator, count: usize) !void {
 /// Eight accepted 100-event batches through sequential `SenderPool.send`.
 ///
 /// Paired with `benchSendPipelined`, which does identical work and differs
-/// only in whether the eight batches overlap. In steady state both cost
-/// exactly 1716 allocations and 386507 B per iteration, so pipelining
-/// changes neither. Its real benefit is one round trip per window rather
-/// than one per batch, and a `MemoryTransport` peer has zero round-trip
-/// latency, so that benefit is invisible here by construction. Do not read
-/// either line as evidence for or against pipelining. The timings are a
-/// worse trap than the counts: which of the two looks faster flips with
-/// run order, so the ops/s ranking here means nothing at all.
+/// only in whether the eight batches overlap. Both measure the same
+/// allocations and bytes in steady state, so pipelining changes neither. Its
+/// real benefit is one round trip per window rather than one per batch, and a
+/// `MemoryTransport` peer has zero round-trip latency, so that benefit is
+/// invisible here by construction. Do not read either line as evidence for or
+/// against pipelining. The timings are a worse trap than the counts: which of
+/// the two looks faster flips with run order, so the ops/s ranking here means
+/// nothing at all.
 ///
-/// Whichever of the two runs first also pays one extra 95400 B allocation
-/// on each of its first several iterations. That is the scripted peer's own
-/// `MemoryTransport.outbound` growing from 54635 B, which the counting
-/// allocator charges only when the general purpose allocator cannot remap
-/// it in place; once such a span has been grown and freed, later remaps
-/// succeed in place and cost nothing. It settles at six such iterations, so
-/// at 20 iterations the first of the two lines reads 1716.30 / 415127
-/// rather than the steady state. It is the test peer's buffer, not the send
-/// path, and it follows run order rather than send mode: swapping the two
-/// cases moves it to the other one.
+/// One or both of the two also pay a few extra 95400 B allocations across
+/// their early iterations, so those lines read higher than the steady state.
+/// That is the scripted peer's own `MemoryTransport.outbound` growing from
+/// 54635 B, which the counting allocator charges only when the general purpose
+/// allocator cannot remap it in place; once such a span has been grown and
+/// freed, later remaps succeed in place and cost nothing. It is the test
+/// peer's buffer, not the send path.
+///
+/// How many of those growths land, and on which of the two cases — sometimes
+/// both, in equal measure — is a property of the starting heap layout rather
+/// than of either case: the same binary gives different counts under `zig
+/// build bench` than under direct exec, and the excess does not always fall on
+/// whichever runs first. Each growth is worth 95400/20 = 4770 B/op, so a line
+/// can be reduced to its steady state by subtracting whole multiples of that.
+/// Compare the two cases only within a single run.
 fn benchSendSequential(allocator: std.mem.Allocator) !void {
     var mem = amqp.MemoryTransport.init(allocator);
     defer mem.deinit();

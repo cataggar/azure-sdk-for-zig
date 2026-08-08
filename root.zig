@@ -1477,7 +1477,8 @@ test "EventDataBatch size matches the encoded bytes" {
     try std.testing.expect(try batch.tryAdd(allocator, second));
 
     var expected = batch.envelope.?.len;
-    for (batch.marshaled.items) |encoded| {
+    for (0..batch.count()) |i| {
+        const encoded = batch.payloadAt(i);
         expected += if (encoded.len < 256) 5 + encoded.len else 8 + encoded.len;
     }
     try std.testing.expectEqual(expected, batch.sizeInBytes());
