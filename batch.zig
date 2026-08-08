@@ -96,24 +96,22 @@ pub const EventDataBatch = struct {
     /// batched, and `BatchError.EventDataTooLarge` when it would not fit even
     /// an empty batch.
     pub fn tryAdd(self: *EventDataBatch, allocator: std.mem.Allocator, event: EventData) !bool {
-        var message = try event.toAmqpMessage(allocator);
-        defer event_data.freeAmqpMessage(allocator, &message);
-
-        if (self.partition_key) |partition_key| {
-            try event_data.setPartitionKeyAnnotation(allocator, &message, partition_key);
-        }
+        var borrowed: event_data.BorrowedMessage = undefined;
+        try borrowed.init(allocator, event, self.partition_key);
+        defer borrowed.deinit();
+        const message = &borrowed.message;
 
         // Both buffers are discarded unless the event is actually adopted,
         // which includes the `false` return when it simply does not fit.
         var adopted = false;
 
-        const encoded = try event_data.encodeMessage(allocator, &message);
+        const encoded = try event_data.encodeMessage(allocator, message);
         defer if (!adopted) allocator.free(encoded);
 
         // The first event also fixes the envelope, so its cost is charged here.
         const is_first = self.marshaled.items.len == 0;
         const envelope: ?[]u8 = if (is_first)
-            try event_data.encodeMessageEnvelope(allocator, &message)
+            try event_data.encodeMessageEnvelope(allocator, message)
         else
             null;
         defer if (!adopted) {
