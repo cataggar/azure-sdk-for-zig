@@ -23,6 +23,31 @@ pub fn isReserved(s: []const u8) bool {
     return false;
 }
 
+/// Primitive type names. They are not keywords, so `@"type"` is legal,
+/// but using one bare shadows the primitive and Zig rejects it. Azure
+/// DevOps has parameters named `type` and `bool`, so generated code has
+/// to quote them the same way it quotes keywords.
+const primitives = [_][]const u8{
+    "anyerror",    "anyframe", "anyopaque",      "bool",
+    "c_char",      "c_int",    "c_long",         "c_longdouble",
+    "c_longlong",  "c_short",  "c_uint",         "c_ulong",
+    "c_ulonglong", "c_ushort", "comptime_float", "comptime_int",
+    "f128",        "f16",      "f32",            "f64",
+    "f80",         "false",    "isize",          "noreturn",
+    "null",        "true",     "type",           "undefined",
+    "usize",       "void",
+};
+
+pub fn isPrimitive(s: []const u8) bool {
+    for (primitives) |p| if (std.mem.eql(u8, s, p)) return true;
+    // `i0`…`i65535` / `u0`…`u65535` are primitives too.
+    if (s.len >= 2 and (s[0] == 'i' or s[0] == 'u')) {
+        for (s[1..]) |c| if (!std.ascii.isDigit(c)) return false;
+        return true;
+    }
+    return false;
+}
+
 /// Returns true when `s` is a valid bare Zig identifier — first char is
 /// an ASCII letter or '_', remaining are letters / digits / '_'.
 pub fn isValidBare(s: []const u8) bool {
@@ -40,7 +65,7 @@ pub fn isValidBare(s: []const u8) bool {
 ///     reserved keyword.
 /// Caller owns the returned slice.
 pub fn quoteIfNeeded(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
-    if (isValidBare(s) and !isReserved(s)) return try allocator.dupe(u8, s);
+    if (isValidBare(s) and !isReserved(s) and !isPrimitive(s)) return try allocator.dupe(u8, s);
     return try std.fmt.allocPrint(allocator, "@\"{s}\"", .{s});
 }
 
@@ -60,5 +85,20 @@ test "quoteIfNeeded" {
         const s = try quoteIfNeeded(a, "v7.5");
         defer a.free(s);
         try std.testing.expectEqualStrings("@\"v7.5\"", s);
+    }
+    {
+        const s = try quoteIfNeeded(a, "type");
+        defer a.free(s);
+        try std.testing.expectEqualStrings("@\"type\"", s);
+    }
+    {
+        const s = try quoteIfNeeded(a, "u32");
+        defer a.free(s);
+        try std.testing.expectEqualStrings("@\"u32\"", s);
+    }
+    {
+        const s = try quoteIfNeeded(a, "uri");
+        defer a.free(s);
+        try std.testing.expectEqualStrings("uri", s);
     }
 }
