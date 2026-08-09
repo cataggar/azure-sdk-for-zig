@@ -128,11 +128,12 @@ pub fn fetch(self: *Fetcher, allocator: std.mem.Allocator, token: ?[]const u8) !
 ```
 
 Some Azure DevOps operations report the next token in the response body
-and some in the `x-ms-continuationtoken` response header. Only the
-body-field form is reachable today: the upstream Swagger does not declare
-that header, so the generated operations do not return it. See
-`examples/page_audit_log.zig` for a working body-token pager and
-`examples/list_builds.zig` for the `$top` workaround.
+and some in the `x-ms-continuationtoken` response header. Both are
+reachable: header-paged operations return a result union whose
+`status_200.headers` carries `x_ms_continuationtoken`, and an absent
+header is the end-of-collection signal. See
+`examples/list_builds.zig` for a header-token pager and
+`examples/page_audit_log.zig` for a body-token one.
 
 ## Raw operations
 
