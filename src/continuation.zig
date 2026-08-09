@@ -9,10 +9,10 @@
 //! not apply; the caller has to re-invoke the same operation with the new
 //! token.
 //!
-//! Only the body-field form is reachable through the generated clients
-//! today: the Azure DevOps Swagger does not declare the
-//! `x-ms-continuationtoken` response header, so the generated operations
-//! do not return it.
+//! Both forms are reachable through the generated clients. Header-paged
+//! operations return a result union whose `status_200.headers` carries
+//! `x_ms_continuationtoken`; body-paged operations put the token on the
+//! model itself. Either way the token is null on the last page.
 //!
 //! `ContinuationPager` owns that loop so callers write a `while` instead
 //! of hand-rolling token plumbing:
