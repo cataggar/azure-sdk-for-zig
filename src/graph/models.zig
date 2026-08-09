@@ -113,18 +113,18 @@ pub const GraphMembershipState = struct {
 
 /// Represents an abstract JSON token.
 pub const JToken = struct {
-    first: ?JToken = null,
+    first: ?*const JToken = null,
     /// Gets a value indicating whether this token has child tokens.
     has_values: ?bool = null,
-    item: ?JToken = null,
-    last: ?JToken = null,
-    next: ?JToken = null,
+    item: ?*const JToken = null,
+    last: ?*const JToken = null,
+    next: ?*const JToken = null,
     /// Gets or sets the parent.
     parent: ?[]const u8 = null,
     /// Gets the path of the JSON token.
     path: ?[]const u8 = null,
-    previous: ?JToken = null,
-    root: ?JToken = null,
+    previous: ?*const JToken = null,
+    root: ?*const JToken = null,
     /// Gets the node type for this JToken.
     type: ?[]const u8 = null,
 

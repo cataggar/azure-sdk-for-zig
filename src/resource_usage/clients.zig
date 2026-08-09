@@ -114,6 +114,7 @@ pub const TeamProjectCollection = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !std.json.ArrayHashMap(models.Usage) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/resourceusage", .{ self.endpoint, encoded_path_0 });
@@ -149,6 +150,7 @@ pub const Project = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Gets the Project Level limits and Usage for a project.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !std.json.ArrayHashMap(models.Usage) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);

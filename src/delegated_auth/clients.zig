@@ -106,6 +106,7 @@ pub const RegistrationSecret = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Create Alternative Secret for the ADO OAuth App Registration
     pub fn create(self: *@This(), alloc: std.mem.Allocator, registration_id: []const u8) !models.JsonWebToken {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, registration_id);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/_apis/delegatedauth/registrationsecret/{s}", .{ self.endpoint, encoded_path_0 });
@@ -135,6 +136,7 @@ pub const RegistrationSecret = struct {
     }
     /// Rotate one of the two secrets for the ADO OAuth App Registration
     pub fn rotateSecret(self: *@This(), alloc: std.mem.Allocator, registration_id: []const u8, secret_type: ?[]const u8) !models.Registration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, registration_id);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/_apis/delegatedauth/registrationsecret/{s}", .{ self.endpoint, encoded_path_0 });

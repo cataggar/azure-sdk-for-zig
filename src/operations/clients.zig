@@ -106,6 +106,7 @@ pub const Operations = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Gets an operation from the operationId using the given pluginId. Some scenarios don’t require a pluginId. If a pluginId is not included in the call then just the operationId will be used to find an operation.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, operation_id: []const u8, organization: []const u8, plugin_id: ?[]const u8) !models.Operation {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, operation_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);

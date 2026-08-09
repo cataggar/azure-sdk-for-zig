@@ -146,6 +146,7 @@ pub const Wikis = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Gets all wikis in a project or collection.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.WikiV2 {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -177,6 +178,7 @@ pub const Wikis = struct {
     }
     /// Creates the wiki resource.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.WikiCreateParametersV2) !models.WikiV2 {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -212,6 +214,7 @@ pub const Wikis = struct {
     }
     /// Deletes the wiki corresponding to the wiki ID or wiki name provided.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, wiki_identifier: []const u8, project: []const u8) !models.WikiV2 {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, wiki_identifier);
@@ -245,6 +248,7 @@ pub const Wikis = struct {
     }
     /// Gets the wiki corresponding to the wiki ID or wiki name provided.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, wiki_identifier: []const u8, project: []const u8) !models.WikiV2 {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, wiki_identifier);
@@ -278,6 +282,7 @@ pub const Wikis = struct {
     }
     /// Updates the wiki corresponding to the wiki ID or wiki name provided using the update parameters.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, wiki_identifier: []const u8, project: []const u8, body: models.WikiUpdateParameters) !models.WikiV2 {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, wiki_identifier);
@@ -331,6 +336,7 @@ pub const Attachments = struct {
     };
     /// Creates an attachment in the wiki.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, wiki_identifier: []const u8, name: []const u8, version_descriptor_version: ?[]const u8, @"version_descriptor.version_options": ?enums.CreateRequestVersionDescriptorVersionOptions, @"version_descriptor.version_type": ?enums.CreateRequestVersionDescriptorVersionType, body: []const u8) !CreateResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -423,6 +429,7 @@ pub const PageMoves = struct {
     };
     /// Creates a page move operation that updates the path and order of the page as provided in the parameters.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, wiki_identifier: []const u8, comment: ?[]const u8, version_descriptor_version: ?[]const u8, @"version_descriptor.version_options": ?enums.CreateRequestVersionDescriptorVersionOptions1, @"version_descriptor.version_type": ?enums.CreateRequestVersionDescriptorVersionType1, body: models.WikiPageMoveParameters) !CreateResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -623,6 +630,7 @@ pub const Pages = struct {
     };
     /// Deletes a wiki page.
     pub fn deletePage(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, wiki_identifier: []const u8, path: []const u8, comment: ?[]const u8, version_descriptor_version: ?[]const u8, @"version_descriptor.version_options": ?enums.DeletePageRequestVersionDescriptorVersionOptions, @"version_descriptor.version_type": ?enums.DeletePageRequestVersionDescriptorVersionType) !DeletePageResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -719,6 +727,7 @@ pub const Pages = struct {
     }
     /// Gets metadata or content of the wiki page for the provided path. Content negotiation is done based on the `Accept` header sent in the request.
     pub fn getPage(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, wiki_identifier: []const u8, path: ?[]const u8, recursion_level: ?enums.GetPageRequestRecursionLevel, version_descriptor_version: ?[]const u8, @"version_descriptor.version_options": ?enums.GetPageRequestVersionDescriptorVersionOptions, @"version_descriptor.version_type": ?enums.GetPageRequestVersionDescriptorVersionType, include_content: ?bool) !GetPageResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -835,6 +844,7 @@ pub const Pages = struct {
     }
     /// Creates or edits a wiki page.
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, wiki_identifier: []const u8, path: []const u8, version: []const u8, comment: ?[]const u8, version_descriptor_version: ?[]const u8, @"version_descriptor.version_options": ?enums.CreateOrUpdateRequestVersionDescriptorVersionOptions, @"version_descriptor.version_type": ?enums.CreateOrUpdateRequestVersionDescriptorVersionType, body: models.WikiPageCreateOrUpdateParameters) !CreateOrUpdateResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -951,6 +961,7 @@ pub const Pages = struct {
     }
     /// Deletes a wiki page.
     pub fn deletePageById(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, wiki_identifier: []const u8, id: i32, comment: ?[]const u8) !DeletePageByIdResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1024,6 +1035,7 @@ pub const Pages = struct {
     }
     /// Gets metadata or content of the wiki page for the provided page id. Content negotiation is done based on the `Accept` header sent in the request.
     pub fn getPageById(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, wiki_identifier: []const u8, id: i32, recursion_level: ?enums.GetPageByIdRequestRecursionLevel, include_content: ?bool) !GetPageByIdResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1114,6 +1126,7 @@ pub const Pages = struct {
     }
     /// Edits a wiki page.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, wiki_identifier: []const u8, id: i32, version: []const u8, comment: ?[]const u8, body: models.WikiPageCreateOrUpdateParameters) !UpdateResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1198,6 +1211,7 @@ pub const PageStats = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Returns page detail corresponding to Page ID.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, wiki_identifier: []const u8, page_id: i32, page_views_for_days: ?i32) !models.WikiPageDetail {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1244,6 +1258,7 @@ pub const PagesBatch = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Returns pageable list of Wiki Pages
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, wiki_identifier: []const u8, version_descriptor_version: ?[]const u8, @"version_descriptor.version_options": ?enums.GetRequestVersionDescriptorVersionOptions, @"version_descriptor.version_type": ?enums.GetRequestVersionDescriptorVersionType, body: models.WikiPagesBatchRequest) ![]const models.WikiPageDetail {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);

@@ -394,6 +394,7 @@ pub const Repositories = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve deleted git repositories.
     pub fn getDeletedRepositories(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.GitDeletedRepository {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -425,6 +426,7 @@ pub const Repositories = struct {
     }
     /// Retrieve soft-deleted git repositories from the recycle bin.
     pub fn getRecycleBinRepositories(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.GitDeletedRepository {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -456,6 +458,7 @@ pub const Repositories = struct {
     }
     /// Destroy (hard delete) a soft-deleted Git repository.
     pub fn deleteRepositoryFromRecycleBin(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -488,6 +491,7 @@ pub const Repositories = struct {
     }
     /// Recover a soft-deleted Git repository. Recently deleted repositories go into a soft-delete state for a period of time before they are hard deleted and become unrecoverable.
     pub fn restoreRepositoryFromRecycleBin(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: []const u8, body: models.GitRecycleBinRepositoryDetails) !models.GitRepository {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -525,6 +529,7 @@ pub const Repositories = struct {
     }
     /// Retrieve git repositories.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, include_links: ?bool, include_all_urls: ?bool, include_hidden: ?bool) ![]const models.GitRepository {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -571,6 +576,7 @@ pub const Repositories = struct {
     }
     /// Create a git repository in a team project.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, source_ref: ?[]const u8, body: models.GitRepositoryCreateOptions) !models.GitRepository {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -613,6 +619,7 @@ pub const Repositories = struct {
     }
     /// Delete a git repository
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -645,6 +652,7 @@ pub const Repositories = struct {
     }
     /// Retrieve a git repository.
     pub fn getRepository(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8) !models.GitRepository {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -678,6 +686,7 @@ pub const Repositories = struct {
     }
     /// Updates the Git repository with either a new repo name or a new default branch.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, body: models.GitRepository) !models.GitRepository {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -721,6 +730,7 @@ pub const RefsFavorites = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Gets the refs favorites for a repo and an identity.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: ?[]const u8, identity_id: ?[]const u8) ![]const models.GitRefFavorite {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -766,6 +776,7 @@ pub const RefsFavorites = struct {
     }
     /// Creates a ref favorite
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.GitRefFavorite) !models.GitRefFavorite {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -801,6 +812,7 @@ pub const RefsFavorites = struct {
     }
     /// Deletes the refs favorite specified
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, favorite_id: i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -833,6 +845,7 @@ pub const RefsFavorites = struct {
     }
     /// Gets the refs favorite for a favorite Id.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, favorite_id: i32) !models.GitRefFavorite {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -872,6 +885,7 @@ pub const RefsFavoritesForProject = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, identity_id: ?[]const u8) ![]const models.GitRefFavorite {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -926,6 +940,7 @@ pub const PolicyConfigurations = struct {
     };
     /// Retrieve a list of policy configurations by a given set of scope/filtering criteria. Azure Repos uses two types of policies to protect your code: **Repository policies (push policies)** check every push to your repository. They validate things like file size limits, path restrictions, or commit requirements. When someone pushes code that violates these rules, the push gets rejected - no matter which branch they're pushing to. **Branch policies (PR policies)** protect specific branches by requiring pull requests. When you set a branch policy on `main`, for example, nobody can push directly to `main` anymore. They must create a pull request instead, which can then require reviews, builds, or other checks to pass first. ## How Policies Work with Your Project Structure Both types of policies can be defined at different levels in your project hierarchy. A policy defined at the project level affects all repositories in that project. A policy defined at the repository level affects just that repository. A branch policy can even be defined at the project level to protect all branches with the same name - like protecting all `main` branches across your entire project with one policy. ### Branch Patterns and Wildcards Branches in Git follow a folder-like structure. You might have branches like: - `refs/heads/main` - `refs/heads/releases/1.0.0` - `refs/heads/releases/2.0.0` - `refs/heads/features/new-login` You can create policies for specific branches or for groups of branches using wildcards. When you create a policy for `refs/heads/releases/*`, it protects all branches in the `releases` 'folder' - both the ones that exist now and any new release branches you create later. This pattern matching works recursively, so `refs/heads/releases/*` also covers branches like `refs/heads/releases/v1/hotfix`. This helps you set up consistent protection without creating the same policy over and over. For example, you can require two reviewers for all release branches with just one policy. ## Understanding Policy Inheritance When you query for policies, this endpoint shows you what policies are actually enforcing rules at your specified scope. This includes policies inherited from higher levels. For example, if you query for policies on a specific branch, you get: - Branch policies for that exact branch - Branch policies with wildcards that match your branch - Repository policies for that repo - Any applicable project-level policies Everything that protects that branch shows up in your results. ## How to Query for Policies The `repositoryId` and `refName` parameters let you focus on specific parts of your project. Here's what you get with different combinations: **Both `repositoryId` and `refName` specified:** - When `refName` is a specific branch name: You see all policies affecting that specific branch. This includes exact branch policies, wildcard branch policies that match, repository policies for that repo, and any project-level policies. - When `refName` is `~all`: You see every policy that affects any branch in that repository. This special value gives you the same results as if you called this API once for every single branch in the repo and then combined all the results (removing duplicates). You get all branch-specific policies, all wildcard policies, all repository policies, and all inherited project-level policies that apply to this repository. This helps you see the complete picture of what protects all your branches without making multiple API calls. **Only `repositoryId` specified:** You see policies that apply to the repository as a whole - repository policies and inherited project-level repository policies. Branch policies aren't included because they don't affect the whole repository. **Neither parameter specified:** You see only project-level repository policies. Branch policies defined at the project level aren't included, even though they exist at the project level. This happens because branch policies need a branch context to be meaningful - without specifying a repository or branch name, the API only returns policies that apply to repositories as a whole. **Only `refName` specified:** You see project-level branch policies for branches with that name (like all `main` branch policies defined at project level), plus project-level repository policies. You can add the `policyType` parameter to filter for a specific type of policy, such as 'Minimum number of reviewers' or 'File size restriction'. This parameter accepts the policy type ID and filters the results to show only that specific policy type. ## Common Scenarios - **'What protects my main branch?'** - Use `repositoryId` + `refName=refs/heads/main` - **'What protects all my release branches?'** - Use `repositoryId` + `refName=refs/heads/releases/*` - **'Show me every policy that affects any branch in this repository'** - Use `repositoryId` + `refName=~all` - **'What repository policies apply to this repo?'** - Use `repositoryId` only - **'What file size limits apply to this repository?'** - Use `repositoryId` with the `policyType` for file size restrictions - **'What project-wide repository policies do we have?'** - Don't specify `repositoryId` or `refName` - **'Which policies apply to develop branches across all repositories?'** - Use `refName=refs/heads/develop`
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: ?[]const u8, ref_name: ?[]const u8, policy_type: ?[]const u8, @"$top": ?i32, continuation_token: ?[]const u8) !GetResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1012,6 +1027,7 @@ pub const PullRequests = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve all pull requests matching a specified criteria. Please note that description field will be truncated up to 400 symbols in the result.
     pub fn getPullRequestsByProject(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, search_criteria_creator_id: ?[]const u8, search_criteria_include_links: ?bool, search_criteria_labels: ?[]const []const u8, search_criteria_max_time: ?[]const u8, search_criteria_min_time: ?[]const u8, @"search_criteria.query_time_range_type": ?enums.GetPullRequestsByProjectRequestSearchCriteriaQueryTimeRangeType, search_criteria_repository_id: ?[]const u8, search_criteria_reviewer_id: ?[]const u8, search_criteria_source_ref_name: ?[]const u8, search_criteria_source_repository_id: ?[]const u8, @"search_criteria.status": ?enums.GetPullRequestsByProjectRequestSearchCriteriaStatus, @"search_criteria.tags_filter_operator": ?enums.GetPullRequestsByProjectRequestSearchCriteriaTagsFilterOperator, search_criteria_target_ref_name: ?[]const u8, search_criteria_title: ?[]const u8, max_comment_length: ?i32, @"$skip": ?i32, @"$top": ?i32) ![]const models.GitPullRequest {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1162,6 +1178,7 @@ pub const PullRequests = struct {
     }
     /// Retrieve a pull request.
     pub fn getPullRequestById(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pull_request_id: i32, project: []const u8) !models.GitPullRequest {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, pull_request_id);
@@ -1195,6 +1212,7 @@ pub const PullRequests = struct {
     }
     /// Retrieve all pull requests matching a specified criteria. Please note that description field will be truncated up to 400 symbols in the result.
     pub fn getPullRequests(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, search_criteria_creator_id: ?[]const u8, search_criteria_include_links: ?bool, search_criteria_labels: ?[]const []const u8, search_criteria_max_time: ?[]const u8, search_criteria_min_time: ?[]const u8, @"search_criteria.query_time_range_type": ?enums.GetPullRequestsRequestSearchCriteriaQueryTimeRangeType, search_criteria_repository_id: ?[]const u8, search_criteria_reviewer_id: ?[]const u8, search_criteria_source_ref_name: ?[]const u8, search_criteria_source_repository_id: ?[]const u8, @"search_criteria.status": ?enums.GetPullRequestsRequestSearchCriteriaStatus, @"search_criteria.tags_filter_operator": ?enums.GetPullRequestsRequestSearchCriteriaTagsFilterOperator, search_criteria_target_ref_name: ?[]const u8, search_criteria_title: ?[]const u8, max_comment_length: ?i32, @"$skip": ?i32, @"$top": ?i32) ![]const models.GitPullRequest {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -1347,6 +1365,7 @@ pub const PullRequests = struct {
     }
     /// Create a pull request.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, supports_iterations: ?bool, body: models.GitPullRequest) !models.GitPullRequest {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -1389,6 +1408,7 @@ pub const PullRequests = struct {
     }
     /// Retrieve a pull request.
     pub fn getPullRequest(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, max_comment_length: ?i32, @"$skip": ?i32, @"$top": ?i32, include_commits: ?bool, include_work_item_refs: ?bool) !models.GitPullRequest {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -1449,6 +1469,7 @@ pub const PullRequests = struct {
     }
     /// Update a pull request These are the properties that can be updated with the API: - Status - Title - Description (up to 4000 characters) - CompletionOptions - MergeOptions - AutoCompleteSetBy.Id - TargetRefName (when the PR retargeting feature is enabled) Attempting to update other properties outside of this list will either cause the server to throw an `InvalidArgumentValueException`, or to silently ignore the update.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, body: models.GitPullRequest) !models.GitPullRequest {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -1494,6 +1515,7 @@ pub const AnnotatedTags = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Create an annotated tag. Repositories have both a name and an identifier. Identifiers are globally unique, but several projects may contain a repository of the same name. You don't need to include the project if you specify a repository by ID. However, if you specify a repository by name, you must also specify the project (by name or ID).
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: []const u8, body: models.GitAnnotatedTag) !models.GitAnnotatedTag {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1531,6 +1553,7 @@ pub const AnnotatedTags = struct {
     }
     /// Get an annotated tag. Repositories have both a name and an identifier. Identifiers are globally unique, but several projects may contain a repository of the same name. You don't need to include the project if you specify a repository by ID. However, if you specify a repository by name, you must also specify the project (by name or ID).
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: []const u8, object_id: []const u8) !models.GitAnnotatedTag {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1592,6 +1615,7 @@ pub const Blobs = struct {
     };
     /// Gets one or more blobs in a zip file download.
     pub fn getBlobsZip(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, filename: ?[]const u8, body: []const []const u8) !GetBlobsZipResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -1653,6 +1677,7 @@ pub const Blobs = struct {
     }
     /// Get a single blob. Repositories have both a name and an identifier. Identifiers are globally unique, but several projects may contain a repository of the same name. You don't need to include the project if you specify a repository by ID. However, if you specify a repository by name, you must also specify the project (by name or ID).
     pub fn getBlob(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, sha1: []const u8, project: []const u8, download: ?bool, file_name: ?[]const u8, @"$format": ?[]const u8, resolve_lfs: ?bool) !GetBlobResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -1734,6 +1759,7 @@ pub const CherryPicks = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve information about a cherry pick operation for a specific branch. This operation is expensive due to the underlying object structure, so this API only looks at the 1000 most recent cherry pick operations.
     pub fn getCherryPickForRefName(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: []const u8, ref_name: []const u8) !models.GitCherryPick {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1771,6 +1797,7 @@ pub const CherryPicks = struct {
     }
     /// Cherry pick a specific commit or commits that are associated to a pull request into a new branch.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: []const u8, body: models.GitAsyncRefOperationParameters) !models.GitCherryPick {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1808,6 +1835,7 @@ pub const CherryPicks = struct {
     }
     /// Retrieve information about a cherry pick operation by cherry pick Id.
     pub fn getCherryPick(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, cherry_pick_id: i32, repository_id: []const u8) !models.GitCherryPick {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1849,6 +1877,7 @@ pub const Commits = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve a list of commits associated with a particular push.
     pub fn getPushCommits(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, push_id: i32, project: []const u8, top: ?i32, skip: ?i32, include_links: ?bool) ![]const models.GitCommitRef {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -1899,6 +1928,7 @@ pub const Commits = struct {
     }
     /// Retrieve a particular commit.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, commit_id: []const u8, repository_id: []const u8, project: []const u8, change_count: ?i32) !models.GitCommit {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, commit_id);
@@ -1939,6 +1969,7 @@ pub const Commits = struct {
     }
     /// Retrieve changes for a particular commit.
     pub fn getChanges(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, commit_id: []const u8, repository_id: []const u8, project: []const u8, top: ?i32, skip: ?i32) !models.GitCommitChanges {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, commit_id);
@@ -1984,6 +2015,7 @@ pub const Commits = struct {
     }
     /// Retrieve git commits for a project matching the search criteria
     pub fn getCommitsBatch(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, @"$skip": ?i32, @"$top": ?i32, include_statuses: ?bool, body: models.GitQueryCommitsCriteria) ![]const models.GitCommitRef {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -2042,6 +2074,7 @@ pub const Statuses = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get statuses associated with the Git commit.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, commit_id: []const u8, repository_id: []const u8, project: []const u8, top: ?i32, skip: ?i32, latest_only: ?bool) ![]const models.GitStatus {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, commit_id);
@@ -2092,6 +2125,7 @@ pub const Statuses = struct {
     }
     /// Create Git commit status.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, commit_id: []const u8, repository_id: []const u8, project: []const u8, body: models.GitStatus) !models.GitStatus {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, commit_id);
@@ -2137,6 +2171,7 @@ pub const Diffs = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Find the closest common commit (the merge base) between base and target commits, and get the diff between either the base and target commits or common and target commits.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, diff_common_commit: ?bool, @"$top": ?i32, @"$skip": ?i32, base_version: ?[]const u8, base_version_options: ?enums.GetRequestBaseVersionOptions, base_version_type: ?enums.GetRequestBaseVersionType, target_version: ?[]const u8, target_version_options: ?enums.GetRequestTargetVersionOptions, target_version_type: ?enums.GetRequestTargetVersionType) !models.GitCommitDiffs {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -2233,6 +2268,7 @@ pub const ImportRequests = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve import requests for a repository.
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: []const u8, include_abandoned: ?bool) ![]const models.GitImportRequest {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2271,6 +2307,7 @@ pub const ImportRequests = struct {
     }
     /// Create an import request.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: []const u8, body: models.GitImportRequest) !models.GitImportRequest {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2308,6 +2345,7 @@ pub const ImportRequests = struct {
     }
     /// Retrieve a particular import request.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: []const u8, import_request_id: i32) !models.GitImportRequest {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2343,6 +2381,7 @@ pub const ImportRequests = struct {
     }
     /// Retry or abandon a failed import request. There can only be one active import request associated with a repository. Marking a failed import request abandoned makes it inactive.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: []const u8, import_request_id: i32, body: models.GitImportRequest) !models.GitImportRequest {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2388,6 +2427,7 @@ pub const Items = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get Item Metadata and/or Content for a collection of items. The download parameter is to indicate whether the content should be available as a download or just sent as a stream in the response. Doesn't apply to zipped content which is always returned as a download.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, scope_path: ?[]const u8, recursion_level: ?enums.ListRequestRecursionLevel, include_content_metadata: ?bool, latest_processed_change: ?bool, download: ?bool, include_links: ?bool, @"$format": ?[]const u8, version_descriptor_version: ?[]const u8, @"version_descriptor.version_options": ?enums.ListRequestVersionDescriptorVersionOptions, @"version_descriptor.version_type": ?enums.ListRequestVersionDescriptorVersionType, zip_for_unix: ?bool) ![]const models.GitItem {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -2488,6 +2528,7 @@ pub const Items = struct {
     }
     /// Retrieves a batch of items in a repo / project for a given list of paths or a long path
     pub fn getItemsBatch(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, body: models.GitItemRequestData) ![]const []const models.JsonValue {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -2531,6 +2572,7 @@ pub const PullRequestQuery = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// This API is used to find what pull requests are related to a given commit. It can be used to either find the pull request that created a particular merge commit or it can be used to find all pull requests that have ever merged a particular commit. The input is a list of queries which each contain a list of commits. For each commit that you search against, you will get back a dictionary of commit -> pull requests.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, body: models.GitPullRequestQuery) !models.GitPullRequestQuery {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -2584,6 +2626,7 @@ pub const PullRequestAttachments = struct {
     };
     /// Get a list of files attached to a given pull request.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8) ![]const models.Attachment {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -2619,6 +2662,7 @@ pub const PullRequestAttachments = struct {
     }
     /// Delete a pull request attachment.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, file_name: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, file_name);
@@ -2655,6 +2699,7 @@ pub const PullRequestAttachments = struct {
     }
     /// Get the file content of a pull request attachment.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, file_name: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8) !GetResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, file_name);
@@ -2709,6 +2754,7 @@ pub const PullRequestAttachments = struct {
     }
     /// Attach a new file to a pull request.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, file_name: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, body: []const u8) !models.Attachment {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, file_name);
@@ -2754,6 +2800,7 @@ pub const PullRequestCommits = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get the commits for the specified pull request.
     pub fn getPullRequestCommits(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, @"$top": ?i32, continuation_token: ?[]const u8) ![]const models.GitCommitRef {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -2801,6 +2848,7 @@ pub const PullRequestCommits = struct {
     }
     /// Get the commits for the specified iteration of a pull request.
     pub fn getPullRequestIterationCommits(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, iteration_id: i32, project: []const u8, top: ?i32, skip: ?i32) ![]const models.GitCommitRef {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -2854,6 +2902,7 @@ pub const PullRequestIterations = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get the list of iterations for the specified pull request.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, include_commits: ?bool) ![]const models.GitPullRequestIteration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -2894,6 +2943,7 @@ pub const PullRequestIterations = struct {
     }
     /// Get the specified iteration for a pull request.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, iteration_id: i32, project: []const u8) !models.GitPullRequestIteration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -2937,6 +2987,7 @@ pub const PullRequestIterationChanges = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve the changes made in a pull request between two iterations.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, iteration_id: i32, project: []const u8, @"$top": ?i32, @"$skip": ?i32, @"$compare_to": ?i32) !models.GitPullRequestIterationChanges {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -2995,6 +3046,7 @@ pub const PullRequestIterationStatuses = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get all the statuses associated with a pull request iteration.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, iteration_id: i32, project: []const u8) ![]const models.GitPullRequestStatus {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -3032,6 +3084,7 @@ pub const PullRequestIterationStatuses = struct {
     }
     /// Update pull request iteration statuses collection. The only supported operation type is `remove`. This operation allows to delete multiple statuses in one call. The path of the `remove` operation should refer to the ID of the pull request status. For example `path='/1'` refers to the pull request status with ID 1.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, iteration_id: i32, project: []const u8, body: models.JsonPatchDocument) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -3072,6 +3125,7 @@ pub const PullRequestIterationStatuses = struct {
     }
     /// Create a pull request status on the iteration. This operation will have the same result as Create status on pull request with specified iteration ID in the request body. The only required field for the status is `Context.Name` that uniquely identifies the status. Note that `iterationId` in the request body is optional since `iterationId` can be specified in the URL. A conflict between `iterationId` in the URL and `iterationId` in the request body will result in status code 400.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, iteration_id: i32, project: []const u8, body: models.GitPullRequestStatus) !models.GitPullRequestStatus {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -3113,6 +3167,7 @@ pub const PullRequestIterationStatuses = struct {
     }
     /// Delete pull request iteration status. You can remove multiple statuses in one call by using Update operation.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, iteration_id: i32, status_id: i32, project: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -3151,6 +3206,7 @@ pub const PullRequestIterationStatuses = struct {
     }
     /// Get the specific pull request iteration status by ID. The status ID is unique within the pull request across all iterations.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, iteration_id: i32, status_id: i32, project: []const u8) !models.GitPullRequestStatus {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -3196,6 +3252,7 @@ pub const PullRequestLabels = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get all the labels (tags) assigned to a pull request.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, project_id: ?[]const u8) ![]const models.WebApiTagDefinition {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -3238,6 +3295,7 @@ pub const PullRequestLabels = struct {
     }
     /// Create a tag (if that does not exists yet) and add that as a label (tag) for a specified pull request. The only required field is the name of the new label (tag).
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, project_id: ?[]const u8, body: models.WebApiCreateTagRequestData) !models.WebApiTagDefinition {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -3284,6 +3342,7 @@ pub const PullRequestLabels = struct {
     }
     /// Removes a label (tag) from the set of those assigned to the pull request. The tag itself will not be deleted.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, label_id_or_name: []const u8, project: []const u8, project_id: ?[]const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -3327,6 +3386,7 @@ pub const PullRequestLabels = struct {
     }
     /// Retrieves a single label (tag) that has been assigned to a pull request.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, label_id_or_name: []const u8, project: []const u8, project_id: ?[]const u8) !models.WebApiTagDefinition {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -3377,6 +3437,7 @@ pub const PullRequestProperties = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get external properties of the pull request.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8) !models.PropertiesCollection {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -3412,6 +3473,7 @@ pub const PullRequestProperties = struct {
     }
     /// Create or update pull request external properties. The patch operation can be `add`, `replace` or `remove`. For `add` operation, the path can be empty. If the path is empty, the value must be a list of key value pairs. For `replace` operation, the path cannot be empty. If the path does not exist, the property will be added to the collection. For `remove` operation, the path cannot be empty. If the path does not exist, no action will be performed.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, body: models.JsonPatchDocument) !models.PropertiesCollection {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -3457,6 +3519,7 @@ pub const PullRequestReviewers = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve the reviewers for a pull request
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8) ![]const models.IdentityRefWithVote {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -3492,6 +3555,7 @@ pub const PullRequestReviewers = struct {
     }
     /// Reset the votes of multiple reviewers on a pull request. NOTE: This endpoint only supports updating votes, but does not support updating required reviewers (use policy) or display names.
     pub fn updatePullRequestReviewers(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, body: []const models.IdentityRefWithVote) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -3530,6 +3594,7 @@ pub const PullRequestReviewers = struct {
     }
     /// Add reviewers to a pull request.
     pub fn createPullRequestReviewers(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, body: []const models.IdentityRef) ![]const models.IdentityRefWithVote {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -3569,6 +3634,7 @@ pub const PullRequestReviewers = struct {
     }
     /// Add an unmaterialized identity to the reviewers of a pull request.
     pub fn createUnmaterializedPullRequestReviewer(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, body: models.IdentityRefWithVote) !models.IdentityRefWithVote {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -3608,6 +3674,7 @@ pub const PullRequestReviewers = struct {
     }
     /// Remove a reviewer from a pull request.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, reviewer_id: []const u8, project: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -3644,6 +3711,7 @@ pub const PullRequestReviewers = struct {
     }
     /// Retrieve information about a particular reviewer on a pull request
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, reviewer_id: []const u8, project: []const u8) !models.IdentityRefWithVote {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -3681,6 +3749,7 @@ pub const PullRequestReviewers = struct {
     }
     /// Edit a reviewer entry. These fields are patchable: isFlagged, hasDeclined
     pub fn updatePullRequestReviewer(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, reviewer_id: []const u8, project: []const u8, body: models.IdentityRefWithVote) !models.IdentityRefWithVote {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -3722,6 +3791,7 @@ pub const PullRequestReviewers = struct {
     }
     /// Add a reviewer to a pull request or cast a vote.
     pub fn createPullRequestReviewer(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, reviewer_id: []const u8, project: []const u8, body: models.IdentityRefWithVote) !models.IdentityRefWithVote {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -3769,6 +3839,7 @@ pub const PullRequestShare = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Sends an e-mail notification about a specific pull request to a set of recipients
     pub fn sharePullRequest(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, body: models.ShareNotificationContext) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -3813,6 +3884,7 @@ pub const PullRequestStatuses = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get all the statuses associated with a pull request.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8) ![]const models.GitPullRequestStatus {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -3848,6 +3920,7 @@ pub const PullRequestStatuses = struct {
     }
     /// Update pull request statuses collection. The only supported operation type is `remove`. This operation allows to delete multiple statuses in one call. The path of the `remove` operation should refer to the ID of the pull request status. For example `path='/1'` refers to the pull request status with ID 1.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, body: models.JsonPatchDocument) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -3886,6 +3959,7 @@ pub const PullRequestStatuses = struct {
     }
     /// Create a pull request status. The only required field for the status is `Context.Name` that uniquely identifies the status. Note that you can specify iterationId in the request body to post the status on the iteration.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, body: models.GitPullRequestStatus) !models.GitPullRequestStatus {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -3925,6 +3999,7 @@ pub const PullRequestStatuses = struct {
     }
     /// Delete pull request status. You can remove multiple statuses in one call by using Update operation.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, status_id: i32, project: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -3961,6 +4036,7 @@ pub const PullRequestStatuses = struct {
     }
     /// Get the specific pull request status by ID. The status ID is unique within the pull request across all iterations.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, status_id: i32, project: []const u8) !models.GitPullRequestStatus {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -4004,6 +4080,7 @@ pub const PullRequestThreads = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve all threads in a pull request.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, @"$iteration": ?i32, @"$base_iteration": ?i32) ![]const models.GitPullRequestCommentThread {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -4049,6 +4126,7 @@ pub const PullRequestThreads = struct {
     }
     /// Create a thread in a pull request.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, body: models.GitPullRequestCommentThread) !models.GitPullRequestCommentThread {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -4088,6 +4166,7 @@ pub const PullRequestThreads = struct {
     }
     /// Retrieve a thread in a pull request.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, thread_id: i32, project: []const u8, @"$iteration": ?i32, @"$base_iteration": ?i32) !models.GitPullRequestCommentThread {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -4135,6 +4214,7 @@ pub const PullRequestThreads = struct {
     }
     /// Update a thread in a pull request.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, thread_id: i32, project: []const u8, body: models.GitPullRequestCommentThread) !models.GitPullRequestCommentThread {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -4182,6 +4262,7 @@ pub const PullRequestThreadComments = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve all comments associated with a specific thread in a pull request.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, thread_id: i32, project: []const u8) ![]const models.Comment {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -4219,6 +4300,7 @@ pub const PullRequestThreadComments = struct {
     }
     /// Create a comment on a specific thread in a pull request (up to 500 comments can be created per thread).
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, thread_id: i32, project: []const u8, body: models.Comment) !models.Comment {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -4260,6 +4342,7 @@ pub const PullRequestThreadComments = struct {
     }
     /// Delete a comment associated with a specific thread in a pull request.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, thread_id: i32, comment_id: i32, project: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -4298,6 +4381,7 @@ pub const PullRequestThreadComments = struct {
     }
     /// Retrieve a comment associated with a specific thread in a pull request.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, thread_id: i32, comment_id: i32, project: []const u8) !models.Comment {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -4337,6 +4421,7 @@ pub const PullRequestThreadComments = struct {
     }
     /// Update a comment associated with a specific thread in a pull request.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, thread_id: i32, comment_id: i32, project: []const u8, body: models.Comment) !models.Comment {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -4386,6 +4471,7 @@ pub const PullRequestCommentLikes = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Delete a like on a comment.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, thread_id: i32, comment_id: i32, project: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -4424,6 +4510,7 @@ pub const PullRequestCommentLikes = struct {
     }
     /// Get likes for a comment.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, thread_id: i32, comment_id: i32, project: []const u8) ![]const models.IdentityRef {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -4463,6 +4550,7 @@ pub const PullRequestCommentLikes = struct {
     }
     /// Add a like on a comment.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, thread_id: i32, comment_id: i32, project: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -4507,6 +4595,7 @@ pub const PullRequestWorkItems = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve a list of work items associated with a pull request.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8) ![]const models.ResourceRef {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -4548,6 +4637,7 @@ pub const Pushes = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieves pushes associated with the specified repository.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, @"$skip": ?i32, @"$top": ?i32, search_criteria_from_date: ?[]const u8, search_criteria_include_links: ?bool, search_criteria_include_ref_updates: ?bool, search_criteria_pusher_id: ?[]const u8, search_criteria_ref_name: ?[]const u8, search_criteria_to_date: ?[]const u8) ![]const models.GitPush {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -4629,6 +4719,7 @@ pub const Pushes = struct {
     }
     /// Push changes to the repository.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, body: models.GitPush) !models.GitPush {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -4666,6 +4757,7 @@ pub const Pushes = struct {
     }
     /// Retrieves a particular push.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, push_id: i32, project: []const u8, include_commits: ?i32, include_ref_updates: ?bool) !models.GitPush {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -4717,6 +4809,7 @@ pub const Refs = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Queries the provided repository for its refs and returns them.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, filter: ?[]const u8, include_links: ?bool, include_statuses: ?bool, include_my_branches: ?bool, latest_statuses_only: ?bool, peel_tags: ?bool, filter_contains: ?[]const u8, @"$top": ?i32, continuation_token: ?[]const u8, include_target_branches: ?bool) ![]const models.GitRef {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -4806,6 +4899,7 @@ pub const Refs = struct {
     }
     /// Lock or Unlock a branch.
     pub fn updateRef(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, filter: []const u8, project: []const u8, project_id: ?[]const u8, body: models.GitRefUpdate) !models.GitRef {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -4854,6 +4948,7 @@ pub const Refs = struct {
     }
     /// Creating, updating, or deleting refs(branches). Updating a ref means making it point at a different commit than it used to. You must specify both the old and new commit to avoid race conditions.
     pub fn updateRefs(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, project_id: ?[]const u8, body: []const models.GitRefUpdate) ![]const models.GitRefUpdateResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -4904,6 +4999,7 @@ pub const Reverts = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve information about a revert operation for a specific branch.
     pub fn getRevertForRefName(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: []const u8, ref_name: []const u8) !models.GitRevert {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -4941,6 +5037,7 @@ pub const Reverts = struct {
     }
     /// Starts the operation to create a new branch which reverts changes introduced by either a specific commit or commits that are associated to a pull request.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: []const u8, body: models.GitAsyncRefOperationParameters) !models.GitRevert {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -4978,6 +5075,7 @@ pub const Reverts = struct {
     }
     /// Retrieve information about a revert operation by revert Id.
     pub fn getRevert(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, revert_id: i32, repository_id: []const u8) !models.GitRevert {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -5019,6 +5117,7 @@ pub const Stats = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve statistics about all branches within a repository.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, base_version_descriptor_version: ?[]const u8, @"base_version_descriptor.version_options": ?enums.ListRequestBaseVersionDescriptorVersionOptions, @"base_version_descriptor.version_type": ?enums.ListRequestBaseVersionDescriptorVersionType) ![]const models.GitBranchStats {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -5079,6 +5178,7 @@ pub const Suggestions = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve a pull request suggestion for a particular repository or team project.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, prefer_compare_branch: ?bool) ![]const models.GitSuggestion {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -5133,6 +5233,7 @@ pub const Trees = struct {
     };
     /// The Tree endpoint returns the collection of objects underneath the specified tree. Trees are folders in a Git repository. Repositories have both a name and an identifier. Identifiers are globally unique, but several projects may contain a repository of the same name. You don't need to include the project if you specify a repository by ID. However, if you specify a repository by name, you must also specify the project (by name or ID.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, sha1: []const u8, project: []const u8, project_id: ?[]const u8, recursive: ?bool, file_name: ?[]const u8, @"$format": ?[]const u8) !GetResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_id);
@@ -5216,6 +5317,7 @@ pub const MergeBases = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Find the merge bases of two commits, optionally across forks. If otherRepositoryId is not specified, the merge bases will only be calculated within the context of the local repositoryNameOrId.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_name_or_id: []const u8, commit_id: []const u8, other_commit_id: []const u8, project: []const u8, other_collection_id: ?[]const u8, other_repository_id: ?[]const u8) ![]const models.GitCommitRef {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_name_or_id);
@@ -5275,6 +5377,7 @@ pub const Forks = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve all forks of a repository in the collection.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_name_or_id: []const u8, collection_id: []const u8, project: []const u8, include_links: ?bool) ![]const models.GitRepositoryRef {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_name_or_id);
@@ -5315,6 +5418,7 @@ pub const Forks = struct {
     }
     /// Retrieve all requested fork sync operations on this repository.
     pub fn getForkSyncRequests(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_name_or_id: []const u8, project: []const u8, include_abandoned: ?bool, include_links: ?bool) ![]const models.GitForkSyncRequest {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_name_or_id);
@@ -5358,6 +5462,7 @@ pub const Forks = struct {
     }
     /// Request that another repository's refs be fetched into this one. It syncs two existing forks. To create a fork, please see the <a href='https://docs.microsoft.com/en-us/rest/api/vsts/git/repositories/create?view=azure-devops-rest-5.1'> repositories endpoint</a>
     pub fn createForkSyncRequest(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_name_or_id: []const u8, project: []const u8, include_links: ?bool, body: models.GitForkSyncRequestParameters) !models.GitForkSyncRequest {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_name_or_id);
@@ -5400,6 +5505,7 @@ pub const Forks = struct {
     }
     /// Get a specific fork sync operation's details.
     pub fn getForkSyncRequest(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_name_or_id: []const u8, fork_sync_operation_id: i32, project: []const u8, include_links: ?bool) !models.GitForkSyncRequest {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, repository_name_or_id);
@@ -5446,6 +5552,7 @@ pub const Merges = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Request a git merge operation. Currently we support merging only 2 commits.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_name_or_id: []const u8, include_links: ?bool, body: models.GitMergeParameters) !models.GitMerge {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -5488,6 +5595,7 @@ pub const Merges = struct {
     }
     /// Get a specific merge operation's details.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_name_or_id: []const u8, merge_operation_id: i32, include_links: ?bool) !models.GitMerge {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);

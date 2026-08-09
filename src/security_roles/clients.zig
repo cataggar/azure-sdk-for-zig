@@ -114,6 +114,7 @@ pub const Roleassignments = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get role assignments for the resource
     pub fn list(self: *@This(), alloc: std.mem.Allocator, scope_id: []const u8, resource_id: []const u8, organization: []const u8) ![]const models.RoleAssignment {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, scope_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_id);
@@ -147,6 +148,7 @@ pub const Roleassignments = struct {
     }
 
     pub fn removeRoleAssignments(self: *@This(), alloc: std.mem.Allocator, scope_id: []const u8, resource_id: []const u8, organization: []const u8, body: []const []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, scope_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_id);
@@ -183,6 +185,7 @@ pub const Roleassignments = struct {
     }
     /// Set role assignments on a resource
     pub fn setRoleAssignments(self: *@This(), alloc: std.mem.Allocator, scope_id: []const u8, resource_id: []const u8, organization: []const u8, limit_to_caller_identity_domain: ?bool, body: []const models.UserRoleAssignmentRef) ![]const models.RoleAssignment {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, scope_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_id);
@@ -225,6 +228,7 @@ pub const Roleassignments = struct {
     }
     /// Remove the role assignment on a resource
     pub fn removeRoleAssignment(self: *@This(), alloc: std.mem.Allocator, scope_id: []const u8, resource_id: []const u8, identity_id: []const u8, organization: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, scope_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_id);
@@ -259,6 +263,7 @@ pub const Roleassignments = struct {
     }
     /// Set role assignment on a resource
     pub fn setRoleAssignment(self: *@This(), alloc: std.mem.Allocator, scope_id: []const u8, resource_id: []const u8, identity_id: []const u8, organization: []const u8, body: models.UserRoleAssignmentRef) !models.RoleAssignment {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, scope_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_id);
@@ -304,6 +309,7 @@ pub const Roledefinitions = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn list(self: *@This(), alloc: std.mem.Allocator, scope_id: []const u8, organization: []const u8) ![]const models.SecurityRole {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, scope_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);

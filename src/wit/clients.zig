@@ -354,6 +354,7 @@ pub const ArtifactLinkTypes = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get the list of work item tracking outbound artifact link types.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.WorkArtifactLink {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/wit/artifactlinktypes", .{ self.endpoint, encoded_path_0 });
@@ -399,6 +400,7 @@ pub const WorkItemIcons = struct {
     };
     /// Get a list of all work item icons.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.WorkItemIcon {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/wit/workitemicons", .{ self.endpoint, encoded_path_0 });
@@ -428,6 +430,7 @@ pub const WorkItemIcons = struct {
     }
     /// Get a work item icon given the friendly name and icon color.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, icon: []const u8, organization: []const u8, color: ?[]const u8, v: ?i32) !GetResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, icon);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);
@@ -493,6 +496,7 @@ pub const WorkItemRelationTypes = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Gets the work item relation types.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.WorkItemRelationType {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/wit/workitemrelationtypes", .{ self.endpoint, encoded_path_0 });
@@ -522,6 +526,7 @@ pub const WorkItemRelationTypes = struct {
     }
     /// Gets the work item relation type definition.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, relation: []const u8) !models.WorkItemRelationType {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, relation);
@@ -559,6 +564,7 @@ pub const WorkItemTransitions = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Returns the next state on the given work item IDs.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, ids: []const u8, action: ?[]const u8) ![]const models.WorkItemNextStateOnTransition {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/wit/workitemtransitions", .{ self.endpoint, encoded_path_0 });
@@ -605,6 +611,7 @@ pub const AccountMyWorkRecentActivity = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Gets recent work item activities
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.AccountRecentActivityWorkItemModel2 {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/work/accountmyworkrecentactivity", .{ self.endpoint, encoded_path_0 });
@@ -640,6 +647,7 @@ pub const GithubConnections = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Gets a list of github connections
     pub fn getGithubConnections(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.GitHubConnectionModel {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -671,6 +679,7 @@ pub const GithubConnections = struct {
     }
     /// Gets a list of repos within specified github connection.
     pub fn getGithubConnectionRepositories(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, connection_id: []const u8) ![]const models.GitHubConnectionRepoModel {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -704,6 +713,7 @@ pub const GithubConnections = struct {
     }
     /// Add/remove list of repos within specified github connection.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, connection_id: []const u8, body: models.GitHubConnectionReposBatchRequest) ![]const models.GitHubConnectionRepoModel {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -747,6 +757,7 @@ pub const ArtifactUriQueryOperations = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Queries work items linked to a given list of artifact URI.
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.ArtifactUriQuery) !models.ArtifactUriQueryResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -798,6 +809,7 @@ pub const Attachments = struct {
     };
     /// Uploads an attachment. On accounts with higher attachment upload limits (>130MB), you will need to use chunked upload. To upload an attachment in multiple chunks, you first need to [**Start a Chunked Upload**](#start_a_chunked_upload) and then follow the example from the **Upload Chunk** section.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, file_name: ?[]const u8, upload_type: ?[]const u8, area_path: ?[]const u8, body: []const u8) !models.AttachmentReference {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -852,6 +864,7 @@ pub const Attachments = struct {
     }
     /// Permanently delete an attachment.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: []const u8, project: []const u8) !models.DestroyedAttachment {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, id);
@@ -885,6 +898,7 @@ pub const Attachments = struct {
     }
     /// Downloads an attachment.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: []const u8, project: []const u8, file_name: ?[]const u8, download: ?bool) !GetResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, id);
@@ -947,6 +961,7 @@ pub const Attachments = struct {
     }
     /// Uploads an attachment chunk. Before performing [**Upload a Chunk**](#upload-a-chunk), make sure to have an attachment id returned in **Start a Chunked Upload** example on **Create** section. Specify the byte range of the chunk using Content-Length. For example: 'Content - Length': 'bytes 0 - 39999 / 50000' for the first 40000 bytes of a 50000 byte file.
     pub fn uploadChunk(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: []const u8, content_range_header: []const u8, project: []const u8, file_name: ?[]const u8, body: []const u8) !models.AttachmentReference {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, id);
@@ -996,6 +1011,7 @@ pub const ClassificationNodes = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Gets root classification nodes under the project.
     pub fn getRootNodes(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"$depth": ?i32) ![]const models.WorkItemClassificationNode {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1032,6 +1048,7 @@ pub const ClassificationNodes = struct {
     }
     /// Delete an existing classification node.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, structure_group: enums.DeleteRequestStructureGroup, path: []const u8, @"$reclassify_id": ?i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1071,6 +1088,7 @@ pub const ClassificationNodes = struct {
     }
     /// Gets the classification node for a given node path.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, structure_group: enums.GetRequestStructureGroup, path: []const u8, @"$depth": ?i32) !models.WorkItemClassificationNode {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1111,6 +1129,7 @@ pub const ClassificationNodes = struct {
     }
     /// Update an existing classification node.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, structure_group: enums.UpdateRequestStructureGroup, path: []const u8, body: models.WorkItemClassificationNode) !models.WorkItemClassificationNode {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1150,6 +1169,7 @@ pub const ClassificationNodes = struct {
     }
     /// Create new or update an existing classification node.
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, structure_group: enums.CreateOrUpdateRequestStructureGroup, path: []const u8, body: models.WorkItemClassificationNode) !models.WorkItemClassificationNode {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1195,6 +1215,7 @@ pub const Fields = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Returns information for all fields. The project ID/name parameter is optional.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"$expand": ?enums.ListRequestExpand) ![]const models.WorkItemField2 {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1233,6 +1254,7 @@ pub const Fields = struct {
     }
     /// Create a new field.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.WorkItemField2) !models.WorkItemField2 {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1268,6 +1290,7 @@ pub const Fields = struct {
     }
     /// Deletes the field. To undelete a filed, see 'Update Field' API.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, field_name_or_ref_name: []const u8, project: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, field_name_or_ref_name);
@@ -1300,6 +1323,7 @@ pub const Fields = struct {
     }
     /// Gets information on a specific field.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, field_name_or_ref_name: []const u8, project: []const u8) !models.WorkItemField2 {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, field_name_or_ref_name);
@@ -1333,6 +1357,7 @@ pub const Fields = struct {
     }
     /// Update a field.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, field_name_or_ref_name: []const u8, project: []const u8, body: models.FieldUpdate) !models.WorkItemField2 {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, field_name_or_ref_name);
@@ -1376,6 +1401,7 @@ pub const ProjectProcessMigration = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Migrates a project to a different process within the same OOB type. For example, you can only migrate a project from agile/custom-agile to agile/custom-agile.
     pub fn migrateProjectsProcess(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.ProcessIdModel) !models.ProcessMigrationResultModel {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1417,6 +1443,7 @@ pub const Queries = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Gets the root queries and their children
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"$expand": ?enums.ListRequestExpand1, @"$depth": ?i32, @"$include_deleted": ?bool) ![]const models.QueryHierarchyItem {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1465,6 +1492,7 @@ pub const Queries = struct {
     }
     /// Delete a query or a folder. This deletes any permission change on the deleted query or folder and any of its descendants if it is a folder. It is important to note that the deleted permission changes cannot be recovered upon undeleting the query or folder.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, query: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1497,6 +1525,7 @@ pub const Queries = struct {
     }
     /// Retrieves an individual query and its children
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, query: []const u8, @"$expand": ?enums.GetRequestExpand, @"$depth": ?i32, @"$include_deleted": ?bool, @"$use_iso_date_format": ?bool) !models.QueryHierarchyItem {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1552,6 +1581,7 @@ pub const Queries = struct {
     }
     /// Update a query or a folder. This allows you to update, rename and move queries and folders.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, query: []const u8, @"$undelete_descendants": ?bool, body: models.QueryHierarchyItem) !models.QueryHierarchyItem {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1594,6 +1624,7 @@ pub const Queries = struct {
     }
     /// Creates a query, or moves a query. Learn more about Work Item Query Language (WIQL) syntax [here](https://docs.microsoft.com/en-us/vsts/collaborate/wiql-syntax?toc=/vsts/work/track/toc.json&bc=/vsts/work/track/breadcrumb/toc.json&view=vsts).
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, query: []const u8, validate_wiql_only: ?bool, body: models.QueryHierarchyItem) !models.QueryHierarchyItem {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1636,6 +1667,7 @@ pub const Queries = struct {
     }
     /// Gets a list of queries by ids (Maximum 1000)
     pub fn getQueriesBatch(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.QueryBatchGetRequest) ![]const models.QueryHierarchyItem {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1677,6 +1709,7 @@ pub const Recyclebin = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Gets a list of the IDs and the URLs of the deleted the work items in the Recycle Bin.
     pub fn getDeletedWorkItemShallowReferences(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.WorkItemDeleteShallowReference {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1708,6 +1741,7 @@ pub const Recyclebin = struct {
     }
     /// Destroys the specified work item permanently from the Recycle Bin. This action can not be undone.
     pub fn destroyWorkItem(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32, project: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, id);
@@ -1740,6 +1774,7 @@ pub const Recyclebin = struct {
     }
     /// Gets a deleted work item from Recycle Bin.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32, project: []const u8) !models.WorkItemDelete {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, id);
@@ -1773,6 +1808,7 @@ pub const Recyclebin = struct {
     }
     /// Restores the deleted work item from Recycle Bin.
     pub fn restoreWorkItem(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32, project: []const u8, body: models.WorkItemDeleteUpdate) !models.WorkItemDelete {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, id);
@@ -1816,6 +1852,7 @@ pub const ReportingWorkItemLinks = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a batch of work item links
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, link_types: ?[]const u8, types: ?[]const u8, continuation_token: ?[]const u8, start_date_time: ?[]const u8) !models.ReportingWorkItemLinksBatch {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1881,6 +1918,7 @@ pub const ReportingWorkItemRevisions = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a batch of work item revisions with the option of including deleted items
     pub fn readReportingRevisionsGet(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, fields: ?[]const u8, types: ?[]const u8, continuation_token: ?[]const u8, start_date_time: ?[]const u8, include_identity_ref: ?bool, include_deleted: ?bool, include_tag_ref: ?bool, include_latest_only: ?bool, @"$expand": ?enums.ReadReportingRevisionsGetRequestExpand, include_discussion_changes_only: ?bool, @"$max_page_size": ?i32) !models.ReportingWorkItemRevisionsBatch {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1977,6 +2015,7 @@ pub const ReportingWorkItemRevisions = struct {
     }
     /// Get a batch of work item revisions. This request may be used if your list of fields is large enough that it may run the URL over the length limit.
     pub fn readReportingRevisionsPost(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, continuation_token: ?[]const u8, start_date_time: ?[]const u8, @"$expand": ?enums.ReadReportingRevisionsPostRequestExpand, body: models.ReportingWorkItemRevisionsFilter) !models.ReportingWorkItemRevisionsBatch {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2039,6 +2078,7 @@ pub const WorkItemRevisionsDiscussions = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn readReportingDiscussions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, continuation_token: ?[]const u8, @"$max_page_size": ?i32) !models.ReportingWorkItemRevisionsBatch {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2088,6 +2128,7 @@ pub const SendMail = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// RESTful method to send mail for selected/queried work items.
     pub fn sendMail(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.SendMailBody) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2128,6 +2169,7 @@ pub const Tags = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get all the tags for the project.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.WorkItemTagDefinition {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2159,6 +2201,7 @@ pub const Tags = struct {
     }
     /// Delete the tag for the project. Please note, that the deleted tag will be removed from all Work Items as well as Pull Requests.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, tag_id_or_name: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2191,6 +2234,7 @@ pub const Tags = struct {
     }
     /// Get the tag for the project.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, tag_id_or_name: []const u8) !models.WorkItemTagDefinition {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2224,6 +2268,7 @@ pub const Tags = struct {
     }
     /// Update the tag for the project.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, tag_id_or_name: []const u8, body: models.WorkItemTagDefinition) !models.WorkItemTagDefinition {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2267,6 +2312,7 @@ pub const TempQueries = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Creates a temporary query Learn more about Work Item Query Language (WIQL) syntax [here](https://docs.microsoft.com/en-us/vsts/collaborate/wiql-syntax?toc=/vsts/work/track/toc.json&bc=/vsts/work/track/breadcrumb/toc.json&view=vsts).
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.TemporaryQueryRequestModel) !models.TemporaryQueryResponseModel {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2308,6 +2354,7 @@ pub const WorkItems = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Returns a list of work items (Maximum 200)
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, ids: []const u8, project: []const u8, fields: ?[]const u8, as_of: ?[]const u8, @"$expand": ?enums.ListRequestExpand2, error_policy: ?enums.ListRequestErrorPolicy) ![]const models.WorkItem {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2371,6 +2418,7 @@ pub const WorkItems = struct {
     }
     /// Returns a single work item from a template.
     pub fn getWorkItemTemplate(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"type": []const u8, fields: ?[]const u8, as_of: ?[]const u8, @"$expand": ?enums.GetWorkItemTemplateRequestExpand) !models.WorkItem {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2425,6 +2473,7 @@ pub const WorkItems = struct {
     }
     /// Creates a single work item.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"type": []const u8, validate_only: ?bool, bypass_rules: ?bool, suppress_notifications: ?bool, @"$expand": ?enums.CreateRequestExpand, body: models.JsonPatchDocument) !models.WorkItem {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2484,6 +2533,7 @@ pub const WorkItems = struct {
     }
     /// Deletes the specified work item and sends it to the Recycle Bin, so that it can be restored back, if required. Optionally, if the destroy parameter has been set to true, it destroys the work item permanently. WARNING: If the destroy parameter is set to true, work items deleted by this command will NOT go to recycle-bin and there is no way to restore/recover them after deletion. It is recommended NOT to use this parameter. If you do, please use this parameter with extreme caution.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32, project: []const u8, destroy: ?bool) !models.WorkItemDelete {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, id);
@@ -2522,6 +2572,7 @@ pub const WorkItems = struct {
     }
     /// Returns a single work item.
     pub fn getWorkItem(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32, project: []const u8, fields: ?[]const u8, as_of: ?[]const u8, @"$expand": ?enums.GetWorkItemRequestExpand) !models.WorkItem {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, id);
@@ -2576,6 +2627,7 @@ pub const WorkItems = struct {
     }
     /// Updates a single work item.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32, project: []const u8, validate_only: ?bool, bypass_rules: ?bool, suppress_notifications: ?bool, @"$expand": ?enums.UpdateRequestExpand, body: models.JsonPatchDocument) !models.WorkItem {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, id);
@@ -2635,6 +2687,7 @@ pub const WorkItems = struct {
     }
     /// Gets work items for a list of work item ids (Maximum 200)
     pub fn getWorkItemsBatch(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.WorkItemBatchGetRequest) ![]const models.WorkItem {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2670,6 +2723,7 @@ pub const WorkItems = struct {
     }
     /// Deletes specified work items and sends them to the Recycle Bin, so that it can be restored back, if required. Optionally, if the destroy parameter has been set to true, it destroys the work item permanently. WARNING: If the destroy parameter is set to true, work items deleted by this command will NOT go to recycle-bin and there is no way to restore/recover them after deletion.
     pub fn deleteWorkItems(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.WorkItemDeleteBatchRequest) !models.WorkItemDeleteBatch {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2711,6 +2765,7 @@ pub const Revisions = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Returns the list of fully hydrated work item revisions, paged.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32, project: []const u8, @"$top": ?i32, @"$skip": ?i32, @"$expand": ?enums.ListRequestExpand3) ![]const models.WorkItem {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, id);
@@ -2761,6 +2816,7 @@ pub const Revisions = struct {
     }
     /// Returns a fully hydrated work item for the requested revision
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32, revision_number: i32, project: []const u8, @"$expand": ?enums.GetRequestExpand1) !models.WorkItem {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, id);
@@ -2809,6 +2865,7 @@ pub const Updates = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Returns the deltas between work item revisions
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32, project: []const u8, @"$top": ?i32, @"$skip": ?i32) ![]const models.WorkItemUpdate {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, id);
@@ -2852,6 +2909,7 @@ pub const Updates = struct {
     }
     /// Returns a single update for a work item
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32, update_number: i32, project: []const u8) !models.WorkItemUpdate {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, id);
@@ -2893,6 +2951,7 @@ pub const Comments = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Returns a list of work item comments by ids.
     pub fn getCommentsBatch(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_id: i32, ids: []const u8, include_deleted: ?bool, @"$expand": ?enums.GetCommentsBatchRequestExpand) !models.CommentList {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2942,6 +3001,7 @@ pub const Comments = struct {
     }
     /// Add a comment on a work item.
     pub fn addComment(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_id: i32, body: models.CommentCreate) !models.Comment {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2979,6 +3039,7 @@ pub const Comments = struct {
     }
     /// Delete a comment on a work item.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_id: i32, comment_id: i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3013,6 +3074,7 @@ pub const Comments = struct {
     }
     /// Returns a work item comment.
     pub fn getComment(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_id: i32, comment_id: i32, include_deleted: ?bool, @"$expand": ?enums.GetCommentRequestExpand) !models.Comment {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3060,6 +3122,7 @@ pub const Comments = struct {
     }
     /// Update a comment on a work item.
     pub fn updateComment(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_id: i32, comment_id: i32, body: models.CommentUpdate) !models.Comment {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3105,6 +3168,7 @@ pub const CommentsReactions = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Gets reactions of a comment.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_id: i32, comment_id: i32) ![]const models.CommentReaction {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3140,6 +3204,7 @@ pub const CommentsReactions = struct {
     }
     /// Deletes an existing reaction on a comment.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_id: i32, comment_id: i32, reaction_type: enums.DeleteRequestReactionType) !models.CommentReaction {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3177,6 +3242,7 @@ pub const CommentsReactions = struct {
     }
     /// Adds a new reaction to a comment.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_id: i32, comment_id: i32, reaction_type: enums.CreateRequestReactionType) !models.CommentReaction {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3220,6 +3286,7 @@ pub const CommentReactionsEngagedUsers = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get users who reacted on the comment.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_id: i32, comment_id: i32, reaction_type: enums.ListRequestReactionType, @"$top": ?i32, @"$skip": ?i32) ![]const models.IdentityRef {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3273,6 +3340,7 @@ pub const CommentsVersions = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_id: i32, comment_id: i32) ![]const models.CommentVersion {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3308,6 +3376,7 @@ pub const CommentsVersions = struct {
     }
 
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_id: i32, comment_id: i32, version: i32) !models.CommentVersion {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3351,6 +3420,7 @@ pub const WorkItemTypeCategories = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get all work item type categories.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.WorkItemTypeCategory {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3382,6 +3452,7 @@ pub const WorkItemTypeCategories = struct {
     }
     /// Get specific work item type category by name.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, category: []const u8) !models.WorkItemTypeCategory {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3421,6 +3492,7 @@ pub const WorkItemTypes = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Returns the list of work item types
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.WorkItemType {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3452,6 +3524,7 @@ pub const WorkItemTypes = struct {
     }
     /// Returns a work item type definition.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"type": []const u8) !models.WorkItemType {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3491,6 +3564,7 @@ pub const WorkItemTypesField = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of fields for a work item type with detailed references.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"type": []const u8, @"$expand": ?enums.ListRequestExpand4) ![]const models.WorkItemTypeFieldWithReferences {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3531,6 +3605,7 @@ pub const WorkItemTypesField = struct {
     }
     /// Get a field for a work item type with detailed references.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"type": []const u8, field: []const u8, @"$expand": ?enums.GetRequestExpand2) !models.WorkItemTypeFieldWithReferences {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3579,6 +3654,7 @@ pub const WorkItemTypeStates = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Returns the state names and colors for a work item type.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"type": []const u8) ![]const models.WorkItemStateColor {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3618,6 +3694,7 @@ pub const Templates = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Gets template
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, workitemtypename: ?[]const u8) ![]const models.WorkItemTemplateReference {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3658,6 +3735,7 @@ pub const Templates = struct {
     }
     /// Creates a template
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, body: models.WorkItemTemplate) !models.WorkItemTemplate {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3695,6 +3773,7 @@ pub const Templates = struct {
     }
     /// Deletes the template with given id
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, template_id: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3729,6 +3808,7 @@ pub const Templates = struct {
     }
     /// Gets the template with specified id
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, template_id: []const u8) !models.WorkItemTemplate {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3764,6 +3844,7 @@ pub const Templates = struct {
     }
     /// Replace template contents
     pub fn replaceTemplate(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, template_id: []const u8, body: models.WorkItemTemplate) !models.WorkItemTemplate {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3817,6 +3898,7 @@ pub const WiqlOperations = struct {
     };
     /// Gets the results of the query given its WIQL.
     pub fn queryByWiql(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, time_precision: ?bool, @"$top": ?i32, body: models.Wiql) !models.WorkItemQueryResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3864,6 +3946,7 @@ pub const WiqlOperations = struct {
     }
     /// Gets the results of the query given the query ID.
     pub fn queryById(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: []const u8, project: []const u8, team: []const u8, time_precision: ?bool, @"$top": ?i32) !models.WorkItemQueryResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, id);
@@ -3909,6 +3992,7 @@ pub const WiqlOperations = struct {
     }
     /// Gets the results of the query given the query ID.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: []const u8, project: []const u8, team: []const u8, time_precision: ?bool, @"$top": ?i32) !GetResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, id);

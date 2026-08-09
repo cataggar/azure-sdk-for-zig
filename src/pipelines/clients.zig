@@ -138,6 +138,7 @@ pub const Pipelines = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of pipelines.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, order_by: ?[]const u8, @"$top": ?i32, continuation_token: ?[]const u8) ![]const models.Pipeline {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -188,6 +189,7 @@ pub const Pipelines = struct {
     }
     /// Create a pipeline.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.CreatePipelineParameters) !models.Pipeline {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -223,6 +225,7 @@ pub const Pipelines = struct {
     }
     /// Gets a pipeline, optionally at the specified version
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, pipeline_id: i32, pipeline_version: ?i32) !models.Pipeline {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -267,6 +270,7 @@ pub const Preview = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Queues a dry run of the pipeline and returns an object containing the final yaml.
     pub fn preview(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, pipeline_id: i32, pipeline_version: ?i32, body: models.RunPipelineParameters) !models.PreviewRun {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -315,6 +319,7 @@ pub const Runs = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Gets top 10000 runs for a particular pipeline.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, pipeline_id: i32) ![]const models.Run {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -348,6 +353,7 @@ pub const Runs = struct {
     }
     /// Runs a pipeline.
     pub fn runPipeline(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, pipeline_id: i32, pipeline_version: ?i32, body: models.RunPipelineParameters) !models.Run {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -390,6 +396,7 @@ pub const Runs = struct {
     }
     /// Gets a run for a particular pipeline.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, pipeline_id: i32, run_id: i32) !models.Run {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -431,6 +438,7 @@ pub const Artifacts = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a specific artifact from a pipeline run
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, pipeline_id: i32, run_id: i32, artifact_name: []const u8, @"$expand": ?enums.GetRequestExpand) !models.Artifact {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -483,6 +491,7 @@ pub const Logs = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of logs from a pipeline run.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, pipeline_id: i32, run_id: i32, @"$expand": ?enums.ListRequestExpand) !models.LogCollection {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -525,6 +534,7 @@ pub const Logs = struct {
     }
     /// Get a specific log from a pipeline run
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, pipeline_id: i32, run_id: i32, log_id: i32, @"$expand": ?enums.GetRequestExpand1) !models.Log {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);

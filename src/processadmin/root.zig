@@ -6,3 +6,5 @@ const clients = @import("clients.zig");
 pub const models = @import("models.zig");
 pub const enums = @import("enums.zig");
 pub const WorkItemTrackingProcessTemplateClient = clients.WorkItemTrackingProcessTemplateClient;
+pub const Behaviors = clients.Behaviors;
+pub const Processes = clients.Processes;

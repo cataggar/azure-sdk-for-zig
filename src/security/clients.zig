@@ -138,6 +138,7 @@ pub const AccessControlEntries = struct {
     };
     /// Remove the specified ACEs from the ACL belonging to the specified token.
     pub fn removeAccessControlEntries(self: *@This(), alloc: std.mem.Allocator, security_namespace_id: []const u8, organization: []const u8, token: ?[]const u8, descriptors: ?[]const u8) !RemoveAccessControlEntriesResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, security_namespace_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);
@@ -193,6 +194,7 @@ pub const AccessControlEntries = struct {
     }
     /// Add or update ACEs in the ACL for the provided token. The request body contains the target token, a list of [ACEs](https://docs.microsoft.com/en-us/rest/api/azure/devops/security/access-control-entries/set-access-control-entries?#accesscontrolentry) and a optional merge parameter. In the case of a collision (by identity descriptor) with an existing ACE in the ACL, the 'merge' parameter determines the behavior. If set, the existing ACE has its allow and deny merged with the incoming ACE's allow and deny. If unset, the existing ACE is displaced. For optimal performance and reliability, it is strongly recommended to batch multiple ACEs in a single request rather than sending individual requests. Batching requests improves efficiency, reduces overhead, and helps ensure successful completion of your operations.
     pub fn setAccessControlEntries(self: *@This(), alloc: std.mem.Allocator, security_namespace_id: []const u8, organization: []const u8, body: models.JObject) ![]const models.AccessControlEntry {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, security_namespace_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);
@@ -242,6 +244,7 @@ pub const AccessControlLists = struct {
     };
     /// Remove access control lists under the specfied security namespace.
     pub fn removeAccessControlLists(self: *@This(), alloc: std.mem.Allocator, security_namespace_id: []const u8, organization: []const u8, tokens: ?[]const u8, recurse: ?bool) !RemoveAccessControlListsResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, security_namespace_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);
@@ -295,6 +298,7 @@ pub const AccessControlLists = struct {
     }
     /// Return a list of access control lists for the specified security namespace and token. All ACLs in the security namespace will be retrieved if no optional parameters are provided. Note that the response will include all project IDs, including projects the current user does not have access to.
     pub fn query(self: *@This(), alloc: std.mem.Allocator, security_namespace_id: []const u8, organization: []const u8, token: ?[]const u8, descriptors: ?[]const u8, include_extended_info: ?bool, recurse: ?bool) ![]const models.AccessControlList {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, security_namespace_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);
@@ -350,6 +354,7 @@ pub const AccessControlLists = struct {
     }
     /// Create or update one or more access control lists. All data that currently exists for the ACLs supplied will be overwritten.
     pub fn setAccessControlLists(self: *@This(), alloc: std.mem.Allocator, security_namespace_id: []const u8, organization: []const u8, body: models.VssJsonCollectionWrapper) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, security_namespace_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);
@@ -390,6 +395,7 @@ pub const Permissions = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Removes the specified permissions on a security token for a user or group.
     pub fn removePermission(self: *@This(), alloc: std.mem.Allocator, security_namespace_id: []const u8, descriptor: []const u8, organization: []const u8, permissions: i32, token: ?[]const u8) !models.AccessControlEntry {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, security_namespace_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);
@@ -434,6 +440,7 @@ pub const Permissions = struct {
     }
     /// Evaluates whether the caller has the specified permissions on the specified set of security tokens.
     pub fn hasPermissions(self: *@This(), alloc: std.mem.Allocator, security_namespace_id: []const u8, organization: []const u8, permissions: i32, tokens: ?[]const u8, always_allow_administrators: ?bool, delimiter: ?[]const u8) ![]const bool {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, security_namespace_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);
@@ -486,6 +493,7 @@ pub const Permissions = struct {
     }
     /// Evaluates multiple permissions for the calling user. Note: This method does not aggregate the results, nor does it short-circuit if one of the permissions evaluates to false.
     pub fn hasPermissionsBatch(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.PermissionEvaluationBatch) !models.PermissionEvaluationBatch {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/security/permissionevaluationbatch", .{ self.endpoint, encoded_path_0 });
@@ -525,6 +533,7 @@ pub const SecurityNamespaces = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// List all security namespaces or just the specified namespace.
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, security_namespace_id: []const u8, local_only: ?bool) ![]const models.SecurityNamespaceDescription {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, security_namespace_id);

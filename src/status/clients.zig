@@ -106,6 +106,7 @@ pub const Health = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Queries status information for the service all-up, or scoped to a particular service and/or geography
     pub fn get(self: *@This(), alloc: std.mem.Allocator, services: ?[]const u8, geographies: ?[]const u8) !models.ServiceStatus {
+        @setEvalBranchQuota(100_000);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/_apis/status/health", .{self.endpoint});
         defer alloc.free(base_url);
         var url_buf: std.ArrayList(u8) = .empty;

@@ -106,6 +106,7 @@ pub const Pats = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Revokes a personal access token (PAT) by authorizationId.
     pub fn revoke(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, authorization_id: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/tokens/pats", .{ self.endpoint, encoded_path_0 });
@@ -138,6 +139,7 @@ pub const Pats = struct {
     }
     /// Gets a single personal access token (PAT).
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, authorization_id: []const u8) !models.PatTokenResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/tokens/pats", .{ self.endpoint, encoded_path_0 });
@@ -171,6 +173,7 @@ pub const Pats = struct {
     }
     /// Creates a new personal access token (PAT) for the requesting user.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.PatTokenCreateRequest) !models.PatTokenResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/tokens/pats", .{ self.endpoint, encoded_path_0 });
@@ -204,6 +207,7 @@ pub const Pats = struct {
     }
     /// Updates an existing personal access token (PAT) with the new parameters. To update a token, it must be valid (has not been revoked).
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.PatTokenUpdateRequest) !models.PatTokenResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/tokens/pats", .{ self.endpoint, encoded_path_0 });

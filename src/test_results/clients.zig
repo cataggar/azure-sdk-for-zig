@@ -426,6 +426,7 @@ pub const Codecoverage = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// http://(tfsserver):8080/tfs/DefaultCollection/_apis/test/CodeCoverage?buildId=10&deltaBuildId=9 Request: build id and delta build id (optional)
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, delta_build_id: ?i32) !models.CodeCoverageSummary {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -464,6 +465,7 @@ pub const Codecoverage = struct {
     }
     /// http://(tfsserver):8080/tfs/DefaultCollection/_apis/test/CodeCoverage?buildId=10 Request: Json of code coverage summary
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, body: models.CodeCoverageData) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -500,6 +502,7 @@ pub const Codecoverage = struct {
     }
 
     pub fn fetchSourceCodeCoverageReport(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32) ![]const models.SourceViewBuildCoverage {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -533,6 +536,7 @@ pub const Codecoverage = struct {
     }
 
     pub fn getTestRunCodeCoverage(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, flags: i32) ![]const models.TestRunCoverage {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -584,6 +588,7 @@ pub const Filecoverage = struct {
     };
     /// Get file coverage for the specified file
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.FileCoverageRequest) !GetResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -650,6 +655,7 @@ pub const Status = struct {
     };
     /// <p>Gets the coverage status for the last successful build of a definition, optionally scoped to a specific branch</p>
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition: []const u8, branch_name: ?[]const u8, label: ?[]const u8) !GetResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -713,6 +719,7 @@ pub const Extensionfields = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Returns List of custom test fields for the given custom test field scope.
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, scope_filter: enums.QueryRequestScopeFilter) ![]const models.CustomTestFieldDefinition {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -748,6 +755,7 @@ pub const Extensionfields = struct {
     }
     /// Returns details of the custom test field which is updated.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.CustomTestFieldUpdateDefinition) !models.CustomTestFieldDefinition {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -783,6 +791,7 @@ pub const Extensionfields = struct {
     }
     /// Creates custom test fields based on the data provided.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: []const models.CustomTestFieldDefinition) ![]const models.CustomTestFieldDefinition {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -818,6 +827,7 @@ pub const Extensionfields = struct {
     }
     /// Returns details of the custom test field for the specified testExtensionFieldId.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, test_extension_field_id: i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -856,6 +866,7 @@ pub const Metrics = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get summary of test results.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, pipeline_id: i32, stage_name: ?[]const u8, phase_name: ?[]const u8, job_name: ?[]const u8, metric_names: ?[]const u8, group_by_node: ?bool) !models.PipelineTestMetrics {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -928,6 +939,7 @@ pub const Resultdetailsbybuild = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, publish_context: ?[]const u8, group_by: ?[]const u8, @"$filter": ?[]const u8, @"$orderby": ?[]const u8, should_include_results: ?bool, query_run_summary_for_in_progress: ?bool) !models.TestResultsDetails {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1005,6 +1017,7 @@ pub const Resultdetailsbyrelease = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, release_env_id: i32, publish_context: ?[]const u8, group_by: ?[]const u8, @"$filter": ?[]const u8, @"$orderby": ?[]const u8, should_include_results: ?bool, query_run_summary_for_in_progress: ?bool) !models.TestResultsDetails {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1084,6 +1097,7 @@ pub const Resultgroupsbybuild = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, publish_context: []const u8, fields: ?[]const u8, continuation_token: ?[]const u8) ![]const models.FieldDetailsForTestResults {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1141,6 +1155,7 @@ pub const Resultgroupsbyrelease = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, publish_context: []const u8, release_env_id: ?i32, fields: ?[]const u8, continuation_token: ?[]const u8) ![]const models.FieldDetailsForTestResults {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1203,6 +1218,7 @@ pub const Results = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn getTestResultsByQuery(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.TestResultsQuery) !models.TestResultsQuery {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1238,6 +1254,7 @@ pub const Results = struct {
     }
 
     pub fn getTestResultsByQueryWiql(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, include_result_details: ?bool, include_iteration_details: ?bool, @"$skip": ?i32, @"$top": ?i32, body: models.QueryModel) ![]const models.TestCaseResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1293,6 +1310,7 @@ pub const Results = struct {
     }
 
     pub fn getTestResults(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, details_to_include: ?enums.GetTestResultsRequestDetailsToInclude, @"$skip": ?i32, @"$top": ?i32, outcomes: ?[]const u8, @"$new_tests_only": ?bool) ![]const models.TestCaseResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1355,6 +1373,7 @@ pub const Results = struct {
     }
 
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, body: []const models.TestCaseResult) ![]const models.TestCaseResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1392,6 +1411,7 @@ pub const Results = struct {
     }
 
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, body: []const models.TestCaseResult) ![]const models.TestCaseResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1429,6 +1449,7 @@ pub const Results = struct {
     }
 
     pub fn getTestResultById(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, test_result_id: i32, details_to_include: ?enums.GetTestResultByIdRequestDetailsToInclude) !models.TestCaseResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1477,6 +1498,7 @@ pub const History = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.ResultsFilter) !models.TestResultHistory {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1518,6 +1540,7 @@ pub const ResultMetaData = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get list of test Result meta data details for corresponding testcasereferenceId
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, details_to_include: ?enums.QueryRequestDetailsToInclude, body: []const []const u8) ![]const models.TestResultMetaData {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1560,6 +1583,7 @@ pub const ResultMetaData = struct {
     }
     /// Update properties of test result meta data
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, test_case_reference_id: i32, body: models.TestResultMetaDataUpdateInput) !models.TestResultMetaData {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1603,6 +1627,7 @@ pub const TestHistory = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get history of a test method using TestHistoryQuery
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.TestHistoryQuery) !models.TestHistoryQuery {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1652,6 +1677,7 @@ pub const Workitems = struct {
     };
     /// Query Test Result WorkItems based on filter
     pub fn queryTestResultWorkItems(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_category: []const u8, automated_test_name: ?[]const u8, test_case_id: ?i32, max_complete_date: ?[]const u8, days: ?i32, @"$work_item_count": ?i32) ![]const models.WorkItemReference {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1716,6 +1742,7 @@ pub const Workitems = struct {
     }
 
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, test_case_result_id: i32) ![]const models.WorkItemReference {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1751,6 +1778,7 @@ pub const Workitems = struct {
     }
 
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, test_name: []const u8, work_item_id: i32) !DeleteResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1798,6 +1826,7 @@ pub const Workitems = struct {
     }
 
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.WorkItemToTestLinks) !models.WorkItemToTestLinks {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1839,6 +1868,7 @@ pub const Resultsbybuild = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, publish_context: ?[]const u8, outcomes: ?[]const u8, @"$top": ?i32, continuation_token: ?[]const u8) ![]const models.ShallowTestCaseResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1904,6 +1934,7 @@ pub const Resultsbypipeline = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of results.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, pipeline_id: i32, stage_name: ?[]const u8, phase_name: ?[]const u8, job_name: ?[]const u8, outcomes: ?[]const u8, include_all_build_runs: ?bool, @"$top": ?i32, continuation_token: ?[]const u8) ![]const models.ShallowTestCaseResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1982,6 +2013,7 @@ pub const Resultsbyrelease = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, release_envid: ?i32, publish_context: ?[]const u8, outcomes: ?[]const u8, @"$top": ?i32, continuation_token: ?[]const u8) ![]const models.ShallowTestCaseResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2052,6 +2084,7 @@ pub const ResultsgroupDetails = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get all the available groups details and for these groups get failed and aborted results.
     pub fn testResultsGroupDetails(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, pipeline_id: i32, stage_name: ?[]const u8, phase_name: ?[]const u8, job_name: ?[]const u8, should_include_failed_and_aborted_results: ?bool, query_group_summary_for_in_progress: ?bool) !models.TestResultsDetails {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2122,6 +2155,7 @@ pub const Resultsummarybybuild = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, publish_context: ?[]const u8, include_failure_details: ?bool, build_to_compare_branch_name: ?[]const u8, build_to_compare_build_system: ?[]const u8, build_to_compare_definition_id: ?i32, build_to_compare_id: ?i32, build_to_compare_number: ?[]const u8, build_to_compare_repository_id: ?[]const u8, build_to_compare_uri: ?[]const u8) !models.TestResultSummary {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2218,6 +2252,7 @@ pub const Resultsummarybypipeline = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get summary of test results.
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, pipeline_id: i32, stage_name: ?[]const u8, phase_name: ?[]const u8, job_name: ?[]const u8, include_failure_details: ?bool) !models.TestResultSummary {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2283,6 +2318,7 @@ pub const Resultsummarybyrelease = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn queryTestResultsReportForRelease(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, release_env_id: i32, publish_context: ?[]const u8, include_failure_details: ?bool, release_to_compare_attempt: ?i32, release_to_compare_creation_date: ?[]const u8, release_to_compare_definition_id: ?i32, release_to_compare_environment_creation_date: ?[]const u8, release_to_compare_environment_definition_id: ?i32, release_to_compare_environment_definition_name: ?[]const u8, release_to_compare_environment_id: ?i32, release_to_compare_environment_name: ?[]const u8, release_to_compare_id: ?i32, release_to_compare_name: ?[]const u8) !models.TestResultSummary {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2390,6 +2426,7 @@ pub const Resultsummarybyrelease = struct {
     }
 
     pub fn queryTestResultsSummaryForReleases(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: []const models.ReleaseReference) ![]const models.TestResultSummary {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2431,6 +2468,7 @@ pub const Resultsummarybyrequirement = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_ids: ?[]const u8, body: models.TestResultsContext) ![]const models.TestSummaryForWorkItem {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2479,6 +2517,7 @@ pub const ResultTrendByBuild = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.TestResultTrendFilter) ![]const models.AggregatedDataForResultTrend {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2520,6 +2559,7 @@ pub const ResultTrendByRelease = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.TestResultTrendFilter) ![]const models.AggregatedDataForResultTrend {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2561,6 +2601,7 @@ pub const Runs = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_uri: ?[]const u8, owner: ?[]const u8, tmi_run_id: ?[]const u8, plan_id: ?i32, include_run_details: ?bool, automated: ?bool, @"$skip": ?i32, @"$top": ?i32) ![]const models.TestRun {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2638,6 +2679,7 @@ pub const Runs = struct {
     }
 
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.RunCreateModel) !models.TestRun {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2673,6 +2715,7 @@ pub const Runs = struct {
     }
 
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2705,6 +2748,7 @@ pub const Runs = struct {
     }
 
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, include_details: ?bool, include_tags: ?bool) !models.TestRun {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2748,6 +2792,7 @@ pub const Runs = struct {
     }
 
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, body: models.RunUpdateModel) !models.TestRun {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2811,6 +2856,7 @@ pub const Attachments = struct {
     };
 
     pub fn getTestRunAttachments(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32) ![]const models.TestAttachment {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2844,6 +2890,7 @@ pub const Attachments = struct {
     }
 
     pub fn createTestRunAttachment(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, body: models.TestAttachmentRequestModel) !models.TestAttachmentReference {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2881,6 +2928,7 @@ pub const Attachments = struct {
     }
 
     pub fn deleteTestRunAttachment(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, attachment_id: i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2915,6 +2963,7 @@ pub const Attachments = struct {
     }
     /// Returns a test run attachment
     pub fn getTestRunAttachmentZip(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, attachment_id: i32) !GetTestRunAttachmentZipResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2967,6 +3016,7 @@ pub const Attachments = struct {
     }
 
     pub fn getTestResultAttachments(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, test_case_result_id: i32) ![]const models.TestAttachment {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3002,6 +3052,7 @@ pub const Attachments = struct {
     }
 
     pub fn createTestResultAttachment(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, test_case_result_id: i32, body: models.TestAttachmentRequestModel) !models.TestAttachmentReference {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3041,6 +3092,7 @@ pub const Attachments = struct {
     }
 
     pub fn deleteTestResultAttachment(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, test_case_result_id: i32, attachment_id: i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3077,6 +3129,7 @@ pub const Attachments = struct {
     }
     /// Returns a test result attachment
     pub fn getTestResultAttachmentZip(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, test_case_result_id: i32, attachment_id: i32) !GetTestResultAttachmentZipResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3137,6 +3190,7 @@ pub const MessageLogs = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get test run message logs
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32) ![]const models.TestMessageLogDetails {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3176,6 +3230,7 @@ pub const ResultDocument = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn publishTestResultDocument(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, body: models.TestResultDocument) !models.TestResultDocument {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3219,6 +3274,7 @@ pub const Testlog = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get list of test result attachments reference
     pub fn getTestResultLogs(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, result_id: i32, directory_path: ?[]const u8, file_name_prefix: ?[]const u8, fetch_meta_data: ?bool, top: ?i32, continuation_token: ?[]const u8) ![]const models.TestLog {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3283,6 +3339,7 @@ pub const Testlog = struct {
     }
     /// Get list of test run attachments reference
     pub fn getTestRunLogs(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, directory_path: ?[]const u8, file_name_prefix: ?[]const u8, fetch_meta_data: ?bool, top: ?i32, continuation_token: ?[]const u8) ![]const models.TestLog {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3345,6 +3402,7 @@ pub const Testlog = struct {
     }
     /// Get list of build attachments reference
     pub fn getTestLogsForBuild(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, directory_path: ?[]const u8, file_name_prefix: ?[]const u8, fetch_meta_data: ?bool, top: ?i32, continuation_token: ?[]const u8) ![]const models.TestLog {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3413,6 +3471,7 @@ pub const Testlogstoreendpoint = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get SAS Uri of a test results attachment
     pub fn getTestLogStoreEndpointDetailsForResultLog(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, result_id: i32, file_path: []const u8) !models.TestLogStoreEndpointDetails {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3456,6 +3515,7 @@ pub const Testlogstoreendpoint = struct {
     }
     /// Create empty file for a result and Get Sas uri for the file
     pub fn testLogStoreEndpointDetailsForResult(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, result_id: i32, sub_result_id: i32, file_path: []const u8) !models.TestLogStoreEndpointDetails {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3501,6 +3561,7 @@ pub const Testlogstoreendpoint = struct {
     }
     /// Get SAS Uri of a test run attachment
     pub fn getTestLogStoreEndpointDetailsForRunLog(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, file_path: []const u8) !models.TestLogStoreEndpointDetails {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3542,6 +3603,7 @@ pub const Testlogstoreendpoint = struct {
     }
     /// Create empty file for a run and Get Sas uri for the file
     pub fn testLogStoreEndpointDetailsForRun(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, file_path: ?[]const u8) !models.TestLogStoreEndpointDetails {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3590,6 +3652,7 @@ pub const Testlogstoreendpoint = struct {
     }
     /// Get SAS Uri of a build attachment
     pub fn getTestLogStoreEndpointDetailsForBuildLog(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build: i32, file_path: []const u8) !models.TestLogStoreEndpointDetails {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3631,6 +3694,7 @@ pub const Testlogstoreendpoint = struct {
     }
     /// Create and Get sas uri of the build container
     pub fn testLogStoreEndpointDetailsForBuild(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32) !models.TestLogStoreEndpointDetails {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3674,6 +3738,7 @@ pub const Bugs = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, test_case_result_id: i32) ![]const models.WorkItemReference {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3715,6 +3780,7 @@ pub const SimilarTestResults = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Gets the list of results whose failure matches with the provided one.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, test_result_id: i32, test_sub_result_id: i32, @"$top": ?i32, continuation_token: ?[]const u8) ![]const models.TestCaseResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3764,6 +3830,7 @@ pub const Runsummary = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get test run summary, used when we want to get summary of a run by outcome. Test run should be in completed state.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32) !models.TestRunStatistic {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3803,6 +3870,7 @@ pub const Statistics = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get test run statistics , used when we want to get summary of a run by outcome.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32) !models.TestRunStatistic {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3842,6 +3910,7 @@ pub const Tags = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Update tags of a run, Tags can be Added and Deleted
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, body: models.TestTagsUpdateModel) ![]const models.TestTag {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3879,6 +3948,7 @@ pub const Tags = struct {
     }
     /// Get all the tags in a build.
     pub fn getTestTagsForBuild(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32) ![]const models.TestTag {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3918,6 +3988,7 @@ pub const Testattachments = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Deletes the attachment with the specified filename for the specified runId from the LogStore.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, filename: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3954,6 +4025,7 @@ pub const Testattachments = struct {
     }
     /// Returns a list of attachments for the specified runId from the LogStore.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32) ![]const models.TestLogStoreAttachment {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -3987,6 +4059,7 @@ pub const Testattachments = struct {
     }
     /// Creates an attachment in the LogStore for the specified runId.
     pub fn createTestRunLogStoreAttachment(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, body: models.TestAttachmentRequestModel) !models.TestLogStoreAttachmentReference {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -4024,6 +4097,7 @@ pub const Testattachments = struct {
     }
     /// Creates an attachment in the LogStore for the specified buildId.
     pub fn createBuildAttachmentInLogStore(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, body: models.TestAttachmentRequestModel) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -4066,6 +4140,7 @@ pub const Settings = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get TestResultsSettings data
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, settings_type: ?enums.GetRequestSettingsType) !models.TestResultsSettings {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -4104,6 +4179,7 @@ pub const Settings = struct {
     }
     /// Update project settings of test results
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.TestResultsUpdateSettings) !models.TestResultsSettings {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -4145,6 +4221,7 @@ pub const Tagsummary = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get all the tags in a build.
     pub fn getTestTagSummaryForBuild(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32) !models.TestTagSummary {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -4192,6 +4269,7 @@ pub const Testai = struct {
     };
     /// OAuth callback endpoint. GitHub redirects here after user authorizes. Exchanges the authorization code for tokens and stores them in TCM StrongBox. Requires the callback URL to be registered in the GitHub OAuth App settings.
     pub fn completeGitHubAuth(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, code: []const u8) !CompleteGitHubAuthResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -4243,6 +4321,7 @@ pub const Testfailuretype = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Returns the list of test failure types.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.TestResultFailureType {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -4274,6 +4353,7 @@ pub const Testfailuretype = struct {
     }
     /// Creates a new test failure type
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.TestResultFailureTypeRequestModel) !models.TestResultFailureType {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -4309,6 +4389,7 @@ pub const Testfailuretype = struct {
     }
     /// Deletes a test failure type with specified failureTypeId
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, failure_type_id: i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -4355,6 +4436,7 @@ pub const Testsettings = struct {
     };
 
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, test_settings_id: i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -4387,6 +4469,7 @@ pub const Testsettings = struct {
     }
 
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, test_settings_id: i32) !models.TestSettings {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -4420,6 +4503,7 @@ pub const Testsettings = struct {
     }
 
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.TestSettings) !CreateResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);

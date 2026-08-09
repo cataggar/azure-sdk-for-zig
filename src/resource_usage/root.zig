@@ -6,3 +6,5 @@ const clients = @import("clients.zig");
 pub const models = @import("models.zig");
 pub const enums = @import("enums.zig");
 pub const ResourceUsageClient = clients.ResourceUsageClient;
+pub const TeamProjectCollection = clients.TeamProjectCollection;
+pub const Project = clients.Project;

@@ -162,6 +162,7 @@ pub const Approvals = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of approvals
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, assigned_to_filter: ?[]const u8, status_filter: ?enums.ListRequestStatusFilter, release_ids_filter: ?[]const u8, type_filter: ?enums.ListRequestTypeFilter, top: ?i32, continuation_token: ?i32, query_order: ?enums.ListRequestQueryOrder, include_my_group_approvals: ?bool) ![]const models.ReleaseApproval {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -243,6 +244,7 @@ pub const Approvals = struct {
     }
     /// Update status of an approval
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, approval_id: i32, body: models.ReleaseApproval) !models.ReleaseApproval {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -296,6 +298,7 @@ pub const Definitions = struct {
     };
     /// Get a list of release definitions.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, search_text: ?[]const u8, @"$expand": ?enums.ListRequestExpand, artifact_type: ?[]const u8, artifact_source_id: ?[]const u8, @"$top": ?i32, continuation_token: ?[]const u8, query_order: ?enums.ListRequestQueryOrder1, path: ?[]const u8, is_exact_name_match: ?bool, tag_filter: ?[]const u8, property_filters: ?[]const u8, definition_id_filter: ?[]const u8, is_deleted: ?bool, search_text_contains_folder_name: ?bool) ![]const models.ReleaseDefinition {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -417,6 +420,7 @@ pub const Definitions = struct {
     }
     /// Create a release definition
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.ReleaseDefinition) !models.ReleaseDefinition {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -452,6 +456,7 @@ pub const Definitions = struct {
     }
     /// Update a release definition.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, skip_tasks_validation: ?bool, body: models.ReleaseDefinition) !models.ReleaseDefinition {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -492,6 +497,7 @@ pub const Definitions = struct {
     }
     /// Delete a release definition.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: i32, comment: ?[]const u8, force_delete: ?bool) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -536,6 +542,7 @@ pub const Definitions = struct {
     }
     /// Get a release definition.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: i32, property_filters: ?[]const u8, include_disabled: ?bool) !models.ReleaseDefinition {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -581,6 +588,7 @@ pub const Definitions = struct {
     }
     /// Get revision history for a release definition
     pub fn getReleaseDefinitionHistory(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: i32) ![]const models.ReleaseDefinitionRevision {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -614,6 +622,7 @@ pub const Definitions = struct {
     }
     /// Get release definition for a given definitionId and revision
     pub fn getDefinitionRevision(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: i32, revision: i32) !GetDefinitionRevisionResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -672,6 +681,7 @@ pub const Deployments = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of deployments
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: ?i32, definition_environment_id: ?i32, created_by: ?[]const u8, min_modified_time: ?[]const u8, max_modified_time: ?[]const u8, deployment_status: ?enums.ListRequestDeploymentStatus, operation_status: ?enums.ListRequestOperationStatus, latest_attempts_only: ?bool, query_order: ?enums.ListRequestQueryOrder2, @"$top": ?i32, continuation_token: ?i32, created_for: ?[]const u8, min_started_time: ?[]const u8, max_started_time: ?[]const u8, source_branch: ?[]const u8) ![]const models.Deployment {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -804,6 +814,7 @@ pub const Folders = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Deletes a definition folder for given folder name and path and all it's existing definitions.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, path: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -836,6 +847,7 @@ pub const Folders = struct {
     }
     /// Gets folders.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, path: []const u8, query_order: ?enums.ListRequestQueryOrder3) ![]const models.Folder {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -876,6 +888,7 @@ pub const Folders = struct {
     }
     /// Updates an existing folder at given existing path.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, path: []const u8, body: models.Folder) !models.Folder {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -913,6 +926,7 @@ pub const Folders = struct {
     }
     /// This method is no longer supported. Use CreateFolder with folder parameter API.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, path: []const u8, body: models.Folder) !models.Folder {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -956,6 +970,7 @@ pub const Gates = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Updates the gate for a deployment.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, gate_step_id: i32, body: models.GateUpdateMetadata) !models.ReleaseGates {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1029,6 +1044,7 @@ pub const Releases = struct {
     };
     /// Get a list of releases
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: ?i32, definition_environment_id: ?i32, search_text: ?[]const u8, created_by: ?[]const u8, status_filter: ?enums.ListRequestStatusFilter1, environment_status_filter: ?i32, min_created_time: ?[]const u8, max_created_time: ?[]const u8, query_order: ?enums.ListRequestQueryOrder4, @"$top": ?i32, continuation_token: ?i32, @"$expand": ?enums.ListRequestExpand1, artifact_type_id: ?[]const u8, source_id: ?[]const u8, artifact_version_id: ?[]const u8, source_branch_filter: ?[]const u8, is_deleted: ?bool, tag_filter: ?[]const u8, property_filters: ?[]const u8, release_id_filter: ?[]const u8, path: ?[]const u8) ![]const models.Release {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1195,6 +1211,7 @@ pub const Releases = struct {
     }
     /// Create a release.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.ReleaseStartMetadata) !models.Release {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1230,6 +1247,7 @@ pub const Releases = struct {
     }
     /// Get release for a given revision number.
     pub fn getReleaseRevision(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, definition_snapshot_revision: i32) !GetReleaseRevisionResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1282,6 +1300,7 @@ pub const Releases = struct {
     }
     /// Update few properties of a release.
     pub fn updateReleaseResource(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, body: models.ReleaseUpdateMetadata) !models.Release {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1319,6 +1338,7 @@ pub const Releases = struct {
     }
     /// Update a complete release object.
     pub fn updateRelease(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, body: models.Release) !models.Release {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1356,6 +1376,7 @@ pub const Releases = struct {
     }
     /// Get a release environment.
     pub fn getReleaseEnvironment(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, environment_id: i32, @"$expand": ?enums.GetReleaseEnvironmentRequestExpand) !models.ReleaseEnvironment {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1398,6 +1419,7 @@ pub const Releases = struct {
     }
     /// Update the status of a release environment
     pub fn updateReleaseEnvironment(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, environment_id: i32, body: models.ReleaseEnvironmentUpdateMetadata) !models.ReleaseEnvironment {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1437,6 +1459,7 @@ pub const Releases = struct {
     }
     /// Gets the task log of a release as a plain text file.
     pub fn getTaskLog(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, environment_id: i32, release_deploy_phase_id: i32, task_id: i32, start_line: ?i64, end_line: ?i64) !GetTaskLogResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1503,6 +1526,7 @@ pub const Releases = struct {
     }
     /// Get logs for a release Id.
     pub fn getLogs(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32) !GetLogsResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1579,6 +1603,7 @@ pub const Attachments = struct {
     };
     /// Get the release task attachments.
     pub fn getReleaseTaskAttachments(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, environment_id: i32, attempt_id: i32, plan_id: []const u8, @"type": []const u8) ![]const models.ReleaseTaskAttachment {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1620,6 +1645,7 @@ pub const Attachments = struct {
     }
     /// Get a release task attachment.
     pub fn getReleaseTaskAttachmentContent(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, environment_id: i32, attempt_id: i32, plan_id: []const u8, timeline_id: []const u8, record_id: []const u8, @"type": []const u8, name: []const u8) !GetReleaseTaskAttachmentContentResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1684,6 +1710,7 @@ pub const Attachments = struct {
     }
     /// GetTaskAttachments API is deprecated. Use GetReleaseTaskAttachments API instead.
     pub fn getTaskAttachments(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, environment_id: i32, attempt_id: i32, timeline_id: []const u8, @"type": []const u8) ![]const models.ReleaseTaskAttachment {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1725,6 +1752,7 @@ pub const Attachments = struct {
     }
     /// GetTaskAttachmentContent API is deprecated. Use GetReleaseTaskAttachmentContent API instead.
     pub fn getTaskAttachmentContent(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, environment_id: i32, attempt_id: i32, timeline_id: []const u8, record_id: []const u8, @"type": []const u8, name: []const u8) !GetTaskAttachmentContentResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1793,6 +1821,7 @@ pub const ManualInterventions = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// List all manual interventions for a given release.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32) ![]const models.ManualIntervention {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1826,6 +1855,7 @@ pub const ManualInterventions = struct {
     }
     /// Get manual intervention for a given release and manual intervention id.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, manual_intervention_id: i32) !models.ManualIntervention {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1861,6 +1891,7 @@ pub const ManualInterventions = struct {
     }
     /// Update manual intervention.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, manual_intervention_id: i32, body: models.ManualInterventionUpdateMetadata) !models.ManualIntervention {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);

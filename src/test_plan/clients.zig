@@ -202,6 +202,7 @@ pub const TestSuites = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Find the list of all test suites in which a given test case is present. This is helpful if you need to find out which test suites are using a test case, when you need to make changes to a test case.
     pub fn getSuitesByTestCaseId(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, test_case_id: i32) ![]const models.TestSuite {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/testplan/suites", .{ self.endpoint, encoded_path_0 });
@@ -233,6 +234,7 @@ pub const TestSuites = struct {
     }
     /// Get test suites for plan.
     pub fn getTestSuitesForPlan(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, expand: ?enums.GetTestSuitesForPlanRequestExpand, continuation_token: ?[]const u8, as_tree_view: ?bool) ![]const models.TestSuite {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -285,6 +287,7 @@ pub const TestSuites = struct {
     }
     /// Create test suite.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, body: models.TestSuiteCreateParams) !models.TestSuite {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -322,6 +325,7 @@ pub const TestSuites = struct {
     }
     /// Delete test suite.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -356,6 +360,7 @@ pub const TestSuites = struct {
     }
     /// Get test suite by suite id.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32, expand: ?enums.GetRequestExpand) !models.TestSuite {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -398,6 +403,7 @@ pub const TestSuites = struct {
     }
     /// Update test suite.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32, body: models.TestSuiteUpdateParams) !models.TestSuite {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -443,6 +449,7 @@ pub const Configurations = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Delete a test configuration by its ID.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, test_configuartion_id: i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -475,6 +482,7 @@ pub const Configurations = struct {
     }
     /// Get a list of test configurations.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, continuation_token: ?[]const u8) ![]const models.TestConfiguration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -513,6 +521,7 @@ pub const Configurations = struct {
     }
     /// Update a test configuration by its ID.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, test_configuartion_id: i32, body: models.TestConfigurationCreateUpdateParameters) !models.TestConfiguration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -550,6 +559,7 @@ pub const Configurations = struct {
     }
     /// Create a test configuration.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.TestConfigurationCreateUpdateParameters) !models.TestConfiguration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -585,6 +595,7 @@ pub const Configurations = struct {
     }
     /// Get a test configuration
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, test_configuration_id: i32) !models.TestConfiguration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -624,6 +635,7 @@ pub const TestPlans = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of test plans
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, owner: ?[]const u8, continuation_token: ?[]const u8, include_plan_details: ?bool, filter_active_plans: ?bool) ![]const models.TestPlan {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -679,6 +691,7 @@ pub const TestPlans = struct {
     }
     /// Create a test plan.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.TestPlanCreateParams) !models.TestPlan {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -714,6 +727,7 @@ pub const TestPlans = struct {
     }
     /// Delete a test plan.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -746,6 +760,7 @@ pub const TestPlans = struct {
     }
     /// Get a test plan by Id.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32) !models.TestPlan {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -779,6 +794,7 @@ pub const TestPlans = struct {
     }
     /// Update a test plan.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, body: models.TestPlanUpdateParams) !models.TestPlan {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -822,6 +838,7 @@ pub const SuiteTestCase = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Removes test cases from a suite based on the list of test case Ids provided. This API can be used to remove a larger number of test cases.
     pub fn removeTestCasesListFromSuite(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32, test_ids: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -860,6 +877,7 @@ pub const SuiteTestCase = struct {
     }
     /// Get Test Case List return those test cases which have all the configuration Ids as mentioned in the optional parameter. If configuration Ids is null, it return all the test cases
     pub fn getTestCaseList(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32, test_ids: ?[]const u8, configuration_ids: ?[]const u8, wit_fields: ?[]const u8, continuation_token: ?[]const u8, return_identity_ref: ?bool, expand: ?bool, exclude_flags: ?enums.GetTestCaseListRequestExcludeFlags, is_recursive: ?bool) ![]const models.TestCase {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -945,6 +963,7 @@ pub const SuiteTestCase = struct {
     }
     /// Update the configurations for test cases
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32, body: []const models.SuiteTestCaseCreateUpdateParameters) ![]const models.TestCase {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -984,6 +1003,7 @@ pub const SuiteTestCase = struct {
     }
     /// Add test cases to a suite with specified configurations
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32, body: []const models.SuiteTestCaseCreateUpdateParameters) ![]const models.TestCase {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1023,6 +1043,7 @@ pub const SuiteTestCase = struct {
     }
     /// Get a particular Test Case from a Suite.
     pub fn getTestCase(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32, test_case_id: []const u8, wit_fields: ?[]const u8, return_identity_ref: ?bool) ![]const models.TestCase {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1078,6 +1099,7 @@ pub const TestPointOperations = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a particular Test Point from a suite.
     pub fn getPoints(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32, point_id: []const u8, return_identity_ref: ?bool, include_point_details: ?bool) ![]const models.TestPoint {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1127,6 +1149,7 @@ pub const TestPointOperations = struct {
     }
     /// Update Test Points. This is used to Reset test point to active, update the outcome of a test point or update the tester of a test point
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32, include_point_details: ?bool, return_identity_ref: ?bool, body: []const models.TestPointUpdateParams) ![]const models.TestPoint {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1182,6 +1205,7 @@ pub const TestPlanClone = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Clone test plan
     pub fn cloneTestPlan(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, deep_clone: ?bool, body: models.CloneTestPlanParams) !models.CloneTestPlanOperationInformation {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1222,6 +1246,7 @@ pub const TestPlanClone = struct {
     }
     /// Get clone information.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, clone_operation_id: i32) !models.CloneTestPlanOperationInformation {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1261,6 +1286,7 @@ pub const TestPlanRecycleBin = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of deleted test plans
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, continuation_token: ?[]const u8) ![]const models.TestPlan {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1299,6 +1325,7 @@ pub const TestPlanRecycleBin = struct {
     }
     /// Restores the deleted test plan
     pub fn restoreDeletedTestPlan(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, body: models.TestPlanAndSuiteRestoreModel) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1341,6 +1368,7 @@ pub const TestSuiteRecycleBinOperations = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get Deleted Test Suites for a Test Plan.
     pub fn getDeletedTestSuitesForPlan(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, expand: ?enums.GetDeletedTestSuitesForPlanRequestExpand, continuation_token: ?[]const u8, as_tree_view: ?bool) ![]const models.TestSuite {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1393,6 +1421,7 @@ pub const TestSuiteRecycleBinOperations = struct {
     }
     /// Get Deleted Test Suites within a Project.
     pub fn getDeletedTestSuitesForProject(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, expand: ?enums.GetDeletedTestSuitesForProjectRequestExpand, continuation_token: ?[]const u8, as_tree_view: ?bool) ![]const models.TestSuite {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1443,6 +1472,7 @@ pub const TestSuiteRecycleBinOperations = struct {
     }
     /// Restores the deleted test suite
     pub fn restoreDeletedTestSuite(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, suite_id: i32, body: models.TestPlanAndSuiteRestoreModel) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1485,6 +1515,7 @@ pub const TestSuiteEntry = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of test suite entries in the test suite.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, suite_id: i32, suite_entry_type: ?enums.ListRequestSuiteEntryType) ![]const models.SuiteEntry {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1525,6 +1556,7 @@ pub const TestSuiteEntry = struct {
     }
     /// Reorder test suite entries in the test suite.
     pub fn reorderSuiteEntries(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, suite_id: i32, body: []const models.SuiteEntryUpdateParams) ![]const models.SuiteEntry {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1568,6 +1600,7 @@ pub const TestSuiteClone = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Clone test suite
     pub fn cloneTestSuite(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, deep_clone: ?bool, body: models.CloneTestSuiteParams) !models.CloneTestSuiteOperationInformation {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1608,6 +1641,7 @@ pub const TestSuiteClone = struct {
     }
     /// Get clone information.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, clone_operation_id: i32) !models.CloneTestSuiteOperationInformation {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1647,6 +1681,7 @@ pub const TestCases = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Delete a test case.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, test_case_id: i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1685,6 +1720,7 @@ pub const TestCaseClone = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn cloneTestCase(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.CloneTestCaseParams) !models.CloneTestCaseOperationInformation {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1720,6 +1756,7 @@ pub const TestCaseClone = struct {
     }
     /// Get clone information.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, clone_operation_id: i32) !models.CloneTestCaseOperationInformation {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1759,6 +1796,7 @@ pub const Variables = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of test variables.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, continuation_token: ?[]const u8) ![]const models.TestVariable {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1797,6 +1835,7 @@ pub const Variables = struct {
     }
     /// Create a test variable.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.TestVariableCreateUpdateParameters) !models.TestVariable {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1832,6 +1871,7 @@ pub const Variables = struct {
     }
     /// Delete a test variable by its ID.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, test_variable_id: i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1864,6 +1904,7 @@ pub const Variables = struct {
     }
     /// Get a test variable by its ID.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, test_variable_id: i32) !models.TestVariable {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1897,6 +1938,7 @@ pub const Variables = struct {
     }
     /// Update a test variable by its ID.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, test_variable_id: i32, body: models.TestVariableCreateUpdateParameters) !models.TestVariable {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);

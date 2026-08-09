@@ -234,6 +234,7 @@ pub const FiltersSettings = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Gets all advanced filters for the organization.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, include_deleted: ?bool, keywords: ?[]const u8) ![]const models.AdvancedFilter {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/reporting/filtersSettings/alertsbatch", .{ self.endpoint, encoded_path_0 });
@@ -275,6 +276,7 @@ pub const FiltersSettings = struct {
     }
     /// Creates a new advanced filter for the organization.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.AdvancedFilterCreate) !models.AdvancedFilter {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/reporting/filtersSettings/alertsbatch", .{ self.endpoint, encoded_path_0 });
@@ -308,6 +310,7 @@ pub const FiltersSettings = struct {
     }
     /// Deletes an advanced filter.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, filter_id: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, filter_id);
@@ -338,6 +341,7 @@ pub const FiltersSettings = struct {
     }
     /// Gets a specific advanced filter by its ID.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, filter_id: []const u8) !models.AdvancedFilter {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, filter_id);
@@ -369,6 +373,7 @@ pub const FiltersSettings = struct {
     }
     /// Updates an advanced filter. Only the name can be updated.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, filter_id: []const u8, body: models.AdvancedFilterUpdate) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, filter_id);
@@ -409,6 +414,7 @@ pub const SummaryDashboard = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get Alert summary by severity for the org
     pub fn getAlertSummaryForOrg(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, criteria_alert_types: ?[]const []const u8, criteria_keywords: ?[]const u8, @"criteria.period": ?enums.GetAlertSummaryForOrgRequestCriteriaPeriod, criteria_projects: ?[]const []const u8, criteria_severities: ?[]const []const u8) !models.OrgAlertSummary {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/reporting/summary/alerts", .{ self.endpoint, encoded_path_0 });
@@ -497,6 +503,7 @@ pub const SummaryDashboard = struct {
     }
     /// Get Combined Alerts for the org
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, @"criteria.alert_type": ?enums.ListRequestCriteriaAlertType, @"criteria.alert_validity_status": ?enums.ListRequestCriteriaAlertValidityStatus, criteria_component_names: ?[]const []const u8, criteria_component_types: ?[]const []const u8, criteria_dismissal_types: ?[]const []const u8, criteria_fixed_date_end: ?[]const u8, criteria_fixed_date_start: ?[]const u8, criteria_introduced_date_end: ?[]const u8, criteria_introduced_date_start: ?[]const u8, criteria_keywords: ?[]const u8, criteria_projects: ?[]const []const u8, criteria_repositories: ?[]const []const u8, criteria_repository_ids: ?[]const []const u8, criteria_rule_names: ?[]const []const u8, criteria_secret_types: ?[]const []const u8, criteria_severities: ?[]const []const u8, @"criteria.state": ?enums.ListRequestCriteriaState, criteria_tool_names: ?[]const []const u8, top: ?i32, continuation_token: ?[]const u8) ![]const models.DashboardAlert {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/reporting/summary/alertsbatch", .{ self.endpoint, encoded_path_0 });
@@ -744,6 +751,7 @@ pub const SummaryDashboard = struct {
     }
     /// Get Enablement summary for the org
     pub fn getEnablementSummaryForOrg(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, criteria_keywords: ?[]const u8, criteria_projects: ?[]const []const u8, criteria_states_any_tool: ?bool, criteria_states_code_alerts: ?bool, criteria_states_code_pr_alerts: ?bool, criteria_states_dependency_alerts: ?bool, criteria_states_dependency_pr_alerts: ?bool, criteria_states_push_protection: ?bool, criteria_states_secret_alerts: ?bool) !models.OrgEnablementSummary {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/reporting/summary/enablement", .{ self.endpoint, encoded_path_0 });
@@ -836,6 +844,7 @@ pub const Alerts = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get alerts for a repository
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository: []const u8, top: ?i32, order_by: ?[]const u8, criteria_alert_ids: ?[]const i64, @"criteria.alert_type": ?enums.ListRequestCriteriaAlertType, criteria_confidence_levels: ?[]const []const u8, criteria_dependency_name: ?[]const u8, criteria_from_date: ?[]const u8, criteria_has_linked_work_items: ?bool, criteria_is_triaged: ?bool, criteria_keywords: ?[]const u8, criteria_license_name: ?[]const u8, criteria_modified_since: ?[]const u8, criteria_only_default_branch: ?bool, criteria_phase_id: ?[]const u8, criteria_phase_name: ?[]const u8, criteria_pipeline_id: ?i32, criteria_pipeline_name: ?[]const u8, criteria_ref: ?[]const u8, criteria_rule_id: ?[]const u8, criteria_rule_name: ?[]const u8, criteria_severities: ?[]const []const u8, criteria_states: ?[]const []const u8, criteria_to_date: ?[]const u8, criteria_tool_name: ?[]const u8, criteria_validity: ?[]const []const u8, expand: ?enums.ListRequestExpand, continuation_token: ?[]const u8) ![]const models.Alert {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1088,6 +1097,7 @@ pub const Alerts = struct {
     }
     /// Get an alert.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, alert_id: i64, repository: []const u8, ref: ?[]const u8, expand: ?enums.GetRequestExpand) !models.Alert {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1137,6 +1147,7 @@ pub const Alerts = struct {
     }
     /// Update the status of an alert
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, alert_id: i64, repository: []const u8, body: models.AlertStateUpdate) !models.Alert {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1182,6 +1193,7 @@ pub const Instances = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get instances of an alert on a branch specified with @ref. If @ref is not provided, return instances of an alert on default branch(if the alert exist in default branch) or latest affected branch.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, alert_id: i64, repository: []const u8, ref: ?[]const u8) ![]const models.AlertAnalysisInstance {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1230,6 +1242,7 @@ pub const Metadata2 = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get an alert metadata.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, alert_id: i64, repository: []const u8) !models.AlertMetadata {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1271,6 +1284,7 @@ pub const MetadataBatch = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get alerts metadata.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository: []const u8, body: models.AlertMetadataBatchRequest) ![]const models.AlertMetadata {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1314,6 +1328,7 @@ pub const AlertsBatch = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get alerts by alert IDs Currently supports fetching secret alerts only.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository: []const u8, body: models.AlertBatchRequest) ![]const models.Alert {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1357,6 +1372,7 @@ pub const Analysis = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Returns the branches for which analysis results were submitted.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository: []const u8, alert_type: enums.ListRequestAlertType, continuation_token: ?[]const u8, branch_name_contains: ?[]const u8, top: ?i32, include_pull_request_branches: ?bool) ![]const models.Branch {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1424,6 +1440,7 @@ pub const PipelineAnalyses = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Soft-deletes analysis data for all pipelines in a repository, cleaning up the associated Advanced Security alerts.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1462,6 +1479,7 @@ pub const PipelineAnalysis = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Soft-deletes analysis data for a specific pipeline, cleaning up the associated Advanced Security alerts.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository: []const u8, ado_pipeline_id: i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1502,6 +1520,7 @@ pub const OrgEnablement = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get the current status of Advanced Security for the organization
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, include_all_properties: ?bool) !models.OrgEnablementSettings {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/management/enablement", .{ self.endpoint, encoded_path_0 });
@@ -1536,6 +1555,7 @@ pub const OrgEnablement = struct {
     }
     /// Update the status of Advanced Security for the organization
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.OrgEnablementSettings) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/management/enablement", .{ self.endpoint, encoded_path_0 });
@@ -1574,6 +1594,7 @@ pub const MeterUsageOperations = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get commiters used when calculating billing information.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, plan: enums.GetRequestPlan, billing_date: ?[]const u8) !models.MeterUsageForPlan {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/management/meterusage/default", .{ self.endpoint, encoded_path_0 });
@@ -1620,6 +1641,7 @@ pub const OrgMeterUsageEstimate = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Estimate the pushers that would be added to the customer's usage if Advanced Security was enabled for this organization.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, plan: ?enums.GetRequestPlan1) !models.MeterUsageEstimate {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/management/meterUsageEstimate/default", .{ self.endpoint, encoded_path_0 });
@@ -1662,6 +1684,7 @@ pub const ProjectEnablement = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get the current status of Advanced Security for a project
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, include_all_properties: ?bool) !models.ProjectEnablementSettings {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1698,6 +1721,7 @@ pub const ProjectEnablement = struct {
     }
     /// Update the status of Advanced Security for the project
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.ProjectEnablementSettings) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1738,6 +1762,7 @@ pub const ProjectMeterUsageEstimate = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Estimate the pushers that would be added to the customer's usage if Advanced Security was enabled for this project.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan: ?enums.GetRequestPlan2) !models.MeterUsageEstimate {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1782,6 +1807,7 @@ pub const RepoEnablement = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Determines if Code Security, Secret Protection, and their features are enabled for the repository.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository: []const u8, include_all_properties: ?bool) !models.RepoEnablementSettings {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1820,6 +1846,7 @@ pub const RepoEnablement = struct {
     }
     /// Update the enablement status of Code Security and Secret Protection, along with their respective features, for a given repository.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository: []const u8, body: models.RepoEnablementSettings) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1862,6 +1889,7 @@ pub const RepoMeterUsageEstimate = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Estimate the pushers that would be added to the customer's usage if Advanced Security was enabled for this repository.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository: []const u8, plan: ?enums.GetRequestPlan3) !models.MeterUsageEstimate {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);

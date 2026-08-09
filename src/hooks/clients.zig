@@ -138,6 +138,7 @@ pub const Consumers = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of available service hook consumer services. Optionally filter by consumers that support at least one event type from the specific publisher.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, publisher_id: ?[]const u8) ![]const models.Consumer {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/hooks/consumers", .{ self.endpoint, encoded_path_0 });
@@ -174,6 +175,7 @@ pub const Consumers = struct {
     }
     /// Get a specific consumer service. Optionally filter out consumer actions that do not support any event types for the specified publisher.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, consumer_id: []const u8, publisher_id: ?[]const u8) !models.Consumer {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, consumer_id);
@@ -212,6 +214,7 @@ pub const Consumers = struct {
     }
     /// Get a list of consumer actions for a specific consumer.
     pub fn listConsumerActions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, consumer_id: []const u8, publisher_id: ?[]const u8) ![]const models.ConsumerAction {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, consumer_id);
@@ -250,6 +253,7 @@ pub const Consumers = struct {
     }
     /// Get details about a specific consumer action.
     pub fn getConsumerAction(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, consumer_id: []const u8, consumer_action_id: []const u8, publisher_id: ?[]const u8) !models.ConsumerAction {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, consumer_id);
@@ -296,6 +300,7 @@ pub const Notifications = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Query for notifications. A notification includes details about the event, the request to and the response from the consumer service.
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.NotificationsQuery) !models.NotificationsQuery {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/hooks/notificationsquery", .{ self.endpoint, encoded_path_0 });
@@ -329,6 +334,7 @@ pub const Notifications = struct {
     }
     /// Get a list of notifications for a specific subscription. A notification includes details about the event, the request to and the response from the consumer service.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, subscription_id: []const u8, max_results: ?i32, status: ?enums.ListRequestStatus, result: ?enums.ListRequestResult) ![]const models.Notification {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, subscription_id);
@@ -379,6 +385,7 @@ pub const Notifications = struct {
     }
     /// Get a specific notification for a subscription.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, subscription_id: []const u8, notification_id: i32) !models.Notification {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, subscription_id);
@@ -412,6 +419,7 @@ pub const Notifications = struct {
     }
     /// Sends a test notification. This is useful for verifying the configuration of an updated or new service hooks subscription.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, use_real_data: ?bool, body: models.Notification) !models.Notification {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/hooks/testnotifications", .{ self.endpoint, encoded_path_0 });
@@ -456,6 +464,7 @@ pub const Publishers = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of publishers.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.Publisher {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/hooks/publishers", .{ self.endpoint, encoded_path_0 });
@@ -485,6 +494,7 @@ pub const Publishers = struct {
     }
     /// Get a specific service hooks publisher.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, publisher_id: []const u8) !models.Publisher {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, publisher_id);
@@ -516,6 +526,7 @@ pub const Publishers = struct {
     }
     /// Get the event types for a specific publisher.
     pub fn listEventTypes(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, publisher_id: []const u8) ![]const models.EventTypeDescriptor {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, publisher_id);
@@ -547,6 +558,7 @@ pub const Publishers = struct {
     }
     /// Get a specific event type.
     pub fn getEventType(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, publisher_id: []const u8, event_type_id: []const u8) !models.EventTypeDescriptor {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, publisher_id);
@@ -580,6 +592,7 @@ pub const Publishers = struct {
     }
 
     pub fn queryInputValues(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, publisher_id: []const u8, body: models.InputValuesQuery) !models.InputValuesQuery {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, publisher_id);
@@ -615,6 +628,7 @@ pub const Publishers = struct {
     }
     /// Query for service hook publishers.
     pub fn queryPublishers(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.PublishersQuery) !models.PublishersQuery {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/hooks/publishersquery", .{ self.endpoint, encoded_path_0 });
@@ -654,6 +668,7 @@ pub const Subscriptions = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of subscriptions.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, publisher_id: ?[]const u8, event_type: ?[]const u8, consumer_id: ?[]const u8, consumer_action_id: ?[]const u8) ![]const models.Subscription {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/hooks/subscriptions", .{ self.endpoint, encoded_path_0 });
@@ -711,6 +726,7 @@ pub const Subscriptions = struct {
     }
     /// Create a subscription.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.Subscription) !models.Subscription {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/hooks/subscriptions", .{ self.endpoint, encoded_path_0 });
@@ -744,6 +760,7 @@ pub const Subscriptions = struct {
     }
     /// Delete a specific service hooks subscription.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, subscription_id: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, subscription_id);
@@ -774,6 +791,7 @@ pub const Subscriptions = struct {
     }
     /// Get a specific service hooks subscription.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, subscription_id: []const u8) !models.Subscription {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, subscription_id);
@@ -805,6 +823,7 @@ pub const Subscriptions = struct {
     }
     /// Update a subscription. <param name='subscriptionId'>ID for a subscription that you wish to update.</param>
     pub fn replaceSubscription(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, subscription_id: []const u8, body: models.Subscription) !models.Subscription {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, subscription_id);
@@ -840,6 +859,7 @@ pub const Subscriptions = struct {
     }
     /// Query for service hook subscriptions.
     pub fn createSubscriptionsQuery(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.SubscriptionsQuery) !models.SubscriptionsQuery {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/hooks/subscriptionsquery", .{ self.endpoint, encoded_path_0 });
@@ -879,6 +899,7 @@ pub const Diagnostics = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, subscription_id: []const u8) !models.SubscriptionDiagnostics {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, subscription_id);
@@ -910,6 +931,7 @@ pub const Diagnostics = struct {
     }
 
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, subscription_id: []const u8, body: models.UpdateSubscripitonDiagnosticsParameters) !models.SubscriptionDiagnostics {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, subscription_id);

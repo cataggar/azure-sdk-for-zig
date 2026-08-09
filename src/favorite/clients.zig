@@ -106,6 +106,7 @@ pub const Favorites = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn getFavorites(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, artifact_type: ?[]const u8, artifact_scope_type: ?[]const u8, artifact_scope_id: ?[]const u8, include_extended_details: ?bool) ![]const models.Favorite {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/favorite/favorites", .{ self.endpoint, encoded_path_0 });
@@ -161,6 +162,7 @@ pub const Favorites = struct {
     }
 
     pub fn createFavorite(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.FavoriteCreateParameters) !models.Favorite {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/favorite/favorites", .{ self.endpoint, encoded_path_0 });
@@ -194,6 +196,7 @@ pub const Favorites = struct {
     }
 
     pub fn deleteFavoriteById(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, favorite_id: []const u8, artifact_type: []const u8, artifact_scope_type: []const u8, artifact_scope_id: ?[]const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, favorite_id);
@@ -239,6 +242,7 @@ pub const Favorites = struct {
     }
 
     pub fn getFavoriteById(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, favorite_id: []const u8, artifact_scope_type: []const u8, artifact_type: []const u8, artifact_scope_id: ?[]const u8, include_extended_details: ?bool) !models.Favorite {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, favorite_id);

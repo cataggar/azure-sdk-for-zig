@@ -146,6 +146,7 @@ pub const GroupEntitlements = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get the group entitlements for an account.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.GroupEntitlement {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/groupentitlements", .{ self.endpoint, encoded_path_0 });
@@ -175,6 +176,7 @@ pub const GroupEntitlements = struct {
     }
     /// Create a group entitlement with license rule, extension rule.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, rule_option: ?enums.AddRequestRuleOption, body: models.GroupEntitlement) !models.GroupEntitlementOperationReference {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/groupentitlements", .{ self.endpoint, encoded_path_0 });
@@ -215,6 +217,7 @@ pub const GroupEntitlements = struct {
     }
     /// Delete a group entitlement.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, group_id: []const u8, rule_option: ?enums.DeleteRequestRuleOption, remove_group_membership: ?bool) !models.GroupEntitlementOperationReference {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, group_id);
@@ -258,6 +261,7 @@ pub const GroupEntitlements = struct {
     }
     /// Get a group entitlement. If the group entitlement does not exist, returns null.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, group_id: []const u8) !models.GroupEntitlement {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, group_id);
@@ -289,6 +293,7 @@ pub const GroupEntitlements = struct {
     }
     /// Update entitlements (License Rule, Extensions Rule, Project memberships etc.) for a group.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, group_id: []const u8, rule_option: ?enums.UpdateRequestRuleOption, body: models.JsonPatchDocument) !models.GroupEntitlementOperationReference {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, group_id);
@@ -337,6 +342,7 @@ pub const Members = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get direct members of a Group.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, group_id: []const u8, max_results: ?i32, paging_token: ?[]const u8) !models.PagedGraphMemberList {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, group_id);
@@ -380,6 +386,7 @@ pub const Members = struct {
     }
     /// Remove a member from a Group.
     pub fn removeMemberFromGroup(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, group_id: []const u8, member_id: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, group_id);
@@ -412,6 +419,7 @@ pub const Members = struct {
     }
     /// Add a member to a Group.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, group_id: []const u8, member_id: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, group_id);
@@ -450,6 +458,7 @@ pub const MemberEntitlements = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn searchMemberEntitlements(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, continuation_token: ?[]const u8, select: ?enums.SearchMemberEntitlementsRequestSelect, @"$filter": ?[]const u8, @"$order_by": ?[]const u8) ![]const models.JsonValue {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/memberentitlements", .{ self.endpoint, encoded_path_0 });
@@ -513,6 +522,7 @@ pub const ServicePrincipalEntitlements = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Edit the entitlements (License, Extensions, Projects, Teams etc) for one or more service principals.
     pub fn updateServicePrincipalEntitlements(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.JsonPatchDocument) !models.ServicePrincipalEntitlementOperationReference {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/serviceprincipalentitlements", .{ self.endpoint, encoded_path_0 });
@@ -546,6 +556,7 @@ pub const ServicePrincipalEntitlements = struct {
     }
     /// Add a service principal, assign license and extensions and make them a member of a project group in an account. NOTE: If you are working with AAD app registration, you can find service principal of your app in enterprise applications, and make sure to use service principal's object id as originId parameter in the request body
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.ServicePrincipalEntitlement) !models.ServicePrincipalEntitlementsPostResponse {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/serviceprincipalentitlements", .{ self.endpoint, encoded_path_0 });
@@ -579,6 +590,7 @@ pub const ServicePrincipalEntitlements = struct {
     }
     /// Delete a service principal from the account. The delete operation includes unassigning Extensions and Licenses and removing the service principal from all project memberships. The service principal would continue to have access to the account if it is member of an AAD group, that is added directly to the account.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, service_principal_id: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, service_principal_id);
@@ -609,6 +621,7 @@ pub const ServicePrincipalEntitlements = struct {
     }
     /// Get Service principal Entitlement for a service principal.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, service_principal_id: []const u8) !models.ServicePrincipalEntitlement {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, service_principal_id);
@@ -640,6 +653,7 @@ pub const ServicePrincipalEntitlements = struct {
     }
     /// Edit the entitlements (License, Extensions, Projects, Teams etc) for a service principal.
     pub fn updateServicePrincipalEntitlement(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, service_principal_id: []const u8, body: models.JsonPatchDocument) !models.ServicePrincipalEntitlementsPatchResponse {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, service_principal_id);
@@ -681,6 +695,7 @@ pub const UserEntitlements = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a paged set of user entitlements matching the filter and sort criteria built with properties that match the select input.
     pub fn searchUserEntitlements(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, continuation_token: ?[]const u8, select: ?enums.SearchUserEntitlementsRequestSelect, @"$filter": ?[]const u8, @"$order_by": ?[]const u8) !models.PagedUserEntitlementsList {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/userentitlements", .{ self.endpoint, encoded_path_0 });
@@ -738,6 +753,7 @@ pub const UserEntitlements = struct {
     }
     /// Edit the entitlements (License, Extensions, Projects, Teams etc) for one or more users. MSA Backed organizations may face limitation when using this API.
     pub fn updateUserEntitlements(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, do_not_send_invite_for_new_users: ?bool, body: models.JsonPatchDocument) !models.UserEntitlementOperationReference {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/userentitlements", .{ self.endpoint, encoded_path_0 });
@@ -776,6 +792,7 @@ pub const UserEntitlements = struct {
     }
     /// Add a user, assign license and extensions and make them a member of a project group in an account.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.UserEntitlement) !models.UserEntitlementsPostResponse {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/userentitlements", .{ self.endpoint, encoded_path_0 });
@@ -809,6 +826,7 @@ pub const UserEntitlements = struct {
     }
     /// Delete a user from the account. The delete operation includes unassigning Extensions and Licenses and removing the user from all project memberships. The user would continue to have access to the account if she is member of an AAD group, that is added directly to the account.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, user_id: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, user_id);
@@ -839,6 +857,7 @@ pub const UserEntitlements = struct {
     }
     /// Get User Entitlement for a user.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, user_id: []const u8) !models.UserEntitlement {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, user_id);
@@ -870,6 +889,7 @@ pub const UserEntitlements = struct {
     }
     /// Edit the entitlements (License, Extensions, Projects, Teams etc) for a user. MSA Backed organizations may face limitation when using this API.
     pub fn updateUserEntitlement(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, user_id: []const u8, body: models.JsonPatchDocument) !models.UserEntitlementsPatchResponse {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, user_id);
@@ -911,6 +931,7 @@ pub const UserEntitlementSummary = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get summary of Licenses, Extension, Projects, Groups and their assignments in the collection.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, select: ?[]const u8) !models.UsersSummary {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/userentitlementsummary", .{ self.endpoint, encoded_path_0 });

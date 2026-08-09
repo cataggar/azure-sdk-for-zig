@@ -306,6 +306,7 @@ pub const Boardcolumns = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get available board columns in a project
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.BoardSuggestedValue {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -343,6 +344,7 @@ pub const Boardrows = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get available board rows in a project
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.BoardSuggestedValue {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -380,6 +382,7 @@ pub const Iterationcapacities = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get an iteration's capacity for all teams in iteration
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, iteration_id: []const u8) !models.IterationCapacity {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -419,6 +422,7 @@ pub const Plans = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get the information for all the plans configured for the given team
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.Plan {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -450,6 +454,7 @@ pub const Plans = struct {
     }
     /// Add a new plan for the team
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.CreatePlan) !models.Plan {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -485,6 +490,7 @@ pub const Plans = struct {
     }
     /// Delete the specified plan
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, id: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -517,6 +523,7 @@ pub const Plans = struct {
     }
     /// Get the information for the specified plan
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, id: []const u8) !models.Plan {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -550,6 +557,7 @@ pub const Plans = struct {
     }
     /// Update the information for the specified plan
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, id: []const u8, body: models.UpdatePlan) !models.Plan {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -593,6 +601,7 @@ pub const Deliverytimeline = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get Delivery View Data
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, id: []const u8, revision: ?i32, start_date: ?[]const u8, end_date: ?[]const u8) !models.DeliveryViewData {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -651,6 +660,7 @@ pub const PredefinedQueries = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieves the set of known queries
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.PredefinedQuery {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -682,6 +692,7 @@ pub const PredefinedQueries = struct {
     }
     /// Retrieves the specified predefined query including the query results
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, id: []const u8, @"$top": ?i32, include_completed: ?bool) !models.PredefinedQuery {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -731,6 +742,7 @@ pub const Processconfiguration = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get process configuration
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.ProcessConfiguration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -768,6 +780,7 @@ pub const Backlogconfiguration = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Gets backlog configuration for a team
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8) !models.BacklogConfiguration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -807,6 +820,7 @@ pub const Backlogs = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// List all backlog levels
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8) ![]const models.BacklogLevelConfiguration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -840,6 +854,7 @@ pub const Backlogs = struct {
     }
     /// Get a list of work items within a backlog level
     pub fn getBacklogLevelWorkItems(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, backlog_id: []const u8) !models.BacklogLevelWorkItems {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -875,6 +890,7 @@ pub const Backlogs = struct {
     }
     /// Get a backlog level
     pub fn getBacklog(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, id: []const u8) !models.BacklogLevelConfiguration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -916,6 +932,7 @@ pub const Boards = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get boards
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8) ![]const models.BoardReference {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -949,6 +966,7 @@ pub const Boards = struct {
     }
     /// Get board
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, id: []const u8, team: []const u8) !models.Board {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -984,6 +1002,7 @@ pub const Boards = struct {
     }
     /// Update board options
     pub fn setBoardOptions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, id: []const u8, team: []const u8, body: std.json.ArrayHashMap([]const u8)) !std.json.ArrayHashMap([]const u8) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1029,6 +1048,7 @@ pub const Boardusersettings = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get board user settings for a board id
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8) !models.BoardUserSettings {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1064,6 +1084,7 @@ pub const Boardusersettings = struct {
     }
     /// Update board user settings for the board id We don't want stakeholders to update board settings (currently just autorefresh). The BacklogManagement feature check validates this.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8, body: std.json.ArrayHashMap([]const u8)) !models.BoardUserSettings {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1109,6 +1130,7 @@ pub const Cardrulesettings = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get board card Rule settings for the board id or board by name
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8) !models.BoardCardRuleSettings {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1144,6 +1166,7 @@ pub const Cardrulesettings = struct {
     }
     /// Update board card Rule settings for the board id or board by name
     pub fn updateBoardCardRuleSettings(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8, body: models.BoardCardRuleSettings) !models.BoardCardRuleSettings {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1183,6 +1206,7 @@ pub const Cardrulesettings = struct {
     }
     /// Update taskboard card Rule settings
     pub fn updateTaskboardCardRuleSettings(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, body: models.BoardCardRuleSettings) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1225,6 +1249,7 @@ pub const Cardsettings = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get board card settings for the board id or board by name
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8) !models.BoardCardSettings {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1260,6 +1285,7 @@ pub const Cardsettings = struct {
     }
     /// Update board card settings for the board id or board by name
     pub fn updateBoardCardSettings(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8, body: models.BoardCardSettings) !models.BoardCardSettings {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1299,6 +1325,7 @@ pub const Cardsettings = struct {
     }
     /// Update taskboard card settings
     pub fn updateTaskboardCardSettings(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, body: models.BoardCardSettings) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1365,6 +1392,7 @@ pub const Chartimages = struct {
     };
     /// Get a board chart image.
     pub fn getBoardChartImage(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, board: []const u8, name: []const u8, width: ?i32, height: ?i32, show_details: ?bool, title: ?[]const u8) !GetBoardChartImageResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1434,6 +1462,7 @@ pub const Chartimages = struct {
     }
     /// Get an iteration chart image.
     pub fn getIterationChartImage(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, iteration_id: []const u8, name: []const u8, width: ?i32, height: ?i32, show_details: ?bool, title: ?[]const u8) !GetIterationChartImageResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1503,6 +1532,7 @@ pub const Chartimages = struct {
     }
     /// Get an iterations chart image.
     pub fn getIterationsChartImage(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, name: []const u8, iterations_number: ?i32, width: ?i32, height: ?i32, show_details: ?bool, title: ?[]const u8) !GetIterationsChartImageResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1581,6 +1611,7 @@ pub const Charts = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get board charts
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8) ![]const models.BoardChartReference {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1616,6 +1647,7 @@ pub const Charts = struct {
     }
     /// Get a board chart
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, name: []const u8, team: []const u8) !models.BoardChart {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1653,6 +1685,7 @@ pub const Charts = struct {
     }
     /// Update a board chart
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, name: []const u8, team: []const u8, body: models.BoardChart) !models.BoardChart {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1700,6 +1733,7 @@ pub const Columns = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get columns on a board
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8) ![]const models.BoardColumn {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1735,6 +1769,7 @@ pub const Columns = struct {
     }
     /// Update columns on a board
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8, body: []const models.BoardColumn) ![]const models.BoardColumn {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1780,6 +1815,7 @@ pub const Rows = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get rows on a board
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8) ![]const models.BoardRow {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1815,6 +1851,7 @@ pub const Rows = struct {
     }
     /// Update rows on a board
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8, body: []const models.BoardRow) ![]const models.BoardRow {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1860,6 +1897,7 @@ pub const Boardparents = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Returns the list of parent field filter model for the given list of workitem ids
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, child_backlog_context_category_ref_name: []const u8, workitem_ids: []const u8, team: []const u8) ![]const models.ParentChildWIMap {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1907,6 +1945,7 @@ pub const Workitemsorder = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Reorder Sprint Backlog/Taskboard Work Items
     pub fn reorderIterationWorkItems(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, iteration_id: []const u8, body: models.ReorderOperation) ![]const models.ReorderResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1946,6 +1985,7 @@ pub const Workitemsorder = struct {
     }
     /// Reorder Product Backlog/Boards Work Items
     pub fn reorderBacklogWorkItems(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, body: models.ReorderOperation) ![]const models.ReorderResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1989,6 +2029,7 @@ pub const TaskboardColumnsOperations = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8) !models.TaskboardColumns {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2022,6 +2063,7 @@ pub const TaskboardColumnsOperations = struct {
     }
 
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, body: []const models.UpdateTaskboardColumn) !models.TaskboardColumns {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2065,6 +2107,7 @@ pub const TaskboardWorkItems = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, iteration_id: []const u8) ![]const models.TaskboardWorkItemColumn {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2100,6 +2143,7 @@ pub const TaskboardWorkItems = struct {
     }
 
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, iteration_id: []const u8, work_item_id: i32, body: models.UpdateTaskboardWorkItemColumn) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2146,6 +2190,7 @@ pub const Teamsettings = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a team's settings
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8) !models.TeamSetting {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2179,6 +2224,7 @@ pub const Teamsettings = struct {
     }
     /// Update a team's settings
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, body: models.TeamSettingsPatch) !models.TeamSetting {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2222,6 +2268,7 @@ pub const Iterations = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a team's iterations using timeframe filter
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, @"$timeframe": ?[]const u8) ![]const models.TeamSettingsIteration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2262,6 +2309,7 @@ pub const Iterations = struct {
     }
     /// Add an iteration to the team
     pub fn postTeamIteration(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, body: models.TeamSettingsIteration) !models.TeamSettingsIteration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2299,6 +2347,7 @@ pub const Iterations = struct {
     }
     /// Delete a team's iteration by iterationId
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, id: []const u8, team: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2333,6 +2382,7 @@ pub const Iterations = struct {
     }
     /// Get team's iteration by iterationId
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, id: []const u8, team: []const u8) !models.TeamSettingsIteration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2368,6 +2418,7 @@ pub const Iterations = struct {
     }
     /// Get work items for iteration
     pub fn getIterationWorkItems(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, iteration_id: []const u8, team: []const u8) !models.IterationWorkItems {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2409,6 +2460,7 @@ pub const Capacities = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a team's capacity including total capacity and days off
     pub fn getCapacitiesWithIdentityRefAndTotals(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, iteration_id: []const u8, team: []const u8) !models.TeamCapacity {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2444,6 +2496,7 @@ pub const Capacities = struct {
     }
     /// Replace a team's capacity
     pub fn replaceCapacitiesWithIdentityRef(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, iteration_id: []const u8, team: []const u8, body: []const models.TeamMemberCapacityIdentityRef) ![]const models.TeamMemberCapacityIdentityRef {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2483,6 +2536,7 @@ pub const Capacities = struct {
     }
     /// Get a team member's capacity
     pub fn getCapacityWithIdentityRef(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, iteration_id: []const u8, team_member_id: []const u8, team: []const u8) !models.TeamMemberCapacityIdentityRef {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2520,6 +2574,7 @@ pub const Capacities = struct {
     }
     /// Update a team member's capacity
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, iteration_id: []const u8, team_member_id: []const u8, team: []const u8, body: models.CapacityPatch) !models.TeamMemberCapacityIdentityRef {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2567,6 +2622,7 @@ pub const Teamdaysoff = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get team's days off for an iteration
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, iteration_id: []const u8, team: []const u8) !models.TeamSettingsDaysOff {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2602,6 +2658,7 @@ pub const Teamdaysoff = struct {
     }
     /// Set a team's days off for an iteration
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, iteration_id: []const u8, team: []const u8, body: models.TeamSettingsDaysOffPatch) !models.TeamSettingsDaysOff {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2647,6 +2704,7 @@ pub const Teamfieldvalues = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a collection of team field values
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8) !models.TeamFieldValues {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2680,6 +2738,7 @@ pub const Teamfieldvalues = struct {
     }
     /// Update team field values
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, body: models.TeamFieldValuesPatch) !models.TeamFieldValues {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);

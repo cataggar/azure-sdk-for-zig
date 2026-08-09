@@ -106,6 +106,7 @@ pub const Profiles = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Gets a user profile.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, id: []const u8, details: ?bool, with_attributes: ?bool, partition: ?[]const u8, core_attributes: ?[]const u8, force_refresh: ?bool) !models.Profile {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, id);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/_apis/profile/profiles/{s}", .{ self.endpoint, encoded_path_0 });

@@ -172,7 +172,7 @@ pub const Build = struct {
     tags: ?[]const []const u8 = null,
     /// Parameters to template expression evaluation
     template_parameters: ?std.json.ArrayHashMap([]const u8) = null,
-    triggered_by_build: ?Build = null,
+    triggered_by_build: ?*const Build = null,
     /// Sourceprovider-specific information about what triggered the build
     trigger_info: ?std.json.ArrayHashMap([]const u8) = null,
     /// The URI of the build.

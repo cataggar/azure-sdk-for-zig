@@ -130,6 +130,7 @@ pub const Endpoints = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Creates a new service endpoint
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.ServiceEndpoint) !models.ServiceEndpoint {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/serviceendpoint/endpoints", .{ self.endpoint, encoded_path_0 });
@@ -163,6 +164,7 @@ pub const Endpoints = struct {
     }
     /// Update the service endpoints.
     pub fn updateServiceEndpoints(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: []const models.ServiceEndpoint) ![]const models.ServiceEndpoint {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/serviceendpoint/endpoints", .{ self.endpoint, encoded_path_0 });
@@ -196,6 +198,7 @@ pub const Endpoints = struct {
     }
     /// Delete a service endpoint
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, endpoint_id: []const u8, project_ids: []const u8, deep: ?bool) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, endpoint_id);
@@ -235,6 +238,7 @@ pub const Endpoints = struct {
     }
     /// Share service endpoint across projects
     pub fn shareServiceEndpoint(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, endpoint_id: []const u8, body: []const models.ServiceEndpointProjectReference) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, endpoint_id);
@@ -269,6 +273,7 @@ pub const Endpoints = struct {
     }
     /// Update the service endpoint
     pub fn updateServiceEndpoint(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, endpoint_id: []const u8, operation: ?[]const u8, body: models.ServiceEndpoint) !models.ServiceEndpoint {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, endpoint_id);
@@ -311,6 +316,7 @@ pub const Endpoints = struct {
     }
     /// Get the service endpoints by name.
     pub fn getServiceEndpointsByNames(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, endpoint_names: []const u8, @"type": ?[]const u8, auth_schemes: ?[]const u8, owner: ?[]const u8, include_failed: ?bool, include_details: ?bool) ![]const models.ServiceEndpoint {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -377,6 +383,7 @@ pub const Endpoints = struct {
     }
     /// Gets the service endpoints and patch new authorization parameters
     pub fn getServiceEndpointsWithRefreshedAuthentication(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, endpoint_ids: []const u8, body: []const models.RefreshAuthenticationParameters) ![]const models.ServiceEndpoint {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -416,6 +423,7 @@ pub const Endpoints = struct {
     }
     /// Get the service endpoint details.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, endpoint_id: []const u8, action_filter: ?enums.GetRequestActionFilter, load_confidential_data: ?bool) !models.ServiceEndpoint {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -467,6 +475,7 @@ pub const Types = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get service endpoint types.
     pub fn getServiceEndpointTypes(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, @"type": ?[]const u8, scheme: ?[]const u8) ![]const models.ServiceEndpointType {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/serviceendpoint/types", .{ self.endpoint, encoded_path_0 });
@@ -510,6 +519,7 @@ pub const Types = struct {
     }
     /// Get service endpoint types with passed types filter.
     pub fn getFilteredServiceEndpointTypes(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: []const []const u8) ![]const models.ServiceEndpointType {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/serviceendpoint/types", .{ self.endpoint, encoded_path_0 });
@@ -549,6 +559,7 @@ pub const Executionhistory = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get service endpoint execution records.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, endpoint_id: []const u8, top: ?i32, continuation_token: ?i64) ![]const models.ServiceEndpointExecutionRecord {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -598,6 +609,7 @@ pub const Endpointproxy = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Use ExecuteServiceEndpointRequest API Instead
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.DataSourceBinding) ![]const []const u8 {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);

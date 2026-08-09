@@ -122,6 +122,7 @@ pub const WidgetTypes = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get all available widget metadata in alphabetical order, including widgets marked with isVisibleFromCatalog == false.
     pub fn getWidgetTypes(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, @"$scope": enums.GetWidgetTypesRequestScope, project: []const u8) !models.WidgetTypesResponse {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -157,6 +158,7 @@ pub const WidgetTypes = struct {
     }
     /// Get the widget metadata satisfying the specified contribution ID.
     pub fn getWidgetMetadata(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, contribution_id: []const u8, project: []const u8) !models.WidgetMetadataResponse {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, contribution_id);
@@ -196,6 +198,7 @@ pub const Dashboards = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of dashboards under a project.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8) ![]const models.Dashboard {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -229,6 +232,7 @@ pub const Dashboards = struct {
     }
     /// Create the supplied dashboard.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, body: models.Dashboard) !models.Dashboard {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -266,6 +270,7 @@ pub const Dashboards = struct {
     }
     /// Update the name and position of dashboards in the supplied group, and remove omitted dashboards. Does not modify dashboard content.
     pub fn replaceDashboards(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, body: models.DashboardGroup) !models.DashboardGroup {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -303,6 +308,7 @@ pub const Dashboards = struct {
     }
     /// Delete a dashboard given its ID. This also deletes the widgets associated with this dashboard.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, dashboard_id: []const u8, team: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -337,6 +343,7 @@ pub const Dashboards = struct {
     }
     /// Get a dashboard by its ID.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, dashboard_id: []const u8, team: []const u8) !models.Dashboard {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -372,6 +379,7 @@ pub const Dashboards = struct {
     }
     /// Replace configuration for the specified dashboard. Replaces Widget list on Dashboard, only if property is supplied.
     pub fn replaceDashboard(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, dashboard_id: []const u8, team: []const u8, body: models.Dashboard) !models.Dashboard {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -447,6 +455,7 @@ pub const Widgets = struct {
     };
     /// Get widgets contained on the specified dashboard.
     pub fn getWidgets(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, dashboard_id: []const u8, team: []const u8, e_tag: ?[]const u8) !GetWidgetsResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -499,6 +508,7 @@ pub const Widgets = struct {
     }
     /// Update the supplied widgets on the dashboard using supplied state. State of existing Widgets not passed in the widget list is preserved.
     pub fn updateWidgets(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, dashboard_id: []const u8, team: []const u8, e_tag: ?[]const u8, body: []const models.Widget) !UpdateWidgetsResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -555,6 +565,7 @@ pub const Widgets = struct {
     }
     /// Create a widget on the specified dashboard.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, dashboard_id: []const u8, team: []const u8, body: models.Widget) !models.Widget {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -594,6 +605,7 @@ pub const Widgets = struct {
     }
     /// Replace the widgets on specified dashboard with the supplied widgets.
     pub fn replaceWidgets(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, dashboard_id: []const u8, team: []const u8, e_tag: ?[]const u8, body: []const models.Widget) !ReplaceWidgetsResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -650,6 +662,7 @@ pub const Widgets = struct {
     }
     /// Delete the specified widget.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, dashboard_id: []const u8, widget_id: []const u8, team: []const u8) !models.Dashboard {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -687,6 +700,7 @@ pub const Widgets = struct {
     }
     /// Get the current state of the specified widget.
     pub fn getWidget(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, dashboard_id: []const u8, widget_id: []const u8, team: []const u8) !models.Widget {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -724,6 +738,7 @@ pub const Widgets = struct {
     }
     /// Perform a partial update of the specified widget.
     pub fn updateWidget(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, dashboard_id: []const u8, widget_id: []const u8, team: []const u8, body: models.Widget) !models.Widget {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -765,6 +780,7 @@ pub const Widgets = struct {
     }
     /// Override the state of the specified widget.
     pub fn replaceWidget(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, dashboard_id: []const u8, widget_id: []const u8, team: []const u8, body: models.Widget) !models.Widget {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);

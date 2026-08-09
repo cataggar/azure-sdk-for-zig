@@ -138,6 +138,7 @@ pub const Processes = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of processes.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.Process {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/process/processes", .{ self.endpoint, encoded_path_0 });
@@ -167,6 +168,7 @@ pub const Processes = struct {
     }
     /// Get a process by ID.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8) !models.Process {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -204,6 +206,7 @@ pub const Projects = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get all projects in the organization that the authenticated user has access to.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, state_filter: ?enums.ListRequestStateFilter, @"$top": ?i32, @"$skip": ?i32, continuation_token: ?i32, get_default_team_image_url: ?bool) ![]const models.TeamProjectReference {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/projects", .{ self.endpoint, encoded_path_0 });
@@ -260,6 +263,7 @@ pub const Projects = struct {
     }
     /// Queues a project to be created. Use the [GetOperation](../../operations/operations/get) to periodically check for create project status.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.TeamProject) !models.OperationReference {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/projects", .{ self.endpoint, encoded_path_0 });
@@ -293,6 +297,7 @@ pub const Projects = struct {
     }
     /// Queues a project to be deleted. Use the [GetOperation](../../operations/operations/get) to periodically check for delete project status.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project_id: []const u8) !models.OperationReference {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project_id);
@@ -324,6 +329,7 @@ pub const Projects = struct {
     }
     /// Get project with the specified id or name, optionally including capabilities.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project_id: []const u8, include_capabilities: ?bool, include_history: ?bool) !models.TeamProject {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project_id);
@@ -365,6 +371,7 @@ pub const Projects = struct {
     }
     /// Update an existing project's name, abbreviation, description, or restore a project.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project_id: []const u8, body: models.TeamProject) !models.OperationReference {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project_id);
@@ -400,6 +407,7 @@ pub const Projects = struct {
     }
     /// Get a collection of team project properties.
     pub fn getProjectProperties(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project_id: []const u8, keys: ?[]const u8) ![]const models.ProjectProperty {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project_id);
@@ -438,6 +446,7 @@ pub const Projects = struct {
     }
     /// Create, update, and delete team project properties.
     pub fn setProjectProperties(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project_id: []const u8, body: models.JsonPatchDocument) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project_id);
@@ -478,6 +487,7 @@ pub const Avatar = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Removes the avatar for the project.
     pub fn removeProjectAvatar(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project_id: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project_id);
@@ -508,6 +518,7 @@ pub const Avatar = struct {
     }
     /// Sets the avatar for the project.
     pub fn setProjectAvatar(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project_id: []const u8, body: models.ProjectAvatar) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project_id);
@@ -548,6 +559,7 @@ pub const CategorizedTeams = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Gets list of user readable teams in a project and teams user is member of (excluded from readable list).
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project_id: []const u8, @"$expand_identity": ?bool, @"$top": ?i32, @"$skip": ?i32) !models.CategorizedWebApiTeams {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project_id);
@@ -600,6 +612,7 @@ pub const Teams = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of teams.
     pub fn getTeams(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project_id: []const u8, @"$mine": ?bool, @"$top": ?i32, @"$skip": ?i32, @"$expand_identity": ?bool) ![]const models.WebApiTeam {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project_id);
@@ -651,6 +664,7 @@ pub const Teams = struct {
     }
     /// Create a team in a team project. Possible failure scenarios Invalid project name/ID (project doesn't exist) 404 Invalid team name or description 400 Team already exists 400 Insufficient privileges 400
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project_id: []const u8, body: models.WebApiTeam) !models.WebApiTeam {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project_id);
@@ -686,6 +700,7 @@ pub const Teams = struct {
     }
     /// Delete a team.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project_id: []const u8, team_id: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project_id);
@@ -718,6 +733,7 @@ pub const Teams = struct {
     }
     /// Get a specific team.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project_id: []const u8, team_id: []const u8, @"$expand_identity": ?bool) !models.WebApiTeam {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project_id);
@@ -756,6 +772,7 @@ pub const Teams = struct {
     }
     /// Update a team's name and/or description.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project_id: []const u8, team_id: []const u8, body: models.WebApiTeam) !models.WebApiTeam {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project_id);
@@ -793,6 +810,7 @@ pub const Teams = struct {
     }
     /// Get a list of members for a specific team.
     pub fn getTeamMembersWithExtendedProperties(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project_id: []const u8, team_id: []const u8, @"$top": ?i32, @"$skip": ?i32) ![]const models.TeamMember {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project_id);
@@ -836,6 +854,7 @@ pub const Teams = struct {
     }
     /// Get a list of all teams.
     pub fn getAllTeams(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, @"$mine": ?bool, @"$top": ?i32, @"$skip": ?i32, @"$expand_identity": ?bool) ![]const models.WebApiTeam {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/teams", .{ self.endpoint, encoded_path_0 });

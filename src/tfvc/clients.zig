@@ -138,6 +138,7 @@ pub const Changesets = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve Tfvc changes for a given changeset.
     pub fn getChangesetChanges(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32, @"$skip": ?i32, @"$top": ?i32, continuation_token: ?[]const u8) ![]const models.TfvcChange {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, id);
@@ -186,6 +187,7 @@ pub const Changesets = struct {
     }
     /// Retrieves the work items associated with a particular changeset.
     pub fn getChangesetWorkItems(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32) ![]const models.AssociatedWorkItem {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, id);
@@ -217,6 +219,7 @@ pub const Changesets = struct {
     }
     /// Returns changesets for a given list of changeset Ids.
     pub fn getBatchedChangesets(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.TfvcChangesetsRequestData) ![]const models.TfvcChangesetRef {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/tfvc/changesetsbatch", .{ self.endpoint, encoded_path_0 });
@@ -250,6 +253,7 @@ pub const Changesets = struct {
     }
     /// Retrieve Tfvc Changesets Note: This is a new version of the GetChangesets API that doesn't expose the unneeded queryParams present in the 1.0 version of the API.
     pub fn getChangesets(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, max_comment_length: ?i32, @"$skip": ?i32, @"$top": ?i32, @"$orderby": ?[]const u8, search_criteria_author: ?[]const u8, search_criteria_follow_renames: ?bool, search_criteria_from_date: ?[]const u8, search_criteria_from_id: ?i32, search_criteria_include_links: ?bool, search_criteria_item_path: ?[]const u8, search_criteria_mappings: ?[]const models.TfvcMappingFilter, search_criteria_to_date: ?[]const u8, search_criteria_to_id: ?i32) ![]const models.TfvcChangesetRef {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -366,6 +370,7 @@ pub const Changesets = struct {
     }
     /// Create a new changeset. Accepts TfvcChangeset as JSON body
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.TfvcChangeset) !models.TfvcChangesetRef {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -401,6 +406,7 @@ pub const Changesets = struct {
     }
     /// Retrieve a Tfvc Changeset
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32, project: []const u8, max_change_count: ?i32, include_details: ?bool, include_work_items: ?bool, max_comment_length: ?i32, include_source_rename: ?bool, @"$skip": ?i32, @"$top": ?i32, @"$orderby": ?[]const u8, search_criteria_author: ?[]const u8, search_criteria_follow_renames: ?bool, search_criteria_from_date: ?[]const u8, search_criteria_from_id: ?i32, search_criteria_include_links: ?bool, search_criteria_item_path: ?[]const u8, search_criteria_mappings: ?[]const models.TfvcMappingFilter, search_criteria_to_date: ?[]const u8, search_criteria_to_id: ?i32) !models.TfvcChangeset {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, id);
@@ -545,6 +551,7 @@ pub const Labels = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get items under a label.
     pub fn getLabelItems(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, label_id: []const u8, @"$top": ?i32, @"$skip": ?i32) ![]const models.TfvcItem {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, label_id);
@@ -586,6 +593,7 @@ pub const Labels = struct {
     }
     /// Get a collection of shallow label references.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, request_data_include_links: ?bool, request_data_item_label_filter: ?[]const u8, request_data_label_scope: ?[]const u8, request_data_max_item_count: ?i32, request_data_name: ?[]const u8, request_data_owner: ?[]const u8, @"$top": ?i32, @"$skip": ?i32) ![]const models.TfvcLabelRef {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -665,6 +673,7 @@ pub const Labels = struct {
     }
     /// Get a single deep label.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, label_id: []const u8, project: []const u8, request_data_include_links: ?bool, request_data_item_label_filter: ?[]const u8, request_data_label_scope: ?[]const u8, request_data_max_item_count: ?i32, request_data_name: ?[]const u8, request_data_owner: ?[]const u8) !models.TfvcLabel {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, label_id);
@@ -742,6 +751,7 @@ pub const Shelvesets = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a single deep shelveset.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, shelveset_id: []const u8, request_data_include_details: ?bool, request_data_include_links: ?bool, request_data_include_work_items: ?bool, request_data_max_change_count: ?i32, request_data_max_comment_length: ?i32, request_data_name: ?[]const u8, request_data_owner: ?[]const u8) !models.TfvcShelveset {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/tfvc/shelvesets", .{ self.endpoint, encoded_path_0 });
@@ -814,6 +824,7 @@ pub const Shelvesets = struct {
     }
     /// Get changes included in a shelveset.
     pub fn getShelvesetChanges(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, shelveset_id: []const u8, @"$top": ?i32, @"$skip": ?i32) ![]const models.TfvcChange {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/tfvc/shelvesets/changes", .{ self.endpoint, encoded_path_0 });
@@ -857,6 +868,7 @@ pub const Shelvesets = struct {
     }
     /// Get work items associated with a shelveset.
     pub fn getShelvesetWorkItems(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, shelveset_id: []const u8) ![]const models.AssociatedWorkItem {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/tfvc/shelvesets/workitems", .{ self.endpoint, encoded_path_0 });
@@ -896,6 +908,7 @@ pub const Branches = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get branch hierarchies below the specified scopePath
     pub fn getBranchRefs(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, scope_path: []const u8, project: []const u8, include_deleted: ?bool, include_links: ?bool) ![]const models.TfvcBranchRef {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -957,6 +970,7 @@ pub const Items = struct {
     };
     /// Post for retrieving a set of items given a list of paths or a long path. Allows for specifying the recursionLevel and version descriptors for each path.
     pub fn getItemsBatch(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.TfvcItemRequestData) !GetItemsBatchResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1008,6 +1022,7 @@ pub const Items = struct {
     }
     /// Get a list of Tfvc items
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, scope_path: ?[]const u8, recursion_level: ?enums.ListRequestRecursionLevel, include_links: ?bool, version_descriptor_version: ?[]const u8, @"version_descriptor.version_option": ?enums.ListRequestVersionDescriptorVersionOption, @"version_descriptor.version_type": ?enums.ListRequestVersionDescriptorVersionType) ![]const models.TfvcItem {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);

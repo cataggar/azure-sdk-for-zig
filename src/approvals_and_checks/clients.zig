@@ -130,6 +130,7 @@ pub const PipelinePermissions = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Batch API to authorize/unauthorize a list of definitions for a multiple resources.
     pub fn updatePipelinePermisionsForResources(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: []const models.ResourcePipelinePermissions) ![]const models.ResourcePipelinePermissions {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -165,6 +166,7 @@ pub const PipelinePermissions = struct {
     }
     /// Given a ResourceType and ResourceId, returns authorized definitions for that resource.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, resource_type: []const u8, resource_id: []const u8) !models.ResourcePipelinePermissions {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -200,6 +202,7 @@ pub const PipelinePermissions = struct {
     }
     /// Authorizes/Unauthorizes a list of definitions for a given resource.
     pub fn updatePipelinePermisionsForResource(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, resource_type: []const u8, resource_id: []const u8, body: models.ResourcePipelinePermissions) !models.ResourcePipelinePermissions {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -245,6 +248,7 @@ pub const CheckConfigurations = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get Check configuration by resource type and id
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, resource_type: ?[]const u8, resource_id: ?[]const u8, @"$expand": ?enums.ListRequestExpand) ![]const models.CheckConfiguration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -297,6 +301,7 @@ pub const CheckConfigurations = struct {
     }
     /// Add a check configuration
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.CheckConfiguration) !models.CheckConfiguration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -332,6 +337,7 @@ pub const CheckConfigurations = struct {
     }
     /// Delete check configuration by id
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, id: i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -364,6 +370,7 @@ pub const CheckConfigurations = struct {
     }
     /// Get Check configuration by Id
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, id: i32, @"$expand": ?enums.GetRequestExpand) !models.CheckConfiguration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -404,6 +411,7 @@ pub const CheckConfigurations = struct {
     }
     /// Update check configuration
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, id: i32, body: models.CheckConfiguration) !models.CheckConfiguration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -441,6 +449,7 @@ pub const CheckConfigurations = struct {
     }
     /// Get check configurations for multiple resources by resource type and id.
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"$expand": ?enums.QueryRequestExpand, body: []const models.Resource) ![]const models.CheckConfiguration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -489,6 +498,7 @@ pub const CheckEvaluations = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Initiate an evaluation for a check in a pipeline
     pub fn evaluate(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"$expand": ?enums.EvaluateRequestExpand, body: models.CheckSuiteRequest) !models.CheckSuite {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -531,6 +541,7 @@ pub const CheckEvaluations = struct {
     }
     /// Get details for a specific check evaluation
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, check_suite_id: []const u8, @"$expand": ?enums.GetRequestExpand1) !models.CheckSuite {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -571,6 +582,7 @@ pub const CheckEvaluations = struct {
     }
     /// Update a check run of a check suite Following update actions are supported: * rerun - allows to rerun an already completed check, if the check retry interval is 0 * bypass - applied on a check which has not already been bypassed and whose check suite is not completed yet
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, check_suite_id: []const u8, @"$expand": ?enums.UpdateRequestExpand, body: models.CheckSuiteUpdateParameter) !models.CheckSuite {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -621,6 +633,7 @@ pub const Approvals = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// List Approvals. This can be used to get a set of pending approvals in a pipeline, on an user or for a resource..
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, approval_ids: ?[]const u8, @"$expand": ?enums.QueryRequestExpand, assigned_to: ?[]const u8, state: ?enums.QueryRequestState, top: ?i32) ![]const models.Approval {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -685,6 +698,7 @@ pub const Approvals = struct {
     }
     /// Update approvals.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: []const models.ApprovalUpdateParameters) ![]const models.Approval {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -720,6 +734,7 @@ pub const Approvals = struct {
     }
     /// Get an approval.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, approval_id: []const u8, @"$expand": ?enums.GetRequestExpand) !models.Approval {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
