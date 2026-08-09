@@ -1,0 +1,105 @@
+//! Generated enums.
+//!
+//! Azure data-plane enums are typically *extensible* — the wire
+//! contract may grow with new values that older clients still
+//! need to round-trip. Represented as a tagged union with a
+//! catch-all `unrecognized` variant.
+
+const std = @import("std");
+const core = @import("azure_sdk_core");
+
+pub const AccountAccountStatus = enum {
+    none,
+    enabled,
+    disabled,
+    deleted,
+    moved,
+
+    pub fn toWire(self: @This()) []const u8 {
+        return switch (self) {
+            .none => "none",
+            .enabled => "enabled",
+            .disabled => "disabled",
+            .deleted => "deleted",
+            .moved => "moved",
+        };
+    }
+
+    pub fn fromWire(s: []const u8) ?@This() {
+        if (std.mem.eql(u8, s, "none")) return .none;
+        if (std.mem.eql(u8, s, "enabled")) return .enabled;
+        if (std.mem.eql(u8, s, "disabled")) return .disabled;
+        if (std.mem.eql(u8, s, "deleted")) return .deleted;
+        if (std.mem.eql(u8, s, "moved")) return .moved;
+        return null;
+    }
+
+    pub fn zerdeDeserialize(
+        comptime T: type,
+        allocator: std.mem.Allocator,
+        deserializer: anytype,
+    ) @TypeOf(deserializer.*).Error!T {
+        return core.fixed_enum.deserialize(T, allocator, deserializer);
+    }
+
+    pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
+        return core.fixed_enum.serialize(self, serializer);
+    }
+};
+
+pub const AccountAccountType = enum {
+    personal,
+    organization,
+
+    pub fn toWire(self: @This()) []const u8 {
+        return switch (self) {
+            .personal => "personal",
+            .organization => "organization",
+        };
+    }
+
+    pub fn fromWire(s: []const u8) ?@This() {
+        if (std.mem.eql(u8, s, "personal")) return .personal;
+        if (std.mem.eql(u8, s, "organization")) return .organization;
+        return null;
+    }
+
+    pub fn zerdeDeserialize(
+        comptime T: type,
+        allocator: std.mem.Allocator,
+        deserializer: anytype,
+    ) @TypeOf(deserializer.*).Error!T {
+        return core.fixed_enum.deserialize(T, allocator, deserializer);
+    }
+
+    pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
+        return core.fixed_enum.serialize(self, serializer);
+    }
+};
+
+pub const ServiceApiVersions = enum {
+    v7_2_preview,
+
+    pub fn toWire(self: @This()) []const u8 {
+        return switch (self) {
+            .v7_2_preview => "7.2-preview",
+        };
+    }
+
+    pub fn fromWire(s: []const u8) ?@This() {
+        if (std.mem.eql(u8, s, "7.2-preview")) return .v7_2_preview;
+        return null;
+    }
+
+    pub fn zerdeDeserialize(
+        comptime T: type,
+        allocator: std.mem.Allocator,
+        deserializer: anytype,
+    ) @TypeOf(deserializer.*).Error!T {
+        return core.fixed_enum.deserialize(T, allocator, deserializer);
+    }
+
+    pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
+        return core.fixed_enum.serialize(self, serializer);
+    }
+};

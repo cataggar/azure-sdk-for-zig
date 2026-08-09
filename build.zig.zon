@@ -1,0 +1,24 @@
+.{
+    .name = .azure_rest_devops,
+    .version = "0.1.0",
+    .fingerprint = 0xf9e2994432577a6a,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .azure_sdk_core = .{
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#da55987aa3c90393a726fc1fa5e86ccd69d72271",
+            .hash = "azure_sdk_core-0.1.2-eFY0EtO6BQARBvYkxdhibifztfqTgJKEN1fe14sMUIYs",
+        },
+        .serde = .{
+            .url = "git+https://github.com/cataggar/serde.zig#73d872776b0361b6fc92f6cecd7ccf2f05e77cdd",
+            .hash = "serde-1.0.1-1DszT1XhDACnteUU3yWahMMjLjkJqB34hwROPIfhZc7l",
+        },
+    },
+    .paths = .{
+        ".gitignore",
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "README.md",
+        "LICENSE.txt",
+    },
+}
