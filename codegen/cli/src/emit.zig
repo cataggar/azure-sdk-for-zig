@@ -302,7 +302,6 @@ fn renderNamespaceRoot(allocator: std.mem.Allocator, namespace: Namespace) ![]u8
     , .{ .name = namespace.display_name });
 
     for (namespace.model.clients) |c| {
-        if (!c.is_root) continue;
         try w.print("pub const {s} = clients.{s};\n", .{ c.name, c.name });
     }
     return try aw.toOwnedSlice();
@@ -394,10 +393,11 @@ fn renderRoot(allocator: std.mem.Allocator, model: cm.CodeModel, display_name: [
         \\
     , .{ .name = display_name });
 
-    // Only re-export root clients; sub-clients are reachable through
-    // accessor methods on their parent.
+    // Re-export every client type. Callers reach sub-clients through
+    // accessor methods on their parent, but a hand-written SDK still has
+    // to *name* the type to store one in a struct field, so the names
+    // are exported too.
     for (model.clients) |c| {
-        if (!c.is_root) continue;
         try w.print("pub const {s} = clients.{s};\n", .{ c.name, c.name });
     }
 
@@ -994,6 +994,12 @@ fn renderMethod(
         try w.print(", {s}: {s}", .{ id, ty });
     }
     try w.print(") !{s} {{\n", .{ret_str});
+
+    // serde walks the whole reachable model graph at comptime. Azure
+    // DevOps models are deep enough (a `Build` reaches several hundred
+    // structs) to exceed Zig's default 1000-branch budget, and the quota
+    // has to be raised in the function that triggers the evaluation.
+    try w.writeAll("        @setEvalBranchQuota(100_000);\n");
 
     // URL build (path + query) — shared by every kind. XML list pagers own
     // the `marker` query pair, so it is excluded from the base URL here.
@@ -2178,10 +2184,12 @@ pub fn renderModels(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
         try renderJsonValue(w);
     }
 
+    var cycles = try CycleBreaker.init(allocator, model.models);
+    defer cycles.deinit();
+
     for (model.models) |m| {
         if (m.doc) |d| try renderDocComment(w, d);
-        try w.print("pub const {s} = struct {{\n", .{m.name});
-        // Azure services routinely omit nominally-required fields from
+        try w.print("pub const {s} = struct {{\n", .{m.name}); // Azure services routinely omit nominally-required fields from
         // response bodies (e.g. a blob listing omits `<Deleted>`/`<Snapshot>`
         // for a normal blob). Match azure-sdk-for-rust, whose generated
         // response models make every field optional, by treating fields of
@@ -2212,8 +2220,22 @@ pub fn renderModels(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
                 continue;
             }
             const opt = f.optional or force_optional;
-            const ty = try renderFieldType(allocator, f.field_type, opt, .models);
-            defer allocator.free(ty);
+            const rendered = try renderFieldType(allocator, f.field_type, opt, .models);
+            defer allocator.free(rendered);
+            // Boxed back edge of a recursive schema: `?Build` → `?*const Build`.
+            const boxed = if (cycles.contains(m.name, f.name)) blk: {
+                const bare = if (std.mem.startsWith(u8, rendered, "?"))
+                    rendered[1..]
+                else
+                    rendered;
+                break :blk try std.fmt.allocPrint(
+                    allocator,
+                    "{s}*const {s}",
+                    .{ if (opt) "?" else "", bare },
+                );
+            } else null;
+            defer if (boxed) |b| allocator.free(b);
+            const ty = boxed orelse rendered;
             if (opt) {
                 try w.print("    {s}: {s} = null,\n", .{ id, ty });
             } else {
@@ -2931,7 +2953,177 @@ fn renderFieldType(
     return try types.renderType(allocator, t, scope);
 }
 
+/// The model a field points at *by value*, if any.
+///
+/// A `[]const T` or a map already stores `T` behind a pointer, so only a
+/// bare (or optional) model reference contributes to a struct's size and
+/// can therefore make a type depend on itself.
+fn directModelName(t: cm.TypeRef) ?[]const u8 {
+    const inner = if (t.isOption()) nestedTypeRef(t) else t;
+    if (inner.isArray() or inner.isMap()) return null;
+    if (!inner.isModel()) return null;
+    return inner.namedTypeName();
+}
+
+/// The `Model.field` pairs that have to be boxed to keep every generated
+/// struct finitely sized.
+///
+/// Azure DevOps has genuinely recursive schemas — a `Build` carries the
+/// `Build` that triggered it, a `WikiPage` carries its sub-pages — which
+/// map to `field: ?Build`, a type that contains itself. Zig rejects that,
+/// so one field on each cycle is emitted as `?*const Build` instead. The
+/// back edge of a depth-first traversal is chosen, which is stable for a
+/// given model order and breaks every cycle it belongs to.
+///
+/// Keys are `"Model.field"`; the caller owns the map and its keys.
+const CycleBreaker = struct {
+    boxed: std.StringHashMapUnmanaged(void) = .empty,
+    allocator: std.mem.Allocator,
+
+    const State = enum { unvisited, in_progress, done };
+
+    fn init(allocator: std.mem.Allocator, models: []const cm.Model) !CycleBreaker {
+        var self: CycleBreaker = .{ .allocator = allocator };
+        errdefer self.deinit();
+
+        var index: std.StringHashMapUnmanaged(usize) = .empty;
+        defer index.deinit(allocator);
+        for (models, 0..) |m, i| try index.put(allocator, m.name, i);
+
+        const state = try allocator.alloc(State, models.len);
+        defer allocator.free(state);
+        @memset(state, .unvisited);
+
+        for (0..models.len) |i| {
+            if (state[i] == .unvisited) try self.visit(models, index, state, i);
+        }
+        return self;
+    }
+
+    fn visit(
+        self: *CycleBreaker,
+        models: []const cm.Model,
+        index: std.StringHashMapUnmanaged(usize),
+        state: []State,
+        i: usize,
+    ) !void {
+        state[i] = .in_progress;
+        for (models[i].fields) |f| {
+            const target_name = directModelName(f.field_type) orelse continue;
+            const j = index.get(target_name) orelse continue;
+            switch (state[j]) {
+                // Back edge: this field closes a cycle, so box it.
+                .in_progress => {
+                    const key = try std.fmt.allocPrint(
+                        self.allocator,
+                        "{s}.{s}",
+                        .{ models[i].name, f.name },
+                    );
+                    errdefer self.allocator.free(key);
+                    const entry = try self.boxed.getOrPut(self.allocator, key);
+                    if (entry.found_existing) self.allocator.free(key);
+                },
+                .unvisited => try self.visit(models, index, state, j),
+                .done => {},
+            }
+        }
+        state[i] = .done;
+    }
+
+    fn contains(self: CycleBreaker, model_name: []const u8, field_name: []const u8) bool {
+        var buf: [256]u8 = undefined;
+        const key = std.fmt.bufPrint(
+            &buf,
+            "{s}.{s}",
+            .{ model_name, field_name },
+        ) catch return false;
+        return self.boxed.contains(key);
+    }
+
+    fn deinit(self: *CycleBreaker) void {
+        var it = self.boxed.keyIterator();
+        while (it.next()) |key| self.allocator.free(key.*);
+        self.boxed.deinit(self.allocator);
+    }
+};
+
 // ─── tests ────────────────────────────────────────────────────────────
+
+test "recursive models box the back edge so the struct stays finitely sized" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    // `Build.triggered_by_build: ?Build` and the two-hop
+    // `Dashboard → Widget → Dashboard` are both real Azure DevOps schemas.
+    var array_of_build: std.json.ObjectMap = try .init(
+        alloc,
+        &.{ "kind", "value" },
+        &.{ .{ .string = "Model" }, .{ .string = "Build" } },
+    );
+    defer array_of_build.deinit(alloc);
+
+    var build_fields = [_]cm.Field{
+        .{
+            .name = "triggered_by_build",
+            .serialized_name = "triggeredByBuild",
+            .field_type = .{ .kind = "Model", .value = .{ .string = "Build" } },
+            .optional = true,
+        },
+        .{
+            .name = "children",
+            .serialized_name = "children",
+            .field_type = .{
+                .kind = "Array",
+                .value = .{ .object = array_of_build },
+            },
+            .optional = true,
+        },
+    };
+    var dashboard_fields = [_]cm.Field{.{
+        .name = "widget",
+        .serialized_name = "widget",
+        .field_type = .{ .kind = "Model", .value = .{ .string = "Widget" } },
+        .optional = true,
+    }};
+    var widget_fields = [_]cm.Field{.{
+        .name = "dashboard",
+        .serialized_name = "dashboard",
+        .field_type = .{ .kind = "Model", .value = .{ .string = "Dashboard" } },
+        .optional = true,
+    }};
+    var models = [_]cm.Model{
+        .{ .name = "Build", .fields = &build_fields, .is_output = true },
+        .{ .name = "Dashboard", .fields = &dashboard_fields, .is_output = true },
+        .{ .name = "Widget", .fields = &widget_fields, .is_output = true },
+    };
+    const model: cm.CodeModel = .{
+        .package_name = "azure_rest_devops",
+        .package_version = "0.1.0",
+        .target_kind = "dataplane",
+        .service_kind = "default",
+        .models = &models,
+    };
+
+    const rendered = try renderModels(alloc, model);
+    defer alloc.free(rendered);
+
+    // Direct self-reference is boxed.
+    try testing.expect(std.mem.indexOf(
+        u8,
+        rendered,
+        "triggered_by_build: ?*const Build = null,",
+    ) != null);
+    // A slice already provides the indirection, so it is left alone.
+    try testing.expect(std.mem.indexOf(
+        u8,
+        rendered,
+        "children: ?[]const Build = null,",
+    ) != null);
+    // Exactly one edge of the two-hop cycle is boxed.
+    const widget_boxed = std.mem.indexOf(u8, rendered, "widget: ?*const Widget") != null;
+    const dashboard_boxed = std.mem.indexOf(u8, rendered, "dashboard: ?*const Dashboard") != null;
+    try testing.expect(widget_boxed != dashboard_boxed);
+}
 
 test "display_name surfaces in root.zig + README, not build.zig" {
     const testing = std.testing;
