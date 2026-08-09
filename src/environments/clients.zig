@@ -146,6 +146,7 @@ pub const Environments = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get all environments.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, name: ?[]const u8, continuation_token: ?[]const u8, @"$top": ?i32) ![]const models.EnvironmentInstance {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -196,6 +197,7 @@ pub const Environments = struct {
     }
     /// Create an environment.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.EnvironmentCreateParameter) !models.EnvironmentInstance {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -231,6 +233,7 @@ pub const Environments = struct {
     }
     /// Delete the specified environment.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, environment_id: i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -263,6 +266,7 @@ pub const Environments = struct {
     }
     /// Get an environment by its ID.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, environment_id: i32, expands: ?enums.GetRequestExpands) !models.EnvironmentInstance {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -303,6 +307,7 @@ pub const Environments = struct {
     }
     /// Update the specified environment.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, environment_id: i32, body: models.EnvironmentUpdateParameter) !models.EnvironmentInstance {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -346,6 +351,7 @@ pub const Environmentdeploymentrecords = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get environment deployment execution history
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, environment_id: i32, continuation_token: ?[]const u8, top: ?i32) ![]const models.EnvironmentDeploymentExecutionRecord {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -397,6 +403,7 @@ pub const Kubernetes = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, environment_id: i32, body: models.KubernetesResourcePatchParameters) !models.KubernetesResource {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -434,6 +441,7 @@ pub const Kubernetes = struct {
     }
 
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, environment_id: i32, body: models.KubernetesResourceCreateParametersExistingEndpoint) !models.KubernetesResource {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -471,6 +479,7 @@ pub const Kubernetes = struct {
     }
 
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, environment_id: i32, resource_id: i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -505,6 +514,7 @@ pub const Kubernetes = struct {
     }
 
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, environment_id: i32, resource_id: i32) !models.KubernetesResource {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -546,6 +556,7 @@ pub const Vmresource = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get Virtual Machine Resources
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, environment_id: i32, name: ?[]const u8, tags: ?[]const u8, continuation_token: ?[]const u8, @"$top": ?i32) ![]const models.VirtualMachineResource {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -605,6 +616,7 @@ pub const Vmresource = struct {
     }
     /// Update Virtual Machine Resource
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, environment_id: i32, body: models.VirtualMachineResource) !models.VirtualMachineResource {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -642,6 +654,7 @@ pub const Vmresource = struct {
     }
     /// Add Virtual Machine Resource
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, environment_id: i32, body: models.VirtualMachineResourceCreateParameters) !models.VirtualMachineResource {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -679,6 +692,7 @@ pub const Vmresource = struct {
     }
     /// Replace Virtual Machine Resource
     pub fn replaceVirtualMachineResource(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, environment_id: i32, body: models.VirtualMachineResource) !models.VirtualMachineResource {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -716,6 +730,7 @@ pub const Vmresource = struct {
     }
     /// Delete Virtual Machine Resource
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, environment_id: i32, resource_id: i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -756,6 +771,7 @@ pub const Pool = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, environment_id: i32) !models.TaskAgentPoolReference {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -803,6 +819,7 @@ pub const Environmentaccesstoken = struct {
     };
     /// GET a PAT token for creating and deleting deployment targets in an environment.
     pub fn generateEnvironmentAccessToken(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, environment_id: i32) !GenerateEnvironmentAccessTokenResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);

@@ -145,6 +145,7 @@ pub const PersonalAccessTokens = struct {
     };
     /// Lists of all the session token details of the personal access tokens (PATs) for a particular user.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, subject_descriptor: []const u8, page_size: ?i32, continuation_token: ?[]const u8, is_public: ?bool) !ListResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, subject_descriptor);
@@ -247,6 +248,7 @@ pub const RevocationRules = struct {
     };
     /// Creates a revocation rule to prevent the further usage of any OAuth authorizations that were created before the current point in time and which match the conditions in the rule. Not all kinds of OAuth authorizations can be revoked directly. Some, such as self-describing session tokens, must instead by revoked by creating a rule which will be evaluated and used to reject matching OAuth credentials at authentication time. Revocation rules created through this endpoint will apply to all credentials that were issued before the datetime at which the rule was created and which match one or more additional conditions.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.TokenAdminRevocationRule) !CreateResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/tokenadmin/revocationrules", .{ self.endpoint, encoded_path_0 });
@@ -325,6 +327,7 @@ pub const Revocations = struct {
     };
     /// Revokes the listed OAuth authorizations.
     pub fn revokeAuthorizations(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, is_public: ?bool, body: []const models.TokenAdminRevocation) !RevokeAuthorizationsResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/tokenadmin/revocations", .{ self.endpoint, encoded_path_0 });

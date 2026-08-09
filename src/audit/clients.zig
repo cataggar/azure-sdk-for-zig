@@ -130,6 +130,7 @@ pub const Actions = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get all auditable actions filterable by area.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, area_name: ?[]const u8) ![]const models.AuditActionInfo {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/audit/actions", .{ self.endpoint, encoded_path_0 });
@@ -172,6 +173,7 @@ pub const AuditLog = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Queries audit log entries
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, start_time: ?[]const u8, end_time: ?[]const u8, batch_size: ?i32, continuation_token: ?[]const u8, skip_aggregation: ?bool) !models.AuditLogQueryResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/audit/auditlog", .{ self.endpoint, encoded_path_0 });
@@ -248,6 +250,7 @@ pub const DownloadLog = struct {
     };
     /// Downloads audit log entries.
     pub fn downloadLog(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, format: []const u8, start_time: ?[]const u8, end_time: ?[]const u8) !DownloadLogResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/audit/downloadlog", .{ self.endpoint, encoded_path_0 });
@@ -318,6 +321,7 @@ pub const Streams = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Return all Audit Streams scoped to an organization
     pub fn queryAllStreams(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.AuditStream {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/audit/streams", .{ self.endpoint, encoded_path_0 });
@@ -347,6 +351,7 @@ pub const Streams = struct {
     }
     /// Create new Audit Stream
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, days_to_backfill: i32, body: models.AuditStream) !models.AuditStream {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/audit/streams", .{ self.endpoint, encoded_path_0 });
@@ -382,6 +387,7 @@ pub const Streams = struct {
     }
     /// Update existing Audit Stream
     pub fn updateStream(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.AuditStream) !models.AuditStream {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/audit/streams", .{ self.endpoint, encoded_path_0 });
@@ -415,6 +421,7 @@ pub const Streams = struct {
     }
     /// Delete Audit Stream
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, stream_id: i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, stream_id);
@@ -445,6 +452,7 @@ pub const Streams = struct {
     }
     /// Return Audit Stream with id of streamId if one exists otherwise throw
     pub fn queryStreamById(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, stream_id: i32) !models.AuditStream {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, stream_id);
@@ -476,6 +484,7 @@ pub const Streams = struct {
     }
     /// Update existing Audit Stream status
     pub fn updateStatus(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, stream_id: i32, status: enums.UpdateStatusRequestStatus) !models.AuditStream {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, stream_id);

@@ -194,6 +194,7 @@ pub const Descriptors = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Resolve a storage key to a descriptor
     pub fn get(self: *@This(), alloc: std.mem.Allocator, storage_key: []const u8, organization: []const u8) !models.GraphDescriptorResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, storage_key);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);
@@ -241,6 +242,7 @@ pub const Groups = struct {
     };
     /// Gets a list of all groups in the current scope (usually organization or account). The optional parameters are used to filter down the returned results. Returned results are in no guaranteed order. Since the list of groups may be large, results are returned in pages of groups. If there are more results than can be returned in a single page, the result set will contain a continuation token for retrieval of the next set of results.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, scope_descriptor: ?[]const u8, subject_types: ?[]const u8, continuation_token: ?[]const u8) !ListResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/graph/groups", .{ self.endpoint, encoded_path_0 });
@@ -307,6 +309,7 @@ pub const Groups = struct {
     }
     /// Create a new Azure DevOps group or materialize an existing AAD group. The body of the request must be a derived type of GraphGroupCreationContext: * GraphGroupVstsCreationContext - Create a new Azure DevOps group that is not backed by an external provider. * GraphGroupMailAddressCreationContext - Create a new group using the mail address as a reference to an existing group from an external AD or AAD backed provider. * GraphGroupOriginIdCreationContext - Create a new group using the OriginID as a reference to a group from an external AD or AAD backed provider. Optionally, you can add the newly created group as a member of an existing Azure DevOps group and/or specify a custom storage key for the group.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, scope_descriptor: ?[]const u8, group_descriptors: ?[]const u8, body: models.GraphGroupCreationContext) !models.GraphGroup {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/graph/groups", .{ self.endpoint, encoded_path_0 });
@@ -354,6 +357,7 @@ pub const Groups = struct {
     }
     /// Removes an Azure DevOps group from all of its parent groups. The group will still be visible, but membership checks for the group, and all descendants which derive membership through it, will return false.”
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, group_descriptor: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, group_descriptor);
@@ -384,6 +388,7 @@ pub const Groups = struct {
     }
     /// Get a group by its descriptor. The group will be returned even if it has been deleted from the account or has had all its memberships deleted.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, group_descriptor: []const u8) !models.GraphGroup {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, group_descriptor);
@@ -415,6 +420,7 @@ pub const Groups = struct {
     }
     /// Update the properties of an Azure DevOps group. Currently limited to only changing the description and account name.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, group_descriptor: []const u8, body: models.JsonPatchDocument) !models.GraphGroup {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, group_descriptor);
@@ -469,6 +475,7 @@ pub const Memberships = struct {
     };
     /// Get all the memberships where this descriptor is a member in the relationship. The default value for direction is 'up' meaning return all memberships where the subject is a member (e.g. all groups the subject is a member of). Alternatively, passing the direction as 'down' will return all memberships where the subject is a container (e.g. all members of the subject group).
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, subject_descriptor: []const u8, direction: ?enums.ListRequestDirection, depth: ?i32) ![]const models.GraphMembership {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, subject_descriptor);
@@ -512,6 +519,7 @@ pub const Memberships = struct {
     }
     /// Deletes a membership between a container and subject.
     pub fn removeMembership(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, subject_descriptor: []const u8, container_descriptor: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, subject_descriptor);
@@ -544,6 +552,7 @@ pub const Memberships = struct {
     }
     /// Get a membership relationship between a container and subject.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, subject_descriptor: []const u8, container_descriptor: []const u8) !models.GraphMembership {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, subject_descriptor);
@@ -577,6 +586,7 @@ pub const Memberships = struct {
     }
     /// Check to see if a membership relationship between a container and subject exists.
     pub fn checkMembershipExistence(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, subject_descriptor: []const u8, container_descriptor: []const u8) !CheckMembershipExistenceResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, subject_descriptor);
@@ -624,6 +634,7 @@ pub const Memberships = struct {
     }
     /// Create a new membership between a container and subject.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, subject_descriptor: []const u8, container_descriptor: []const u8) !models.GraphMembership {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, subject_descriptor);
@@ -663,6 +674,7 @@ pub const MembershipStates = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Check whether a subject is active or inactive.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, subject_descriptor: []const u8) !models.GraphMembershipState {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, subject_descriptor);
@@ -700,6 +712,7 @@ pub const RequestAccess = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn requestAccess(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.JToken) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/graph/requestaccess", .{ self.endpoint, encoded_path_0 });
@@ -748,6 +761,7 @@ pub const ServicePrincipals = struct {
     };
     /// Get a list of all service principals in a given scope. Since the list of service principals may be large, results are returned in pages of service principals. If there are more results than can be returned in a single page, the result set will contain a continuation token for retrieval of the next set of results. The only reliable way to know if there is no more service principals left is the lack of a continuation token.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, continuation_token: ?[]const u8, scope_descriptor: ?[]const u8) !ListResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/graph/serviceprincipals", .{ self.endpoint, encoded_path_0 });
@@ -807,6 +821,7 @@ pub const ServicePrincipals = struct {
     }
     /// Materialize an existing AAD service principal into the ADO account. NOTE: Created service principals are not active in an account. Adding a service principal to an account is required before the service principal can be added to ADO groups or assigned an asset. The body of the request must be a derived type of GraphServicePrincipalCreationContext: * GraphServicePrincipalOriginIdCreationContext - Create a new service principal using the OriginID as a reference to an existing service principal from AAD backed provider. If the service principal to be added corresponds to a service principal that was previously deleted, then that service principal will be restored. Optionally, you can add the newly created service principal as a member of an existing ADO group and/or specify a custom storage key for the service principal.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, group_descriptors: ?[]const u8, body: models.GraphServicePrincipalCreationContext) !models.GraphServicePrincipal {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/graph/serviceprincipals", .{ self.endpoint, encoded_path_0 });
@@ -847,6 +862,7 @@ pub const ServicePrincipals = struct {
     }
     /// Disables a service principal. The service principal will still be visible, but membership checks for the service principal will return false.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, service_principal_descriptor: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, service_principal_descriptor);
@@ -877,6 +893,7 @@ pub const ServicePrincipals = struct {
     }
     /// Get a service principal by its descriptor.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, service_principal_descriptor: []const u8) !models.GraphServicePrincipal {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, service_principal_descriptor);
@@ -914,6 +931,7 @@ pub const StorageKeys = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Resolve a descriptor to a storage key.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, subject_descriptor: []const u8, organization: []const u8) !models.GraphStorageKeyResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, subject_descriptor);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);
@@ -951,6 +969,7 @@ pub const SubjectLookup = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Resolve descriptors to users, groups or scopes (Subjects) in a batch.
     pub fn lookupSubjects(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.GraphSubjectLookup) !std.json.ArrayHashMap(models.GraphSubject) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/graph/subjectlookup", .{ self.endpoint, encoded_path_0 });
@@ -990,6 +1009,7 @@ pub const SubjectQuery = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Search for Azure Devops users, or/and groups. Results will be returned in a batch with no more than 100 graph subjects.
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.GraphSubjectQuery) ![]const models.GraphSubject {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/graph/subjectquery", .{ self.endpoint, encoded_path_0 });
@@ -1029,6 +1049,7 @@ pub const Avatars = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, subject_descriptor: []const u8, organization: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, subject_descriptor);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);
@@ -1059,6 +1080,7 @@ pub const Avatars = struct {
     }
 
     pub fn get(self: *@This(), alloc: std.mem.Allocator, subject_descriptor: []const u8, organization: []const u8, size: ?enums.GetRequestSize, format: ?[]const u8) !models.Avatar {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, subject_descriptor);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);
@@ -1104,6 +1126,7 @@ pub const Avatars = struct {
     }
 
     pub fn setAvatar(self: *@This(), alloc: std.mem.Allocator, subject_descriptor: []const u8, organization: []const u8, body: models.Avatar) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, subject_descriptor);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);
@@ -1154,6 +1177,7 @@ pub const Users = struct {
     };
     /// Get a list of all users in a given scope. Since the list of users may be large, results are returned in pages of users. If there are more results than can be returned in a single page, the result set will contain a continuation token for retrieval of the next set of results.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, subject_types: ?[]const u8, continuation_token: ?[]const u8, scope_descriptor: ?[]const u8) !ListResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/graph/users", .{ self.endpoint, encoded_path_0 });
@@ -1220,6 +1244,7 @@ pub const Users = struct {
     }
     /// Materialize an existing AAD or MSA user into the ADO account. NOTE: Created users are not active in an account unless they have been explicitly assigned a parent group at creation time or have signed in and been autolicensed through AAD group memberships. Adding a user to an account is required before the user can be added to ADO groups or assigned an asset. The body of the request must be a derived type of GraphUserCreationContext: * GraphUserMailAddressCreationContext - Create a new user using the mail address as a reference to an existing user from an external AD or AAD backed provider. * GraphUserOriginIdCreationContext - Create a new user using the OriginID as a reference to an existing user from an external AD or AAD backed provider. * GraphUserPrincipalNameCreationContext - Create a new user using the principal name as a reference to an existing user from an external AD or AAD backed provider. If the user to be added corresponds to a user that was previously deleted, then that user will be restored. Optionally, you can add the newly created user as a member of an existing ADO group and/or specify a custom storage key for the user.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, group_descriptors: ?[]const u8, body: models.GraphUserCreationContext) !models.GraphUser {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/graph/users", .{ self.endpoint, encoded_path_0 });
@@ -1260,6 +1285,7 @@ pub const Users = struct {
     }
     /// Disables a user. The user will still be visible, but membership checks for the user will return false.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, user_descriptor: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, user_descriptor);
@@ -1290,6 +1316,7 @@ pub const Users = struct {
     }
     /// Get a user by its descriptor.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, user_descriptor: []const u8) !models.GraphUser {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, user_descriptor);
@@ -1321,6 +1348,7 @@ pub const Users = struct {
     }
     /// Map an existing user to a different user. The body of the request must be a derived type of GraphUserUpdateContext: * GraphUserOriginIdUpdateContext - Map an existing user in an account, to an existing user from an external AD or AAD backed provider using the OriginId as a reference.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, user_descriptor: []const u8, body: models.GraphUserUpdateContext) !models.GraphUser {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, user_descriptor);
@@ -1362,6 +1390,7 @@ pub const ProviderInfo = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn get(self: *@This(), alloc: std.mem.Allocator, user_descriptor: []const u8, organization: []const u8) !models.GraphProviderInfo {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, user_descriptor);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);

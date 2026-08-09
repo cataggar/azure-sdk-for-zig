@@ -106,6 +106,7 @@ pub const InstalledExtensions = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// List the installed extensions in the account / project collection.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, include_disabled_extensions: ?bool, include_errors: ?bool, asset_types: ?[]const u8, include_installation_issues: ?bool) ![]const models.InstalledExtension {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/extensionmanagement/installedextensions", .{ self.endpoint, encoded_path_0 });
@@ -157,6 +158,7 @@ pub const InstalledExtensions = struct {
     }
     /// Update an installed extension. Typically this API is used to enable or disable an extension.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.InstalledExtension) !models.InstalledExtension {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/extensionmanagement/installedextensions", .{ self.endpoint, encoded_path_0 });
@@ -190,6 +192,7 @@ pub const InstalledExtensions = struct {
     }
     /// Uninstall the specified extension from the account / project collection.
     pub fn uninstallExtensionByName(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, publisher_name: []const u8, extension_name: []const u8, reason: ?[]const u8, reason_code: ?[]const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, publisher_name);
@@ -236,6 +239,7 @@ pub const InstalledExtensions = struct {
     }
     /// Get an installed extension by its publisher and extension name.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, publisher_name: []const u8, extension_name: []const u8, asset_types: ?[]const u8) !models.InstalledExtension {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, publisher_name);
@@ -276,6 +280,7 @@ pub const InstalledExtensions = struct {
     }
     /// Install the specified extension into the account / project collection.
     pub fn installExtensionByName(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, publisher_name: []const u8, extension_name: []const u8, version: []const u8) !models.InstalledExtension {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, publisher_name);

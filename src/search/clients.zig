@@ -156,6 +156,7 @@ pub const PackageSearchResults = struct {
     };
     /// Provides a set of results for the search text.
     pub fn fetchPackageSearchResults(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.PackageSearchRequest) !FetchPackageSearchResultsResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/search/packagesearchresults", .{ self.endpoint, encoded_path_0 });
@@ -211,6 +212,7 @@ pub const CodeSearchResults = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Provides a set of results for the search text.
     pub fn fetchCodeSearchResults(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.CodeSearchRequest) !models.CodeSearchResponse {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -252,6 +254,7 @@ pub const Repositories = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Provides status of Repository.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository: []const u8) !models.RepositoryStatusResponse {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -291,6 +294,7 @@ pub const Tfvc = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Provides status of TFVC Repository.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.TfvcRepositoryStatusResponse {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -328,6 +332,7 @@ pub const WikiSearchResults = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Provides a set of results for the search request.
     pub fn fetchWikiSearchResults(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.WikiSearchRequest) !models.WikiSearchResponse {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -369,6 +374,7 @@ pub const WorkItemSearchResults = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Provides a set of results for the search text.
     pub fn fetchWorkItemSearchResults(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.WorkItemSearchRequest) !models.WorkItemSearchResponse {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);

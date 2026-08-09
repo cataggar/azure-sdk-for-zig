@@ -114,6 +114,7 @@ pub const Behaviors = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Returns a list of behaviors for the process.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8) ![]const models.AdminBehavior {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -161,6 +162,7 @@ pub const Processes = struct {
     };
     /// Returns requested process template.
     pub fn exportProcessTemplate(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: []const u8) !ExportProcessTemplateResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, id);
@@ -209,6 +211,7 @@ pub const Processes = struct {
     }
     /// Imports a process from zip file.
     pub fn importProcessTemplate(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, ignore_warnings: ?bool, replace_existing_template: ?bool, body: []const u8) !models.ProcessImportResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/work/processadmin/processes/import", .{ self.endpoint, encoded_path_0 });
@@ -250,6 +253,7 @@ pub const Processes = struct {
     }
     /// Tells whether promote has completed for the specified promote job ID.
     pub fn importProcessTemplateStatus(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: []const u8) !models.ProcessPromoteStatus {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, id);

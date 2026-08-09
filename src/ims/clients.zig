@@ -106,6 +106,7 @@ pub const Identities = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Resolve legacy identity information for use with older APIs such as the Security APIs
     pub fn readIdentities(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, descriptors: ?[]const u8, identity_ids: ?[]const u8, subject_descriptors: ?[]const u8, search_filter: ?[]const u8, filter_value: ?[]const u8, query_membership: ?enums.ReadIdentitiesRequestQueryMembership) ![]const models.Identity {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/identities", .{ self.endpoint, encoded_path_0 });

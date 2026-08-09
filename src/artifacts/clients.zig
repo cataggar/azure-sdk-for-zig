@@ -162,6 +162,7 @@ pub const ServiceSettings = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get all service-wide feed creation and administration permissions.
     pub fn getGlobalPermissions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, include_ids: ?bool) ![]const models.GlobalPermission {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/packaging/globalpermissions", .{ self.endpoint, encoded_path_0 });
@@ -196,6 +197,7 @@ pub const ServiceSettings = struct {
     }
     /// Set service-wide permissions that govern feed creation and administration.
     pub fn setGlobalPermissions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: []const models.GlobalPermission) ![]const models.GlobalPermission {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/packaging/globalpermissions", .{ self.endpoint, encoded_path_0 });
@@ -235,6 +237,7 @@ pub const ChangeTracking = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Query to determine which feeds have changed since the last call, tracked through the provided continuationToken. Only changes to a feed itself are returned and impact the continuationToken, not additions or alterations to packages within the feeds. If the project parameter is present, gets all feed changes in the given project. If omitted, gets all feed changes in the organization.
     pub fn getFeedChanges(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, include_deleted: ?bool, continuation_token: ?i64, batch_size: ?i32) !models.FeedChangesResponse {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -281,6 +284,7 @@ pub const ChangeTracking = struct {
     }
     /// Query a feed to determine its current state. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn getFeedChange(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8) !models.FeedChange {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -314,6 +318,7 @@ pub const ChangeTracking = struct {
     }
     /// Get a batch of package changes made to a feed. The changes returned are 'most recent change' so if an Add is followed by an Update before you begin enumerating, you'll only see one change in the batch. While consuming batches using the continuation token, you may see changes to the same package version multiple times if they are happening as you enumerate. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn getPackageChanges(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8, continuation_token: ?i64, batch_size: ?i32) !models.PackageChangesResponse {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -363,6 +368,7 @@ pub const FeedRecycleBin = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Query for feeds within the recycle bin. If the project parameter is present, gets all feeds in recycle bin in the given project. If omitted, gets all feeds in recycle bin in the organization.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.Feed {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -394,6 +400,7 @@ pub const FeedRecycleBin = struct {
     }
     /// Permanently delete a feed and all of its packages. The action is irreversible and the package content will be deleted immediately. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn permanentDeleteFeed(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -426,6 +433,7 @@ pub const FeedRecycleBin = struct {
     }
     /// Restores a deleted feed and all of its packages. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn restoreDeletedFeed(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8, body: models.JsonPatchDocument) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -468,6 +476,7 @@ pub const FeedManagement = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get all feeds in an account where you have the provided role access. If the project parameter is present, gets all feeds in the given project. If omitted, gets all feeds in the organization.
     pub fn getFeeds(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, feed_role: ?enums.GetFeedsRequestFeedRole, include_deleted_upstreams: ?bool, include_urls: ?bool) ![]const models.Feed {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -516,6 +525,7 @@ pub const FeedManagement = struct {
     }
     /// Create a feed, a container for various package types. Feeds can be created in a project if the project parameter is included in the request url. If the project parameter is omitted, the feed will not be associated with a project and will be created at the organization level.
     pub fn createFeed(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.Feed) !models.Feed {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -551,6 +561,7 @@ pub const FeedManagement = struct {
     }
     /// Remove a feed and all its packages. The feed moves to the recycle bin and is reversible. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn deleteFeed(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -583,6 +594,7 @@ pub const FeedManagement = struct {
     }
     /// Get the settings for a specific feed. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn getFeed(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8, include_deleted_upstreams: ?bool) !models.Feed {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -621,6 +633,7 @@ pub const FeedManagement = struct {
     }
     /// Change the attributes of a feed. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn updateFeed(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8, body: models.FeedUpdate) !models.Feed {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -658,6 +671,7 @@ pub const FeedManagement = struct {
     }
     /// Get the permissions for a feed. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn getFeedPermissions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8, include_ids: ?bool, exclude_inherited_permissions: ?bool, identity_descriptor: ?[]const u8, include_deleted_feeds: ?bool) ![]const models.FeedPermission {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -713,6 +727,7 @@ pub const FeedManagement = struct {
     }
     /// Update the permissions on a feed. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn setFeedPermissions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8, body: []const models.FeedPermission) ![]const models.FeedPermission {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -750,6 +765,7 @@ pub const FeedManagement = struct {
     }
     /// Get all views for a feed. The project parameter must be supplied if the feed was created in a project.
     pub fn getFeedViews(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8) ![]const models.FeedView {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -783,6 +799,7 @@ pub const FeedManagement = struct {
     }
     /// Create a new view on the referenced feed. The project parameter must be supplied if the feed was created in a project.
     pub fn createFeedView(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8, body: models.FeedView) !models.FeedView {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -820,6 +837,7 @@ pub const FeedManagement = struct {
     }
     /// Delete a feed view. The project parameter must be supplied if the feed was created in a project.
     pub fn deleteFeedView(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, view_id: []const u8, project: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -854,6 +872,7 @@ pub const FeedManagement = struct {
     }
     /// Get a view by Id. The project parameter must be supplied if the feed was created in a project.
     pub fn getFeedView(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, view_id: []const u8, project: []const u8) !models.FeedView {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -889,6 +908,7 @@ pub const FeedManagement = struct {
     }
     /// Update a view. The project parameter must be supplied if the feed was created in a project.
     pub fn updateFeedView(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, view_id: []const u8, project: []const u8, body: models.FeedView) !models.FeedView {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -944,6 +964,7 @@ pub const ArtifactDetails = struct {
     };
 
     pub fn queryPackageMetrics(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8, body: models.PackageMetricsQuery) ![]const models.PackageMetrics {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -981,6 +1002,7 @@ pub const ArtifactDetails = struct {
     }
     /// Get details about all of the packages in the feed. Use the various filters to include or exclude information from the result set. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn getPackages(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8, protocol_type: ?[]const u8, package_name_query: ?[]const u8, normalized_package_name: ?[]const u8, include_urls: ?bool, include_all_versions: ?bool, is_listed: ?bool, get_top_package_versions: ?bool, is_release: ?bool, include_description: ?bool, @"$top": ?i32, @"$skip": ?i32, include_deleted: ?bool, is_cached: ?bool, direct_upstream_id: ?[]const u8) ![]const models.Package {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -1092,6 +1114,7 @@ pub const ArtifactDetails = struct {
     }
     /// Get details about a specific package. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn getPackage(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, package_id: []const u8, project: []const u8, include_all_versions: ?bool, include_urls: ?bool, is_listed: ?bool, is_release: ?bool, include_deleted: ?bool, include_description: ?bool) !models.Package {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -1157,6 +1180,7 @@ pub const ArtifactDetails = struct {
     }
 
     pub fn queryPackageVersionMetrics(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, package_id: []const u8, project: []const u8, body: models.PackageVersionMetricsQuery) ![]const models.PackageVersionMetrics {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -1196,6 +1220,7 @@ pub const ArtifactDetails = struct {
     }
     /// Get a list of package versions, optionally filtering by state. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn getPackageVersions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, package_id: []const u8, project: []const u8, include_urls: ?bool, is_listed: ?bool, is_deleted: ?bool) ![]const models.PackageVersion {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -1246,6 +1271,7 @@ pub const ArtifactDetails = struct {
     }
     /// Get details about a specific package version. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn getPackageVersion(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, package_id: []const u8, package_version_id: []const u8, project: []const u8, include_urls: ?bool, is_listed: ?bool, is_deleted: ?bool) !models.PackageVersion {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -1298,6 +1324,7 @@ pub const ArtifactDetails = struct {
     }
     /// Gets provenance for a package version. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn getPackageVersionProvenance(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, package_id: []const u8, package_version_id: []const u8, project: []const u8) !models.PackageVersionProvenance {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -1335,6 +1362,7 @@ pub const ArtifactDetails = struct {
     }
     /// Generate a SVG badge for the latest version of a package. The generated SVG is typically used as the image in an HTML link which takes users to the feed containing the package to accelerate discovery and consumption. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn getBadge(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, package_id: []const u8, project: []const u8) !GetBadgeResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -1392,6 +1420,7 @@ pub const RecycleBin = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Queues a job to remove all package versions from a feed's recycle bin
     pub fn emptyRecycleBin(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8) !models.OperationReference {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -1425,6 +1454,7 @@ pub const RecycleBin = struct {
     }
     /// Query for packages within the recycle bin. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn getRecycleBinPackages(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8, protocol_type: ?[]const u8, package_name_query: ?[]const u8, include_urls: ?bool, @"$top": ?i32, @"$skip": ?i32, include_all_versions: ?bool) ![]const models.Package {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -1492,6 +1522,7 @@ pub const RecycleBin = struct {
     }
     /// Get information about a package and all its versions within the recycle bin. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn getRecycleBinPackage(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, package_id: []const u8, project: []const u8, include_urls: ?bool) !models.Package {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -1532,6 +1563,7 @@ pub const RecycleBin = struct {
     }
     /// Get a list of package versions within the recycle bin. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn getRecycleBinPackageVersions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, package_id: []const u8, project: []const u8, include_urls: ?bool) ![]const models.RecycleBinPackageVersion {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -1572,6 +1604,7 @@ pub const RecycleBin = struct {
     }
     /// Get information about a package version within the recycle bin. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn getRecycleBinPackageVersion(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, package_id: []const u8, package_version_id: []const u8, project: []const u8, include_urls: ?bool) !models.RecycleBinPackageVersion {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -1620,6 +1653,7 @@ pub const RetentionPolicies = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Delete the retention policy for a feed. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn deleteRetentionPolicy(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -1652,6 +1686,7 @@ pub const RetentionPolicies = struct {
     }
     /// Get the retention policy for a feed. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn getRetentionPolicy(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8) !models.FeedRetentionPolicy {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -1685,6 +1720,7 @@ pub const RetentionPolicies = struct {
     }
     /// Set the retention policy for a feed. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn setRetentionPolicy(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8, body: models.FeedRetentionPolicy) !models.FeedRetentionPolicy {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, feed_id);
@@ -1728,6 +1764,7 @@ pub const Provenance = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Creates a session, a wrapper around a feed that can store additional metadata on the packages published to it.
     pub fn createSession(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, protocol: []const u8, project: []const u8, body: models.SessionRequest) !models.SessionResponse {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, protocol);

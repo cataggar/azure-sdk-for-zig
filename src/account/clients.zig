@@ -106,6 +106,7 @@ pub const Accounts = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of accounts for a specific owner or a specific member. One of the following parameters is required: ownerId, memberId.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, owner_id: ?[]const u8, member_id: ?[]const u8, properties: ?[]const u8) ![]const models.Account {
+        @setEvalBranchQuota(100_000);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/_apis/accounts", .{self.endpoint});
         defer alloc.free(base_url);
         var url_buf: std.ArrayList(u8) = .empty;

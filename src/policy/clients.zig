@@ -130,6 +130,7 @@ pub const Configurations = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of policy configurations in a project. The 'scope' parameter for this API should not be used, except for legacy compatability reasons. It returns specifically scoped policies and does not support heirarchical nesting. Instead, use the /_apis/git/policy/configurations API, which provides first class scope filtering support. The optional `policyType` parameter can be used to filter the set of policies returned from this method.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, scope: ?[]const u8, @"$top": ?i32, continuation_token: ?[]const u8, policy_type: ?[]const u8) ![]const models.PolicyConfiguration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -187,6 +188,7 @@ pub const Configurations = struct {
     }
     /// Create a policy configuration of a given policy type.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.PolicyConfiguration) !models.PolicyConfiguration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -222,6 +224,7 @@ pub const Configurations = struct {
     }
     /// Delete a policy configuration by its ID.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, configuration_id: i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -254,6 +257,7 @@ pub const Configurations = struct {
     }
     /// Get a policy configuration by its ID.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, configuration_id: i32) !models.PolicyConfiguration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -287,6 +291,7 @@ pub const Configurations = struct {
     }
     /// Update a policy configuration by its ID.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, configuration_id: i32, body: models.PolicyConfiguration) !models.PolicyConfiguration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -330,6 +335,7 @@ pub const Revisions = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve all revisions for a given policy.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, configuration_id: i32, @"$top": ?i32, @"$skip": ?i32) ![]const models.PolicyConfiguration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -373,6 +379,7 @@ pub const Revisions = struct {
     }
     /// Retrieve a specific revision of a given policy by ID.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, configuration_id: i32, revision_id: i32) !models.PolicyConfiguration {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -414,6 +421,7 @@ pub const Evaluations = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieves a list of all the policy evaluation statuses for a specific pull request. Evaluations are retrieved using an artifact ID which uniquely identifies the pull request. To generate an artifact ID for a pull request, use this template: ``` vstfs:///CodeReview/CodeReviewId/{projectId}/{pullRequestId} ```
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, artifact_id: []const u8, include_not_applicable: ?bool, @"$top": ?i32, @"$skip": ?i32) ![]const models.PolicyEvaluationRecord {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -464,6 +472,7 @@ pub const Evaluations = struct {
     }
     /// Gets the present evaluation state of a policy. Each policy which applies to a pull request will have an evaluation state which is specific to that policy running in the context of that pull request. Each evaluation is uniquely identified via a Guid. You can find all the policy evaluations for a specific pull request using the List operation of this controller.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, evaluation_id: []const u8) !models.PolicyEvaluationRecord {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -497,6 +506,7 @@ pub const Evaluations = struct {
     }
     /// Requeue the policy evaluation. Some policies define a 'requeue' action which performs some policy-specific operation. You can trigger this operation by updating an existing policy evaluation and setting the PolicyEvaluationRecord.Status field to Queued. Although any policy evaluation can be requeued, at present only build policies perform any action in response. Requeueing a build policy will queue a new build to run (cancelling any existing build which is running).
     pub fn requeuePolicyEvaluation(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, evaluation_id: []const u8) !models.PolicyEvaluationRecord {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -536,6 +546,7 @@ pub const Types = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve all available policy types.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.PolicyType {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -567,6 +578,7 @@ pub const Types = struct {
     }
     /// Retrieve a specific policy type by ID.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, type_id: []const u8) !models.PolicyType {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);

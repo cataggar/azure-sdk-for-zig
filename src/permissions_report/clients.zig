@@ -114,6 +114,7 @@ pub const PermissionsReportOperations = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of permissions reports
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.PermissionsReport {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/permissionsreport", .{ self.endpoint, encoded_path_0 });
@@ -143,6 +144,7 @@ pub const PermissionsReportOperations = struct {
     }
     /// Request a permissions report to be created asyncronously
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.PermissionsReportRequest) !models.ReferenceLinks {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/permissionsreport", .{ self.endpoint, encoded_path_0 });
@@ -176,6 +178,7 @@ pub const PermissionsReportOperations = struct {
     }
     /// Get a specific permissions report
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: []const u8) !models.PermissionsReport {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, id);
@@ -223,6 +226,7 @@ pub const PermissionsReportDownload = struct {
     };
     /// Download the json results of a permissions report
     pub fn download(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: []const u8) !DownloadResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, id);

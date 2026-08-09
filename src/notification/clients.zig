@@ -145,6 +145,7 @@ pub const DiagnosticLogs = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of diagnostic logs for this service.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, source: []const u8, organization: []const u8, entry_id: []const u8, start_time: ?[]const u8, end_time: ?[]const u8) ![]const models.INotificationDiagnosticLog {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, source);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);
@@ -198,6 +199,7 @@ pub const EventTypes = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// List available event types for this service. Optionally filter by only event types for the specified publisher.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, publisher_id: ?[]const u8) ![]const models.NotificationEventType {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/notification/eventtypes", .{ self.endpoint, encoded_path_0 });
@@ -234,6 +236,7 @@ pub const EventTypes = struct {
     }
     /// Get a specific event type.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, event_type: []const u8, organization: []const u8) !models.NotificationEventType {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, event_type);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);
@@ -271,6 +274,7 @@ pub const Settings = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !models.NotificationAdminSettings {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/notification/settings", .{ self.endpoint, encoded_path_0 });
@@ -300,6 +304,7 @@ pub const Settings = struct {
     }
 
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.NotificationAdminSettingsUpdateParameters) !models.NotificationAdminSettings {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/notification/settings", .{ self.endpoint, encoded_path_0 });
@@ -339,6 +344,7 @@ pub const Subscribers = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get delivery preferences of a notifications subscriber.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, subscriber_id: []const u8, organization: []const u8) !models.NotificationSubscriber {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, subscriber_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);
@@ -370,6 +376,7 @@ pub const Subscribers = struct {
     }
     /// Update delivery preferences of a notifications subscriber.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, subscriber_id: []const u8, organization: []const u8, body: models.NotificationSubscriberUpdateParameters) !models.NotificationSubscriber {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, subscriber_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);
@@ -411,6 +418,7 @@ pub const Subscriptions = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Query for subscriptions. A subscription is returned if it matches one or more of the specified conditions.
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.SubscriptionQuery) ![]const models.NotificationSubscription {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/notification/subscriptionquery", .{ self.endpoint, encoded_path_0 });
@@ -444,6 +452,7 @@ pub const Subscriptions = struct {
     }
     /// Get a list of notification subscriptions, either by subscription IDs or by all subscriptions for a given user or group.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, target_id: ?[]const u8, ids: ?[]const u8, query_flags: ?enums.ListRequestQueryFlags) ![]const models.NotificationSubscription {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/notification/subscriptions", .{ self.endpoint, encoded_path_0 });
@@ -494,6 +503,7 @@ pub const Subscriptions = struct {
     }
     /// Create a new subscription.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.NotificationSubscriptionCreateParameters) !models.NotificationSubscription {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/notification/subscriptions", .{ self.endpoint, encoded_path_0 });
@@ -527,6 +537,7 @@ pub const Subscriptions = struct {
     }
     /// Delete a subscription.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, subscription_id: []const u8, organization: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);
@@ -557,6 +568,7 @@ pub const Subscriptions = struct {
     }
     /// Get a notification subscription by its ID.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, subscription_id: []const u8, organization: []const u8, query_flags: ?enums.GetRequestQueryFlags) !models.NotificationSubscription {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);
@@ -595,6 +607,7 @@ pub const Subscriptions = struct {
     }
     /// Update an existing subscription. Depending on the type of subscription and permissions, the caller can update the description, filter settings, channel (delivery) settings and more.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, subscription_id: []const u8, organization: []const u8, body: models.NotificationSubscriptionUpdateParameters) !models.NotificationSubscription {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);
@@ -630,6 +643,7 @@ pub const Subscriptions = struct {
     }
     /// Update the specified user's settings for the specified subscription. This API is typically used to opt in or out of a shared subscription. User settings can only be applied to shared subscriptions, like team subscriptions or default subscriptions.
     pub fn updateSubscriptionUserSettings(self: *@This(), alloc: std.mem.Allocator, subscription_id: []const u8, user_id: []const u8, organization: []const u8, body: models.SubscriptionUserSettings) !models.SubscriptionUserSettings {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, user_id);
@@ -667,6 +681,7 @@ pub const Subscriptions = struct {
     }
     /// Get available subscription templates.
     pub fn getSubscriptionTemplates(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.NotificationSubscriptionTemplate {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/notification/subscriptiontemplates", .{ self.endpoint, encoded_path_0 });
@@ -702,6 +717,7 @@ pub const Diagnostics = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get the diagnostics settings for a subscription.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, subscription_id: []const u8, organization: []const u8) !models.SubscriptionDiagnostics {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);
@@ -733,6 +749,7 @@ pub const Diagnostics = struct {
     }
     /// Update the diagnostics settings for a subscription.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, subscription_id: []const u8, organization: []const u8, body: models.UpdateSubscripitonDiagnosticsParameters) !models.SubscriptionDiagnostics {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, organization);

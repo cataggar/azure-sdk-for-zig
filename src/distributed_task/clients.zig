@@ -266,6 +266,7 @@ pub const Elasticpools = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of all Elastic Pools.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.ElasticPool {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/distributedtask/elasticpools", .{ self.endpoint, encoded_path_0 });
@@ -295,6 +296,7 @@ pub const Elasticpools = struct {
     }
     /// Create a new elastic pool. This will create a new TaskAgentPool at the organization level. If a project id is provided, this will create a new TaskAgentQueue in the specified project.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_name: []const u8, authorize_all_pipelines: ?bool, auto_provision_project_pools: ?bool, project_id: ?[]const u8, body: models.ElasticPool) !models.ElasticPoolCreationResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/distributedtask/elasticpools", .{ self.endpoint, encoded_path_0 });
@@ -349,6 +351,7 @@ pub const Elasticpools = struct {
     }
     /// Returns the Elastic Pool with the specified Pool Id.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32) !models.ElasticPool {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, pool_id);
@@ -380,6 +383,7 @@ pub const Elasticpools = struct {
     }
     /// Update settings on a specified Elastic Pool.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32, body: models.ElasticPoolSettings) !models.ElasticPool {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, pool_id);
@@ -421,6 +425,7 @@ pub const Elasticpoollogs = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get elastic pool diagnostics logs for a specified Elastic Pool.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32, @"$top": ?i32) ![]const models.ElasticPoolLog {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, pool_id);
@@ -463,6 +468,7 @@ pub const Nodes = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of ElasticNodes currently in the ElasticPool
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32, @"$state": ?enums.ListRequestState) ![]const models.ElasticNode {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, pool_id);
@@ -501,6 +507,7 @@ pub const Nodes = struct {
     }
     /// Update properties on a specified ElasticNode
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32, elastic_node_id: i32, body: models.ElasticNodeSettings) !models.ElasticNode {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, pool_id);
@@ -544,6 +551,7 @@ pub const Webhooks = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Triggers a pipeline run of pipelines which have a webhook resource defined with specified WebHook Name property of the WebHook service connection.
     pub fn receiveExternalEvent(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, web_hook_id: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, web_hook_id);
@@ -580,6 +588,7 @@ pub const Events = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Send a pipeline job event to be processed by the execution plan.
     pub fn postEvent(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, scope_identifier: []const u8, hub_name: []const u8, plan_id: []const u8, body: models.JobEvent) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, scope_identifier);
@@ -624,6 +633,7 @@ pub const Oidctoken = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, scope_identifier: []const u8, hub_name: []const u8, plan_id: []const u8, job_id: []const u8, service_connection_id: ?[]const u8, body: std.json.ArrayHashMap([]const u8)) !models.TaskHubOidcToken {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, scope_identifier);
@@ -678,6 +688,7 @@ pub const Logs = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Create a log and connect it to a pipeline run's execution plan.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, scope_identifier: []const u8, hub_name: []const u8, plan_id: []const u8, body: models.TaskLog) !models.TaskLog {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, scope_identifier);
@@ -717,6 +728,7 @@ pub const Logs = struct {
     }
     /// Append a log to a task's log. The log should be sent in the body of the request as a TaskLog object stream.
     pub fn appendLogContent(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, scope_identifier: []const u8, hub_name: []const u8, plan_id: []const u8, log_id: i32, body: []const u8) !models.TaskLog {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, scope_identifier);
@@ -762,6 +774,7 @@ pub const Records = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Update timeline records if they already exist, otherwise create new ones for the same timeline.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, scope_identifier: []const u8, hub_name: []const u8, plan_id: []const u8, timeline_id: []const u8, body: models.VssJsonCollectionWrapper) ![]const models.TimelineRecord {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, scope_identifier);
@@ -809,6 +822,7 @@ pub const Agentclouds = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.TaskAgentCloud {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/distributedtask/agentclouds", .{ self.endpoint, encoded_path_0 });
@@ -838,6 +852,7 @@ pub const Agentclouds = struct {
     }
 
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.TaskAgentCloud) !models.TaskAgentCloud {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/distributedtask/agentclouds", .{ self.endpoint, encoded_path_0 });
@@ -871,6 +886,7 @@ pub const Agentclouds = struct {
     }
 
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, agent_cloud_id: i32) !models.TaskAgentCloud {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, agent_cloud_id);
@@ -902,6 +918,7 @@ pub const Agentclouds = struct {
     }
 
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, agent_cloud_id: i32) !models.TaskAgentCloud {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, agent_cloud_id);
@@ -933,6 +950,7 @@ pub const Agentclouds = struct {
     }
 
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, agent_cloud_id: i32, body: models.TaskAgentCloud) !models.TaskAgentCloud {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, agent_cloud_id);
@@ -974,6 +992,7 @@ pub const Requests = struct {
     pipeline: core.pipeline.HttpPipeline,
 
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, agent_cloud_id: i32) ![]const models.TaskAgentCloudRequest {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, agent_cloud_id);
@@ -1011,6 +1030,7 @@ pub const Agentcloudtypes = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get agent cloud types.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.TaskAgentCloudType {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/distributedtask/agentcloudtypes", .{ self.endpoint, encoded_path_0 });
@@ -1046,6 +1066,7 @@ pub const Pools = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of agent pools.
     pub fn getAgentPoolsByIds(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_ids: []const u8, action_filter: ?enums.GetAgentPoolsByIdsRequestActionFilter) ![]const models.TaskAgentPool {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/distributedtask/pools", .{ self.endpoint, encoded_path_0 });
@@ -1086,6 +1107,7 @@ pub const Pools = struct {
     }
     /// Create an agent pool.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.TaskAgentPool) !models.TaskAgentPool {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/distributedtask/pools", .{ self.endpoint, encoded_path_0 });
@@ -1119,6 +1141,7 @@ pub const Pools = struct {
     }
     /// Delete an agent pool.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, pool_id);
@@ -1149,6 +1172,7 @@ pub const Pools = struct {
     }
     /// Get information about an agent pool.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32, properties: ?[]const u8, action_filter: ?enums.GetRequestActionFilter) !models.TaskAgentPool {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, pool_id);
@@ -1194,6 +1218,7 @@ pub const Pools = struct {
     }
     /// Update properties on an agent pool
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32, body: models.TaskAgentPool) !models.TaskAgentPool {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, pool_id);
@@ -1235,6 +1260,7 @@ pub const Agents = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of agents.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32, agent_name: ?[]const u8, include_capabilities: ?bool, include_assigned_request: ?bool, include_last_completed_request: ?bool, property_filters: ?[]const u8, demands: ?[]const u8) ![]const models.TaskAgent {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, pool_id);
@@ -1302,6 +1328,7 @@ pub const Agents = struct {
     }
     /// Adds an agent to a pool. You probably don't want to call this endpoint directly. Instead, [configure an agent](https://docs.microsoft.com/azure/devops/pipelines/agents/agents) using the agent download package.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32, body: models.TaskAgent) !models.TaskAgent {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, pool_id);
@@ -1337,6 +1364,7 @@ pub const Agents = struct {
     }
     /// Delete an agent. You probably don't want to call this endpoint directly. Instead, [use the agent configuration script](https://docs.microsoft.com/azure/devops/pipelines/agents/agents) to remove an agent from your organization.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32, agent_id: i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, pool_id);
@@ -1369,6 +1397,7 @@ pub const Agents = struct {
     }
     /// Get information about an agent.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32, agent_id: i32, include_capabilities: ?bool, include_assigned_request: ?bool, include_last_completed_request: ?bool, property_filters: ?[]const u8) !models.TaskAgent {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, pool_id);
@@ -1424,6 +1453,7 @@ pub const Agents = struct {
     }
     /// Update agent details.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32, agent_id: i32, body: models.TaskAgent) !models.TaskAgent {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, pool_id);
@@ -1461,6 +1491,7 @@ pub const Agents = struct {
     }
     /// Replace an agent. You probably don't want to call this endpoint directly. Instead, [use the agent configuration script](https://docs.microsoft.com/azure/devops/pipelines/agents/agents) to remove and reconfigure an agent from your organization.
     pub fn replaceAgent(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32, agent_id: i32, body: models.TaskAgent) !models.TaskAgent {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, pool_id);
@@ -1512,6 +1543,7 @@ pub const Poolpermissions = struct {
     };
     /// Checks if current identity has passed permissions on a pool.
     pub fn hasPoolPermissions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32, permissions: i32) !HasPoolPermissionsResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, pool_id);
@@ -1561,6 +1593,7 @@ pub const Variablegroups = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Add a variable group.
     pub fn shareVariableGroup(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, variable_group_id: i32, body: []const models.VariableGroupProjectReference) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/distributedtask/variablegroups", .{ self.endpoint, encoded_path_0 });
@@ -1595,6 +1628,7 @@ pub const Variablegroups = struct {
     }
     /// Add a variable group.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.VariableGroupParameters) !models.VariableGroup {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/distributedtask/variablegroups", .{ self.endpoint, encoded_path_0 });
@@ -1628,6 +1662,7 @@ pub const Variablegroups = struct {
     }
     /// Delete a variable group
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, group_id: i32, project_ids: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, group_id);
@@ -1662,6 +1697,7 @@ pub const Variablegroups = struct {
     }
     /// Update a variable group.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, group_id: i32, body: models.VariableGroupParameters) !models.VariableGroup {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, group_id);
@@ -1697,6 +1733,7 @@ pub const Variablegroups = struct {
     }
     /// Get variable groups by ids.
     pub fn getVariableGroupsById(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, group_ids: []const u8, load_secrets: ?bool) ![]const models.VariableGroup {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1737,6 +1774,7 @@ pub const Variablegroups = struct {
     }
     /// Get a variable group.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, group_id: i32) !models.VariableGroup {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1776,6 +1814,7 @@ pub const Yamlschema = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// GET the Yaml schema used for Yaml file validation.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, validate_task_names: ?bool) !models.GetResponse {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/distributedtask/yamlschema", .{ self.endpoint, encoded_path_0 });
@@ -1816,6 +1855,7 @@ pub const Deploymentgroups = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of deployment groups by name or IDs.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, name: ?[]const u8, action_filter: ?enums.ListRequestActionFilter, @"$expand": ?enums.ListRequestExpand, continuation_token: ?[]const u8, @"$top": ?i32, ids: ?[]const u8) ![]const models.DeploymentGroup {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1887,6 +1927,7 @@ pub const Deploymentgroups = struct {
     }
     /// Create a deployment group.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.DeploymentGroupCreateParameter) !models.DeploymentGroup {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1922,6 +1963,7 @@ pub const Deploymentgroups = struct {
     }
     /// Delete a deployment group.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, deployment_group_id: i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -1954,6 +1996,7 @@ pub const Deploymentgroups = struct {
     }
     /// Get a deployment group by its ID.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, deployment_group_id: i32, action_filter: ?enums.GetRequestActionFilter1, @"$expand": ?enums.GetRequestExpand) !models.DeploymentGroup {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2001,6 +2044,7 @@ pub const Deploymentgroups = struct {
     }
     /// Update a deployment group.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, deployment_group_id: i32, body: models.DeploymentGroupUpdateParameter) !models.DeploymentGroup {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2044,6 +2088,7 @@ pub const Targets = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of deployment targets in a deployment group.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, deployment_group_id: i32, tags: ?[]const u8, name: ?[]const u8, partial_name_match: ?bool, @"$expand": ?enums.ListRequestExpand1, agent_status: ?enums.ListRequestAgentStatus, agent_job_result: ?enums.ListRequestAgentJobResult, continuation_token: ?[]const u8, @"$top": ?i32, enabled: ?bool, property_filters: ?[]const u8) ![]const models.DeploymentMachine {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2141,6 +2186,7 @@ pub const Targets = struct {
     }
     /// Update tags of a list of deployment targets in a deployment group.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, deployment_group_id: i32, body: []const models.DeploymentTargetUpdateParameter) ![]const models.DeploymentMachine {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2178,6 +2224,7 @@ pub const Targets = struct {
     }
     /// Delete a deployment target in a deployment group. This deletes the agent from associated deployment pool too.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, deployment_group_id: i32, target_id: i32) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2212,6 +2259,7 @@ pub const Targets = struct {
     }
     /// Get a deployment target by its ID in a deployment group
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, deployment_group_id: i32, target_id: i32, @"$expand": ?enums.GetRequestExpand1) !models.DeploymentMachine {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2260,6 +2308,7 @@ pub const Queues = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of agent queues by pool ids
     pub fn getAgentQueuesForPools(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_ids: []const u8, project: []const u8, action_filter: ?enums.GetAgentQueuesForPoolsRequestActionFilter) ![]const models.TaskAgentQueue {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2302,6 +2351,7 @@ pub const Queues = struct {
     }
     /// Create a new agent queue to connect a project to an agent pool.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, authorize_pipelines: ?bool, body: models.TaskAgentQueue) !models.TaskAgentQueue {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2342,6 +2392,7 @@ pub const Queues = struct {
     }
     /// Removes an agent queue from a project.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, queue_id: i32, project: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, queue_id);
@@ -2374,6 +2425,7 @@ pub const Queues = struct {
     }
     /// Get information about an agent queue.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, queue_id: i32, project: []const u8, action_filter: ?enums.GetRequestActionFilter2) !models.TaskAgentQueue {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, queue_id);
@@ -2420,6 +2472,7 @@ pub const Securefiles = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get secure files
     pub fn getSecureFilesByNames(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, secure_file_names: []const u8, include_download_tickets: ?bool, action_filter: ?enums.GetSecureFilesByNamesRequestActionFilter) ![]const models.SecureFile {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2467,6 +2520,7 @@ pub const Securefiles = struct {
     }
     /// Update properties and/or names of a set of secure files. Files are identified by their IDs. Properties provided override the existing one entirely, i.e. do not merge.
     pub fn updateSecureFiles(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: []const models.SecureFile) ![]const models.SecureFile {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2502,6 +2556,7 @@ pub const Securefiles = struct {
     }
     /// Query secure files using a name pattern and a condition on file properties.
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, name_pattern: ?[]const u8, body: []const u8) ![]const models.SecureFile {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2542,6 +2597,7 @@ pub const Securefiles = struct {
     }
     /// Delete a secure file
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, secure_file_id: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2574,6 +2630,7 @@ pub const Securefiles = struct {
     }
     /// Get a secure file
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, secure_file_id: []const u8, include_download_ticket: ?bool, action_filter: ?enums.GetRequestActionFilter3) !models.SecureFile {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2619,6 +2676,7 @@ pub const Securefiles = struct {
     }
     /// Update the name or properties of an existing secure file
     pub fn updateSecureFile(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, secure_file_id: []const u8, body: models.SecureFile) !models.SecureFile {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2662,6 +2720,7 @@ pub const Taskgroups = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Create a task group.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.TaskGroupCreateParameter) !models.TaskGroup {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2697,6 +2756,7 @@ pub const Taskgroups = struct {
     }
     /// Delete a task group.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, task_group_id: []const u8, comment: ?[]const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2736,6 +2796,7 @@ pub const Taskgroups = struct {
     }
     /// List task groups.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, task_group_id: []const u8, expanded: ?bool, task_id_filter: ?[]const u8, deleted: ?bool, @"$top": ?i32, continuation_token: ?[]const u8, query_order: ?enums.ListRequestQueryOrder) ![]const models.TaskGroup {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);
@@ -2805,6 +2866,7 @@ pub const Taskgroups = struct {
     }
     /// Update a task group.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, task_group_id: []const u8, body: models.TaskGroupUpdateParameter) !models.TaskGroup {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, project);

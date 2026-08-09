@@ -202,6 +202,7 @@ pub const Processes = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Get list of all processes including system and inherited.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, @"$expand": ?enums.ListRequestExpand) ![]const models.ProcessInfo {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/work/processes", .{ self.endpoint, encoded_path_0 });
@@ -238,6 +239,7 @@ pub const Processes = struct {
     }
     /// Creates a process.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.CreateProcessModel) !models.ProcessInfo {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/work/processes", .{ self.endpoint, encoded_path_0 });
@@ -271,6 +273,7 @@ pub const Processes = struct {
     }
     /// Removes a process of a specific ID.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_type_id: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_type_id);
@@ -301,6 +304,7 @@ pub const Processes = struct {
     }
     /// Get a single process of a specified ID.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_type_id: []const u8, @"$expand": ?enums.GetRequestExpand) !models.ProcessInfo {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_type_id);
@@ -339,6 +343,7 @@ pub const Processes = struct {
     }
     /// Edit a process of a specific ID.
     pub fn editProcess(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_type_id: []const u8, body: models.UpdateProcessModel) !models.ProcessInfo {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_type_id);
@@ -380,6 +385,7 @@ pub const Behaviors = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Returns a list of all behaviors in the process.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, @"$expand": ?enums.ListRequestExpand1) ![]const models.ProcessBehavior {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -418,6 +424,7 @@ pub const Behaviors = struct {
     }
     /// Creates a single behavior in the given process.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, body: models.ProcessBehaviorCreateRequest) !models.ProcessBehavior {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -453,6 +460,7 @@ pub const Behaviors = struct {
     }
     /// Removes a behavior in the process.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, behavior_ref_name: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -485,6 +493,7 @@ pub const Behaviors = struct {
     }
     /// Returns a behavior of the process.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, behavior_ref_name: []const u8, @"$expand": ?enums.GetRequestExpand1) !models.ProcessBehavior {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -525,6 +534,7 @@ pub const Behaviors = struct {
     }
     /// Replaces a behavior in the process.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, behavior_ref_name: []const u8, body: models.ProcessBehaviorUpdateRequest) !models.ProcessBehavior {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -568,6 +578,7 @@ pub const WorkItemTypes = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Returns a list of all work item types in a process.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, @"$expand": ?enums.ListRequestExpand2) ![]const models.ProcessWorkItemType {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -606,6 +617,7 @@ pub const WorkItemTypes = struct {
     }
     /// Creates a work item type in the process.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, body: models.CreateProcessWorkItemTypeRequest) !models.ProcessWorkItemType {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -641,6 +653,7 @@ pub const WorkItemTypes = struct {
     }
     /// Removes a work item type in the process.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -673,6 +686,7 @@ pub const WorkItemTypes = struct {
     }
     /// Returns a single work item type in a process.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, @"$expand": ?enums.GetRequestExpand2) !models.ProcessWorkItemType {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -713,6 +727,7 @@ pub const WorkItemTypes = struct {
     }
     /// Updates a work item type of the process.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, body: models.UpdateProcessWorkItemTypeRequest) !models.ProcessWorkItemType {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -756,6 +771,7 @@ pub const Fields = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Returns a list of all fields in a work item type.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8) ![]const models.ProcessWorkItemTypeField {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -789,6 +805,7 @@ pub const Fields = struct {
     }
     /// Adds a field to a work item type.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, body: models.AddProcessWorkItemTypeFieldRequest) !models.ProcessWorkItemTypeField {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -826,6 +843,7 @@ pub const Fields = struct {
     }
     /// Removes a field from a work item type. Does not permanently delete the field.
     pub fn removeWorkItemTypeField(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, field_ref_name: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -860,6 +878,7 @@ pub const Fields = struct {
     }
     /// Returns a field in a work item type.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, field_ref_name: []const u8, @"$expand": ?enums.GetRequestExpand3) !models.ProcessWorkItemTypeField {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -902,6 +921,7 @@ pub const Fields = struct {
     }
     /// Updates a field in a work item type.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, field_ref_name: []const u8, body: models.UpdateProcessWorkItemTypeFieldRequest) !models.ProcessWorkItemTypeField {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -947,6 +967,7 @@ pub const Layout = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Gets the form layout.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8) !models.FormLayout {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -986,6 +1007,7 @@ pub const Controls = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Creates a control in a group.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, group_id: []const u8, body: models.Control) !models.Control {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1025,6 +1047,7 @@ pub const Controls = struct {
     }
     /// Removes a control from the work item form.
     pub fn removeControlFromGroup(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, group_id: []const u8, control_id: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1061,6 +1084,7 @@ pub const Controls = struct {
     }
     /// Updates a control on the work item form.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, group_id: []const u8, control_id: []const u8, body: models.Control) !models.Control {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1102,6 +1126,7 @@ pub const Controls = struct {
     }
     /// Moves a control to a specified group.
     pub fn moveControlToGroup(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, group_id: []const u8, control_id: []const u8, remove_from_group_id: ?[]const u8, body: models.Control) !models.Control {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1156,6 +1181,7 @@ pub const Pages = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Updates a page on the work item form
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, body: models.Page) !models.Page {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1193,6 +1219,7 @@ pub const Pages = struct {
     }
     /// Adds a page to the work item form.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, body: models.Page) !models.Page {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1230,6 +1257,7 @@ pub const Pages = struct {
     }
     /// Removes a page from the work item form
     pub fn removePage(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, page_id: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1270,6 +1298,7 @@ pub const Groups = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Adds a group to the work item form.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, page_id: []const u8, section_id: []const u8, body: models.Group) !models.Group {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1311,6 +1340,7 @@ pub const Groups = struct {
     }
     /// Removes a group from the work item form.
     pub fn removeGroup(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, page_id: []const u8, section_id: []const u8, group_id: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1349,6 +1379,7 @@ pub const Groups = struct {
     }
     /// Updates a group in the work item form.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, page_id: []const u8, section_id: []const u8, group_id: []const u8, body: models.Group) !models.Group {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1392,6 +1423,7 @@ pub const Groups = struct {
     }
     /// Moves a group to a different section.
     pub fn moveGroupToSection(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, page_id: []const u8, section_id: []const u8, group_id: []const u8, remove_from_section_id: []const u8, body: models.Group) !models.Group {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1445,6 +1477,7 @@ pub const SystemControls = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Gets edited system controls for a work item type in a process. To get all system controls (base + edited) use layout API(s)
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8) ![]const models.Control {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1478,6 +1511,7 @@ pub const SystemControls = struct {
     }
     /// Deletes a system control modification on the work item form.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, control_id: []const u8) ![]const models.Control {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1513,6 +1547,7 @@ pub const SystemControls = struct {
     }
     /// Updates/adds a system control on the work item form.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, control_id: []const u8, body: models.Control) !models.Control {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1558,6 +1593,7 @@ pub const Rules = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Returns a list of all rules in the work item type of the process.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8) ![]const models.ProcessRule {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1591,6 +1627,7 @@ pub const Rules = struct {
     }
     /// Adds a rule to work item type in the process.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, body: models.CreateProcessRuleRequest) !models.ProcessRule {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1628,6 +1665,7 @@ pub const Rules = struct {
     }
     /// Removes a rule from the work item type in the process.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, rule_id: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1662,6 +1700,7 @@ pub const Rules = struct {
     }
     /// Returns a single rule in the work item type of the process.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, rule_id: []const u8) !models.ProcessRule {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1697,6 +1736,7 @@ pub const Rules = struct {
     }
     /// Updates a rule in the work item type of the process.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, rule_id: []const u8, body: models.UpdateProcessRuleRequest) !models.ProcessRule {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1742,6 +1782,7 @@ pub const States = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Returns a list of all state definitions in a work item type of the process.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8) ![]const models.WorkItemStateResultModel {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1775,6 +1816,7 @@ pub const States = struct {
     }
     /// Creates a state definition in the work item type of the process.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, body: models.WorkItemStateInputModel) !models.WorkItemStateResultModel {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1812,6 +1854,7 @@ pub const States = struct {
     }
     /// Removes a state definition in the work item type of the process.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, state_id: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1846,6 +1889,7 @@ pub const States = struct {
     }
     /// Returns a single state definition in a work item type of the process.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, state_id: []const u8) !models.WorkItemStateResultModel {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1881,6 +1925,7 @@ pub const States = struct {
     }
     /// Updates a given state definition in the work item type of the process.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, state_id: []const u8, body: models.WorkItemStateInputModel) !models.WorkItemStateResultModel {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1920,6 +1965,7 @@ pub const States = struct {
     }
     /// Hides a state definition in the work item type of the process.Only states with customizationType:System can be hidden.
     pub fn hideStateDefinition(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, state_id: []const u8, body: models.HideStateModel) !models.WorkItemStateResultModel {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1965,6 +2011,7 @@ pub const WorkItemTypesBehaviors = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Returns a list of all behaviors for the work item type of the process.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name_for_behaviors: []const u8) ![]const models.WorkItemTypeBehavior {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -1998,6 +2045,7 @@ pub const WorkItemTypesBehaviors = struct {
     }
     /// Updates a behavior for the work item type of the process.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name_for_behaviors: []const u8, body: models.WorkItemTypeBehavior) !models.WorkItemTypeBehavior {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -2035,6 +2083,7 @@ pub const WorkItemTypesBehaviors = struct {
     }
     /// Adds a behavior to the work item type of the process.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name_for_behaviors: []const u8, body: models.WorkItemTypeBehavior) !models.WorkItemTypeBehavior {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -2072,6 +2121,7 @@ pub const WorkItemTypesBehaviors = struct {
     }
     /// Removes a behavior for the work item type of the process.
     pub fn removeBehaviorFromWorkItemType(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name_for_behaviors: []const u8, behavior_ref_name: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -2106,6 +2156,7 @@ pub const WorkItemTypesBehaviors = struct {
     }
     /// Returns a behavior for the work item type of the process.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name_for_behaviors: []const u8, behavior_ref_name: []const u8) !models.WorkItemTypeBehavior {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, process_id);
@@ -2147,6 +2198,7 @@ pub const Lists = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Returns meta data of the picklist.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.PickListMetadata {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/work/processes/lists", .{ self.endpoint, encoded_path_0 });
@@ -2176,6 +2228,7 @@ pub const Lists = struct {
     }
     /// Creates a picklist.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.PickList) !models.PickList {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/work/processes/lists", .{ self.endpoint, encoded_path_0 });
@@ -2209,6 +2262,7 @@ pub const Lists = struct {
     }
     /// Removes a picklist.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, list_id: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, list_id);
@@ -2239,6 +2293,7 @@ pub const Lists = struct {
     }
     /// Returns a picklist.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, list_id: []const u8) !models.PickList {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, list_id);
@@ -2270,6 +2325,7 @@ pub const Lists = struct {
     }
     /// Updates a list.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, list_id: []const u8, body: models.PickList) !models.PickList {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, list_id);

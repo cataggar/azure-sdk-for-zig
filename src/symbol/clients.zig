@@ -138,6 +138,7 @@ pub const Availability = struct {
     pipeline: core.pipeline.HttpPipeline,
     /// Check the availability of symbol service. This includes checking for feature flag, and possibly license in future. Note this is NOT an anonymous endpoint, and the caller will be redirected to authentication before hitting it.
     pub fn checkAvailability(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/symbol/availability", .{ self.endpoint, encoded_path_0 });
@@ -185,6 +186,7 @@ pub const Client = struct {
     };
     /// Get client version information.
     pub fn headClient(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/symbol/client", .{ self.endpoint, encoded_path_0 });
@@ -213,6 +215,7 @@ pub const Client = struct {
     }
     /// Get the client package.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, client_type: []const u8) !GetResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, client_type);
@@ -362,6 +365,7 @@ pub const Requests = struct {
     };
     /// Delete a symbol request by request name.
     pub fn deleteRequestsRequestName(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, request_name: []const u8, synchronous: ?bool) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/symbol/requests", .{ self.endpoint, encoded_path_0 });
@@ -399,6 +403,7 @@ pub const Requests = struct {
     }
     /// Get a symbol request by request name.
     pub fn getRequestsRequestName(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, request_name: []const u8) !GetRequestsRequestNameResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/symbol/requests", .{ self.endpoint, encoded_path_0 });
@@ -449,6 +454,7 @@ pub const Requests = struct {
     }
     /// Update a symbol request by request name.
     pub fn updateRequestsRequestName(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, request_name: []const u8, body: models.Request) !UpdateRequestsRequestNameResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/symbol/requests", .{ self.endpoint, encoded_path_0 });
@@ -511,6 +517,7 @@ pub const Requests = struct {
     }
     /// Create a new symbol request.
     pub fn createRequests(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.Request) !CreateRequestsResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}/_apis/symbol/requests", .{ self.endpoint, encoded_path_0 });
@@ -561,6 +568,7 @@ pub const Requests = struct {
     }
     /// Delete a symbol request by request identifier.
     pub fn deleteRequestsRequestId(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, request_id: []const u8, synchronous: ?bool) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, request_id);
@@ -596,6 +604,7 @@ pub const Requests = struct {
     }
     /// Get a symbol request by request identifier.
     pub fn getRequestsRequestId(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, request_id: []const u8) !GetRequestsRequestIdResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, request_id);
@@ -644,6 +653,7 @@ pub const Requests = struct {
     }
     /// Update a symbol request by request identifier.
     pub fn updateRequestsRequestId(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, request_id: []const u8, body: models.Request) !UpdateRequestsRequestIdResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, request_id);
@@ -704,6 +714,7 @@ pub const Requests = struct {
     }
     /// Create debug entries for a symbol request as specified by its identifier.
     pub fn createRequestsRequestIdDebugEntries(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, request_id: []const u8, collection: []const u8, body: models.DebugEntryCreateBatch) !CreateRequestsRequestIdDebugEntriesResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, request_id);
@@ -787,6 +798,7 @@ pub const Contents = struct {
     };
     /// Get a stitched debug entry for a symbol request as specified by symbol request identifier and debug entry identifier.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, request_id: []const u8, debug_entry_id: []const u8) !GetResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, request_id);
@@ -858,6 +870,7 @@ pub const Symsrv = struct {
     };
     /// Given a client key, returns the best matched debug entry.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, debug_entry_client_key: []const u8) !GetResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, debug_entry_client_key);
