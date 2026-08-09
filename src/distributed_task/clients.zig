@@ -1853,8 +1853,18 @@ pub const Deploymentgroups = struct {
     endpoint: []const u8,
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
+
+    pub const ListResult = union(enum) {
+        status_200: struct {
+            status: u16 = 200,
+            headers: struct {
+                x_ms_continuationtoken: ?[]const u8 = null,
+            },
+            body: []const models.DeploymentGroup,
+        },
+    };
     /// Get a list of deployment groups by name or IDs.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, name: ?[]const u8, action_filter: ?enums.ListRequestActionFilter, @"$expand": ?enums.ListRequestExpand, continuation_token: ?[]const u8, @"$top": ?i32, ids: ?[]const u8) ![]const models.DeploymentGroup {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, name: ?[]const u8, action_filter: ?enums.ListRequestActionFilter, @"$expand": ?enums.ListRequestExpand, continuation_token: ?[]const u8, @"$top": ?i32, ids: ?[]const u8) !ListResult {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1919,11 +1929,27 @@ pub const Deploymentgroups = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!responseStatusExpected(resp.status_code, &.{200})) {
-            core.pager.logHttpError("Deploymentgroups.list", resp.status_code, resp.body);
-            return error.AzureRequestFailed;
+        switch (resp.status_code) {
+            200 => {
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
+                    try alloc.dupe(u8, value)
+                else
+                    null;
+                errdefer if (response_header_0) |value| alloc.free(value);
+                const response_body = try serde.json.fromSlice([]const models.DeploymentGroup, alloc, resp.body);
+                return .{ .status_200 = .{
+                    .status = resp.status_code,
+                    .headers = .{
+                        .x_ms_continuationtoken = response_header_0,
+                    },
+                    .body = response_body,
+                } };
+            },
+            else => {
+                core.pager.logHttpError("Deploymentgroups.list", resp.status_code, resp.body);
+                return error.AzureRequestFailed;
+            },
         }
-        return try serde.json.fromSlice([]const models.DeploymentGroup, alloc, resp.body);
     }
     /// Create a deployment group.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.DeploymentGroupCreateParameter) !models.DeploymentGroup {
@@ -2086,8 +2112,18 @@ pub const Targets = struct {
     endpoint: []const u8,
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
+
+    pub const ListResult = union(enum) {
+        status_200: struct {
+            status: u16 = 200,
+            headers: struct {
+                x_ms_continuationtoken: ?[]const u8 = null,
+            },
+            body: []const models.DeploymentMachine,
+        },
+    };
     /// Get a list of deployment targets in a deployment group.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, deployment_group_id: i32, tags: ?[]const u8, name: ?[]const u8, partial_name_match: ?bool, @"$expand": ?enums.ListRequestExpand1, agent_status: ?enums.ListRequestAgentStatus, agent_job_result: ?enums.ListRequestAgentJobResult, continuation_token: ?[]const u8, @"$top": ?i32, enabled: ?bool, property_filters: ?[]const u8) ![]const models.DeploymentMachine {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, deployment_group_id: i32, tags: ?[]const u8, name: ?[]const u8, partial_name_match: ?bool, @"$expand": ?enums.ListRequestExpand1, agent_status: ?enums.ListRequestAgentStatus, agent_job_result: ?enums.ListRequestAgentJobResult, continuation_token: ?[]const u8, @"$top": ?i32, enabled: ?bool, property_filters: ?[]const u8) !ListResult {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2178,11 +2214,27 @@ pub const Targets = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!responseStatusExpected(resp.status_code, &.{200})) {
-            core.pager.logHttpError("Targets.list", resp.status_code, resp.body);
-            return error.AzureRequestFailed;
+        switch (resp.status_code) {
+            200 => {
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
+                    try alloc.dupe(u8, value)
+                else
+                    null;
+                errdefer if (response_header_0) |value| alloc.free(value);
+                const response_body = try serde.json.fromSlice([]const models.DeploymentMachine, alloc, resp.body);
+                return .{ .status_200 = .{
+                    .status = resp.status_code,
+                    .headers = .{
+                        .x_ms_continuationtoken = response_header_0,
+                    },
+                    .body = response_body,
+                } };
+            },
+            else => {
+                core.pager.logHttpError("Targets.list", resp.status_code, resp.body);
+                return error.AzureRequestFailed;
+            },
         }
-        return try serde.json.fromSlice([]const models.DeploymentMachine, alloc, resp.body);
     }
     /// Update tags of a list of deployment targets in a deployment group.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, deployment_group_id: i32, body: []const models.DeploymentTargetUpdateParameter) ![]const models.DeploymentMachine {
@@ -2718,6 +2770,16 @@ pub const Taskgroups = struct {
     endpoint: []const u8,
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
+
+    pub const ListResult = union(enum) {
+        status_200: struct {
+            status: u16 = 200,
+            headers: struct {
+                x_ms_continuationtoken: ?[]const u8 = null,
+            },
+            body: []const models.TaskGroup,
+        },
+    };
     /// Create a task group.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.TaskGroupCreateParameter) !models.TaskGroup {
         @setEvalBranchQuota(100_000);
@@ -2795,7 +2857,7 @@ pub const Taskgroups = struct {
         return;
     }
     /// List task groups.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, task_group_id: []const u8, expanded: ?bool, task_id_filter: ?[]const u8, deleted: ?bool, @"$top": ?i32, continuation_token: ?[]const u8, query_order: ?enums.ListRequestQueryOrder) ![]const models.TaskGroup {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, task_group_id: []const u8, expanded: ?bool, task_id_filter: ?[]const u8, deleted: ?bool, @"$top": ?i32, continuation_token: ?[]const u8, query_order: ?enums.ListRequestQueryOrder) !ListResult {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2858,11 +2920,27 @@ pub const Taskgroups = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!responseStatusExpected(resp.status_code, &.{200})) {
-            core.pager.logHttpError("Taskgroups.list", resp.status_code, resp.body);
-            return error.AzureRequestFailed;
+        switch (resp.status_code) {
+            200 => {
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
+                    try alloc.dupe(u8, value)
+                else
+                    null;
+                errdefer if (response_header_0) |value| alloc.free(value);
+                const response_body = try serde.json.fromSlice([]const models.TaskGroup, alloc, resp.body);
+                return .{ .status_200 = .{
+                    .status = resp.status_code,
+                    .headers = .{
+                        .x_ms_continuationtoken = response_header_0,
+                    },
+                    .body = response_body,
+                } };
+            },
+            else => {
+                core.pager.logHttpError("Taskgroups.list", resp.status_code, resp.body);
+                return error.AzureRequestFailed;
+            },
         }
-        return try serde.json.fromSlice([]const models.TaskGroup, alloc, resp.body);
     }
     /// Update a task group.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, task_group_id: []const u8, body: models.TaskGroupUpdateParameter) !models.TaskGroup {

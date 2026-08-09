@@ -412,6 +412,16 @@ pub const SummaryDashboard = struct {
     endpoint: []const u8,
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
+
+    pub const ListResult = union(enum) {
+        status_200: struct {
+            status: u16 = 200,
+            headers: struct {
+                x_ms_continuationtoken: ?[]const u8 = null,
+            },
+            body: []const models.DashboardAlert,
+        },
+    };
     /// Get Alert summary by severity for the org
     pub fn getAlertSummaryForOrg(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, criteria_alert_types: ?[]const []const u8, criteria_keywords: ?[]const u8, @"criteria.period": ?enums.GetAlertSummaryForOrgRequestCriteriaPeriod, criteria_projects: ?[]const []const u8, criteria_severities: ?[]const []const u8) !models.OrgAlertSummary {
         @setEvalBranchQuota(100_000);
@@ -502,7 +512,7 @@ pub const SummaryDashboard = struct {
         return try serde.json.fromSlice(models.OrgAlertSummary, alloc, resp.body);
     }
     /// Get Combined Alerts for the org
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, @"criteria.alert_type": ?enums.ListRequestCriteriaAlertType, @"criteria.alert_validity_status": ?enums.ListRequestCriteriaAlertValidityStatus, criteria_component_names: ?[]const []const u8, criteria_component_types: ?[]const []const u8, criteria_dismissal_types: ?[]const []const u8, criteria_fixed_date_end: ?[]const u8, criteria_fixed_date_start: ?[]const u8, criteria_introduced_date_end: ?[]const u8, criteria_introduced_date_start: ?[]const u8, criteria_keywords: ?[]const u8, criteria_projects: ?[]const []const u8, criteria_repositories: ?[]const []const u8, criteria_repository_ids: ?[]const []const u8, criteria_rule_names: ?[]const []const u8, criteria_secret_types: ?[]const []const u8, criteria_severities: ?[]const []const u8, @"criteria.state": ?enums.ListRequestCriteriaState, criteria_tool_names: ?[]const []const u8, top: ?i32, continuation_token: ?[]const u8) ![]const models.DashboardAlert {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, @"criteria.alert_type": ?enums.ListRequestCriteriaAlertType, @"criteria.alert_validity_status": ?enums.ListRequestCriteriaAlertValidityStatus, criteria_component_names: ?[]const []const u8, criteria_component_types: ?[]const []const u8, criteria_dismissal_types: ?[]const []const u8, criteria_fixed_date_end: ?[]const u8, criteria_fixed_date_start: ?[]const u8, criteria_introduced_date_end: ?[]const u8, criteria_introduced_date_start: ?[]const u8, criteria_keywords: ?[]const u8, criteria_projects: ?[]const []const u8, criteria_repositories: ?[]const []const u8, criteria_repository_ids: ?[]const []const u8, criteria_rule_names: ?[]const []const u8, criteria_secret_types: ?[]const []const u8, criteria_severities: ?[]const []const u8, @"criteria.state": ?enums.ListRequestCriteriaState, criteria_tool_names: ?[]const []const u8, top: ?i32, continuation_token: ?[]const u8) !ListResult {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -743,11 +753,27 @@ pub const SummaryDashboard = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!responseStatusExpected(resp.status_code, &.{200})) {
-            core.pager.logHttpError("SummaryDashboard.list", resp.status_code, resp.body);
-            return error.AzureRequestFailed;
+        switch (resp.status_code) {
+            200 => {
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
+                    try alloc.dupe(u8, value)
+                else
+                    null;
+                errdefer if (response_header_0) |value| alloc.free(value);
+                const response_body = try serde.json.fromSlice([]const models.DashboardAlert, alloc, resp.body);
+                return .{ .status_200 = .{
+                    .status = resp.status_code,
+                    .headers = .{
+                        .x_ms_continuationtoken = response_header_0,
+                    },
+                    .body = response_body,
+                } };
+            },
+            else => {
+                core.pager.logHttpError("SummaryDashboard.list", resp.status_code, resp.body);
+                return error.AzureRequestFailed;
+            },
         }
-        return try serde.json.fromSlice([]const models.DashboardAlert, alloc, resp.body);
     }
     /// Get Enablement summary for the org
     pub fn getEnablementSummaryForOrg(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, criteria_keywords: ?[]const u8, criteria_projects: ?[]const []const u8, criteria_states_any_tool: ?bool, criteria_states_code_alerts: ?bool, criteria_states_code_pr_alerts: ?bool, criteria_states_dependency_alerts: ?bool, criteria_states_dependency_pr_alerts: ?bool, criteria_states_push_protection: ?bool, criteria_states_secret_alerts: ?bool) !models.OrgEnablementSummary {
@@ -842,8 +868,18 @@ pub const Alerts = struct {
     endpoint: []const u8,
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
+
+    pub const ListResult = union(enum) {
+        status_200: struct {
+            status: u16 = 200,
+            headers: struct {
+                x_ms_continuationtoken: ?[]const u8 = null,
+            },
+            body: []const models.Alert,
+        },
+    };
     /// Get alerts for a repository
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository: []const u8, top: ?i32, order_by: ?[]const u8, criteria_alert_ids: ?[]const i64, @"criteria.alert_type": ?enums.ListRequestCriteriaAlertType, criteria_confidence_levels: ?[]const []const u8, criteria_dependency_name: ?[]const u8, criteria_from_date: ?[]const u8, criteria_has_linked_work_items: ?bool, criteria_is_triaged: ?bool, criteria_keywords: ?[]const u8, criteria_license_name: ?[]const u8, criteria_modified_since: ?[]const u8, criteria_only_default_branch: ?bool, criteria_phase_id: ?[]const u8, criteria_phase_name: ?[]const u8, criteria_pipeline_id: ?i32, criteria_pipeline_name: ?[]const u8, criteria_ref: ?[]const u8, criteria_rule_id: ?[]const u8, criteria_rule_name: ?[]const u8, criteria_severities: ?[]const []const u8, criteria_states: ?[]const []const u8, criteria_to_date: ?[]const u8, criteria_tool_name: ?[]const u8, criteria_validity: ?[]const []const u8, expand: ?enums.ListRequestExpand, continuation_token: ?[]const u8) ![]const models.Alert {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository: []const u8, top: ?i32, order_by: ?[]const u8, criteria_alert_ids: ?[]const i64, @"criteria.alert_type": ?enums.ListRequestCriteriaAlertType, criteria_confidence_levels: ?[]const []const u8, criteria_dependency_name: ?[]const u8, criteria_from_date: ?[]const u8, criteria_has_linked_work_items: ?bool, criteria_is_triaged: ?bool, criteria_keywords: ?[]const u8, criteria_license_name: ?[]const u8, criteria_modified_since: ?[]const u8, criteria_only_default_branch: ?bool, criteria_phase_id: ?[]const u8, criteria_phase_name: ?[]const u8, criteria_pipeline_id: ?i32, criteria_pipeline_name: ?[]const u8, criteria_ref: ?[]const u8, criteria_rule_id: ?[]const u8, criteria_rule_name: ?[]const u8, criteria_severities: ?[]const []const u8, criteria_states: ?[]const []const u8, criteria_to_date: ?[]const u8, criteria_tool_name: ?[]const u8, criteria_validity: ?[]const []const u8, expand: ?enums.ListRequestExpand, continuation_token: ?[]const u8) !ListResult {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1089,11 +1125,27 @@ pub const Alerts = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!responseStatusExpected(resp.status_code, &.{200})) {
-            core.pager.logHttpError("Alerts.list", resp.status_code, resp.body);
-            return error.AzureRequestFailed;
+        switch (resp.status_code) {
+            200 => {
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
+                    try alloc.dupe(u8, value)
+                else
+                    null;
+                errdefer if (response_header_0) |value| alloc.free(value);
+                const response_body = try serde.json.fromSlice([]const models.Alert, alloc, resp.body);
+                return .{ .status_200 = .{
+                    .status = resp.status_code,
+                    .headers = .{
+                        .x_ms_continuationtoken = response_header_0,
+                    },
+                    .body = response_body,
+                } };
+            },
+            else => {
+                core.pager.logHttpError("Alerts.list", resp.status_code, resp.body);
+                return error.AzureRequestFailed;
+            },
         }
-        return try serde.json.fromSlice([]const models.Alert, alloc, resp.body);
     }
     /// Get an alert.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, alert_id: i64, repository: []const u8, ref: ?[]const u8, expand: ?enums.GetRequestExpand) !models.Alert {
@@ -1370,8 +1422,18 @@ pub const Analysis = struct {
     endpoint: []const u8,
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
+
+    pub const ListResult = union(enum) {
+        status_200: struct {
+            status: u16 = 200,
+            headers: struct {
+                x_ms_continuationtoken: ?[]const u8 = null,
+            },
+            body: []const models.Branch,
+        },
+    };
     /// Returns the branches for which analysis results were submitted.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository: []const u8, alert_type: enums.ListRequestAlertType, continuation_token: ?[]const u8, branch_name_contains: ?[]const u8, top: ?i32, include_pull_request_branches: ?bool) ![]const models.Branch {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository: []const u8, alert_type: enums.ListRequestAlertType, continuation_token: ?[]const u8, branch_name_contains: ?[]const u8, top: ?i32, include_pull_request_branches: ?bool) !ListResult {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1426,11 +1488,27 @@ pub const Analysis = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!responseStatusExpected(resp.status_code, &.{200})) {
-            core.pager.logHttpError("Analysis.list", resp.status_code, resp.body);
-            return error.AzureRequestFailed;
+        switch (resp.status_code) {
+            200 => {
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
+                    try alloc.dupe(u8, value)
+                else
+                    null;
+                errdefer if (response_header_0) |value| alloc.free(value);
+                const response_body = try serde.json.fromSlice([]const models.Branch, alloc, resp.body);
+                return .{ .status_200 = .{
+                    .status = resp.status_code,
+                    .headers = .{
+                        .x_ms_continuationtoken = response_header_0,
+                    },
+                    .body = response_body,
+                } };
+            },
+            else => {
+                core.pager.logHttpError("Analysis.list", resp.status_code, resp.body);
+                return error.AzureRequestFailed;
+            },
         }
-        return try serde.json.fromSlice([]const models.Branch, alloc, resp.body);
     }
 };
 

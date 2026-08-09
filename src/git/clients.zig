@@ -2798,8 +2798,18 @@ pub const PullRequestCommits = struct {
     endpoint: []const u8,
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
+
+    pub const GetPullRequestCommitsResult = union(enum) {
+        status_200: struct {
+            status: u16 = 200,
+            headers: struct {
+                x_ms_continuationtoken: ?[]const u8 = null,
+            },
+            body: []const models.GitCommitRef,
+        },
+    };
     /// Get the commits for the specified pull request.
-    pub fn getPullRequestCommits(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, @"$top": ?i32, continuation_token: ?[]const u8) ![]const models.GitCommitRef {
+    pub fn getPullRequestCommits(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, @"$top": ?i32, continuation_token: ?[]const u8) !GetPullRequestCommitsResult {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2840,11 +2850,27 @@ pub const PullRequestCommits = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!responseStatusExpected(resp.status_code, &.{200})) {
-            core.pager.logHttpError("PullRequestCommits.getPullRequestCommits", resp.status_code, resp.body);
-            return error.AzureRequestFailed;
+        switch (resp.status_code) {
+            200 => {
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
+                    try alloc.dupe(u8, value)
+                else
+                    null;
+                errdefer if (response_header_0) |value| alloc.free(value);
+                const response_body = try serde.json.fromSlice([]const models.GitCommitRef, alloc, resp.body);
+                return .{ .status_200 = .{
+                    .status = resp.status_code,
+                    .headers = .{
+                        .x_ms_continuationtoken = response_header_0,
+                    },
+                    .body = response_body,
+                } };
+            },
+            else => {
+                core.pager.logHttpError("PullRequestCommits.getPullRequestCommits", resp.status_code, resp.body);
+                return error.AzureRequestFailed;
+            },
         }
-        return try serde.json.fromSlice([]const models.GitCommitRef, alloc, resp.body);
     }
     /// Get the commits for the specified iteration of a pull request.
     pub fn getPullRequestIterationCommits(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, iteration_id: i32, project: []const u8, top: ?i32, skip: ?i32) ![]const models.GitCommitRef {
@@ -4807,8 +4833,18 @@ pub const Refs = struct {
     endpoint: []const u8,
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
+
+    pub const ListResult = union(enum) {
+        status_200: struct {
+            status: u16 = 200,
+            headers: struct {
+                x_ms_continuationtoken: ?[]const u8 = null,
+            },
+            body: []const models.GitRef,
+        },
+    };
     /// Queries the provided repository for its refs and returns them.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, filter: ?[]const u8, include_links: ?bool, include_statuses: ?bool, include_my_branches: ?bool, latest_statuses_only: ?bool, peel_tags: ?bool, filter_contains: ?[]const u8, @"$top": ?i32, continuation_token: ?[]const u8, include_target_branches: ?bool) ![]const models.GitRef {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, filter: ?[]const u8, include_links: ?bool, include_statuses: ?bool, include_my_branches: ?bool, latest_statuses_only: ?bool, peel_tags: ?bool, filter_contains: ?[]const u8, @"$top": ?i32, continuation_token: ?[]const u8, include_target_branches: ?bool) !ListResult {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -4891,11 +4927,27 @@ pub const Refs = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!responseStatusExpected(resp.status_code, &.{200})) {
-            core.pager.logHttpError("Refs.list", resp.status_code, resp.body);
-            return error.AzureRequestFailed;
+        switch (resp.status_code) {
+            200 => {
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
+                    try alloc.dupe(u8, value)
+                else
+                    null;
+                errdefer if (response_header_0) |value| alloc.free(value);
+                const response_body = try serde.json.fromSlice([]const models.GitRef, alloc, resp.body);
+                return .{ .status_200 = .{
+                    .status = resp.status_code,
+                    .headers = .{
+                        .x_ms_continuationtoken = response_header_0,
+                    },
+                    .body = response_body,
+                } };
+            },
+            else => {
+                core.pager.logHttpError("Refs.list", resp.status_code, resp.body);
+                return error.AzureRequestFailed;
+            },
         }
-        return try serde.json.fromSlice([]const models.GitRef, alloc, resp.body);
     }
     /// Lock or Unlock a branch.
     pub fn updateRef(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, filter: []const u8, project: []const u8, project_id: ?[]const u8, body: models.GitRefUpdate) !models.GitRef {
