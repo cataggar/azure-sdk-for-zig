@@ -9,7 +9,7 @@
             .hash = "azure_sdk_core-0.1.2-eFY0EtO6BQARBvYkxdhibifztfqTgJKEN1fe14sMUIYs",
         },
         .azure_rest_devops = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#90f07beeafc40a80fffad126f4bdd8f0865c0a32",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#1bb8d2c4f0ea720832e03ad3b52a102c0de5129a",
             .hash = "azure_rest_devops-0.1.0-anpXMg1SQwCoGccK5iz7ZKy4mcPFiHYHR8fiFA9Jas6v",
         },
     },
