@@ -177,6 +177,16 @@ pub const all = [_]PackageHistory{
             .{ .source = "src/azure/kusto/", .destination = "" },
         },
     },
+    .{
+        .package = "azure_rest_devops",
+        .branch = "rest/devops",
+        .mappings = current_only.mappings("rest/devops"),
+    },
+    .{
+        .package = "azure_sdk_devops",
+        .branch = "sdk/devops",
+        .mappings = current_only.mappings("sdk/devops"),
+    },
 };
 
 pub const rejected_paths = [_]RejectedPath{
@@ -271,7 +281,7 @@ fn validatePath(path: []const u8, allow_empty: bool) !void {
 
 test "history map covers every branch-owned package" {
     try validate(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 22), all.len);
+    try std.testing.expectEqual(@as(usize, 24), all.len);
     try std.testing.expectEqual(@as(usize, 5), rejected_paths.len);
     try std.testing.expect(find("azure_sdk_storage_blobs") != null);
     try std.testing.expect(find("azure_sdk_core") != null);

@@ -5,7 +5,8 @@ pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
     const io = init.io;
 
-    var args = init.minimal.args.iterate();
+    var args: std.process.Args.Iterator = try .initAllocator(init.minimal.args, allocator);
+    defer args.deinit();
     _ = args.skip();
     const output_path = args.next() orelse return error.MissingOutputPath;
     var azure_sdk_core_commit: ?[]const u8 = null;

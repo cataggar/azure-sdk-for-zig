@@ -201,6 +201,74 @@ pub fn build(b: *std.Build) void {
     );
     generate_data_tables_step.dependOn(&generate_data_tables.step);
 
+    // Azure DevOps ships 44 API areas as one package, so unlike the
+    // fixtures above its generator reads code models from a directory at
+    // run time instead of embedding a single one.
+    const devops_generator_mod = b.createModule(.{
+        .root_source_file = b.path("../devops/generate_devops_package.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    devops_generator_mod.addImport("emit", emit_mod);
+    const devops_generator = b.addExecutable(.{
+        .name = "generate-devops-package",
+        .root_module = devops_generator_mod,
+    });
+    const generate_devops = b.addRunArtifact(devops_generator);
+    generate_devops.setCwd(b.path("."));
+    generate_devops.has_side_effects = true;
+    generate_devops.addArg(b.option(
+        []const u8,
+        "devops-models",
+        "Directory of Azure DevOps JSON code models (see codegen/devops/README.md)",
+    ) orelse "../../.devops-models");
+    const devops_output = b.option(
+        []const u8,
+        "devops-output",
+        "Azure DevOps package output directory",
+    );
+    if (devops_output != null and azure_sdk_core_commit == null and azure_sdk_core_path == null) {
+        std.debug.panic(
+            "an explicit output requires -Dazure-sdk-core-path or an immutable Core commit/hash pin",
+            .{},
+        );
+    }
+    generate_devops.addArg(devops_output orelse "../../.release/devops/generated-rest");
+    if (azure_sdk_core_commit) |commit| {
+        generate_devops.addArgs(&.{
+            "--azure-sdk-core-commit",
+            commit,
+            "--azure-sdk-core-hash",
+            azure_sdk_core_hash.?,
+        });
+    } else {
+        generate_devops.addArgs(&.{
+            "--azure-sdk-core-path",
+            azure_sdk_core_path orelse "../../../sdk/core",
+        });
+    }
+    const devops_generator_commit = b.option(
+        []const u8,
+        "devops-generator-commit",
+        "azure-sdk-for-zig commit recorded in the generated .azure-sdk-generator",
+    );
+    if (devops_generator_commit) |commit| {
+        generate_devops.addArgs(&.{ "--generator-commit", commit });
+    }
+    const devops_spec_commit = b.option(
+        []const u8,
+        "devops-spec-commit",
+        "vsts-rest-api-specs typespec-branch commit recorded in .azure-sdk-generator",
+    );
+    if (devops_spec_commit) |commit| {
+        generate_devops.addArgs(&.{ "--spec-commit", commit });
+    }
+    const generate_devops_step = b.step(
+        "generate-devops-package",
+        "Regenerate Azure DevOps into an external package worktree",
+    );
+    generate_devops_step.dependOn(&generate_devops.step);
+
     const azure_sdk_core_dep = b.dependency("azure_sdk_core", .{
         .target = host_target,
         .optimize = optimize,

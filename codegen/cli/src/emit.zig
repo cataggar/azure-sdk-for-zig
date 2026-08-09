@@ -57,6 +57,11 @@ pub const EmitOptions = struct {
     /// otherwise be written through as-is anyway (we fall back on
     /// parse failure to keep build errors visible).
     run_zig_fmt: bool = true,
+    /// Markdown inserted between the `README.md` H1 and the API-area
+    /// table written by `emitPackageShell`. Multi-area packages use it to
+    /// describe the service and its regeneration contract; when null a
+    /// generic "generated package" blurb is used instead.
+    readme_intro: ?[]const u8 = null,
 };
 
 pub fn emit(
@@ -140,6 +145,97 @@ pub fn emit(
     try writeFile(allocator, io, out_dir, ".gitignore", "zig-cache/\nzig-out/\nzig-pkg/\n.zig-cache/\n", opts.run_zig_fmt);
 }
 
+/// One API area inside a multi-namespace package.
+pub const Namespace = struct {
+    /// Directory name under `src/` and the identifier the aggregating
+    /// root re-exports it as (e.g. `git`, `build`, `work_item_tracking`).
+    name: []const u8,
+    /// Human-readable label used in the namespace's doc comment.
+    display_name: []const u8,
+    model: cm.CodeModel,
+};
+
+/// Emit one API area into `<out_dir>/src/<namespace.name>/`.
+///
+/// Services like Azure DevOps publish dozens of independent areas that
+/// share a host, an auth scheme and a release cadence, so they ship as a
+/// single package rather than 59 of them. Each area keeps its own
+/// `clients.zig` / `models.zig` / `enums.zig` — models collide across
+/// areas (`Build.Timeline` vs `Work.Timeline`), and sibling imports stay
+/// relative, so nothing has to be renamed.
+///
+/// Use `emitPackageShell` to write the `build.zig` / `build.zig.zon` /
+/// aggregating `src/root.zig` that tie the namespaces together.
+pub fn emitNamespace(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    out_dir: std.Io.Dir,
+    namespace: Namespace,
+    opts: EmitOptions,
+) !void {
+    const dir = try std.fmt.allocPrint(allocator, "src/{s}", .{namespace.name});
+    defer allocator.free(dir);
+    try out_dir.createDirPath(io, dir);
+
+    const files = .{
+        .{ "root.zig", try renderNamespaceRoot(allocator, namespace) },
+        .{ "clients.zig", try renderClients(allocator, namespace.model) },
+        .{ "models.zig", try renderModels(allocator, namespace.model) },
+        .{ "enums.zig", try renderEnums(allocator, namespace.model) },
+    };
+    inline for (files) |file| {
+        defer allocator.free(file[1]);
+        const sub_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, file[0] });
+        defer allocator.free(sub_path);
+        try writeFile(allocator, io, out_dir, sub_path, file[1], opts.run_zig_fmt);
+    }
+}
+
+/// Write the package-level files for a multi-namespace package: the
+/// aggregating `src/root.zig`, `build.zig`, `build.zig.zon`, `README.md`
+/// and `.gitignore`.
+pub fn emitPackageShell(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    out_dir: std.Io.Dir,
+    package_version: []const u8,
+    namespaces: []const Namespace,
+    opts: EmitOptions,
+) !void {
+    const pkg_name = opts.package_name orelse return error.MissingPackageName;
+    const display_name = opts.display_name orelse pkg_name;
+
+    try out_dir.createDirPath(io, "src");
+    {
+        const s = try renderAggregateRoot(allocator, display_name, namespaces);
+        defer allocator.free(s);
+        try writeFile(allocator, io, out_dir, "src/root.zig", s, opts.run_zig_fmt);
+    }
+    {
+        const s = try renderBuildZig(allocator, pkg_name);
+        defer allocator.free(s);
+        try writeFile(allocator, io, out_dir, "build.zig", s, opts.run_zig_fmt);
+    }
+    {
+        const s = try renderBuildZigZon(
+            allocator,
+            pkg_name,
+            package_version,
+            opts.azure_sdk_core_commit,
+            opts.azure_sdk_core_hash,
+            opts.azure_sdk_core_path,
+        );
+        defer allocator.free(s);
+        try writeFile(allocator, io, out_dir, "build.zig.zon", s, opts.run_zig_fmt);
+    }
+    {
+        const s = try renderNamespaceReadme(allocator, display_name, namespaces, opts.readme_intro);
+        defer allocator.free(s);
+        try writeFile(allocator, io, out_dir, "README.md", s, opts.run_zig_fmt);
+    }
+    try writeFile(allocator, io, out_dir, ".gitignore", "zig-cache/\nzig-out/\nzig-pkg/\n.zig-cache/\n", opts.run_zig_fmt);
+}
+
 /// Write `content` to `<out_dir>/<sub_path>`. When `fmt_enabled` is true
 /// and the path looks like Zig (`.zig`) or ZON (`.zig.zon`), run the
 /// in-process formatter (std.zig.Ast.parse + renderAlloc) first.
@@ -186,6 +282,101 @@ fn maybeFormat(
 
 // ─── root.zig ─────────────────────────────────────────────────────────
 
+/// Per-area `src/<area>/root.zig`. Unlike the single-package root it
+/// carries no `clients_test.zig` import — operator-owned tests live once
+/// at the package level, not once per area.
+fn renderNamespaceRoot(allocator: std.mem.Allocator, namespace: Namespace) ![]u8 {
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    errdefer aw.deinit();
+    const w = &aw.writer;
+
+    try w.print(
+        \\//! {[name]s} — generated from TypeSpec.
+        \\//!
+        \\//! Do not edit by hand. Regenerate with `codegen`.
+        \\
+        \\const clients = @import("clients.zig");
+        \\pub const models = @import("models.zig");
+        \\pub const enums = @import("enums.zig");
+        \\
+    , .{ .name = namespace.display_name });
+
+    for (namespace.model.clients) |c| {
+        try w.print("pub const {s} = clients.{s};\n", .{ c.name, c.name });
+    }
+    return try aw.toOwnedSlice();
+}
+
+/// Aggregating `src/root.zig` for a multi-namespace package. Area names
+/// are quoted when they collide with a Zig keyword — Azure DevOps has an
+/// area literally called `test`.
+fn renderAggregateRoot(
+    allocator: std.mem.Allocator,
+    display_name: []const u8,
+    namespaces: []const Namespace,
+) ![]u8 {
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    errdefer aw.deinit();
+    const w = &aw.writer;
+
+    try w.print(
+        \\//! {[name]s} — generated from TypeSpec.
+        \\//!
+        \\//! Do not edit by hand. Regenerate with `codegen`.
+        \\//!
+        \\//! Each API area is a namespace with its own clients, models and
+        \\//! enums; area names are the ones Azure DevOps uses in its REST
+        \\//! documentation.
+        \\
+        \\
+    , .{ .name = display_name });
+
+    for (namespaces) |ns| {
+        const id = try ids.quoteIfNeeded(allocator, ns.name);
+        defer allocator.free(id);
+        try w.print("pub const {s} = @import(\"{s}/root.zig\");\n", .{ id, ns.name });
+    }
+
+    try w.writeAll(
+        \\
+        \\test {
+        \\    _ = @import("clients_test.zig");
+        \\}
+        \\
+    );
+    return try aw.toOwnedSlice();
+}
+
+fn renderNamespaceReadme(
+    allocator: std.mem.Allocator,
+    display_name: []const u8,
+    namespaces: []const Namespace,
+    intro: ?[]const u8,
+) ![]u8 {
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    errdefer aw.deinit();
+    const w = &aw.writer;
+    try w.print("# {s}\n\n", .{display_name});
+    try w.writeAll(intro orelse
+        \\Generated Azure SDK client for Zig.
+        \\
+        \\Do not edit generated package files by hand — they will be
+        \\overwritten on the next regeneration.
+        \\
+    );
+    try w.writeAll("\n## API areas\n\n");
+    for (namespaces) |ns| {
+        var clients: usize = 0;
+        var methods: usize = 0;
+        for (ns.model.clients) |c| {
+            clients += 1;
+            methods += c.methods.len;
+        }
+        try w.print("- `{s}` — {d} clients, {d} operations\n", .{ ns.name, clients, methods });
+    }
+    return try aw.toOwnedSlice();
+}
+
 fn renderRoot(allocator: std.mem.Allocator, model: cm.CodeModel, display_name: []const u8) ![]u8 {
     var aw: std.Io.Writer.Allocating = .init(allocator);
     errdefer aw.deinit();
@@ -202,10 +393,11 @@ fn renderRoot(allocator: std.mem.Allocator, model: cm.CodeModel, display_name: [
         \\
     , .{ .name = display_name });
 
-    // Only re-export root clients; sub-clients are reachable through
-    // accessor methods on their parent.
+    // Re-export every client type. Callers reach sub-clients through
+    // accessor methods on their parent, but a hand-written SDK still has
+    // to *name* the type to store one in a struct field, so the names
+    // are exported too.
     for (model.clients) |c| {
-        if (!c.is_root) continue;
         try w.print("pub const {s} = clients.{s};\n", .{ c.name, c.name });
     }
 
@@ -296,6 +488,76 @@ fn hasODataStringPathParameter(model: cm.CodeModel) bool {
         }
     }
     return false;
+}
+
+/// Declarations and parameter names the emitter puts on every client.
+///
+/// Zig rejects a function parameter that shadows a container-level
+/// declaration, so a generated accessor or method sharing one of these
+/// names would not compile — Azure DevOps has a `build` operation group
+/// literally called `Options`, which collides with `init(…, options:
+/// InitOptions)`. Such names get an `_op` suffix.
+const reserved_members = [_][]const u8{
+    "alloc",            "allocator", "api_version", "auth_policy",
+    "deinit",           "endpoint",  "init",        "InitOptions",
+    "initWithPipeline", "options",   "pipeline",    "PipelineOptions",
+    "policy_ptrs",      "self",
+};
+
+/// Renders `name` as a client member, avoiding the emitter's own names.
+/// Caller owns the returned slice.
+fn memberName(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    for (reserved_members) |reserved| {
+        if (std.mem.eql(u8, name, reserved)) {
+            return std.fmt.allocPrint(allocator, "{s}_op", .{name});
+        }
+    }
+    return ids.quoteIfNeeded(allocator, name);
+}
+
+/// Local names the emitter declares in every generated method body.
+///
+/// A user parameter sharing one of these would shadow (or be shadowed by)
+/// an emitter-owned local or capture — Azure DevOps' `WorkItemIcons.get`
+/// takes a query parameter literally named `v`, which is why the optional
+/// query-append capture is `query_value` and is reserved here. Such
+/// parameters get a `_param` suffix.
+const reserved_locals = [_][]const u8{
+    "alloc",   "base_url", "core",        "enums",
+    "models",  "req",      "query_value", "resp",
+    "self",    "serde",    "std",         "has_query",
+    "url_buf",
+};
+
+/// Renders `name` as a generated method parameter, avoiding the locals the
+/// emitter declares in method bodies. Caller owns the returned slice.
+fn paramName(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    for (reserved_locals) |reserved| {
+        if (std.mem.eql(u8, name, reserved)) {
+            return std.fmt.allocPrint(allocator, "{s}_param", .{name});
+        }
+    }
+    return ids.quoteIfNeeded(allocator, name);
+}
+
+/// Response headers deduplicated by generated field name.
+///
+/// Azure DevOps declares the same response header more than once on some
+/// operations (`build`'s `GetBuildLog` lists `Content-Type` twice), which
+/// would emit a struct with a duplicate field. Caller owns the slice.
+fn uniqueResponseHeaders(
+    allocator: std.mem.Allocator,
+    headers: []const cm.ResponseHeader,
+) ![]cm.ResponseHeader {
+    var kept: std.ArrayList(cm.ResponseHeader) = .empty;
+    errdefer kept.deinit(allocator);
+    next: for (headers) |header| {
+        for (kept.items) |existing| {
+            if (std.mem.eql(u8, existing.name, header.name)) continue :next;
+        }
+        try kept.append(allocator, header);
+    }
+    return kept.toOwnedSlice(allocator);
 }
 
 fn renderRootConstants(w: *std.Io.Writer, c: cm.Client) !void {
@@ -518,6 +780,9 @@ fn renderRootDeinit(w: *std.Io.Writer) !void {
 }
 
 fn renderSubClientAccessor(w: *std.Io.Writer, parent: cm.Client, sc: cm.SubClient) !void {
+    var buffer: [256]u8 = undefined;
+    var fixed: std.heap.FixedBufferAllocator = .init(&buffer);
+    const accessor = try memberName(fixed.allocator(), sc.accessor_camel);
     try w.print(
         \\
         \\    pub fn {[acc]s}(self: *@This()) {[name]s} {{
@@ -526,7 +791,7 @@ fn renderSubClientAccessor(w: *std.Io.Writer, parent: cm.Client, sc: cm.SubClien
         \\            .api_version = self.api_version,
         \\            .pipeline = self.pipeline,
         \\
-    , .{ .acc = sc.accessor_camel, .name = sc.client_name });
+    , .{ .acc = accessor, .name = sc.client_name });
     for (parent.init_parameters) |p| {
         try w.print("            .{s} = self.{s},\n", .{ p.name, p.name });
     }
@@ -642,7 +907,9 @@ fn renderProtocolResultType(
             try w.print("        status_{d}: struct {{\n", .{code});
             try w.print("            status: u16 = {d},\n", .{code});
             try w.writeAll("            headers: struct {\n");
-            for (response.headers) |header| {
+            const headers = try uniqueResponseHeaders(allocator, response.headers);
+            defer allocator.free(headers);
+            for (headers) |header| {
                 const id = try ids.quoteIfNeeded(allocator, header.name);
                 defer allocator.free(id);
                 const ty = try renderFieldType(allocator, header.header_type, header.optional, .clients);
@@ -716,15 +983,23 @@ fn renderMethod(
     defer allocator.free(ret_str);
 
     // Signature: `pub fn <name>(self: *@This(), alloc: std.mem.Allocator, <user params>) !<ret> {`
-    try w.print("\n    pub fn {s}(self: *@This(), alloc: std.mem.Allocator", .{m.name_camel});
+    const method_name = try memberName(allocator, m.name_camel);
+    defer allocator.free(method_name);
+    try w.print("\n    pub fn {s}(self: *@This(), alloc: std.mem.Allocator", .{method_name});
     for (m.user_parameters) |p| {
-        const id = try ids.quoteIfNeeded(allocator, p.name);
+        const id = try paramName(allocator, p.name);
         defer allocator.free(id);
         const ty = try renderFieldType(allocator, p.param_type, p.optional, .clients);
         defer allocator.free(ty);
         try w.print(", {s}: {s}", .{ id, ty });
     }
     try w.print(") !{s} {{\n", .{ret_str});
+
+    // serde walks the whole reachable model graph at comptime. Azure
+    // DevOps models are deep enough (a `Build` reaches several hundred
+    // structs) to exceed Zig's default 1000-branch budget, and the quota
+    // has to be raised in the function that triggers the evaluation.
+    try w.writeAll("        @setEvalBranchQuota(100_000);\n");
 
     // URL build (path + query) — shared by every kind. XML list pagers own
     // the `marker` query pair, so it is excluded from the base URL here.
@@ -807,7 +1082,7 @@ fn renderReturnType(allocator: std.mem.Allocator, m: cm.Method, kind: anytype) !
 /// and replacing `{<wire_name>}` runs with `{s}`. Required query
 /// parameters are appended inline to the head `allocPrint`. Optional
 /// query parameters (typed as `?T` in the Zig signature) are
-/// appended afterwards, each gated by `if (param) |v| { ... }`, with
+/// appended afterwards, each gated by `if (param) |query_value| { ... }`, with
 /// values percent-encoded via `core.url.percentEncode`. The final
 /// owned `[]u8` is exposed as `const url` and freed via `defer`.
 fn renderUrlBuild(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method, exclude_marker: bool) !void {
@@ -914,7 +1189,7 @@ fn renderUrlBuild(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method,
         if (queryParamArrayElement(m, qp)) |elem| {
             try renderArrayQueryAppend(allocator, w, qp, elem);
         } else if (qp.optional and qp.source.name != null) {
-            const user_id = try ids.quoteIfNeeded(allocator, qp.source.name.?);
+            const user_id = try paramName(allocator, qp.source.name.?);
             defer allocator.free(user_id);
             try renderOptionalAppendNoRequired(w, user_id, qp.wire_name, innerOptionKind(m, qp));
         } else {
@@ -1039,9 +1314,9 @@ fn renderOptionalAppendNoRequired(
 ) !void {
     switch (kind) {
         .string_like => try w.print(
-            \\        if ({s}) |v| {{
+            \\        if ({s}) |query_value| {{
             \\            const sep: []const u8 = if (has_query) "&" else "?";
-            \\            const enc = try core.url.percentEncode(alloc, v);
+            \\            const enc = try core.url.percentEncode(alloc, query_value);
             \\            defer alloc.free(enc);
             \\            try url_buf.print(alloc, "{{s}}{s}={{s}}", .{{ sep, enc }});
             \\            has_query = true;
@@ -1049,9 +1324,9 @@ fn renderOptionalAppendNoRequired(
             \\
         , .{ user_id, wire_name }),
         .enum_or_union => try w.print(
-            \\        if ({s}) |v| {{
+            \\        if ({s}) |query_value| {{
             \\            const sep: []const u8 = if (has_query) "&" else "?";
-            \\            const enc = try core.url.percentEncode(alloc, v.toWire());
+            \\            const enc = try core.url.percentEncode(alloc, query_value.toWire());
             \\            defer alloc.free(enc);
             \\            try url_buf.print(alloc, "{{s}}{s}={{s}}", .{{ sep, enc }});
             \\            has_query = true;
@@ -1059,17 +1334,17 @@ fn renderOptionalAppendNoRequired(
             \\
         , .{ user_id, wire_name }),
         .numeric => try w.print(
-            \\        if ({s}) |v| {{
+            \\        if ({s}) |query_value| {{
             \\            const sep: []const u8 = if (has_query) "&" else "?";
-            \\            try url_buf.print(alloc, "{{s}}{s}={{d}}", .{{ sep, v }});
+            \\            try url_buf.print(alloc, "{{s}}{s}={{d}}", .{{ sep, query_value }});
             \\            has_query = true;
             \\        }}
             \\
         , .{ user_id, wire_name }),
         .boolean => try w.print(
-            \\        if ({s}) |v| {{
+            \\        if ({s}) |query_value| {{
             \\            const sep: []const u8 = if (has_query) "&" else "?";
-            \\            try url_buf.print(alloc, "{{s}}{s}={{}}", .{{ sep, v }});
+            \\            try url_buf.print(alloc, "{{s}}{s}={{}}", .{{ sep, query_value }});
             \\            has_query = true;
             \\        }}
             \\
@@ -1102,7 +1377,7 @@ fn renderArrayQueryAppend(
     qp: cm.WireParameter,
     elem: cm.TypeRef,
 ) !void {
-    const user_id = try ids.quoteIfNeeded(allocator, qp.source.name orelse "<missing>");
+    const user_id = try paramName(allocator, qp.source.name orelse "<missing>");
     defer allocator.free(user_id);
     const kind = classifyTypeRef(elem);
     const item_expr: []const u8 = switch (kind) {
@@ -1178,7 +1453,7 @@ fn sourceExpression(allocator: std.mem.Allocator, src: cm.WireSource) ![]u8 {
         return try std.fmt.allocPrint(allocator, "self.{s}", .{src.name orelse "<missing>"});
     }
     // user
-    return try ids.quoteIfNeeded(allocator, src.name orelse "<missing>");
+    return try paramName(allocator, src.name orelse "<missing>");
 }
 
 fn renderListBody(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method) !void {
@@ -1273,7 +1548,7 @@ fn renderRequestSetup(
         }
         if (std.mem.eql(u8, hp.source.kind, "constant")) {
             if (hp.optional and m.body_parameter != null and bodyParameterIsOptional(m)) {
-                const body_id = try ids.quoteIfNeeded(allocator, m.body_parameter.?.user_param_name);
+                const body_id = try paramName(allocator, m.body_parameter.?.user_param_name);
                 defer allocator.free(body_id);
                 try w.print(
                     \\        if ({s} != null) try req.setHeader("{s}", "{s}");
@@ -1329,7 +1604,7 @@ fn renderRequestSetup(
     }
 
     if (m.body_parameter) |bp| {
-        const id = try ids.quoteIfNeeded(allocator, bp.user_param_name);
+        const id = try paramName(allocator, bp.user_param_name);
         defer allocator.free(id);
         if (std.mem.eql(u8, bp.serialization_kind, "raw")) {
             if (bodyParameterIsOptional(m)) {
@@ -1635,7 +1910,9 @@ fn renderProtocolVariantReturn(
     response: cm.ResponseVariant,
     status: u16,
 ) !void {
-    for (response.headers, 0..) |header, index| {
+    const headers = try uniqueResponseHeaders(allocator, response.headers);
+    defer allocator.free(headers);
+    for (headers, 0..) |header, index| {
         try renderResponseHeaderExtract(allocator, w, model, header, index);
     }
 
@@ -1672,7 +1949,7 @@ fn renderProtocolVariantReturn(
         \\                    .headers = .{{
         \\
     , .{status});
-    for (response.headers, 0..) |header, index| {
+    for (headers, 0..) |header, index| {
         const id = try ids.quoteIfNeeded(allocator, header.name);
         defer allocator.free(id);
         try w.print("                        .{s} = response_header_{d},\n", .{ id, index });
@@ -1907,10 +2184,12 @@ pub fn renderModels(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
         try renderJsonValue(w);
     }
 
+    var cycles = try CycleBreaker.init(allocator, model.models);
+    defer cycles.deinit();
+
     for (model.models) |m| {
         if (m.doc) |d| try renderDocComment(w, d);
-        try w.print("pub const {s} = struct {{\n", .{m.name});
-        // Azure services routinely omit nominally-required fields from
+        try w.print("pub const {s} = struct {{\n", .{m.name}); // Azure services routinely omit nominally-required fields from
         // response bodies (e.g. a blob listing omits `<Deleted>`/`<Snapshot>`
         // for a normal blob). Match azure-sdk-for-rust, whose generated
         // response models make every field optional, by treating fields of
@@ -1941,8 +2220,22 @@ pub fn renderModels(allocator: std.mem.Allocator, model: cm.CodeModel) ![]u8 {
                 continue;
             }
             const opt = f.optional or force_optional;
-            const ty = try renderFieldType(allocator, f.field_type, opt, .models);
-            defer allocator.free(ty);
+            const rendered = try renderFieldType(allocator, f.field_type, opt, .models);
+            defer allocator.free(rendered);
+            // Boxed back edge of a recursive schema: `?Build` → `?*const Build`.
+            const boxed = if (cycles.contains(m.name, f.name)) blk: {
+                const bare = if (std.mem.startsWith(u8, rendered, "?"))
+                    rendered[1..]
+                else
+                    rendered;
+                break :blk try std.fmt.allocPrint(
+                    allocator,
+                    "{s}*const {s}",
+                    .{ if (opt) "?" else "", bare },
+                );
+            } else null;
+            defer if (boxed) |b| allocator.free(b);
+            const ty = boxed orelse rendered;
             if (opt) {
                 try w.print("    {s}: {s} = null,\n", .{ id, ty });
             } else {
@@ -2660,7 +2953,177 @@ fn renderFieldType(
     return try types.renderType(allocator, t, scope);
 }
 
+/// The model a field points at *by value*, if any.
+///
+/// A `[]const T` or a map already stores `T` behind a pointer, so only a
+/// bare (or optional) model reference contributes to a struct's size and
+/// can therefore make a type depend on itself.
+fn directModelName(t: cm.TypeRef) ?[]const u8 {
+    const inner = if (t.isOption()) nestedTypeRef(t) else t;
+    if (inner.isArray() or inner.isMap()) return null;
+    if (!inner.isModel()) return null;
+    return inner.namedTypeName();
+}
+
+/// The `Model.field` pairs that have to be boxed to keep every generated
+/// struct finitely sized.
+///
+/// Azure DevOps has genuinely recursive schemas — a `Build` carries the
+/// `Build` that triggered it, a `WikiPage` carries its sub-pages — which
+/// map to `field: ?Build`, a type that contains itself. Zig rejects that,
+/// so one field on each cycle is emitted as `?*const Build` instead. The
+/// back edge of a depth-first traversal is chosen, which is stable for a
+/// given model order and breaks every cycle it belongs to.
+///
+/// Keys are `"Model.field"`; the caller owns the map and its keys.
+const CycleBreaker = struct {
+    boxed: std.StringHashMapUnmanaged(void) = .empty,
+    allocator: std.mem.Allocator,
+
+    const State = enum { unvisited, in_progress, done };
+
+    fn init(allocator: std.mem.Allocator, models: []const cm.Model) !CycleBreaker {
+        var self: CycleBreaker = .{ .allocator = allocator };
+        errdefer self.deinit();
+
+        var index: std.StringHashMapUnmanaged(usize) = .empty;
+        defer index.deinit(allocator);
+        for (models, 0..) |m, i| try index.put(allocator, m.name, i);
+
+        const state = try allocator.alloc(State, models.len);
+        defer allocator.free(state);
+        @memset(state, .unvisited);
+
+        for (0..models.len) |i| {
+            if (state[i] == .unvisited) try self.visit(models, index, state, i);
+        }
+        return self;
+    }
+
+    fn visit(
+        self: *CycleBreaker,
+        models: []const cm.Model,
+        index: std.StringHashMapUnmanaged(usize),
+        state: []State,
+        i: usize,
+    ) !void {
+        state[i] = .in_progress;
+        for (models[i].fields) |f| {
+            const target_name = directModelName(f.field_type) orelse continue;
+            const j = index.get(target_name) orelse continue;
+            switch (state[j]) {
+                // Back edge: this field closes a cycle, so box it.
+                .in_progress => {
+                    const key = try std.fmt.allocPrint(
+                        self.allocator,
+                        "{s}.{s}",
+                        .{ models[i].name, f.name },
+                    );
+                    errdefer self.allocator.free(key);
+                    const entry = try self.boxed.getOrPut(self.allocator, key);
+                    if (entry.found_existing) self.allocator.free(key);
+                },
+                .unvisited => try self.visit(models, index, state, j),
+                .done => {},
+            }
+        }
+        state[i] = .done;
+    }
+
+    fn contains(self: CycleBreaker, model_name: []const u8, field_name: []const u8) bool {
+        var buf: [256]u8 = undefined;
+        const key = std.fmt.bufPrint(
+            &buf,
+            "{s}.{s}",
+            .{ model_name, field_name },
+        ) catch return false;
+        return self.boxed.contains(key);
+    }
+
+    fn deinit(self: *CycleBreaker) void {
+        var it = self.boxed.keyIterator();
+        while (it.next()) |key| self.allocator.free(key.*);
+        self.boxed.deinit(self.allocator);
+    }
+};
+
 // ─── tests ────────────────────────────────────────────────────────────
+
+test "recursive models box the back edge so the struct stays finitely sized" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    // `Build.triggered_by_build: ?Build` and the two-hop
+    // `Dashboard → Widget → Dashboard` are both real Azure DevOps schemas.
+    var array_of_build: std.json.ObjectMap = try .init(
+        alloc,
+        &.{ "kind", "value" },
+        &.{ .{ .string = "Model" }, .{ .string = "Build" } },
+    );
+    defer array_of_build.deinit(alloc);
+
+    var build_fields = [_]cm.Field{
+        .{
+            .name = "triggered_by_build",
+            .serialized_name = "triggeredByBuild",
+            .field_type = .{ .kind = "Model", .value = .{ .string = "Build" } },
+            .optional = true,
+        },
+        .{
+            .name = "children",
+            .serialized_name = "children",
+            .field_type = .{
+                .kind = "Array",
+                .value = .{ .object = array_of_build },
+            },
+            .optional = true,
+        },
+    };
+    var dashboard_fields = [_]cm.Field{.{
+        .name = "widget",
+        .serialized_name = "widget",
+        .field_type = .{ .kind = "Model", .value = .{ .string = "Widget" } },
+        .optional = true,
+    }};
+    var widget_fields = [_]cm.Field{.{
+        .name = "dashboard",
+        .serialized_name = "dashboard",
+        .field_type = .{ .kind = "Model", .value = .{ .string = "Dashboard" } },
+        .optional = true,
+    }};
+    var models = [_]cm.Model{
+        .{ .name = "Build", .fields = &build_fields, .is_output = true },
+        .{ .name = "Dashboard", .fields = &dashboard_fields, .is_output = true },
+        .{ .name = "Widget", .fields = &widget_fields, .is_output = true },
+    };
+    const model: cm.CodeModel = .{
+        .package_name = "azure_rest_devops",
+        .package_version = "0.1.0",
+        .target_kind = "dataplane",
+        .service_kind = "default",
+        .models = &models,
+    };
+
+    const rendered = try renderModels(alloc, model);
+    defer alloc.free(rendered);
+
+    // Direct self-reference is boxed.
+    try testing.expect(std.mem.indexOf(
+        u8,
+        rendered,
+        "triggered_by_build: ?*const Build = null,",
+    ) != null);
+    // A slice already provides the indirection, so it is left alone.
+    try testing.expect(std.mem.indexOf(
+        u8,
+        rendered,
+        "children: ?[]const Build = null,",
+    ) != null);
+    // Exactly one edge of the two-hop cycle is boxed.
+    const widget_boxed = std.mem.indexOf(u8, rendered, "widget: ?*const Widget") != null;
+    const dashboard_boxed = std.mem.indexOf(u8, rendered, "dashboard: ?*const Dashboard") != null;
+    try testing.expect(widget_boxed != dashboard_boxed);
+}
 
 test "display_name surfaces in root.zig + README, not build.zig" {
     const testing = std.testing;

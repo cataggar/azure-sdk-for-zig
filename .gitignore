@@ -381,6 +381,7 @@ zig-pkg/
 /thoughts/
 # codegen local-dev scratch output
 .tsp-generated/
+.devops-models/
 codegen/tcgc-component/.tsp-staging/
 codegen/tcgc-component/.typespec-output/
 codegen/tcgc-component/tcgc.wasm
