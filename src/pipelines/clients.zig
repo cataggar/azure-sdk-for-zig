@@ -136,8 +136,18 @@ pub const Pipelines = struct {
     endpoint: []const u8,
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
+
+    pub const ListResult = union(enum) {
+        status_200: struct {
+            status: u16 = 200,
+            headers: struct {
+                x_ms_continuationtoken: ?[]const u8 = null,
+            },
+            body: []const models.Pipeline,
+        },
+    };
     /// Get a list of pipelines.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, order_by: ?[]const u8, @"$top": ?i32, continuation_token: ?[]const u8) ![]const models.Pipeline {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, order_by: ?[]const u8, @"$top": ?i32, continuation_token: ?[]const u8) !ListResult {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -181,11 +191,27 @@ pub const Pipelines = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!responseStatusExpected(resp.status_code, &.{200})) {
-            core.pager.logHttpError("Pipelines.list", resp.status_code, resp.body);
-            return error.AzureRequestFailed;
+        switch (resp.status_code) {
+            200 => {
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
+                    try alloc.dupe(u8, value)
+                else
+                    null;
+                errdefer if (response_header_0) |value| alloc.free(value);
+                const response_body = try serde.json.fromSlice([]const models.Pipeline, alloc, resp.body);
+                return .{ .status_200 = .{
+                    .status = resp.status_code,
+                    .headers = .{
+                        .x_ms_continuationtoken = response_header_0,
+                    },
+                    .body = response_body,
+                } };
+            },
+            else => {
+                core.pager.logHttpError("Pipelines.list", resp.status_code, resp.body);
+                return error.AzureRequestFailed;
+            },
         }
-        return try serde.json.fromSlice([]const models.Pipeline, alloc, resp.body);
     }
     /// Create a pipeline.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.CreatePipelineParameters) !models.Pipeline {

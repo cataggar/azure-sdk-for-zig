@@ -200,6 +200,16 @@ pub const TestSuites = struct {
     endpoint: []const u8,
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
+
+    pub const GetTestSuitesForPlanResult = union(enum) {
+        status_200: struct {
+            status: u16 = 200,
+            headers: struct {
+                x_ms_continuationtoken: ?[]const u8 = null,
+            },
+            body: []const models.TestSuite,
+        },
+    };
     /// Find the list of all test suites in which a given test case is present. This is helpful if you need to find out which test suites are using a test case, when you need to make changes to a test case.
     pub fn getSuitesByTestCaseId(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, test_case_id: i32) ![]const models.TestSuite {
         @setEvalBranchQuota(100_000);
@@ -233,7 +243,7 @@ pub const TestSuites = struct {
         return try serde.json.fromSlice([]const models.TestSuite, alloc, resp.body);
     }
     /// Get test suites for plan.
-    pub fn getTestSuitesForPlan(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, expand: ?enums.GetTestSuitesForPlanRequestExpand, continuation_token: ?[]const u8, as_tree_view: ?bool) ![]const models.TestSuite {
+    pub fn getTestSuitesForPlan(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, expand: ?enums.GetTestSuitesForPlanRequestExpand, continuation_token: ?[]const u8, as_tree_view: ?bool) !GetTestSuitesForPlanResult {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -279,11 +289,27 @@ pub const TestSuites = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!responseStatusExpected(resp.status_code, &.{200})) {
-            core.pager.logHttpError("TestSuites.getTestSuitesForPlan", resp.status_code, resp.body);
-            return error.AzureRequestFailed;
+        switch (resp.status_code) {
+            200 => {
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
+                    try alloc.dupe(u8, value)
+                else
+                    null;
+                errdefer if (response_header_0) |value| alloc.free(value);
+                const response_body = try serde.json.fromSlice([]const models.TestSuite, alloc, resp.body);
+                return .{ .status_200 = .{
+                    .status = resp.status_code,
+                    .headers = .{
+                        .x_ms_continuationtoken = response_header_0,
+                    },
+                    .body = response_body,
+                } };
+            },
+            else => {
+                core.pager.logHttpError("TestSuites.getTestSuitesForPlan", resp.status_code, resp.body);
+                return error.AzureRequestFailed;
+            },
         }
-        return try serde.json.fromSlice([]const models.TestSuite, alloc, resp.body);
     }
     /// Create test suite.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, body: models.TestSuiteCreateParams) !models.TestSuite {
@@ -447,6 +473,16 @@ pub const Configurations = struct {
     endpoint: []const u8,
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
+
+    pub const ListResult = union(enum) {
+        status_200: struct {
+            status: u16 = 200,
+            headers: struct {
+                x_ms_continuationtoken: ?[]const u8 = null,
+            },
+            body: []const models.TestConfiguration,
+        },
+    };
     /// Delete a test configuration by its ID.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, test_configuartion_id: i32) !void {
         @setEvalBranchQuota(100_000);
@@ -481,7 +517,7 @@ pub const Configurations = struct {
         return;
     }
     /// Get a list of test configurations.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, continuation_token: ?[]const u8) ![]const models.TestConfiguration {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, continuation_token: ?[]const u8) !ListResult {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -513,11 +549,27 @@ pub const Configurations = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!responseStatusExpected(resp.status_code, &.{200})) {
-            core.pager.logHttpError("Configurations.list", resp.status_code, resp.body);
-            return error.AzureRequestFailed;
+        switch (resp.status_code) {
+            200 => {
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
+                    try alloc.dupe(u8, value)
+                else
+                    null;
+                errdefer if (response_header_0) |value| alloc.free(value);
+                const response_body = try serde.json.fromSlice([]const models.TestConfiguration, alloc, resp.body);
+                return .{ .status_200 = .{
+                    .status = resp.status_code,
+                    .headers = .{
+                        .x_ms_continuationtoken = response_header_0,
+                    },
+                    .body = response_body,
+                } };
+            },
+            else => {
+                core.pager.logHttpError("Configurations.list", resp.status_code, resp.body);
+                return error.AzureRequestFailed;
+            },
         }
-        return try serde.json.fromSlice([]const models.TestConfiguration, alloc, resp.body);
     }
     /// Update a test configuration by its ID.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, test_configuartion_id: i32, body: models.TestConfigurationCreateUpdateParameters) !models.TestConfiguration {
@@ -633,8 +685,18 @@ pub const TestPlans = struct {
     endpoint: []const u8,
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
+
+    pub const ListResult = union(enum) {
+        status_200: struct {
+            status: u16 = 200,
+            headers: struct {
+                x_ms_continuationtoken: ?[]const u8 = null,
+            },
+            body: []const models.TestPlan,
+        },
+    };
     /// Get a list of test plans
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, owner: ?[]const u8, continuation_token: ?[]const u8, include_plan_details: ?bool, filter_active_plans: ?bool) ![]const models.TestPlan {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, owner: ?[]const u8, continuation_token: ?[]const u8, include_plan_details: ?bool, filter_active_plans: ?bool) !ListResult {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -683,11 +745,27 @@ pub const TestPlans = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!responseStatusExpected(resp.status_code, &.{200})) {
-            core.pager.logHttpError("TestPlans.list", resp.status_code, resp.body);
-            return error.AzureRequestFailed;
+        switch (resp.status_code) {
+            200 => {
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
+                    try alloc.dupe(u8, value)
+                else
+                    null;
+                errdefer if (response_header_0) |value| alloc.free(value);
+                const response_body = try serde.json.fromSlice([]const models.TestPlan, alloc, resp.body);
+                return .{ .status_200 = .{
+                    .status = resp.status_code,
+                    .headers = .{
+                        .x_ms_continuationtoken = response_header_0,
+                    },
+                    .body = response_body,
+                } };
+            },
+            else => {
+                core.pager.logHttpError("TestPlans.list", resp.status_code, resp.body);
+                return error.AzureRequestFailed;
+            },
         }
-        return try serde.json.fromSlice([]const models.TestPlan, alloc, resp.body);
     }
     /// Create a test plan.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.TestPlanCreateParams) !models.TestPlan {
@@ -836,6 +914,16 @@ pub const SuiteTestCase = struct {
     endpoint: []const u8,
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
+
+    pub const GetTestCaseListResult = union(enum) {
+        status_200: struct {
+            status: u16 = 200,
+            headers: struct {
+                x_ms_continuationtoken: ?[]const u8 = null,
+            },
+            body: []const models.TestCase,
+        },
+    };
     /// Removes test cases from a suite based on the list of test case Ids provided. This API can be used to remove a larger number of test cases.
     pub fn removeTestCasesListFromSuite(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32, test_ids: []const u8) !void {
         @setEvalBranchQuota(100_000);
@@ -876,7 +964,7 @@ pub const SuiteTestCase = struct {
         return;
     }
     /// Get Test Case List return those test cases which have all the configuration Ids as mentioned in the optional parameter. If configuration Ids is null, it return all the test cases
-    pub fn getTestCaseList(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32, test_ids: ?[]const u8, configuration_ids: ?[]const u8, wit_fields: ?[]const u8, continuation_token: ?[]const u8, return_identity_ref: ?bool, expand: ?bool, exclude_flags: ?enums.GetTestCaseListRequestExcludeFlags, is_recursive: ?bool) ![]const models.TestCase {
+    pub fn getTestCaseList(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32, test_ids: ?[]const u8, configuration_ids: ?[]const u8, wit_fields: ?[]const u8, continuation_token: ?[]const u8, return_identity_ref: ?bool, expand: ?bool, exclude_flags: ?enums.GetTestCaseListRequestExcludeFlags, is_recursive: ?bool) !GetTestCaseListResult {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -955,11 +1043,27 @@ pub const SuiteTestCase = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!responseStatusExpected(resp.status_code, &.{200})) {
-            core.pager.logHttpError("SuiteTestCase.getTestCaseList", resp.status_code, resp.body);
-            return error.AzureRequestFailed;
+        switch (resp.status_code) {
+            200 => {
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
+                    try alloc.dupe(u8, value)
+                else
+                    null;
+                errdefer if (response_header_0) |value| alloc.free(value);
+                const response_body = try serde.json.fromSlice([]const models.TestCase, alloc, resp.body);
+                return .{ .status_200 = .{
+                    .status = resp.status_code,
+                    .headers = .{
+                        .x_ms_continuationtoken = response_header_0,
+                    },
+                    .body = response_body,
+                } };
+            },
+            else => {
+                core.pager.logHttpError("SuiteTestCase.getTestCaseList", resp.status_code, resp.body);
+                return error.AzureRequestFailed;
+            },
         }
-        return try serde.json.fromSlice([]const models.TestCase, alloc, resp.body);
     }
     /// Update the configurations for test cases
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32, body: []const models.SuiteTestCaseCreateUpdateParameters) ![]const models.TestCase {
@@ -1284,8 +1388,18 @@ pub const TestPlanRecycleBin = struct {
     endpoint: []const u8,
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
+
+    pub const ListResult = union(enum) {
+        status_200: struct {
+            status: u16 = 200,
+            headers: struct {
+                x_ms_continuationtoken: ?[]const u8 = null,
+            },
+            body: []const models.TestPlan,
+        },
+    };
     /// Get a list of deleted test plans
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, continuation_token: ?[]const u8) ![]const models.TestPlan {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, continuation_token: ?[]const u8) !ListResult {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1317,11 +1431,27 @@ pub const TestPlanRecycleBin = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!responseStatusExpected(resp.status_code, &.{200})) {
-            core.pager.logHttpError("TestPlanRecycleBin.list", resp.status_code, resp.body);
-            return error.AzureRequestFailed;
+        switch (resp.status_code) {
+            200 => {
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
+                    try alloc.dupe(u8, value)
+                else
+                    null;
+                errdefer if (response_header_0) |value| alloc.free(value);
+                const response_body = try serde.json.fromSlice([]const models.TestPlan, alloc, resp.body);
+                return .{ .status_200 = .{
+                    .status = resp.status_code,
+                    .headers = .{
+                        .x_ms_continuationtoken = response_header_0,
+                    },
+                    .body = response_body,
+                } };
+            },
+            else => {
+                core.pager.logHttpError("TestPlanRecycleBin.list", resp.status_code, resp.body);
+                return error.AzureRequestFailed;
+            },
         }
-        return try serde.json.fromSlice([]const models.TestPlan, alloc, resp.body);
     }
     /// Restores the deleted test plan
     pub fn restoreDeletedTestPlan(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, body: models.TestPlanAndSuiteRestoreModel) !void {
@@ -1366,8 +1496,28 @@ pub const TestSuiteRecycleBinOperations = struct {
     endpoint: []const u8,
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
+
+    pub const GetDeletedTestSuitesForPlanResult = union(enum) {
+        status_200: struct {
+            status: u16 = 200,
+            headers: struct {
+                x_ms_continuationtoken: ?[]const u8 = null,
+            },
+            body: []const models.TestSuite,
+        },
+    };
+
+    pub const GetDeletedTestSuitesForProjectResult = union(enum) {
+        status_200: struct {
+            status: u16 = 200,
+            headers: struct {
+                x_ms_continuationtoken: ?[]const u8 = null,
+            },
+            body: []const models.TestSuite,
+        },
+    };
     /// Get Deleted Test Suites for a Test Plan.
-    pub fn getDeletedTestSuitesForPlan(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, expand: ?enums.GetDeletedTestSuitesForPlanRequestExpand, continuation_token: ?[]const u8, as_tree_view: ?bool) ![]const models.TestSuite {
+    pub fn getDeletedTestSuitesForPlan(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, expand: ?enums.GetDeletedTestSuitesForPlanRequestExpand, continuation_token: ?[]const u8, as_tree_view: ?bool) !GetDeletedTestSuitesForPlanResult {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1413,14 +1563,30 @@ pub const TestSuiteRecycleBinOperations = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!responseStatusExpected(resp.status_code, &.{200})) {
-            core.pager.logHttpError("TestSuiteRecycleBinOperations.getDeletedTestSuitesForPlan", resp.status_code, resp.body);
-            return error.AzureRequestFailed;
+        switch (resp.status_code) {
+            200 => {
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
+                    try alloc.dupe(u8, value)
+                else
+                    null;
+                errdefer if (response_header_0) |value| alloc.free(value);
+                const response_body = try serde.json.fromSlice([]const models.TestSuite, alloc, resp.body);
+                return .{ .status_200 = .{
+                    .status = resp.status_code,
+                    .headers = .{
+                        .x_ms_continuationtoken = response_header_0,
+                    },
+                    .body = response_body,
+                } };
+            },
+            else => {
+                core.pager.logHttpError("TestSuiteRecycleBinOperations.getDeletedTestSuitesForPlan", resp.status_code, resp.body);
+                return error.AzureRequestFailed;
+            },
         }
-        return try serde.json.fromSlice([]const models.TestSuite, alloc, resp.body);
     }
     /// Get Deleted Test Suites within a Project.
-    pub fn getDeletedTestSuitesForProject(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, expand: ?enums.GetDeletedTestSuitesForProjectRequestExpand, continuation_token: ?[]const u8, as_tree_view: ?bool) ![]const models.TestSuite {
+    pub fn getDeletedTestSuitesForProject(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, expand: ?enums.GetDeletedTestSuitesForProjectRequestExpand, continuation_token: ?[]const u8, as_tree_view: ?bool) !GetDeletedTestSuitesForProjectResult {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1464,11 +1630,27 @@ pub const TestSuiteRecycleBinOperations = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!responseStatusExpected(resp.status_code, &.{200})) {
-            core.pager.logHttpError("TestSuiteRecycleBinOperations.getDeletedTestSuitesForProject", resp.status_code, resp.body);
-            return error.AzureRequestFailed;
+        switch (resp.status_code) {
+            200 => {
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
+                    try alloc.dupe(u8, value)
+                else
+                    null;
+                errdefer if (response_header_0) |value| alloc.free(value);
+                const response_body = try serde.json.fromSlice([]const models.TestSuite, alloc, resp.body);
+                return .{ .status_200 = .{
+                    .status = resp.status_code,
+                    .headers = .{
+                        .x_ms_continuationtoken = response_header_0,
+                    },
+                    .body = response_body,
+                } };
+            },
+            else => {
+                core.pager.logHttpError("TestSuiteRecycleBinOperations.getDeletedTestSuitesForProject", resp.status_code, resp.body);
+                return error.AzureRequestFailed;
+            },
         }
-        return try serde.json.fromSlice([]const models.TestSuite, alloc, resp.body);
     }
     /// Restores the deleted test suite
     pub fn restoreDeletedTestSuite(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, suite_id: i32, body: models.TestPlanAndSuiteRestoreModel) !void {
@@ -1794,8 +1976,18 @@ pub const Variables = struct {
     endpoint: []const u8,
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
+
+    pub const ListResult = union(enum) {
+        status_200: struct {
+            status: u16 = 200,
+            headers: struct {
+                x_ms_continuationtoken: ?[]const u8 = null,
+            },
+            body: []const models.TestVariable,
+        },
+    };
     /// Get a list of test variables.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, continuation_token: ?[]const u8) ![]const models.TestVariable {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, continuation_token: ?[]const u8) !ListResult {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1827,11 +2019,27 @@ pub const Variables = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!responseStatusExpected(resp.status_code, &.{200})) {
-            core.pager.logHttpError("Variables.list", resp.status_code, resp.body);
-            return error.AzureRequestFailed;
+        switch (resp.status_code) {
+            200 => {
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
+                    try alloc.dupe(u8, value)
+                else
+                    null;
+                errdefer if (response_header_0) |value| alloc.free(value);
+                const response_body = try serde.json.fromSlice([]const models.TestVariable, alloc, resp.body);
+                return .{ .status_200 = .{
+                    .status = resp.status_code,
+                    .headers = .{
+                        .x_ms_continuationtoken = response_header_0,
+                    },
+                    .body = response_body,
+                } };
+            },
+            else => {
+                core.pager.logHttpError("Variables.list", resp.status_code, resp.body);
+                return error.AzureRequestFailed;
+            },
         }
-        return try serde.json.fromSlice([]const models.TestVariable, alloc, resp.body);
     }
     /// Create a test variable.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.TestVariableCreateUpdateParameters) !models.TestVariable {

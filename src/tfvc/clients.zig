@@ -136,8 +136,18 @@ pub const Changesets = struct {
     endpoint: []const u8,
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
+
+    pub const GetChangesetChangesResult = union(enum) {
+        status_200: struct {
+            status: u16 = 200,
+            headers: struct {
+                x_ms_continuationtoken: ?[]const u8 = null,
+            },
+            body: []const models.TfvcChange,
+        },
+    };
     /// Retrieve Tfvc changes for a given changeset.
-    pub fn getChangesetChanges(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32, @"$skip": ?i32, @"$top": ?i32, continuation_token: ?[]const u8) ![]const models.TfvcChange {
+    pub fn getChangesetChanges(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32, @"$skip": ?i32, @"$top": ?i32, continuation_token: ?[]const u8) !GetChangesetChangesResult {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -179,11 +189,27 @@ pub const Changesets = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!responseStatusExpected(resp.status_code, &.{200})) {
-            core.pager.logHttpError("Changesets.getChangesetChanges", resp.status_code, resp.body);
-            return error.AzureRequestFailed;
+        switch (resp.status_code) {
+            200 => {
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
+                    try alloc.dupe(u8, value)
+                else
+                    null;
+                errdefer if (response_header_0) |value| alloc.free(value);
+                const response_body = try serde.json.fromSlice([]const models.TfvcChange, alloc, resp.body);
+                return .{ .status_200 = .{
+                    .status = resp.status_code,
+                    .headers = .{
+                        .x_ms_continuationtoken = response_header_0,
+                    },
+                    .body = response_body,
+                } };
+            },
+            else => {
+                core.pager.logHttpError("Changesets.getChangesetChanges", resp.status_code, resp.body);
+                return error.AzureRequestFailed;
+            },
         }
-        return try serde.json.fromSlice([]const models.TfvcChange, alloc, resp.body);
     }
     /// Retrieves the work items associated with a particular changeset.
     pub fn getChangesetWorkItems(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32) ![]const models.AssociatedWorkItem {

@@ -235,7 +235,7 @@ pub const Groups = struct {
         status_200: struct {
             status: u16 = 200,
             headers: struct {
-                xms_continuation_token: ?[]const u8 = null,
+                x_ms_continuationtoken: ?[]const u8 = null,
             },
             body: []const models.GraphGroup,
         },
@@ -287,7 +287,7 @@ pub const Groups = struct {
 
         switch (resp.status_code) {
             200 => {
-                const response_header_0 = if (resp.getHeader("X-MS-ContinuationToken")) |value|
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
                     try alloc.dupe(u8, value)
                 else
                     null;
@@ -296,7 +296,7 @@ pub const Groups = struct {
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{
-                        .xms_continuation_token = response_header_0,
+                        .x_ms_continuationtoken = response_header_0,
                     },
                     .body = response_body,
                 } };
@@ -754,7 +754,7 @@ pub const ServicePrincipals = struct {
         status_200: struct {
             status: u16 = 200,
             headers: struct {
-                xms_continuation_token: ?[]const u8 = null,
+                x_ms_continuationtoken: ?[]const u8 = null,
             },
             body: []const models.GraphServicePrincipal,
         },
@@ -799,7 +799,7 @@ pub const ServicePrincipals = struct {
 
         switch (resp.status_code) {
             200 => {
-                const response_header_0 = if (resp.getHeader("X-MS-ContinuationToken")) |value|
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
                     try alloc.dupe(u8, value)
                 else
                     null;
@@ -808,7 +808,7 @@ pub const ServicePrincipals = struct {
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{
-                        .xms_continuation_token = response_header_0,
+                        .x_ms_continuationtoken = response_header_0,
                     },
                     .body = response_body,
                 } };
@@ -1170,7 +1170,7 @@ pub const Users = struct {
         status_200: struct {
             status: u16 = 200,
             headers: struct {
-                xms_continuation_token: ?[]const u8 = null,
+                x_ms_continuationtoken: ?[]const u8 = null,
             },
             body: []const models.GraphUser,
         },
@@ -1222,7 +1222,7 @@ pub const Users = struct {
 
         switch (resp.status_code) {
             200 => {
-                const response_header_0 = if (resp.getHeader("X-MS-ContinuationToken")) |value|
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
                     try alloc.dupe(u8, value)
                 else
                     null;
@@ -1231,7 +1231,7 @@ pub const Users = struct {
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{
-                        .xms_continuation_token = response_header_0,
+                        .x_ms_continuationtoken = response_header_0,
                     },
                     .body = response_body,
                 } };

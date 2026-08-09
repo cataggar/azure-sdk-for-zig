@@ -457,7 +457,17 @@ pub const MemberEntitlements = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
 
-    pub fn searchMemberEntitlements(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, continuation_token: ?[]const u8, select: ?enums.SearchMemberEntitlementsRequestSelect, @"$filter": ?[]const u8, @"$order_by": ?[]const u8) ![]const models.JsonValue {
+    pub const SearchMemberEntitlementsResult = union(enum) {
+        status_200: struct {
+            status: u16 = 200,
+            headers: struct {
+                x_ms_continuationtoken: ?[]const u8 = null,
+            },
+            body: []const models.JsonValue,
+        },
+    };
+
+    pub fn searchMemberEntitlements(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, continuation_token: ?[]const u8, select: ?enums.SearchMemberEntitlementsRequestSelect, @"$filter": ?[]const u8, @"$order_by": ?[]const u8) !SearchMemberEntitlementsResult {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -508,11 +518,27 @@ pub const MemberEntitlements = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!responseStatusExpected(resp.status_code, &.{200})) {
-            core.pager.logHttpError("MemberEntitlements.searchMemberEntitlements", resp.status_code, resp.body);
-            return error.AzureRequestFailed;
+        switch (resp.status_code) {
+            200 => {
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
+                    try alloc.dupe(u8, value)
+                else
+                    null;
+                errdefer if (response_header_0) |value| alloc.free(value);
+                const response_body = try serde.json.fromSlice([]const models.JsonValue, alloc, resp.body);
+                return .{ .status_200 = .{
+                    .status = resp.status_code,
+                    .headers = .{
+                        .x_ms_continuationtoken = response_header_0,
+                    },
+                    .body = response_body,
+                } };
+            },
+            else => {
+                core.pager.logHttpError("MemberEntitlements.searchMemberEntitlements", resp.status_code, resp.body);
+                return error.AzureRequestFailed;
+            },
         }
-        return try serde.json.fromSlice([]const models.JsonValue, alloc, resp.body);
     }
 };
 

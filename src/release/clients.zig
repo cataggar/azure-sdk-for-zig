@@ -287,6 +287,16 @@ pub const Definitions = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
 
+    pub const ListResult = union(enum) {
+        status_200: struct {
+            status: u16 = 200,
+            headers: struct {
+                x_ms_continuationtoken: ?[]const u8 = null,
+            },
+            body: []const models.ReleaseDefinition,
+        },
+    };
+
     pub const GetDefinitionRevisionResult = union(enum) {
         status_200: struct {
             status: u16 = 200,
@@ -297,7 +307,7 @@ pub const Definitions = struct {
         },
     };
     /// Get a list of release definitions.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, search_text: ?[]const u8, @"$expand": ?enums.ListRequestExpand, artifact_type: ?[]const u8, artifact_source_id: ?[]const u8, @"$top": ?i32, continuation_token: ?[]const u8, query_order: ?enums.ListRequestQueryOrder1, path: ?[]const u8, is_exact_name_match: ?bool, tag_filter: ?[]const u8, property_filters: ?[]const u8, definition_id_filter: ?[]const u8, is_deleted: ?bool, search_text_contains_folder_name: ?bool) ![]const models.ReleaseDefinition {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, search_text: ?[]const u8, @"$expand": ?enums.ListRequestExpand, artifact_type: ?[]const u8, artifact_source_id: ?[]const u8, @"$top": ?i32, continuation_token: ?[]const u8, query_order: ?enums.ListRequestQueryOrder1, path: ?[]const u8, is_exact_name_match: ?bool, tag_filter: ?[]const u8, property_filters: ?[]const u8, definition_id_filter: ?[]const u8, is_deleted: ?bool, search_text_contains_folder_name: ?bool) !ListResult {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -412,11 +422,27 @@ pub const Definitions = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!responseStatusExpected(resp.status_code, &.{200})) {
-            core.pager.logHttpError("Definitions.list", resp.status_code, resp.body);
-            return error.AzureRequestFailed;
+        switch (resp.status_code) {
+            200 => {
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
+                    try alloc.dupe(u8, value)
+                else
+                    null;
+                errdefer if (response_header_0) |value| alloc.free(value);
+                const response_body = try serde.json.fromSlice([]const models.ReleaseDefinition, alloc, resp.body);
+                return .{ .status_200 = .{
+                    .status = resp.status_code,
+                    .headers = .{
+                        .x_ms_continuationtoken = response_header_0,
+                    },
+                    .body = response_body,
+                } };
+            },
+            else => {
+                core.pager.logHttpError("Definitions.list", resp.status_code, resp.body);
+                return error.AzureRequestFailed;
+            },
         }
-        return try serde.json.fromSlice([]const models.ReleaseDefinition, alloc, resp.body);
     }
     /// Create a release definition
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.ReleaseDefinition) !models.ReleaseDefinition {

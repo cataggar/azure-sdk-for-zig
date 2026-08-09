@@ -692,6 +692,26 @@ pub const Builds = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
 
+    pub const ListResult = union(enum) {
+        status_200: struct {
+            status: u16 = 200,
+            headers: struct {
+                x_ms_continuationtoken: ?[]const u8 = null,
+            },
+            body: []const models.Build,
+        },
+    };
+
+    pub const GetBuildChangesResult = union(enum) {
+        status_200: struct {
+            status: u16 = 200,
+            headers: struct {
+                x_ms_continuationtoken: ?[]const u8 = null,
+            },
+            body: []const models.Change,
+        },
+    };
+
     pub const GetBuildLogsResult = union(enum) {
         status_200: struct {
             status: u16 = 200,
@@ -712,7 +732,7 @@ pub const Builds = struct {
         },
     };
     /// Gets a list of builds.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definitions: ?[]const u8, queues: ?[]const u8, build_number: ?[]const u8, min_time: ?[]const u8, max_time: ?[]const u8, requested_for: ?[]const u8, reason_filter: ?enums.ListRequestReasonFilter, status_filter: ?enums.ListRequestStatusFilter, result_filter: ?enums.ListRequestResultFilter, tag_filters: ?[]const u8, properties: ?[]const u8, @"$top": ?i32, continuation_token: ?[]const u8, max_builds_per_definition: ?i32, deleted_filter: ?enums.ListRequestDeletedFilter, query_order: ?enums.ListRequestQueryOrder, branch_name: ?[]const u8, build_ids: ?[]const u8, repository_id: ?[]const u8, repository_type: ?[]const u8) ![]const models.Build {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definitions: ?[]const u8, queues: ?[]const u8, build_number: ?[]const u8, min_time: ?[]const u8, max_time: ?[]const u8, requested_for: ?[]const u8, reason_filter: ?enums.ListRequestReasonFilter, status_filter: ?enums.ListRequestStatusFilter, result_filter: ?enums.ListRequestResultFilter, tag_filters: ?[]const u8, properties: ?[]const u8, @"$top": ?i32, continuation_token: ?[]const u8, max_builds_per_definition: ?i32, deleted_filter: ?enums.ListRequestDeletedFilter, query_order: ?enums.ListRequestQueryOrder, branch_name: ?[]const u8, build_ids: ?[]const u8, repository_id: ?[]const u8, repository_type: ?[]const u8) !ListResult {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -873,11 +893,27 @@ pub const Builds = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!responseStatusExpected(resp.status_code, &.{200})) {
-            core.pager.logHttpError("Builds.list", resp.status_code, resp.body);
-            return error.AzureRequestFailed;
+        switch (resp.status_code) {
+            200 => {
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
+                    try alloc.dupe(u8, value)
+                else
+                    null;
+                errdefer if (response_header_0) |value| alloc.free(value);
+                const response_body = try serde.json.fromSlice([]const models.Build, alloc, resp.body);
+                return .{ .status_200 = .{
+                    .status = resp.status_code,
+                    .headers = .{
+                        .x_ms_continuationtoken = response_header_0,
+                    },
+                    .body = response_body,
+                } };
+            },
+            else => {
+                core.pager.logHttpError("Builds.list", resp.status_code, resp.body);
+                return error.AzureRequestFailed;
+            },
         }
-        return try serde.json.fromSlice([]const models.Build, alloc, resp.body);
     }
     /// Updates multiple builds.
     pub fn updateBuilds(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: []const models.Build) ![]const models.Build {
@@ -1091,7 +1127,7 @@ pub const Builds = struct {
         return try serde.json.fromSlice(models.Build, alloc, resp.body);
     }
     /// Gets the changes associated with a build
-    pub fn getBuildChanges(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, continuation_token: ?[]const u8, @"$top": ?i32, include_source_change: ?bool) ![]const models.Change {
+    pub fn getBuildChanges(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, continuation_token: ?[]const u8, @"$top": ?i32, include_source_change: ?bool) !GetBuildChangesResult {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1135,11 +1171,27 @@ pub const Builds = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!responseStatusExpected(resp.status_code, &.{200})) {
-            core.pager.logHttpError("Builds.getBuildChanges", resp.status_code, resp.body);
-            return error.AzureRequestFailed;
+        switch (resp.status_code) {
+            200 => {
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
+                    try alloc.dupe(u8, value)
+                else
+                    null;
+                errdefer if (response_header_0) |value| alloc.free(value);
+                const response_body = try serde.json.fromSlice([]const models.Change, alloc, resp.body);
+                return .{ .status_200 = .{
+                    .status = resp.status_code,
+                    .headers = .{
+                        .x_ms_continuationtoken = response_header_0,
+                    },
+                    .body = response_body,
+                } };
+            },
+            else => {
+                core.pager.logHttpError("Builds.getBuildChanges", resp.status_code, resp.body);
+                return error.AzureRequestFailed;
+            },
         }
-        return try serde.json.fromSlice([]const models.Change, alloc, resp.body);
     }
     /// Gets all retention leases that apply to a specific build.
     pub fn getRetentionLeasesForBuild(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32) ![]const models.RetentionLease {
@@ -2534,8 +2586,18 @@ pub const Definitions = struct {
     endpoint: []const u8,
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
+
+    pub const ListResult = union(enum) {
+        status_200: struct {
+            status: u16 = 200,
+            headers: struct {
+                x_ms_continuationtoken: ?[]const u8 = null,
+            },
+            body: []const models.BuildDefinitionReference,
+        },
+    };
     /// Gets a list of definitions.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, name: ?[]const u8, repository_id: ?[]const u8, repository_type: ?[]const u8, query_order: ?enums.ListRequestQueryOrder1, @"$top": ?i32, continuation_token: ?[]const u8, min_metrics_time: ?[]const u8, definition_ids: ?[]const u8, path: ?[]const u8, built_after: ?[]const u8, not_built_after: ?[]const u8, include_all_properties: ?bool, include_latest_builds: ?bool, task_id_filter: ?[]const u8, process_type: ?i32, yaml_filename: ?[]const u8) ![]const models.BuildDefinitionReference {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, name: ?[]const u8, repository_id: ?[]const u8, repository_type: ?[]const u8, query_order: ?enums.ListRequestQueryOrder1, @"$top": ?i32, continuation_token: ?[]const u8, min_metrics_time: ?[]const u8, definition_ids: ?[]const u8, path: ?[]const u8, built_after: ?[]const u8, not_built_after: ?[]const u8, include_all_properties: ?bool, include_latest_builds: ?bool, task_id_filter: ?[]const u8, process_type: ?i32, yaml_filename: ?[]const u8) !ListResult {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2664,11 +2726,27 @@ pub const Definitions = struct {
         var resp = try self.pipeline.send(&req);
         defer resp.deinit();
 
-        if (!responseStatusExpected(resp.status_code, &.{200})) {
-            core.pager.logHttpError("Definitions.list", resp.status_code, resp.body);
-            return error.AzureRequestFailed;
+        switch (resp.status_code) {
+            200 => {
+                const response_header_0 = if (resp.getHeader("x-ms-continuationtoken")) |value|
+                    try alloc.dupe(u8, value)
+                else
+                    null;
+                errdefer if (response_header_0) |value| alloc.free(value);
+                const response_body = try serde.json.fromSlice([]const models.BuildDefinitionReference, alloc, resp.body);
+                return .{ .status_200 = .{
+                    .status = resp.status_code,
+                    .headers = .{
+                        .x_ms_continuationtoken = response_header_0,
+                    },
+                    .body = response_body,
+                } };
+            },
+            else => {
+                core.pager.logHttpError("Definitions.list", resp.status_code, resp.body);
+                return error.AzureRequestFailed;
+            },
         }
-        return try serde.json.fromSlice([]const models.BuildDefinitionReference, alloc, resp.body);
     }
     /// Creates a new definition.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_to_clone_id: ?i32, definition_to_clone_revision: ?i32, body: models.BuildDefinition) !models.BuildDefinition {
