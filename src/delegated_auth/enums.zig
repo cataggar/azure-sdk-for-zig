@@ -8,45 +8,42 @@
 const std = @import("std");
 const core = @import("azure_sdk_core");
 
-pub const RegistrationClientType = enum {
+pub const RegistrationClientType = union(enum) {
     confidential,
     public,
     medium_trust,
     high_trust,
     full_trust,
     application,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .confidential => "confidential",
-            .public => "public",
-            .medium_trust => "mediumTrust",
-            .high_trust => "highTrust",
-            .full_trust => "fullTrust",
-            .application => "application",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "confidential")) return .confidential;
-        if (std.mem.eql(u8, s, "public")) return .public;
-        if (std.mem.eql(u8, s, "mediumTrust")) return .medium_trust;
-        if (std.mem.eql(u8, s, "highTrust")) return .high_trust;
-        if (std.mem.eql(u8, s, "fullTrust")) return .full_trust;
-        if (std.mem.eql(u8, s, "application")) return .application;
-        return null;
-    }
+    const wire_names = .{
+        .confidential = "confidential",
+        .public = "public",
+        .medium_trust = "mediumTrust",
+        .high_trust = "highTrust",
+        .full_trust = "fullTrust",
+        .application = "application",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 

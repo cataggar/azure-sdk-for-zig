@@ -8,7 +8,7 @@
 const std = @import("std");
 const core = @import("azure_sdk_core");
 
-pub const NotificationEventFieldTypeSubscriptionFieldType = enum {
+pub const NotificationEventFieldTypeSubscriptionFieldType = union(enum) {
     string,
     integer,
     date_time,
@@ -24,156 +24,145 @@ pub const NotificationEventFieldTypeSubscriptionFieldType = enum {
     picklist_string,
     picklist_double,
     team_project,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .string => "string",
-            .integer => "integer",
-            .date_time => "dateTime",
-            .plain_text => "plainText",
-            .html => "html",
-            .tree_path => "treePath",
-            .history => "history",
-            .double => "double",
-            .guid => "guid",
-            .boolean => "boolean",
-            .identity => "identity",
-            .picklist_integer => "picklistInteger",
-            .picklist_string => "picklistString",
-            .picklist_double => "picklistDouble",
-            .team_project => "teamProject",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "string")) return .string;
-        if (std.mem.eql(u8, s, "integer")) return .integer;
-        if (std.mem.eql(u8, s, "dateTime")) return .date_time;
-        if (std.mem.eql(u8, s, "plainText")) return .plain_text;
-        if (std.mem.eql(u8, s, "html")) return .html;
-        if (std.mem.eql(u8, s, "treePath")) return .tree_path;
-        if (std.mem.eql(u8, s, "history")) return .history;
-        if (std.mem.eql(u8, s, "double")) return .double;
-        if (std.mem.eql(u8, s, "guid")) return .guid;
-        if (std.mem.eql(u8, s, "boolean")) return .boolean;
-        if (std.mem.eql(u8, s, "identity")) return .identity;
-        if (std.mem.eql(u8, s, "picklistInteger")) return .picklist_integer;
-        if (std.mem.eql(u8, s, "picklistString")) return .picklist_string;
-        if (std.mem.eql(u8, s, "picklistDouble")) return .picklist_double;
-        if (std.mem.eql(u8, s, "teamProject")) return .team_project;
-        return null;
-    }
+    const wire_names = .{
+        .string = "string",
+        .integer = "integer",
+        .date_time = "dateTime",
+        .plain_text = "plainText",
+        .html = "html",
+        .tree_path = "treePath",
+        .history = "history",
+        .double = "double",
+        .guid = "guid",
+        .boolean = "boolean",
+        .identity = "identity",
+        .picklist_integer = "picklistInteger",
+        .picklist_string = "picklistString",
+        .picklist_double = "picklistDouble",
+        .team_project = "teamProject",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const NotificationAdminSettingsDefaultGroupDeliveryPreference = enum {
+pub const NotificationAdminSettingsDefaultGroupDeliveryPreference = union(enum) {
     no_delivery,
     each_member,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .no_delivery => "noDelivery",
-            .each_member => "eachMember",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "noDelivery")) return .no_delivery;
-        if (std.mem.eql(u8, s, "eachMember")) return .each_member;
-        return null;
-    }
+    const wire_names = .{
+        .no_delivery = "noDelivery",
+        .each_member = "eachMember",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const NotificationAdminSettingsUpdateParametersDefaultGroupDeliveryPreference = enum {
+pub const NotificationAdminSettingsUpdateParametersDefaultGroupDeliveryPreference = union(enum) {
     no_delivery,
     each_member,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .no_delivery => "noDelivery",
-            .each_member => "eachMember",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "noDelivery")) return .no_delivery;
-        if (std.mem.eql(u8, s, "eachMember")) return .each_member;
-        return null;
-    }
+    const wire_names = .{
+        .no_delivery = "noDelivery",
+        .each_member = "eachMember",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const NotificationSubscriberDeliveryPreference = enum {
+pub const NotificationSubscriberDeliveryPreference = union(enum) {
     no_delivery,
     preferred_email_address,
     each_member,
     use_default,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .no_delivery => "noDelivery",
-            .preferred_email_address => "preferredEmailAddress",
-            .each_member => "eachMember",
-            .use_default => "useDefault",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "noDelivery")) return .no_delivery;
-        if (std.mem.eql(u8, s, "preferredEmailAddress")) return .preferred_email_address;
-        if (std.mem.eql(u8, s, "eachMember")) return .each_member;
-        if (std.mem.eql(u8, s, "useDefault")) return .use_default;
-        return null;
-    }
+    const wire_names = .{
+        .no_delivery = "noDelivery",
+        .preferred_email_address = "preferredEmailAddress",
+        .each_member = "eachMember",
+        .use_default = "useDefault",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const NotificationSubscriberFlags = enum {
+pub const NotificationSubscriberFlags = union(enum) {
     none,
     delivery_preferences_editable,
     supports_preferred_email_address_delivery,
@@ -182,244 +171,228 @@ pub const NotificationSubscriberFlags = enum {
     is_user,
     is_group,
     is_team,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .none => "none",
-            .delivery_preferences_editable => "deliveryPreferencesEditable",
-            .supports_preferred_email_address_delivery => "supportsPreferredEmailAddressDelivery",
-            .supports_each_member_delivery => "supportsEachMemberDelivery",
-            .supports_no_delivery => "supportsNoDelivery",
-            .is_user => "isUser",
-            .is_group => "isGroup",
-            .is_team => "isTeam",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "none")) return .none;
-        if (std.mem.eql(u8, s, "deliveryPreferencesEditable")) return .delivery_preferences_editable;
-        if (std.mem.eql(u8, s, "supportsPreferredEmailAddressDelivery")) return .supports_preferred_email_address_delivery;
-        if (std.mem.eql(u8, s, "supportsEachMemberDelivery")) return .supports_each_member_delivery;
-        if (std.mem.eql(u8, s, "supportsNoDelivery")) return .supports_no_delivery;
-        if (std.mem.eql(u8, s, "isUser")) return .is_user;
-        if (std.mem.eql(u8, s, "isGroup")) return .is_group;
-        if (std.mem.eql(u8, s, "isTeam")) return .is_team;
-        return null;
-    }
+    const wire_names = .{
+        .none = "none",
+        .delivery_preferences_editable = "deliveryPreferencesEditable",
+        .supports_preferred_email_address_delivery = "supportsPreferredEmailAddressDelivery",
+        .supports_each_member_delivery = "supportsEachMemberDelivery",
+        .supports_no_delivery = "supportsNoDelivery",
+        .is_user = "isUser",
+        .is_group = "isGroup",
+        .is_team = "isTeam",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const NotificationSubscriberUpdateParametersDeliveryPreference = enum {
+pub const NotificationSubscriberUpdateParametersDeliveryPreference = union(enum) {
     no_delivery,
     preferred_email_address,
     each_member,
     use_default,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .no_delivery => "noDelivery",
-            .preferred_email_address => "preferredEmailAddress",
-            .each_member => "eachMember",
-            .use_default => "useDefault",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "noDelivery")) return .no_delivery;
-        if (std.mem.eql(u8, s, "preferredEmailAddress")) return .preferred_email_address;
-        if (std.mem.eql(u8, s, "eachMember")) return .each_member;
-        if (std.mem.eql(u8, s, "useDefault")) return .use_default;
-        return null;
-    }
+    const wire_names = .{
+        .no_delivery = "noDelivery",
+        .preferred_email_address = "preferredEmailAddress",
+        .each_member = "eachMember",
+        .use_default = "useDefault",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const SubscriptionQueryConditionFlags = enum {
+pub const SubscriptionQueryConditionFlags = union(enum) {
     none,
     group_subscription,
     contributed_subscription,
     can_opt_out,
     team_subscription,
     one_actor_matches,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .none => "none",
-            .group_subscription => "groupSubscription",
-            .contributed_subscription => "contributedSubscription",
-            .can_opt_out => "canOptOut",
-            .team_subscription => "teamSubscription",
-            .one_actor_matches => "oneActorMatches",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "none")) return .none;
-        if (std.mem.eql(u8, s, "groupSubscription")) return .group_subscription;
-        if (std.mem.eql(u8, s, "contributedSubscription")) return .contributed_subscription;
-        if (std.mem.eql(u8, s, "canOptOut")) return .can_opt_out;
-        if (std.mem.eql(u8, s, "teamSubscription")) return .team_subscription;
-        if (std.mem.eql(u8, s, "oneActorMatches")) return .one_actor_matches;
-        return null;
-    }
+    const wire_names = .{
+        .none = "none",
+        .group_subscription = "groupSubscription",
+        .contributed_subscription = "contributedSubscription",
+        .can_opt_out = "canOptOut",
+        .team_subscription = "teamSubscription",
+        .one_actor_matches = "oneActorMatches",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const SubscriptionQueryQueryFlags = enum {
+pub const SubscriptionQueryQueryFlags = union(enum) {
     none,
     include_invalid_subscriptions,
     include_deleted_subscriptions,
     include_filter_details,
     always_return_basic_information,
     include_system_subscriptions,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .none => "none",
-            .include_invalid_subscriptions => "includeInvalidSubscriptions",
-            .include_deleted_subscriptions => "includeDeletedSubscriptions",
-            .include_filter_details => "includeFilterDetails",
-            .always_return_basic_information => "alwaysReturnBasicInformation",
-            .include_system_subscriptions => "includeSystemSubscriptions",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "none")) return .none;
-        if (std.mem.eql(u8, s, "includeInvalidSubscriptions")) return .include_invalid_subscriptions;
-        if (std.mem.eql(u8, s, "includeDeletedSubscriptions")) return .include_deleted_subscriptions;
-        if (std.mem.eql(u8, s, "includeFilterDetails")) return .include_filter_details;
-        if (std.mem.eql(u8, s, "alwaysReturnBasicInformation")) return .always_return_basic_information;
-        if (std.mem.eql(u8, s, "includeSystemSubscriptions")) return .include_system_subscriptions;
-        return null;
-    }
+    const wire_names = .{
+        .none = "none",
+        .include_invalid_subscriptions = "includeInvalidSubscriptions",
+        .include_deleted_subscriptions = "includeDeletedSubscriptions",
+        .include_filter_details = "includeFilterDetails",
+        .always_return_basic_information = "alwaysReturnBasicInformation",
+        .include_system_subscriptions = "includeSystemSubscriptions",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const NotificationSubscriptionFlags = enum {
+pub const NotificationSubscriptionFlags = union(enum) {
     none,
     group_subscription,
     contributed_subscription,
     can_opt_out,
     team_subscription,
     one_actor_matches,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .none => "none",
-            .group_subscription => "groupSubscription",
-            .contributed_subscription => "contributedSubscription",
-            .can_opt_out => "canOptOut",
-            .team_subscription => "teamSubscription",
-            .one_actor_matches => "oneActorMatches",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "none")) return .none;
-        if (std.mem.eql(u8, s, "groupSubscription")) return .group_subscription;
-        if (std.mem.eql(u8, s, "contributedSubscription")) return .contributed_subscription;
-        if (std.mem.eql(u8, s, "canOptOut")) return .can_opt_out;
-        if (std.mem.eql(u8, s, "teamSubscription")) return .team_subscription;
-        if (std.mem.eql(u8, s, "oneActorMatches")) return .one_actor_matches;
-        return null;
-    }
+    const wire_names = .{
+        .none = "none",
+        .group_subscription = "groupSubscription",
+        .contributed_subscription = "contributedSubscription",
+        .can_opt_out = "canOptOut",
+        .team_subscription = "teamSubscription",
+        .one_actor_matches = "oneActorMatches",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const NotificationSubscriptionPermissions = enum {
+pub const NotificationSubscriptionPermissions = union(enum) {
     none,
     view,
     edit,
     delete,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .none => "none",
-            .view => "view",
-            .edit => "edit",
-            .delete => "delete",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "none")) return .none;
-        if (std.mem.eql(u8, s, "view")) return .view;
-        if (std.mem.eql(u8, s, "edit")) return .edit;
-        if (std.mem.eql(u8, s, "delete")) return .delete;
-        return null;
-    }
+    const wire_names = .{
+        .none = "none",
+        .view = "view",
+        .edit = "edit",
+        .delete = "delete",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const NotificationSubscriptionStatus = enum {
+pub const NotificationSubscriptionStatus = union(enum) {
     jailed_by_notifications_volume,
     pending_deletion,
     disabled_argument_exception,
@@ -436,58 +409,45 @@ pub const NotificationSubscriptionStatus = enum {
     disabled,
     enabled,
     enabled_on_probation,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .jailed_by_notifications_volume => "jailedByNotificationsVolume",
-            .pending_deletion => "pendingDeletion",
-            .disabled_argument_exception => "disabledArgumentException",
-            .disabled_project_invalid => "disabledProjectInvalid",
-            .disabled_missing_permissions => "disabledMissingPermissions",
-            .disabled_from_probation => "disabledFromProbation",
-            .disabled_inactive_identity => "disabledInactiveIdentity",
-            .disabled_message_queue_not_supported => "disabledMessageQueueNotSupported",
-            .disabled_missing_identity => "disabledMissingIdentity",
-            .disabled_invalid_role_expression => "disabledInvalidRoleExpression",
-            .disabled_invalid_path_clause => "disabledInvalidPathClause",
-            .disabled_as_duplicate_of_default => "disabledAsDuplicateOfDefault",
-            .disabled_by_admin => "disabledByAdmin",
-            .disabled => "disabled",
-            .enabled => "enabled",
-            .enabled_on_probation => "enabledOnProbation",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "jailedByNotificationsVolume")) return .jailed_by_notifications_volume;
-        if (std.mem.eql(u8, s, "pendingDeletion")) return .pending_deletion;
-        if (std.mem.eql(u8, s, "disabledArgumentException")) return .disabled_argument_exception;
-        if (std.mem.eql(u8, s, "disabledProjectInvalid")) return .disabled_project_invalid;
-        if (std.mem.eql(u8, s, "disabledMissingPermissions")) return .disabled_missing_permissions;
-        if (std.mem.eql(u8, s, "disabledFromProbation")) return .disabled_from_probation;
-        if (std.mem.eql(u8, s, "disabledInactiveIdentity")) return .disabled_inactive_identity;
-        if (std.mem.eql(u8, s, "disabledMessageQueueNotSupported")) return .disabled_message_queue_not_supported;
-        if (std.mem.eql(u8, s, "disabledMissingIdentity")) return .disabled_missing_identity;
-        if (std.mem.eql(u8, s, "disabledInvalidRoleExpression")) return .disabled_invalid_role_expression;
-        if (std.mem.eql(u8, s, "disabledInvalidPathClause")) return .disabled_invalid_path_clause;
-        if (std.mem.eql(u8, s, "disabledAsDuplicateOfDefault")) return .disabled_as_duplicate_of_default;
-        if (std.mem.eql(u8, s, "disabledByAdmin")) return .disabled_by_admin;
-        if (std.mem.eql(u8, s, "disabled")) return .disabled;
-        if (std.mem.eql(u8, s, "enabled")) return .enabled;
-        if (std.mem.eql(u8, s, "enabledOnProbation")) return .enabled_on_probation;
-        return null;
-    }
+    const wire_names = .{
+        .jailed_by_notifications_volume = "jailedByNotificationsVolume",
+        .pending_deletion = "pendingDeletion",
+        .disabled_argument_exception = "disabledArgumentException",
+        .disabled_project_invalid = "disabledProjectInvalid",
+        .disabled_missing_permissions = "disabledMissingPermissions",
+        .disabled_from_probation = "disabledFromProbation",
+        .disabled_inactive_identity = "disabledInactiveIdentity",
+        .disabled_message_queue_not_supported = "disabledMessageQueueNotSupported",
+        .disabled_missing_identity = "disabledMissingIdentity",
+        .disabled_invalid_role_expression = "disabledInvalidRoleExpression",
+        .disabled_invalid_path_clause = "disabledInvalidPathClause",
+        .disabled_as_duplicate_of_default = "disabledAsDuplicateOfDefault",
+        .disabled_by_admin = "disabledByAdmin",
+        .disabled = "disabled",
+        .enabled = "enabled",
+        .enabled_on_probation = "enabledOnProbation",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -575,7 +535,7 @@ pub const GetRequestQueryFlags = enum {
     }
 };
 
-pub const NotificationSubscriptionUpdateParametersStatus = enum {
+pub const NotificationSubscriptionUpdateParametersStatus = union(enum) {
     jailed_by_notifications_volume,
     pending_deletion,
     disabled_argument_exception,
@@ -592,94 +552,80 @@ pub const NotificationSubscriptionUpdateParametersStatus = enum {
     disabled,
     enabled,
     enabled_on_probation,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .jailed_by_notifications_volume => "jailedByNotificationsVolume",
-            .pending_deletion => "pendingDeletion",
-            .disabled_argument_exception => "disabledArgumentException",
-            .disabled_project_invalid => "disabledProjectInvalid",
-            .disabled_missing_permissions => "disabledMissingPermissions",
-            .disabled_from_probation => "disabledFromProbation",
-            .disabled_inactive_identity => "disabledInactiveIdentity",
-            .disabled_message_queue_not_supported => "disabledMessageQueueNotSupported",
-            .disabled_missing_identity => "disabledMissingIdentity",
-            .disabled_invalid_role_expression => "disabledInvalidRoleExpression",
-            .disabled_invalid_path_clause => "disabledInvalidPathClause",
-            .disabled_as_duplicate_of_default => "disabledAsDuplicateOfDefault",
-            .disabled_by_admin => "disabledByAdmin",
-            .disabled => "disabled",
-            .enabled => "enabled",
-            .enabled_on_probation => "enabledOnProbation",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "jailedByNotificationsVolume")) return .jailed_by_notifications_volume;
-        if (std.mem.eql(u8, s, "pendingDeletion")) return .pending_deletion;
-        if (std.mem.eql(u8, s, "disabledArgumentException")) return .disabled_argument_exception;
-        if (std.mem.eql(u8, s, "disabledProjectInvalid")) return .disabled_project_invalid;
-        if (std.mem.eql(u8, s, "disabledMissingPermissions")) return .disabled_missing_permissions;
-        if (std.mem.eql(u8, s, "disabledFromProbation")) return .disabled_from_probation;
-        if (std.mem.eql(u8, s, "disabledInactiveIdentity")) return .disabled_inactive_identity;
-        if (std.mem.eql(u8, s, "disabledMessageQueueNotSupported")) return .disabled_message_queue_not_supported;
-        if (std.mem.eql(u8, s, "disabledMissingIdentity")) return .disabled_missing_identity;
-        if (std.mem.eql(u8, s, "disabledInvalidRoleExpression")) return .disabled_invalid_role_expression;
-        if (std.mem.eql(u8, s, "disabledInvalidPathClause")) return .disabled_invalid_path_clause;
-        if (std.mem.eql(u8, s, "disabledAsDuplicateOfDefault")) return .disabled_as_duplicate_of_default;
-        if (std.mem.eql(u8, s, "disabledByAdmin")) return .disabled_by_admin;
-        if (std.mem.eql(u8, s, "disabled")) return .disabled;
-        if (std.mem.eql(u8, s, "enabled")) return .enabled;
-        if (std.mem.eql(u8, s, "enabledOnProbation")) return .enabled_on_probation;
-        return null;
-    }
+    const wire_names = .{
+        .jailed_by_notifications_volume = "jailedByNotificationsVolume",
+        .pending_deletion = "pendingDeletion",
+        .disabled_argument_exception = "disabledArgumentException",
+        .disabled_project_invalid = "disabledProjectInvalid",
+        .disabled_missing_permissions = "disabledMissingPermissions",
+        .disabled_from_probation = "disabledFromProbation",
+        .disabled_inactive_identity = "disabledInactiveIdentity",
+        .disabled_message_queue_not_supported = "disabledMessageQueueNotSupported",
+        .disabled_missing_identity = "disabledMissingIdentity",
+        .disabled_invalid_role_expression = "disabledInvalidRoleExpression",
+        .disabled_invalid_path_clause = "disabledInvalidPathClause",
+        .disabled_as_duplicate_of_default = "disabledAsDuplicateOfDefault",
+        .disabled_by_admin = "disabledByAdmin",
+        .disabled = "disabled",
+        .enabled = "enabled",
+        .enabled_on_probation = "enabledOnProbation",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const NotificationSubscriptionTemplateType = enum {
+pub const NotificationSubscriptionTemplateType = union(enum) {
     user,
     team,
     both,
     none,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .user => "user",
-            .team => "team",
-            .both => "both",
-            .none => "none",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "user")) return .user;
-        if (std.mem.eql(u8, s, "team")) return .team;
-        if (std.mem.eql(u8, s, "both")) return .both;
-        if (std.mem.eql(u8, s, "none")) return .none;
-        return null;
-    }
+    const wire_names = .{
+        .user = "user",
+        .team = "team",
+        .both = "both",
+        .none = "none",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 

@@ -38,144 +38,141 @@ pub const GetWidgetTypesRequestScope = enum {
     }
 };
 
-pub const WidgetMetadataSupportedScope = enum {
+pub const WidgetMetadataSupportedScope = union(enum) {
     collection_user,
     project_team,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .collection_user => "collection_User",
-            .project_team => "project_Team",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "collection_User")) return .collection_user;
-        if (std.mem.eql(u8, s, "project_Team")) return .project_team;
-        return null;
-    }
+    const wire_names = .{
+        .collection_user = "collection_User",
+        .project_team = "project_Team",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const DashboardDashboardScope = enum {
+pub const DashboardDashboardScope = union(enum) {
     collection_user,
     project_team,
     project,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .collection_user => "collection_User",
-            .project_team => "project_Team",
-            .project => "project",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "collection_User")) return .collection_user;
-        if (std.mem.eql(u8, s, "project_Team")) return .project_team;
-        if (std.mem.eql(u8, s, "project")) return .project;
-        return null;
-    }
+    const wire_names = .{
+        .collection_user = "collection_User",
+        .project_team = "project_Team",
+        .project = "project",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const DashboardGroupPermission = enum {
+pub const DashboardGroupPermission = union(enum) {
     none,
     edit,
     manage,
     manage_permissions,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .none => "none",
-            .edit => "edit",
-            .manage => "manage",
-            .manage_permissions => "managePermissions",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "none")) return .none;
-        if (std.mem.eql(u8, s, "edit")) return .edit;
-        if (std.mem.eql(u8, s, "manage")) return .manage;
-        if (std.mem.eql(u8, s, "managePermissions")) return .manage_permissions;
-        return null;
-    }
+    const wire_names = .{
+        .none = "none",
+        .edit = "edit",
+        .manage = "manage",
+        .manage_permissions = "managePermissions",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const DashboardGroupTeamDashboardPermission = enum {
+pub const DashboardGroupTeamDashboardPermission = union(enum) {
     none,
     read,
     create,
     edit,
     delete,
     manage_permissions,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .none => "none",
-            .read => "read",
-            .create => "create",
-            .edit => "edit",
-            .delete => "delete",
-            .manage_permissions => "managePermissions",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "none")) return .none;
-        if (std.mem.eql(u8, s, "read")) return .read;
-        if (std.mem.eql(u8, s, "create")) return .create;
-        if (std.mem.eql(u8, s, "edit")) return .edit;
-        if (std.mem.eql(u8, s, "delete")) return .delete;
-        if (std.mem.eql(u8, s, "managePermissions")) return .manage_permissions;
-        return null;
-    }
+    const wire_names = .{
+        .none = "none",
+        .read = "read",
+        .create = "create",
+        .edit = "edit",
+        .delete = "delete",
+        .manage_permissions = "managePermissions",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 

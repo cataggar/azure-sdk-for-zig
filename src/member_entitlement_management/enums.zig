@@ -8,112 +8,110 @@
 const std = @import("std");
 const core = @import("azure_sdk_core");
 
-pub const AccessLevelAccountLicenseType = enum {
+pub const AccessLevelAccountLicenseType = union(enum) {
     none,
     early_adopter,
     express,
     professional,
     advanced,
     stakeholder,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .none => "none",
-            .early_adopter => "earlyAdopter",
-            .express => "express",
-            .professional => "professional",
-            .advanced => "advanced",
-            .stakeholder => "stakeholder",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "none")) return .none;
-        if (std.mem.eql(u8, s, "earlyAdopter")) return .early_adopter;
-        if (std.mem.eql(u8, s, "express")) return .express;
-        if (std.mem.eql(u8, s, "professional")) return .professional;
-        if (std.mem.eql(u8, s, "advanced")) return .advanced;
-        if (std.mem.eql(u8, s, "stakeholder")) return .stakeholder;
-        return null;
-    }
+    const wire_names = .{
+        .none = "none",
+        .early_adopter = "earlyAdopter",
+        .express = "express",
+        .professional = "professional",
+        .advanced = "advanced",
+        .stakeholder = "stakeholder",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const AccessLevelAssignmentSource = enum {
+pub const AccessLevelAssignmentSource = union(enum) {
     none,
     unknown,
     group_rule,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .none => "none",
-            .unknown => "unknown",
-            .group_rule => "groupRule",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "none")) return .none;
-        if (std.mem.eql(u8, s, "unknown")) return .unknown;
-        if (std.mem.eql(u8, s, "groupRule")) return .group_rule;
-        return null;
-    }
+    const wire_names = .{
+        .none = "none",
+        .unknown = "unknown",
+        .group_rule = "groupRule",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const AccessLevelGitHubLicenseType = enum {
+pub const AccessLevelGitHubLicenseType = union(enum) {
     none,
     enterprise,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .none => "none",
-            .enterprise => "enterprise",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "none")) return .none;
-        if (std.mem.eql(u8, s, "enterprise")) return .enterprise;
-        return null;
-    }
+    const wire_names = .{
+        .none = "none",
+        .enterprise = "enterprise",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const AccessLevelLicensingSource = enum {
+pub const AccessLevelLicensingSource = union(enum) {
     none,
     account,
     msdn,
@@ -121,44 +119,40 @@ pub const AccessLevelLicensingSource = enum {
     auto,
     trial,
     git_hub,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .none => "none",
-            .account => "account",
-            .msdn => "msdn",
-            .profile => "profile",
-            .auto => "auto",
-            .trial => "trial",
-            .git_hub => "gitHub",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "none")) return .none;
-        if (std.mem.eql(u8, s, "account")) return .account;
-        if (std.mem.eql(u8, s, "msdn")) return .msdn;
-        if (std.mem.eql(u8, s, "profile")) return .profile;
-        if (std.mem.eql(u8, s, "auto")) return .auto;
-        if (std.mem.eql(u8, s, "trial")) return .trial;
-        if (std.mem.eql(u8, s, "gitHub")) return .git_hub;
-        return null;
-    }
+    const wire_names = .{
+        .none = "none",
+        .account = "account",
+        .msdn = "msdn",
+        .profile = "profile",
+        .auto = "auto",
+        .trial = "trial",
+        .git_hub = "gitHub",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const AccessLevelMsdnLicenseType = enum {
+pub const AccessLevelMsdnLicenseType = union(enum) {
     none,
     eligible,
     professional,
@@ -167,46 +161,41 @@ pub const AccessLevelMsdnLicenseType = enum {
     premium,
     ultimate,
     enterprise,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .none => "none",
-            .eligible => "eligible",
-            .professional => "professional",
-            .platforms => "platforms",
-            .test_professional => "testProfessional",
-            .premium => "premium",
-            .ultimate => "ultimate",
-            .enterprise => "enterprise",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "none")) return .none;
-        if (std.mem.eql(u8, s, "eligible")) return .eligible;
-        if (std.mem.eql(u8, s, "professional")) return .professional;
-        if (std.mem.eql(u8, s, "platforms")) return .platforms;
-        if (std.mem.eql(u8, s, "testProfessional")) return .test_professional;
-        if (std.mem.eql(u8, s, "premium")) return .premium;
-        if (std.mem.eql(u8, s, "ultimate")) return .ultimate;
-        if (std.mem.eql(u8, s, "enterprise")) return .enterprise;
-        return null;
-    }
+    const wire_names = .{
+        .none = "none",
+        .eligible = "eligible",
+        .professional = "professional",
+        .platforms = "platforms",
+        .test_professional = "testProfessional",
+        .premium = "premium",
+        .ultimate = "ultimate",
+        .enterprise = "enterprise",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const AccessLevelStatus = enum {
+pub const AccessLevelStatus = union(enum) {
     none,
     active,
     disabled,
@@ -214,181 +203,174 @@ pub const AccessLevelStatus = enum {
     pending,
     expired,
     pending_disabled,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .none => "none",
-            .active => "active",
-            .disabled => "disabled",
-            .deleted => "deleted",
-            .pending => "pending",
-            .expired => "expired",
-            .pending_disabled => "pendingDisabled",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "none")) return .none;
-        if (std.mem.eql(u8, s, "active")) return .active;
-        if (std.mem.eql(u8, s, "disabled")) return .disabled;
-        if (std.mem.eql(u8, s, "deleted")) return .deleted;
-        if (std.mem.eql(u8, s, "pending")) return .pending;
-        if (std.mem.eql(u8, s, "expired")) return .expired;
-        if (std.mem.eql(u8, s, "pendingDisabled")) return .pending_disabled;
-        return null;
-    }
+    const wire_names = .{
+        .none = "none",
+        .active = "active",
+        .disabled = "disabled",
+        .deleted = "deleted",
+        .pending = "pending",
+        .expired = "expired",
+        .pending_disabled = "pendingDisabled",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const ProjectEntitlementAssignmentSource = enum {
+pub const ProjectEntitlementAssignmentSource = union(enum) {
     none,
     unknown,
     group_rule,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .none => "none",
-            .unknown => "unknown",
-            .group_rule => "groupRule",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "none")) return .none;
-        if (std.mem.eql(u8, s, "unknown")) return .unknown;
-        if (std.mem.eql(u8, s, "groupRule")) return .group_rule;
-        return null;
-    }
+    const wire_names = .{
+        .none = "none",
+        .unknown = "unknown",
+        .group_rule = "groupRule",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const GroupGroupType = enum {
+pub const GroupGroupType = union(enum) {
     project_stakeholder,
     project_reader,
     project_contributor,
     project_administrator,
     custom,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .project_stakeholder => "projectStakeholder",
-            .project_reader => "projectReader",
-            .project_contributor => "projectContributor",
-            .project_administrator => "projectAdministrator",
-            .custom => "custom",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "projectStakeholder")) return .project_stakeholder;
-        if (std.mem.eql(u8, s, "projectReader")) return .project_reader;
-        if (std.mem.eql(u8, s, "projectContributor")) return .project_contributor;
-        if (std.mem.eql(u8, s, "projectAdministrator")) return .project_administrator;
-        if (std.mem.eql(u8, s, "custom")) return .custom;
-        return null;
-    }
+    const wire_names = .{
+        .project_stakeholder = "projectStakeholder",
+        .project_reader = "projectReader",
+        .project_contributor = "projectContributor",
+        .project_administrator = "projectAdministrator",
+        .custom = "custom",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const ProjectEntitlementProjectPermissionInherited = enum {
+pub const ProjectEntitlementProjectPermissionInherited = union(enum) {
     not_set,
     not_inherited,
     inherited,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .not_set => "notSet",
-            .not_inherited => "notInherited",
-            .inherited => "inherited",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "notSet")) return .not_set;
-        if (std.mem.eql(u8, s, "notInherited")) return .not_inherited;
-        if (std.mem.eql(u8, s, "inherited")) return .inherited;
-        return null;
-    }
+    const wire_names = .{
+        .not_set = "notSet",
+        .not_inherited = "notInherited",
+        .inherited = "inherited",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const GroupEntitlementStatus = enum {
+pub const GroupEntitlementStatus = union(enum) {
     apply_pending,
     applied,
     incompatible,
     unable_to_apply,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .apply_pending => "applyPending",
-            .applied => "applied",
-            .incompatible => "incompatible",
-            .unable_to_apply => "unableToApply",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "applyPending")) return .apply_pending;
-        if (std.mem.eql(u8, s, "applied")) return .applied;
-        if (std.mem.eql(u8, s, "incompatible")) return .incompatible;
-        if (std.mem.eql(u8, s, "unableToApply")) return .unable_to_apply;
-        return null;
-    }
+    const wire_names = .{
+        .apply_pending = "applyPending",
+        .applied = "applied",
+        .incompatible = "incompatible",
+        .unable_to_apply = "unableToApply",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -422,45 +404,42 @@ pub const AddRequestRuleOption = enum {
     }
 };
 
-pub const GroupEntitlementOperationReferenceStatus = enum {
+pub const GroupEntitlementOperationReferenceStatus = union(enum) {
     not_set,
     queued,
     in_progress,
     cancelled,
     succeeded,
     failed,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .not_set => "notSet",
-            .queued => "queued",
-            .in_progress => "inProgress",
-            .cancelled => "cancelled",
-            .succeeded => "succeeded",
-            .failed => "failed",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "notSet")) return .not_set;
-        if (std.mem.eql(u8, s, "queued")) return .queued;
-        if (std.mem.eql(u8, s, "inProgress")) return .in_progress;
-        if (std.mem.eql(u8, s, "cancelled")) return .cancelled;
-        if (std.mem.eql(u8, s, "succeeded")) return .succeeded;
-        if (std.mem.eql(u8, s, "failed")) return .failed;
-        return null;
-    }
+    const wire_names = .{
+        .not_set = "notSet",
+        .queued = "queued",
+        .in_progress = "inProgress",
+        .cancelled = "cancelled",
+        .succeeded = "succeeded",
+        .failed = "failed",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -602,79 +581,77 @@ pub const SearchUserEntitlementsRequestSelect = enum {
     }
 };
 
-pub const LicenseSummaryDataAccountLicenseType = enum {
+pub const LicenseSummaryDataAccountLicenseType = union(enum) {
     none,
     early_adopter,
     express,
     professional,
     advanced,
     stakeholder,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .none => "none",
-            .early_adopter => "earlyAdopter",
-            .express => "express",
-            .professional => "professional",
-            .advanced => "advanced",
-            .stakeholder => "stakeholder",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "none")) return .none;
-        if (std.mem.eql(u8, s, "earlyAdopter")) return .early_adopter;
-        if (std.mem.eql(u8, s, "express")) return .express;
-        if (std.mem.eql(u8, s, "professional")) return .professional;
-        if (std.mem.eql(u8, s, "advanced")) return .advanced;
-        if (std.mem.eql(u8, s, "stakeholder")) return .stakeholder;
-        return null;
-    }
+    const wire_names = .{
+        .none = "none",
+        .early_adopter = "earlyAdopter",
+        .express = "express",
+        .professional = "professional",
+        .advanced = "advanced",
+        .stakeholder = "stakeholder",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const LicenseSummaryDataGitHubLicenseType = enum {
+pub const LicenseSummaryDataGitHubLicenseType = union(enum) {
     none,
     enterprise,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .none => "none",
-            .enterprise => "enterprise",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "none")) return .none;
-        if (std.mem.eql(u8, s, "enterprise")) return .enterprise;
-        return null;
-    }
+    const wire_names = .{
+        .none = "none",
+        .enterprise = "enterprise",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const LicenseSummaryDataMsdnLicenseType = enum {
+pub const LicenseSummaryDataMsdnLicenseType = union(enum) {
     none,
     eligible,
     professional,
@@ -683,46 +660,41 @@ pub const LicenseSummaryDataMsdnLicenseType = enum {
     premium,
     ultimate,
     enterprise,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .none => "none",
-            .eligible => "eligible",
-            .professional => "professional",
-            .platforms => "platforms",
-            .test_professional => "testProfessional",
-            .premium => "premium",
-            .ultimate => "ultimate",
-            .enterprise => "enterprise",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "none")) return .none;
-        if (std.mem.eql(u8, s, "eligible")) return .eligible;
-        if (std.mem.eql(u8, s, "professional")) return .professional;
-        if (std.mem.eql(u8, s, "platforms")) return .platforms;
-        if (std.mem.eql(u8, s, "testProfessional")) return .test_professional;
-        if (std.mem.eql(u8, s, "premium")) return .premium;
-        if (std.mem.eql(u8, s, "ultimate")) return .ultimate;
-        if (std.mem.eql(u8, s, "enterprise")) return .enterprise;
-        return null;
-    }
+    const wire_names = .{
+        .none = "none",
+        .eligible = "eligible",
+        .professional = "professional",
+        .platforms = "platforms",
+        .test_professional = "testProfessional",
+        .premium = "premium",
+        .ultimate = "ultimate",
+        .enterprise = "enterprise",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const LicenseSummaryDataSource = enum {
+pub const LicenseSummaryDataSource = union(enum) {
     none,
     account,
     msdn,
@@ -730,40 +702,36 @@ pub const LicenseSummaryDataSource = enum {
     auto,
     trial,
     git_hub,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .none => "none",
-            .account => "account",
-            .msdn => "msdn",
-            .profile => "profile",
-            .auto => "auto",
-            .trial => "trial",
-            .git_hub => "gitHub",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "none")) return .none;
-        if (std.mem.eql(u8, s, "account")) return .account;
-        if (std.mem.eql(u8, s, "msdn")) return .msdn;
-        if (std.mem.eql(u8, s, "profile")) return .profile;
-        if (std.mem.eql(u8, s, "auto")) return .auto;
-        if (std.mem.eql(u8, s, "trial")) return .trial;
-        if (std.mem.eql(u8, s, "gitHub")) return .git_hub;
-        return null;
-    }
+    const wire_names = .{
+        .none = "none",
+        .account = "account",
+        .msdn = "msdn",
+        .profile = "profile",
+        .auto = "auto",
+        .trial = "trial",
+        .git_hub = "gitHub",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 

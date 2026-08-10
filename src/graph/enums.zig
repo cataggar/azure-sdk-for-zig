@@ -74,36 +74,36 @@ pub const GetRequestSize = enum {
     }
 };
 
-pub const AvatarSize = enum {
+pub const AvatarSize = union(enum) {
     small,
     medium,
     large,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .small => "small",
-            .medium => "medium",
-            .large => "large",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "small")) return .small;
-        if (std.mem.eql(u8, s, "medium")) return .medium;
-        if (std.mem.eql(u8, s, "large")) return .large;
-        return null;
-    }
+    const wire_names = .{
+        .small = "small",
+        .medium = "medium",
+        .large = "large",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 

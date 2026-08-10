@@ -8,81 +8,77 @@
 const std = @import("std");
 const core = @import("azure_sdk_core");
 
-pub const StatusSummaryHealth = enum {
+pub const StatusSummaryHealth = union(enum) {
     unknown,
     unhealthy,
     degraded,
     advisory,
     healthy,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .unknown => "unknown",
-            .unhealthy => "unhealthy",
-            .degraded => "degraded",
-            .advisory => "advisory",
-            .healthy => "healthy",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "unknown")) return .unknown;
-        if (std.mem.eql(u8, s, "unhealthy")) return .unhealthy;
-        if (std.mem.eql(u8, s, "degraded")) return .degraded;
-        if (std.mem.eql(u8, s, "advisory")) return .advisory;
-        if (std.mem.eql(u8, s, "healthy")) return .healthy;
-        return null;
-    }
+    const wire_names = .{
+        .unknown = "unknown",
+        .unhealthy = "unhealthy",
+        .degraded = "degraded",
+        .advisory = "advisory",
+        .healthy = "healthy",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const GeographyWithHealthHealth = enum {
+pub const GeographyWithHealthHealth = union(enum) {
     unknown,
     unhealthy,
     degraded,
     advisory,
     healthy,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .unknown => "unknown",
-            .unhealthy => "unhealthy",
-            .degraded => "degraded",
-            .advisory => "advisory",
-            .healthy => "healthy",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "unknown")) return .unknown;
-        if (std.mem.eql(u8, s, "unhealthy")) return .unhealthy;
-        if (std.mem.eql(u8, s, "degraded")) return .degraded;
-        if (std.mem.eql(u8, s, "advisory")) return .advisory;
-        if (std.mem.eql(u8, s, "healthy")) return .healthy;
-        return null;
-    }
+    const wire_names = .{
+        .unknown = "unknown",
+        .unhealthy = "unhealthy",
+        .degraded = "degraded",
+        .advisory = "advisory",
+        .healthy = "healthy",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
