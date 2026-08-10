@@ -113,7 +113,7 @@ pub const Behaviors = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Returns a list of behaviors for the process.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8) ![]const models.AdminBehavior {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8) !models.AdminBehaviorList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -142,7 +142,7 @@ pub const Behaviors = struct {
             core.pager.logHttpError("Behaviors.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.AdminBehavior, alloc, resp.body);
+        return try serde.json.fromSlice(models.AdminBehaviorList, alloc, resp.body);
     }
 };
 

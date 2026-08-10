@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `BuildController` as returned by Azure DevOps.
+pub const BuildControllerList = struct {
+    count: ?i32 = null,
+    value: ?[]const BuildController = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const BuildController = struct {
     /// Id of the resource
     id: ?i32 = null,
@@ -90,6 +100,16 @@ pub const BuildRetentionSample = struct {
     };
 };
 
+/// A collection of `DefinitionResourceReference` as returned by Azure DevOps.
+pub const DefinitionResourceReferenceList = struct {
+    count: ?i32 = null,
+    value: ?[]const DefinitionResourceReference = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const DefinitionResourceReference = struct {
     /// Indicates whether the resource is authorized for use.
     authorized: ?bool = null,
@@ -99,6 +119,16 @@ pub const DefinitionResourceReference = struct {
     name: ?[]const u8 = null,
     /// The type of the resource.
     type: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `Build` as returned by Azure DevOps.
+pub const BuildList = struct {
+    count: ?i32 = null,
+    value: ?[]const Build = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -416,6 +446,16 @@ pub const BuildRequestValidationResult = struct {
     };
 };
 
+/// A collection of `Change` as returned by Azure DevOps.
+pub const ChangeList = struct {
+    count: ?i32 = null,
+    value: ?[]const Change = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Represents a change associated with a build.
 pub const Change = struct {
     author: ?IdentityRef = null,
@@ -435,6 +475,16 @@ pub const Change = struct {
     timestamp: ?[]const u8 = null,
     /// The type of change. 'commit', 'changeset', etc.
     type: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `RetentionLease` as returned by Azure DevOps.
+pub const RetentionLeaseList = struct {
+    count: ?i32 = null,
+    value: ?[]const RetentionLease = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -463,6 +513,16 @@ pub const RetentionLease = struct {
     };
 };
 
+/// A collection of `BuildLog` as returned by Azure DevOps.
+pub const BuildLogList = struct {
+    count: ?i32 = null,
+    value: ?[]const BuildLog = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Represents a build log.
 pub const BuildLog = struct {
     /// The ID of the log.
@@ -483,9 +543,29 @@ pub const BuildLog = struct {
     };
 };
 
+/// A collection of `ResourceRef` as returned by Azure DevOps.
+pub const ResourceRefList = struct {
+    count: ?i32 = null,
+    value: ?[]const ResourceRef = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const ResourceRef = struct {
     id: ?[]const u8 = null,
     url: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `Attachment` as returned by Azure DevOps.
+pub const AttachmentList = struct {
+    count: ?i32 = null,
+    value: ?[]const Attachment = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -503,6 +583,16 @@ pub const Attachment = struct {
         .rename = .{
             .links = "_links",
         },
+    };
+};
+
+/// A collection of `BuildArtifact` as returned by Azure DevOps.
+pub const BuildArtifactList = struct {
+    count: ?i32 = null,
+    value: ?[]const BuildArtifact = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
     };
 };
 
@@ -712,6 +802,16 @@ pub const TaskReference = struct {
     name: ?[]const u8 = null,
     /// The version of the task definition.
     version: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `BuildDefinitionReference` as returned by Azure DevOps.
+pub const BuildDefinitionReferenceList = struct {
+    count: ?i32 = null,
+    value: ?[]const BuildDefinitionReference = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -1032,6 +1132,16 @@ pub const BuildDefinitionVariable = struct {
     };
 };
 
+/// A collection of `BuildDefinitionRevision` as returned by Azure DevOps.
+pub const BuildDefinitionRevisionList = struct {
+    count: ?i32 = null,
+    value: ?[]const BuildDefinitionRevision = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Represents a revision of a build definition.
 pub const BuildDefinitionRevision = struct {
     changed_by: ?IdentityRef = null,
@@ -1053,10 +1163,30 @@ pub const BuildDefinitionRevision = struct {
     };
 };
 
+/// A collection of `BuildMetric` as returned by Azure DevOps.
+pub const BuildMetricList = struct {
+    count: ?i32 = null,
+    value: ?[]const BuildMetric = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Represents a yaml build.
 pub const YamlBuild = struct {
     /// The yaml used to define the build
     yaml: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `BuildDefinitionTemplate` as returned by Azure DevOps.
+pub const BuildDefinitionTemplateList = struct {
+    count: ?i32 = null,
+    value: ?[]const BuildDefinitionTemplate = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -1100,6 +1230,16 @@ pub const Folder = struct {
     /// The full path.
     path: ?[]const u8 = null,
     project: ?TeamProjectReference = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `Folder` as returned by Azure DevOps.
+pub const FolderList = struct {
+    count: ?i32 = null,
+    value: ?[]const Folder = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -1156,6 +1296,16 @@ pub const PipelineGeneralSettings = struct {
         .rename = .{
             .disable_implied_yaml_ci_trigger = "disableImpliedYAMLCiTrigger",
         },
+    };
+};
+
+/// A collection of `BuildOptionDefinition` as returned by Azure DevOps.
+pub const BuildOptionDefinitionList = struct {
+    count: ?i32 = null,
+    value: ?[]const BuildOptionDefinition = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
     };
 };
 
@@ -1302,6 +1452,16 @@ pub const BuildSettings = struct {
     };
 };
 
+/// A collection of `SourceProviderAttributes` as returned by Azure DevOps.
+pub const SourceProviderAttributesList = struct {
+    count: ?i32 = null,
+    value: ?[]const SourceProviderAttributes = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const SourceProviderAttributes = struct {
     /// The name of the source provider.
     name: ?[]const u8 = null,
@@ -1324,6 +1484,16 @@ pub const SupportedTrigger = struct {
     supported_capabilities: ?std.json.ArrayHashMap(enums.SupportedTriggerSupportedCapability) = null,
     /// The type of trigger.
     type: ?enums.SupportedTriggerType = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `SourceRepositoryItem` as returned by Azure DevOps.
+pub const SourceRepositoryItemList = struct {
+    count: ?i32 = null,
+    value: ?[]const SourceRepositoryItem = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -1410,6 +1580,16 @@ pub const SourceRepository = struct {
     source_provider_name: ?[]const u8 = null,
     /// The URL of the repository.
     url: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `RepositoryWebhook` as returned by Azure DevOps.
+pub const RepositoryWebhookList = struct {
+    count: ?i32 = null,
+    value: ?[]const RepositoryWebhook = null,
 
     pub const serde = .{
         .rename_all = .camel_case,

@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `Pipeline` as returned by Azure DevOps.
+pub const PipelineList = struct {
+    count: ?i32 = null,
+    value: ?[]const Pipeline = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Definition of a pipeline.
 pub const Pipeline = struct {
     /// Pipeline folder
@@ -158,6 +168,16 @@ pub const Variable = struct {
 
 pub const PreviewRun = struct {
     final_yaml: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `Run` as returned by Azure DevOps.
+pub const RunList = struct {
+    count: ?i32 = null,
+    value: ?[]const Run = null,
 
     pub const serde = .{
         .rename_all = .camel_case,

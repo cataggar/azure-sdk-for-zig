@@ -163,6 +163,16 @@ pub const ProjectReference = struct {
     };
 };
 
+/// A collection of `ServiceEndpoint` as returned by Azure DevOps.
+pub const ServiceEndpointList = struct {
+    count: ?i32 = null,
+    value: ?[]const ServiceEndpoint = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Specify the properties for refreshing the endpoint authentication object being queried
 pub const RefreshAuthenticationParameters = struct {
     /// EndpointId which needs new authentication params
@@ -171,6 +181,16 @@ pub const RefreshAuthenticationParameters = struct {
     scope: ?[]const i32 = null,
     /// The requested endpoint authentication should be valid for _ minutes. Authentication params will not be refreshed if the token contained in endpoint already has active token.
     token_validity_in_minutes: ?i16 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `ServiceEndpointType` as returned by Azure DevOps.
+pub const ServiceEndpointTypeList = struct {
+    count: ?i32 = null,
+    value: ?[]const ServiceEndpointType = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -520,6 +540,16 @@ pub const HelpLink = struct {
     text: ?[]const u8 = null,
     /// Gets or sets the public url of the help documentation.
     url: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `ServiceEndpointExecutionRecord` as returned by Azure DevOps.
+pub const ServiceEndpointExecutionRecordList = struct {
+    count: ?i32 = null,
+    value: ?[]const ServiceEndpointExecutionRecord = null,
 
     pub const serde = .{
         .rename_all = .camel_case,

@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `TestSuite` as returned by Azure DevOps.
+pub const TestSuiteList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestSuite = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Test suite
 pub const TestSuite = struct {
     /// Test suite default configurations.
@@ -204,6 +214,16 @@ pub const TestSuiteUpdateParams = struct {
     };
 };
 
+/// A collection of `TestConfiguration` as returned by Azure DevOps.
+pub const TestConfigurationList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestConfiguration = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Test configuration
 pub const TestConfiguration = struct {
     /// Description of the configuration
@@ -249,6 +269,16 @@ pub const TestConfigurationCreateUpdateParameters = struct {
     state: ?enums.TestConfigurationState = null,
     /// Dictionary of Test Variable, Selected Value
     values: ?[]const NameValuePair = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TestPlan` as returned by Azure DevOps.
+pub const TestPlanList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestPlan = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -420,6 +450,16 @@ pub const TestPlanUpdateParams = struct {
     };
 };
 
+/// A collection of `TestCase` as returned by Azure DevOps.
+pub const TestCaseList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestCase = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Test Case Class
 pub const TestCase = struct {
     links: ?ReferenceLinks = null,
@@ -497,6 +537,16 @@ pub const Configuration = struct {
 pub const WorkItem = struct {
     /// Id of the Work Item
     id: ?i32 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TestPoint` as returned by Azure DevOps.
+pub const TestPointList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestPoint = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -759,6 +809,16 @@ pub const TestPlanAndSuiteRestoreModel = struct {
     };
 };
 
+/// A collection of `SuiteEntry` as returned by Azure DevOps.
+pub const SuiteEntryList = struct {
+    count: ?i32 = null,
+    value: ?[]const SuiteEntry = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// A suite entry defines properties for a test suite.
 pub const SuiteEntry = struct {
     /// Id of the suite entry in the test suite: either a test case id or child suite id.
@@ -896,6 +956,16 @@ pub const SourceTestSuiteResponse = struct {
     project: ?TeamProjectReference = null,
     /// Id of suites to be cloned inside source Test Plan
     test_case_ids: ?[]const i32 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TestVariable` as returned by Azure DevOps.
+pub const TestVariableList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestVariable = null,
 
     pub const serde = .{
         .rename_all = .camel_case,

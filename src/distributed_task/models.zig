@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `ElasticPool` as returned by Azure DevOps.
+pub const ElasticPoolList = struct {
+    count: ?i32 = null,
+    value: ?[]const ElasticPool = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Data and settings for an elastic pool
 pub const ElasticPool = struct {
     /// Set whether agents should be configured to run with interactive UI
@@ -231,6 +241,16 @@ pub const ElasticPoolSettings = struct {
     };
 };
 
+/// A collection of `ElasticPoolLog` as returned by Azure DevOps.
+pub const ElasticPoolLogList = struct {
+    count: ?i32 = null,
+    value: ?[]const ElasticPoolLog = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Log data for an Elastic Pool
 pub const ElasticPoolLog = struct {
     /// Log Id
@@ -245,6 +265,16 @@ pub const ElasticPoolLog = struct {
     pool_id: ?i32 = null,
     /// Datetime that the log occurred
     timestamp: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `ElasticNode` as returned by Azure DevOps.
+pub const ElasticNodeList = struct {
+    count: ?i32 = null,
+    value: ?[]const ElasticNode = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -339,6 +369,16 @@ pub const VssJsonCollectionWrapper = struct {
     count: ?i32 = null,
     /// The serialized item.
     value: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TimelineRecord` as returned by Azure DevOps.
+pub const TimelineRecordList = struct {
+    count: ?i32 = null,
+    value: ?[]const TimelineRecord = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -510,6 +550,16 @@ pub const VariableValue = struct {
     };
 };
 
+/// A collection of `TaskAgentCloud` as returned by Azure DevOps.
+pub const TaskAgentCloudList = struct {
+    count: ?i32 = null,
+    value: ?[]const TaskAgentCloud = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const TaskAgentCloud = struct {
     /// Gets or sets a AcquireAgentEndpoint using which a request can be made to acquire new agent
     acquire_agent_endpoint: ?[]const u8 = null,
@@ -527,6 +577,16 @@ pub const TaskAgentCloud = struct {
     shared_secret: ?[]const u8 = null,
     /// Gets or sets the type of the endpoint.
     type: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TaskAgentCloudRequest` as returned by Azure DevOps.
+pub const TaskAgentCloudRequestList = struct {
+    count: ?i32 = null,
+    value: ?[]const TaskAgentCloudRequest = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -596,6 +656,16 @@ pub const JToken = struct {
     root: ?*const JToken = null,
     /// Gets the node type for this JToken.
     type: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TaskAgentCloudType` as returned by Azure DevOps.
+pub const TaskAgentCloudTypeList = struct {
+    count: ?i32 = null,
+    value: ?[]const TaskAgentCloudType = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -729,6 +799,26 @@ pub const InputValue = struct {
 };
 
 pub const InputValueDatum = struct {
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TaskAgentPool` as returned by Azure DevOps.
+pub const TaskAgentPoolList = struct {
+    count: ?i32 = null,
+    value: ?[]const TaskAgentPool = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TaskAgent` as returned by Azure DevOps.
+pub const TaskAgentList = struct {
+    count: ?i32 = null,
+    value: ?[]const TaskAgent = null,
+
     pub const serde = .{
         .rename_all = .camel_case,
     };
@@ -989,7 +1079,27 @@ pub const VariableGroup = struct {
     };
 };
 
+/// A collection of `VariableGroup` as returned by Azure DevOps.
+pub const VariableGroupList = struct {
+    count: ?i32 = null,
+    value: ?[]const VariableGroup = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const GetResponse = struct {
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `DeploymentGroup` as returned by Azure DevOps.
+pub const DeploymentGroupList = struct {
+    count: ?i32 = null,
+    value: ?[]const DeploymentGroup = null,
+
     pub const serde = .{
         .rename_all = .camel_case,
     };
@@ -1057,11 +1167,41 @@ pub const DeploymentGroupUpdateParameter = struct {
     };
 };
 
+/// A collection of `DeploymentMachine` as returned by Azure DevOps.
+pub const DeploymentMachineList = struct {
+    count: ?i32 = null,
+    value: ?[]const DeploymentMachine = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Deployment target update parameter.
 pub const DeploymentTargetUpdateParameter = struct {
     /// Identifier of the deployment target.
     id: ?i32 = null,
     tags: ?[]const []const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TaskAgentQueue` as returned by Azure DevOps.
+pub const TaskAgentQueueList = struct {
+    count: ?i32 = null,
+    value: ?[]const TaskAgentQueue = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `SecureFile` as returned by Azure DevOps.
+pub const SecureFileList = struct {
+    count: ?i32 = null,
+    value: ?[]const SecureFile = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -1366,6 +1506,16 @@ pub const TaskSourceDefinition = struct {
     key_selector: ?[]const u8 = null,
     selector: ?[]const u8 = null,
     target: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TaskGroup` as returned by Azure DevOps.
+pub const TaskGroupList = struct {
+    count: ?i32 = null,
+    value: ?[]const TaskGroup = null,
 
     pub const serde = .{
         .rename_all = .camel_case,

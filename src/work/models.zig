@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `BoardSuggestedValue` as returned by Azure DevOps.
+pub const BoardSuggestedValueList = struct {
+    count: ?i32 = null,
+    value: ?[]const BoardSuggestedValue = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const BoardSuggestedValue = struct {
     name: ?[]const u8 = null,
 
@@ -27,6 +37,16 @@ pub const TeamCapacityTotals = struct {
     team_capacity_per_day: ?f64 = null,
     team_id: ?[]const u8 = null,
     team_total_days_off: ?i32 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `Plan` as returned by Azure DevOps.
+pub const PlanList = struct {
+    count: ?i32 = null,
+    value: ?[]const Plan = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -351,6 +371,16 @@ pub const WorkItemColor = struct {
     };
 };
 
+/// A collection of `PredefinedQuery` as returned by Azure DevOps.
+pub const PredefinedQueryList = struct {
+    count: ?i32 = null,
+    value: ?[]const PredefinedQuery = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Represents a single pre-defined query.
 pub const PredefinedQuery = struct {
     /// Whether or not the query returned the complete set of data or if the data was truncated.
@@ -575,6 +605,16 @@ pub const WorkItemTypeStateInfo = struct {
     };
 };
 
+/// A collection of `BacklogLevelConfiguration` as returned by Azure DevOps.
+pub const BacklogLevelConfigurationList = struct {
+    count: ?i32 = null,
+    value: ?[]const BacklogLevelConfiguration = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Represents work items in a backlog level
 pub const BacklogLevelWorkItems = struct {
     /// A list of work items within a backlog level
@@ -603,6 +643,16 @@ pub const WorkItemReference = struct {
     id: ?i32 = null,
     /// REST API URL of the resource
     url: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `BoardReference` as returned by Azure DevOps.
+pub const BoardReferenceList = struct {
+    count: ?i32 = null,
+    value: ?[]const BoardReference = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -757,6 +807,16 @@ pub const FieldSetting = struct {
     };
 };
 
+/// A collection of `BoardChartReference` as returned by Azure DevOps.
+pub const BoardChartReferenceList = struct {
+    count: ?i32 = null,
+    value: ?[]const BoardChartReference = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const BoardChartReference = struct {
     /// Name of the resource
     name: ?[]const u8 = null,
@@ -791,6 +851,36 @@ pub const BoardChartSetting = struct {
     };
 };
 
+/// A collection of `BoardColumn` as returned by Azure DevOps.
+pub const BoardColumnList = struct {
+    count: ?i32 = null,
+    value: ?[]const BoardColumn = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `BoardRow` as returned by Azure DevOps.
+pub const BoardRowList = struct {
+    count: ?i32 = null,
+    value: ?[]const BoardRow = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `ParentChildWIMap` as returned by Azure DevOps.
+pub const ParentChildWIMapList = struct {
+    count: ?i32 = null,
+    value: ?[]const ParentChildWIMap = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Represents a reorder request for one or more work items.
 pub const ReorderOperation = struct {
     /// IDs of the work items to be reordered. Must be valid WorkItem Ids.
@@ -803,6 +893,16 @@ pub const ReorderOperation = struct {
     parent_id: ?i32 = null,
     /// ID of the work item that should be before the reordered items. Can use 0 to specify the beginning of the list.
     previous_id: ?i32 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `ReorderResult` as returned by Azure DevOps.
+pub const ReorderResultList = struct {
+    count: ?i32 = null,
+    value: ?[]const ReorderResult = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -881,6 +981,16 @@ pub const TaskboardColumnMapping = struct {
     state: ?[]const u8 = null,
     /// Work Item Type name who's state is mapped to the column
     work_item_type: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TaskboardWorkItemColumn` as returned by Azure DevOps.
+pub const TaskboardWorkItemColumnList = struct {
+    count: ?i32 = null,
+    value: ?[]const TaskboardWorkItemColumn = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -983,6 +1093,16 @@ pub const TeamSettingsPatch = struct {
     };
 };
 
+/// A collection of `TeamSettingsIteration` as returned by Azure DevOps.
+pub const TeamSettingsIterationList = struct {
+    count: ?i32 = null,
+    value: ?[]const TeamSettingsIteration = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Represents work items in an iteration backlog
 pub const IterationWorkItems = struct {
     links: ?ReferenceLinks = null,
@@ -1043,6 +1163,16 @@ pub const DateRange = struct {
     end: ?[]const u8 = null,
     /// Start of the date range.
     start: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TeamMemberCapacityIdentityRef` as returned by Azure DevOps.
+pub const TeamMemberCapacityIdentityRefList = struct {
+    count: ?i32 = null,
+    value: ?[]const TeamMemberCapacityIdentityRef = null,
 
     pub const serde = .{
         .rename_all = .camel_case,

@@ -163,7 +163,7 @@ pub const Endpoints = struct {
         return try serde.json.fromSlice(models.ServiceEndpoint, alloc, resp.body);
     }
     /// Update the service endpoints.
-    pub fn updateServiceEndpoints(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: []const models.ServiceEndpoint) ![]const models.ServiceEndpoint {
+    pub fn updateServiceEndpoints(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: []const models.ServiceEndpoint) !models.ServiceEndpointList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -194,7 +194,7 @@ pub const Endpoints = struct {
             core.pager.logHttpError("Endpoints.updateServiceEndpoints", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ServiceEndpoint, alloc, resp.body);
+        return try serde.json.fromSlice(models.ServiceEndpointList, alloc, resp.body);
     }
     /// Delete a service endpoint
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, endpoint_id: []const u8, project_ids: []const u8, deep: ?bool) !void {
@@ -315,7 +315,7 @@ pub const Endpoints = struct {
         return try serde.json.fromSlice(models.ServiceEndpoint, alloc, resp.body);
     }
     /// Get the service endpoints by name.
-    pub fn getServiceEndpointsByNames(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, endpoint_names: []const u8, @"type": ?[]const u8, auth_schemes: ?[]const u8, owner: ?[]const u8, include_failed: ?bool, include_details: ?bool) ![]const models.ServiceEndpoint {
+    pub fn getServiceEndpointsByNames(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, endpoint_names: []const u8, @"type": ?[]const u8, auth_schemes: ?[]const u8, owner: ?[]const u8, include_failed: ?bool, include_details: ?bool) !models.ServiceEndpointList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -379,10 +379,10 @@ pub const Endpoints = struct {
             core.pager.logHttpError("Endpoints.getServiceEndpointsByNames", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ServiceEndpoint, alloc, resp.body);
+        return try serde.json.fromSlice(models.ServiceEndpointList, alloc, resp.body);
     }
     /// Gets the service endpoints and patch new authorization parameters
-    pub fn getServiceEndpointsWithRefreshedAuthentication(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, endpoint_ids: []const u8, body: []const models.RefreshAuthenticationParameters) ![]const models.ServiceEndpoint {
+    pub fn getServiceEndpointsWithRefreshedAuthentication(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, endpoint_ids: []const u8, body: []const models.RefreshAuthenticationParameters) !models.ServiceEndpointList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -419,7 +419,7 @@ pub const Endpoints = struct {
             core.pager.logHttpError("Endpoints.getServiceEndpointsWithRefreshedAuthentication", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ServiceEndpoint, alloc, resp.body);
+        return try serde.json.fromSlice(models.ServiceEndpointList, alloc, resp.body);
     }
     /// Get the service endpoint details.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, endpoint_id: []const u8, action_filter: ?enums.GetRequestActionFilter, load_confidential_data: ?bool) !models.ServiceEndpoint {
@@ -474,7 +474,7 @@ pub const Types = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get service endpoint types.
-    pub fn getServiceEndpointTypes(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, @"type": ?[]const u8, scheme: ?[]const u8) ![]const models.ServiceEndpointType {
+    pub fn getServiceEndpointTypes(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, @"type": ?[]const u8, scheme: ?[]const u8) !models.ServiceEndpointTypeList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -515,10 +515,10 @@ pub const Types = struct {
             core.pager.logHttpError("Types.getServiceEndpointTypes", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ServiceEndpointType, alloc, resp.body);
+        return try serde.json.fromSlice(models.ServiceEndpointTypeList, alloc, resp.body);
     }
     /// Get service endpoint types with passed types filter.
-    pub fn getFilteredServiceEndpointTypes(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: []const []const u8) ![]const models.ServiceEndpointType {
+    pub fn getFilteredServiceEndpointTypes(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: []const []const u8) !models.ServiceEndpointTypeList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -549,7 +549,7 @@ pub const Types = struct {
             core.pager.logHttpError("Types.getFilteredServiceEndpointTypes", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ServiceEndpointType, alloc, resp.body);
+        return try serde.json.fromSlice(models.ServiceEndpointTypeList, alloc, resp.body);
     }
 };
 
@@ -558,7 +558,7 @@ pub const Executionhistory = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get service endpoint execution records.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, endpoint_id: []const u8, top: ?i32, continuation_token: ?i64) ![]const models.ServiceEndpointExecutionRecord {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, endpoint_id: []const u8, top: ?i32, continuation_token: ?i64) !models.ServiceEndpointExecutionRecordList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -599,7 +599,7 @@ pub const Executionhistory = struct {
             core.pager.logHttpError("Executionhistory.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ServiceEndpointExecutionRecord, alloc, resp.body);
+        return try serde.json.fromSlice(models.ServiceEndpointExecutionRecordList, alloc, resp.body);
     }
 };
 

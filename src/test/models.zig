@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `BuildCoverage` as returned by Azure DevOps.
+pub const BuildCoverageList = struct {
+    count: ?i32 = null,
+    value: ?[]const BuildCoverage = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Build Coverage Detail
 pub const BuildCoverage = struct {
     /// Code Coverage File Url
@@ -111,6 +121,16 @@ pub const CoverageStatistics = struct {
     };
 };
 
+/// A collection of `TestRunCoverage` as returned by Azure DevOps.
+pub const TestRunCoverageList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestRunCoverage = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Test Run Code Coverage Details
 pub const TestRunCoverage = struct {
     /// Last Error
@@ -120,6 +140,16 @@ pub const TestRunCoverage = struct {
     /// State
     state: ?[]const u8 = null,
     test_run: ?ShallowReference = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TestPoint` as returned by Azure DevOps.
+pub const TestPointList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestPoint = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -293,6 +323,16 @@ pub const PointsFilter = struct {
     testcase_ids: ?[]const i32 = null,
     /// List of tester for filtering.
     testers: ?[]const IdentityRef = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `SuiteTestCase` as returned by Azure DevOps.
+pub const SuiteTestCaseList = struct {
+    count: ?i32 = null,
+    value: ?[]const SuiteTestCase = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -726,6 +766,16 @@ pub const TestCaseResultIdentifier = struct {
     };
 };
 
+/// A collection of `TestRun` as returned by Azure DevOps.
+pub const TestRunList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestRun = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Test run details.
 pub const TestRun = struct {
     build: ?ShallowReference = null,
@@ -1097,6 +1147,16 @@ pub const TestRunStatistic = struct {
     };
 };
 
+/// A collection of `TestAttachment` as returned by Azure DevOps.
+pub const TestAttachmentList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestAttachment = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const TestAttachment = struct {
     /// Attachment type.
     attachment_type: ?enums.TestAttachmentAttachmentType = null,
@@ -1140,6 +1200,36 @@ pub const TestAttachmentReference = struct {
     id: ?i32 = null,
     /// Url to download the attachment.
     url: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TestCaseResult` as returned by Azure DevOps.
+pub const TestCaseResultList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestCaseResult = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TestIterationDetailsModel` as returned by Azure DevOps.
+pub const TestIterationDetailsModelList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestIterationDetailsModel = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TestSession` as returned by Azure DevOps.
+pub const TestSessionList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestSession = null,
 
     pub const serde = .{
         .rename_all = .camel_case,

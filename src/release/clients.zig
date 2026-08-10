@@ -161,7 +161,7 @@ pub const Approvals = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of approvals
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, assigned_to_filter: ?[]const u8, status_filter: ?enums.ListRequestStatusFilter, release_ids_filter: ?[]const u8, type_filter: ?enums.ListRequestTypeFilter, top: ?i32, continuation_token: ?i32, query_order: ?enums.ListRequestQueryOrder, include_my_group_approvals: ?bool) ![]const models.ReleaseApproval {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, assigned_to_filter: ?[]const u8, status_filter: ?enums.ListRequestStatusFilter, release_ids_filter: ?[]const u8, type_filter: ?enums.ListRequestTypeFilter, top: ?i32, continuation_token: ?i32, query_order: ?enums.ListRequestQueryOrder, include_my_group_approvals: ?bool) !models.ReleaseApprovalList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -240,7 +240,7 @@ pub const Approvals = struct {
             core.pager.logHttpError("Approvals.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ReleaseApproval, alloc, resp.body);
+        return try serde.json.fromSlice(models.ReleaseApprovalList, alloc, resp.body);
     }
     /// Update status of an approval
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, approval_id: i32, body: models.ReleaseApproval) !models.ReleaseApproval {
@@ -293,7 +293,7 @@ pub const Definitions = struct {
             headers: struct {
                 x_ms_continuationtoken: ?[]const u8 = null,
             },
-            body: []const models.ReleaseDefinition,
+            body: models.ReleaseDefinitionList,
         },
     };
 
@@ -429,7 +429,7 @@ pub const Definitions = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.ReleaseDefinition, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.ReleaseDefinitionList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{
@@ -613,7 +613,7 @@ pub const Definitions = struct {
         return try serde.json.fromSlice(models.ReleaseDefinition, alloc, resp.body);
     }
     /// Get revision history for a release definition
-    pub fn getReleaseDefinitionHistory(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: i32) ![]const models.ReleaseDefinitionRevision {
+    pub fn getReleaseDefinitionHistory(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: i32) !models.ReleaseDefinitionRevisionList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -644,7 +644,7 @@ pub const Definitions = struct {
             core.pager.logHttpError("Definitions.getReleaseDefinitionHistory", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ReleaseDefinitionRevision, alloc, resp.body);
+        return try serde.json.fromSlice(models.ReleaseDefinitionRevisionList, alloc, resp.body);
     }
     /// Get release definition for a given definitionId and revision
     pub fn getDefinitionRevision(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: i32, revision: i32) !GetDefinitionRevisionResult {
@@ -706,7 +706,7 @@ pub const Deployments = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of deployments
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: ?i32, definition_environment_id: ?i32, created_by: ?[]const u8, min_modified_time: ?[]const u8, max_modified_time: ?[]const u8, deployment_status: ?enums.ListRequestDeploymentStatus, operation_status: ?enums.ListRequestOperationStatus, latest_attempts_only: ?bool, query_order: ?enums.ListRequestQueryOrder2, @"$top": ?i32, continuation_token: ?i32, created_for: ?[]const u8, min_started_time: ?[]const u8, max_started_time: ?[]const u8, source_branch: ?[]const u8) ![]const models.Deployment {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: ?i32, definition_environment_id: ?i32, created_by: ?[]const u8, min_modified_time: ?[]const u8, max_modified_time: ?[]const u8, deployment_status: ?enums.ListRequestDeploymentStatus, operation_status: ?enums.ListRequestOperationStatus, latest_attempts_only: ?bool, query_order: ?enums.ListRequestQueryOrder2, @"$top": ?i32, continuation_token: ?i32, created_for: ?[]const u8, min_started_time: ?[]const u8, max_started_time: ?[]const u8, source_branch: ?[]const u8) !models.DeploymentList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -830,7 +830,7 @@ pub const Deployments = struct {
             core.pager.logHttpError("Deployments.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Deployment, alloc, resp.body);
+        return try serde.json.fromSlice(models.DeploymentList, alloc, resp.body);
     }
 };
 
@@ -872,7 +872,7 @@ pub const Folders = struct {
         return;
     }
     /// Gets folders.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, path: []const u8, query_order: ?enums.ListRequestQueryOrder3) ![]const models.Folder {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, path: []const u8, query_order: ?enums.ListRequestQueryOrder3) !models.FolderList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -910,7 +910,7 @@ pub const Folders = struct {
             core.pager.logHttpError("Folders.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Folder, alloc, resp.body);
+        return try serde.json.fromSlice(models.FolderList, alloc, resp.body);
     }
     /// Updates an existing folder at given existing path.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, path: []const u8, body: models.Folder) !models.Folder {
@@ -1069,7 +1069,7 @@ pub const Releases = struct {
         },
     };
     /// Get a list of releases
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: ?i32, definition_environment_id: ?i32, search_text: ?[]const u8, created_by: ?[]const u8, status_filter: ?enums.ListRequestStatusFilter1, environment_status_filter: ?i32, min_created_time: ?[]const u8, max_created_time: ?[]const u8, query_order: ?enums.ListRequestQueryOrder4, @"$top": ?i32, continuation_token: ?i32, @"$expand": ?enums.ListRequestExpand1, artifact_type_id: ?[]const u8, source_id: ?[]const u8, artifact_version_id: ?[]const u8, source_branch_filter: ?[]const u8, is_deleted: ?bool, tag_filter: ?[]const u8, property_filters: ?[]const u8, release_id_filter: ?[]const u8, path: ?[]const u8) ![]const models.Release {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: ?i32, definition_environment_id: ?i32, search_text: ?[]const u8, created_by: ?[]const u8, status_filter: ?enums.ListRequestStatusFilter1, environment_status_filter: ?i32, min_created_time: ?[]const u8, max_created_time: ?[]const u8, query_order: ?enums.ListRequestQueryOrder4, @"$top": ?i32, continuation_token: ?i32, @"$expand": ?enums.ListRequestExpand1, artifact_type_id: ?[]const u8, source_id: ?[]const u8, artifact_version_id: ?[]const u8, source_branch_filter: ?[]const u8, is_deleted: ?bool, tag_filter: ?[]const u8, property_filters: ?[]const u8, release_id_filter: ?[]const u8, path: ?[]const u8) !models.ReleaseList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1233,7 +1233,7 @@ pub const Releases = struct {
             core.pager.logHttpError("Releases.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Release, alloc, resp.body);
+        return try serde.json.fromSlice(models.ReleaseList, alloc, resp.body);
     }
     /// Create a release.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.ReleaseStartMetadata) !models.Release {
@@ -1628,7 +1628,7 @@ pub const Attachments = struct {
         },
     };
     /// Get the release task attachments.
-    pub fn getReleaseTaskAttachments(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, environment_id: i32, attempt_id: i32, plan_id: []const u8, @"type": []const u8) ![]const models.ReleaseTaskAttachment {
+    pub fn getReleaseTaskAttachments(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, environment_id: i32, attempt_id: i32, plan_id: []const u8, @"type": []const u8) !models.ReleaseTaskAttachmentList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1667,7 +1667,7 @@ pub const Attachments = struct {
             core.pager.logHttpError("Attachments.getReleaseTaskAttachments", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ReleaseTaskAttachment, alloc, resp.body);
+        return try serde.json.fromSlice(models.ReleaseTaskAttachmentList, alloc, resp.body);
     }
     /// Get a release task attachment.
     pub fn getReleaseTaskAttachmentContent(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, environment_id: i32, attempt_id: i32, plan_id: []const u8, timeline_id: []const u8, record_id: []const u8, @"type": []const u8, name: []const u8) !GetReleaseTaskAttachmentContentResult {
@@ -1735,7 +1735,7 @@ pub const Attachments = struct {
         }
     }
     /// GetTaskAttachments API is deprecated. Use GetReleaseTaskAttachments API instead.
-    pub fn getTaskAttachments(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, environment_id: i32, attempt_id: i32, timeline_id: []const u8, @"type": []const u8) ![]const models.ReleaseTaskAttachment {
+    pub fn getTaskAttachments(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, environment_id: i32, attempt_id: i32, timeline_id: []const u8, @"type": []const u8) !models.ReleaseTaskAttachmentList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1774,7 +1774,7 @@ pub const Attachments = struct {
             core.pager.logHttpError("Attachments.getTaskAttachments", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ReleaseTaskAttachment, alloc, resp.body);
+        return try serde.json.fromSlice(models.ReleaseTaskAttachmentList, alloc, resp.body);
     }
     /// GetTaskAttachmentContent API is deprecated. Use GetReleaseTaskAttachmentContent API instead.
     pub fn getTaskAttachmentContent(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, environment_id: i32, attempt_id: i32, timeline_id: []const u8, record_id: []const u8, @"type": []const u8, name: []const u8) !GetTaskAttachmentContentResult {
@@ -1846,7 +1846,7 @@ pub const ManualInterventions = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// List all manual interventions for a given release.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32) ![]const models.ManualIntervention {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32) !models.ManualInterventionList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1877,7 +1877,7 @@ pub const ManualInterventions = struct {
             core.pager.logHttpError("ManualInterventions.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ManualIntervention, alloc, resp.body);
+        return try serde.json.fromSlice(models.ManualInterventionList, alloc, resp.body);
     }
     /// Get manual intervention for a given release and manual intervention id.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, manual_intervention_id: i32) !models.ManualIntervention {

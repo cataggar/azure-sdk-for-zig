@@ -161,7 +161,7 @@ pub const ServiceSettings = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get all service-wide feed creation and administration permissions.
-    pub fn getGlobalPermissions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, include_ids: ?bool) ![]const models.GlobalPermission {
+    pub fn getGlobalPermissions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, include_ids: ?bool) !models.GlobalPermissionList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -193,10 +193,10 @@ pub const ServiceSettings = struct {
             core.pager.logHttpError("ServiceSettings.getGlobalPermissions", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GlobalPermission, alloc, resp.body);
+        return try serde.json.fromSlice(models.GlobalPermissionList, alloc, resp.body);
     }
     /// Set service-wide permissions that govern feed creation and administration.
-    pub fn setGlobalPermissions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: []const models.GlobalPermission) ![]const models.GlobalPermission {
+    pub fn setGlobalPermissions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: []const models.GlobalPermission) !models.GlobalPermissionList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -227,7 +227,7 @@ pub const ServiceSettings = struct {
             core.pager.logHttpError("ServiceSettings.setGlobalPermissions", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GlobalPermission, alloc, resp.body);
+        return try serde.json.fromSlice(models.GlobalPermissionList, alloc, resp.body);
     }
 };
 
@@ -367,7 +367,7 @@ pub const FeedRecycleBin = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Query for feeds within the recycle bin. If the project parameter is present, gets all feeds in recycle bin in the given project. If omitted, gets all feeds in recycle bin in the organization.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.Feed {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.FeedList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -396,7 +396,7 @@ pub const FeedRecycleBin = struct {
             core.pager.logHttpError("FeedRecycleBin.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Feed, alloc, resp.body);
+        return try serde.json.fromSlice(models.FeedList, alloc, resp.body);
     }
     /// Permanently delete a feed and all of its packages. The action is irreversible and the package content will be deleted immediately. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn permanentDeleteFeed(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8) !void {
@@ -475,7 +475,7 @@ pub const FeedManagement = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get all feeds in an account where you have the provided role access. If the project parameter is present, gets all feeds in the given project. If omitted, gets all feeds in the organization.
-    pub fn getFeeds(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, feed_role: ?enums.GetFeedsRequestFeedRole, include_deleted_upstreams: ?bool, include_urls: ?bool) ![]const models.Feed {
+    pub fn getFeeds(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, feed_role: ?enums.GetFeedsRequestFeedRole, include_deleted_upstreams: ?bool, include_urls: ?bool) !models.FeedList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -521,7 +521,7 @@ pub const FeedManagement = struct {
             core.pager.logHttpError("FeedManagement.getFeeds", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Feed, alloc, resp.body);
+        return try serde.json.fromSlice(models.FeedList, alloc, resp.body);
     }
     /// Create a feed, a container for various package types. Feeds can be created in a project if the project parameter is included in the request url. If the project parameter is omitted, the feed will not be associated with a project and will be created at the organization level.
     pub fn createFeed(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.Feed) !models.Feed {
@@ -670,7 +670,7 @@ pub const FeedManagement = struct {
         return try serde.json.fromSlice(models.Feed, alloc, resp.body);
     }
     /// Get the permissions for a feed. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
-    pub fn getFeedPermissions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8, include_ids: ?bool, exclude_inherited_permissions: ?bool, identity_descriptor: ?[]const u8, include_deleted_feeds: ?bool) ![]const models.FeedPermission {
+    pub fn getFeedPermissions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8, include_ids: ?bool, exclude_inherited_permissions: ?bool, identity_descriptor: ?[]const u8, include_deleted_feeds: ?bool) !models.FeedPermissionList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -723,10 +723,10 @@ pub const FeedManagement = struct {
             core.pager.logHttpError("FeedManagement.getFeedPermissions", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.FeedPermission, alloc, resp.body);
+        return try serde.json.fromSlice(models.FeedPermissionList, alloc, resp.body);
     }
     /// Update the permissions on a feed. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
-    pub fn setFeedPermissions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8, body: []const models.FeedPermission) ![]const models.FeedPermission {
+    pub fn setFeedPermissions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8, body: []const models.FeedPermission) !models.FeedPermissionList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -761,10 +761,10 @@ pub const FeedManagement = struct {
             core.pager.logHttpError("FeedManagement.setFeedPermissions", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.FeedPermission, alloc, resp.body);
+        return try serde.json.fromSlice(models.FeedPermissionList, alloc, resp.body);
     }
     /// Get all views for a feed. The project parameter must be supplied if the feed was created in a project.
-    pub fn getFeedViews(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8) ![]const models.FeedView {
+    pub fn getFeedViews(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8) !models.FeedViewList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -795,7 +795,7 @@ pub const FeedManagement = struct {
             core.pager.logHttpError("FeedManagement.getFeedViews", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.FeedView, alloc, resp.body);
+        return try serde.json.fromSlice(models.FeedViewList, alloc, resp.body);
     }
     /// Create a new view on the referenced feed. The project parameter must be supplied if the feed was created in a project.
     pub fn createFeedView(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8, body: models.FeedView) !models.FeedView {
@@ -963,7 +963,7 @@ pub const ArtifactDetails = struct {
         },
     };
 
-    pub fn queryPackageMetrics(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8, body: models.PackageMetricsQuery) ![]const models.PackageMetrics {
+    pub fn queryPackageMetrics(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8, body: models.PackageMetricsQuery) !models.PackageMetricsList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -998,10 +998,10 @@ pub const ArtifactDetails = struct {
             core.pager.logHttpError("ArtifactDetails.queryPackageMetrics", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.PackageMetrics, alloc, resp.body);
+        return try serde.json.fromSlice(models.PackageMetricsList, alloc, resp.body);
     }
     /// Get details about all of the packages in the feed. Use the various filters to include or exclude information from the result set. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
-    pub fn getPackages(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8, protocol_type: ?[]const u8, package_name_query: ?[]const u8, normalized_package_name: ?[]const u8, include_urls: ?bool, include_all_versions: ?bool, is_listed: ?bool, get_top_package_versions: ?bool, is_release: ?bool, include_description: ?bool, @"$top": ?i32, @"$skip": ?i32, include_deleted: ?bool, is_cached: ?bool, direct_upstream_id: ?[]const u8) ![]const models.Package {
+    pub fn getPackages(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8, protocol_type: ?[]const u8, package_name_query: ?[]const u8, normalized_package_name: ?[]const u8, include_urls: ?bool, include_all_versions: ?bool, is_listed: ?bool, get_top_package_versions: ?bool, is_release: ?bool, include_description: ?bool, @"$top": ?i32, @"$skip": ?i32, include_deleted: ?bool, is_cached: ?bool, direct_upstream_id: ?[]const u8) !models.PackageList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1110,7 +1110,7 @@ pub const ArtifactDetails = struct {
             core.pager.logHttpError("ArtifactDetails.getPackages", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Package, alloc, resp.body);
+        return try serde.json.fromSlice(models.PackageList, alloc, resp.body);
     }
     /// Get details about a specific package. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn getPackage(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, package_id: []const u8, project: []const u8, include_all_versions: ?bool, include_urls: ?bool, is_listed: ?bool, is_release: ?bool, include_deleted: ?bool, include_description: ?bool) !models.Package {
@@ -1179,7 +1179,7 @@ pub const ArtifactDetails = struct {
         return try serde.json.fromSlice(models.Package, alloc, resp.body);
     }
 
-    pub fn queryPackageVersionMetrics(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, package_id: []const u8, project: []const u8, body: models.PackageVersionMetricsQuery) ![]const models.PackageVersionMetrics {
+    pub fn queryPackageVersionMetrics(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, package_id: []const u8, project: []const u8, body: models.PackageVersionMetricsQuery) !models.PackageVersionMetricsList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1216,10 +1216,10 @@ pub const ArtifactDetails = struct {
             core.pager.logHttpError("ArtifactDetails.queryPackageVersionMetrics", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.PackageVersionMetrics, alloc, resp.body);
+        return try serde.json.fromSlice(models.PackageVersionMetricsList, alloc, resp.body);
     }
     /// Get a list of package versions, optionally filtering by state. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
-    pub fn getPackageVersions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, package_id: []const u8, project: []const u8, include_urls: ?bool, is_listed: ?bool, is_deleted: ?bool) ![]const models.PackageVersion {
+    pub fn getPackageVersions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, package_id: []const u8, project: []const u8, include_urls: ?bool, is_listed: ?bool, is_deleted: ?bool) !models.PackageVersionList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1267,7 +1267,7 @@ pub const ArtifactDetails = struct {
             core.pager.logHttpError("ArtifactDetails.getPackageVersions", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.PackageVersion, alloc, resp.body);
+        return try serde.json.fromSlice(models.PackageVersionList, alloc, resp.body);
     }
     /// Get details about a specific package version. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn getPackageVersion(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, package_id: []const u8, package_version_id: []const u8, project: []const u8, include_urls: ?bool, is_listed: ?bool, is_deleted: ?bool) !models.PackageVersion {
@@ -1453,7 +1453,7 @@ pub const RecycleBin = struct {
         return try serde.json.fromSlice(models.OperationReference, alloc, resp.body);
     }
     /// Query for packages within the recycle bin. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
-    pub fn getRecycleBinPackages(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8, protocol_type: ?[]const u8, package_name_query: ?[]const u8, include_urls: ?bool, @"$top": ?i32, @"$skip": ?i32, include_all_versions: ?bool) ![]const models.Package {
+    pub fn getRecycleBinPackages(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8, protocol_type: ?[]const u8, package_name_query: ?[]const u8, include_urls: ?bool, @"$top": ?i32, @"$skip": ?i32, include_all_versions: ?bool) !models.PackageList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1518,7 +1518,7 @@ pub const RecycleBin = struct {
             core.pager.logHttpError("RecycleBin.getRecycleBinPackages", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Package, alloc, resp.body);
+        return try serde.json.fromSlice(models.PackageList, alloc, resp.body);
     }
     /// Get information about a package and all its versions within the recycle bin. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn getRecycleBinPackage(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, package_id: []const u8, project: []const u8, include_urls: ?bool) !models.Package {
@@ -1562,7 +1562,7 @@ pub const RecycleBin = struct {
         return try serde.json.fromSlice(models.Package, alloc, resp.body);
     }
     /// Get a list of package versions within the recycle bin. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
-    pub fn getRecycleBinPackageVersions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, package_id: []const u8, project: []const u8, include_urls: ?bool) ![]const models.RecycleBinPackageVersion {
+    pub fn getRecycleBinPackageVersions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, package_id: []const u8, project: []const u8, include_urls: ?bool) !models.RecycleBinPackageVersionList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1600,7 +1600,7 @@ pub const RecycleBin = struct {
             core.pager.logHttpError("RecycleBin.getRecycleBinPackageVersions", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.RecycleBinPackageVersion, alloc, resp.body);
+        return try serde.json.fromSlice(models.RecycleBinPackageVersionList, alloc, resp.body);
     }
     /// Get information about a package version within the recycle bin. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn getRecycleBinPackageVersion(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, package_id: []const u8, package_version_id: []const u8, project: []const u8, include_urls: ?bool) !models.RecycleBinPackageVersion {

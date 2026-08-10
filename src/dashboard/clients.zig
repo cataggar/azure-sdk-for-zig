@@ -197,7 +197,7 @@ pub const Dashboards = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of dashboards under a project.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8) ![]const models.Dashboard {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8) !models.DashboardList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -228,7 +228,7 @@ pub const Dashboards = struct {
             core.pager.logHttpError("Dashboards.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Dashboard, alloc, resp.body);
+        return try serde.json.fromSlice(models.DashboardList, alloc, resp.body);
     }
     /// Create the supplied dashboard.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, body: models.Dashboard) !models.Dashboard {
@@ -430,7 +430,7 @@ pub const Widgets = struct {
             headers: struct {
                 e_tag: ?[]const u8 = null,
             },
-            body: []const models.Widget,
+            body: models.WidgetList,
         },
     };
 
@@ -440,7 +440,7 @@ pub const Widgets = struct {
             headers: struct {
                 e_tag: ?[]const u8 = null,
             },
-            body: []const models.Widget,
+            body: models.WidgetList,
         },
     };
 
@@ -450,7 +450,7 @@ pub const Widgets = struct {
             headers: struct {
                 e_tag: ?[]const u8 = null,
             },
-            body: []const models.Widget,
+            body: models.WidgetList,
         },
     };
     /// Get widgets contained on the specified dashboard.
@@ -491,7 +491,7 @@ pub const Widgets = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.Widget, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.WidgetList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{
@@ -548,7 +548,7 @@ pub const Widgets = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.Widget, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.WidgetList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{
@@ -645,7 +645,7 @@ pub const Widgets = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.Widget, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.WidgetList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{

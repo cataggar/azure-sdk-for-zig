@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `InstalledExtension` as returned by Azure DevOps.
+pub const InstalledExtensionList = struct {
+    count: ?i32 = null,
+    value: ?[]const InstalledExtension = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Represents a VSTS extension along with its installation state
 pub const InstalledExtension = struct {
     /// Uri used as base for other relative uri's defined in extension

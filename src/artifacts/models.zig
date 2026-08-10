@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `GlobalPermission` as returned by Azure DevOps.
+pub const GlobalPermissionList = struct {
+    count: ?i32 = null,
+    value: ?[]const GlobalPermission = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Permissions for feed service-wide operations such as the creation of new feeds.
 pub const GlobalPermission = struct {
     identity_descriptor: ?IdentityDescriptor = null,
@@ -435,6 +445,16 @@ pub const ProtocolMetadataData = struct {
     };
 };
 
+/// A collection of `Feed` as returned by Azure DevOps.
+pub const FeedList = struct {
+    count: ?i32 = null,
+    value: ?[]const Feed = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// The JSON model for JSON Patch Operations
 pub const JsonPatchDocument = struct {
     pub const serde = .{
@@ -470,10 +490,40 @@ pub const FeedUpdate = struct {
     };
 };
 
+/// A collection of `FeedPermission` as returned by Azure DevOps.
+pub const FeedPermissionList = struct {
+    count: ?i32 = null,
+    value: ?[]const FeedPermission = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `FeedView` as returned by Azure DevOps.
+pub const FeedViewList = struct {
+    count: ?i32 = null,
+    value: ?[]const FeedView = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Query to get package metrics
 pub const PackageMetricsQuery = struct {
     /// List of package ids
     package_ids: ?[]const []const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `PackageMetrics` as returned by Azure DevOps.
+pub const PackageMetricsList = struct {
+    count: ?i32 = null,
+    value: ?[]const PackageMetrics = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -496,10 +546,30 @@ pub const PackageMetrics = struct {
     };
 };
 
+/// A collection of `Package` as returned by Azure DevOps.
+pub const PackageList = struct {
+    count: ?i32 = null,
+    value: ?[]const Package = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Query to get package version metrics
 pub const PackageVersionMetricsQuery = struct {
     /// List of package version ids
     package_version_ids: ?[]const []const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `PackageVersionMetrics` as returned by Azure DevOps.
+pub const PackageVersionMetricsList = struct {
+    count: ?i32 = null,
+    value: ?[]const PackageVersionMetrics = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -518,6 +588,16 @@ pub const PackageVersionMetrics = struct {
     package_id: ?[]const u8 = null,
     /// Package version id.
     package_version_id: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `PackageVersion` as returned by Azure DevOps.
+pub const PackageVersionList = struct {
+    count: ?i32 = null,
+    value: ?[]const PackageVersion = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -565,6 +645,16 @@ pub const OperationReference = struct {
     status: ?enums.OperationReferenceStatus = null,
     /// URL to get the full operation object.
     url: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `RecycleBinPackageVersion` as returned by Azure DevOps.
+pub const RecycleBinPackageVersionList = struct {
+    count: ?i32 = null,
+    value: ?[]const RecycleBinPackageVersion = null,
 
     pub const serde = .{
         .rename_all = .camel_case,

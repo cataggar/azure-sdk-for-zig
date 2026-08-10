@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `TfvcChange` as returned by Azure DevOps.
+pub const TfvcChangeList = struct {
+    count: ?i32 = null,
+    value: ?[]const TfvcChange = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// A change.
 pub const TfvcChange = struct {
     /// The type of change that was made to the item.
@@ -48,6 +58,16 @@ pub const TfvcMergeSource = struct {
     };
 };
 
+/// A collection of `AssociatedWorkItem` as returned by Azure DevOps.
+pub const AssociatedWorkItemList = struct {
+    count: ?i32 = null,
+    value: ?[]const AssociatedWorkItem = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const AssociatedWorkItem = struct {
     assigned_to: ?[]const u8 = null,
     /// Id of associated the work item.
@@ -72,6 +92,16 @@ pub const TfvcChangesetsRequestData = struct {
     comment_length: ?i32 = null,
     /// Whether to include the _links field on the shallow references
     include_links: ?bool = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TfvcChangesetRef` as returned by Azure DevOps.
+pub const TfvcChangesetRefList = struct {
+    count: ?i32 = null,
+    value: ?[]const TfvcChangesetRef = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -235,6 +265,16 @@ pub const TfvcPolicyFailureInfo = struct {
     };
 };
 
+/// A collection of `TfvcItem` as returned by Azure DevOps.
+pub const TfvcItemList = struct {
+    count: ?i32 = null,
+    value: ?[]const TfvcItem = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Metadata for an item.
 pub const TfvcItem = struct {
     links: ?ReferenceLinks = null,
@@ -277,6 +317,16 @@ pub const FileContentMetadata = struct {
     is_binary: ?bool = null,
     is_image: ?bool = null,
     vs_link: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TfvcLabelRef` as returned by Azure DevOps.
+pub const TfvcLabelRefList = struct {
+    count: ?i32 = null,
+    value: ?[]const TfvcLabelRef = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -364,6 +414,16 @@ pub const TfvcShelveset = struct {
         .rename = .{
             .links = "_links",
         },
+    };
+};
+
+/// A collection of `TfvcBranchRef` as returned by Azure DevOps.
+pub const TfvcBranchRefList = struct {
+    count: ?i32 = null,
+    value: ?[]const TfvcBranchRef = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
     };
 };
 

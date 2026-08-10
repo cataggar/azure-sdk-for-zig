@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `Account` as returned by Azure DevOps.
+pub const AccountList = struct {
+    count: ?i32 = null,
+    value: ?[]const Account = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const Account = struct {
     /// Identifier for an Account
     account_id: ?[]const u8 = null,

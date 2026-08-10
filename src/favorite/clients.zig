@@ -105,7 +105,7 @@ pub const Favorites = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
 
-    pub fn getFavorites(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, artifact_type: ?[]const u8, artifact_scope_type: ?[]const u8, artifact_scope_id: ?[]const u8, include_extended_details: ?bool) ![]const models.Favorite {
+    pub fn getFavorites(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, artifact_type: ?[]const u8, artifact_scope_type: ?[]const u8, artifact_scope_id: ?[]const u8, include_extended_details: ?bool) !models.FavoriteList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -158,7 +158,7 @@ pub const Favorites = struct {
             core.pager.logHttpError("Favorites.getFavorites", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Favorite, alloc, resp.body);
+        return try serde.json.fromSlice(models.FavoriteList, alloc, resp.body);
     }
 
     pub fn createFavorite(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.FavoriteCreateParameters) !models.Favorite {

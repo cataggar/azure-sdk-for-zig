@@ -265,7 +265,7 @@ pub const Elasticpools = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of all Elastic Pools.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.ElasticPool {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !models.ElasticPoolList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -292,7 +292,7 @@ pub const Elasticpools = struct {
             core.pager.logHttpError("Elasticpools.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ElasticPool, alloc, resp.body);
+        return try serde.json.fromSlice(models.ElasticPoolList, alloc, resp.body);
     }
     /// Create a new elastic pool. This will create a new TaskAgentPool at the organization level. If a project id is provided, this will create a new TaskAgentQueue in the specified project.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_name: []const u8, authorize_all_pipelines: ?bool, auto_provision_project_pools: ?bool, project_id: ?[]const u8, body: models.ElasticPool) !models.ElasticPoolCreationResult {
@@ -424,7 +424,7 @@ pub const Elasticpoollogs = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get elastic pool diagnostics logs for a specified Elastic Pool.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32, @"$top": ?i32) ![]const models.ElasticPoolLog {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32, @"$top": ?i32) !models.ElasticPoolLogList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -458,7 +458,7 @@ pub const Elasticpoollogs = struct {
             core.pager.logHttpError("Elasticpoollogs.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ElasticPoolLog, alloc, resp.body);
+        return try serde.json.fromSlice(models.ElasticPoolLogList, alloc, resp.body);
     }
 };
 
@@ -467,7 +467,7 @@ pub const Nodes = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of ElasticNodes currently in the ElasticPool
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32, @"$state": ?enums.ListRequestState) ![]const models.ElasticNode {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32, @"$state": ?enums.ListRequestState) !models.ElasticNodeList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -503,7 +503,7 @@ pub const Nodes = struct {
             core.pager.logHttpError("Nodes.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ElasticNode, alloc, resp.body);
+        return try serde.json.fromSlice(models.ElasticNodeList, alloc, resp.body);
     }
     /// Update properties on a specified ElasticNode
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32, elastic_node_id: i32, body: models.ElasticNodeSettings) !models.ElasticNode {
@@ -773,7 +773,7 @@ pub const Records = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Update timeline records if they already exist, otherwise create new ones for the same timeline.
-    pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, scope_identifier: []const u8, hub_name: []const u8, plan_id: []const u8, timeline_id: []const u8, body: models.VssJsonCollectionWrapper) ![]const models.TimelineRecord {
+    pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, scope_identifier: []const u8, hub_name: []const u8, plan_id: []const u8, timeline_id: []const u8, body: models.VssJsonCollectionWrapper) !models.TimelineRecordList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -812,7 +812,7 @@ pub const Records = struct {
             core.pager.logHttpError("Records.update", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TimelineRecord, alloc, resp.body);
+        return try serde.json.fromSlice(models.TimelineRecordList, alloc, resp.body);
     }
 };
 
@@ -821,7 +821,7 @@ pub const Agentclouds = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
 
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.TaskAgentCloud {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !models.TaskAgentCloudList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -848,7 +848,7 @@ pub const Agentclouds = struct {
             core.pager.logHttpError("Agentclouds.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TaskAgentCloud, alloc, resp.body);
+        return try serde.json.fromSlice(models.TaskAgentCloudList, alloc, resp.body);
     }
 
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.TaskAgentCloud) !models.TaskAgentCloud {
@@ -991,7 +991,7 @@ pub const Requests = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
 
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, agent_cloud_id: i32) ![]const models.TaskAgentCloudRequest {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, agent_cloud_id: i32) !models.TaskAgentCloudRequestList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1020,7 +1020,7 @@ pub const Requests = struct {
             core.pager.logHttpError("Requests.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TaskAgentCloudRequest, alloc, resp.body);
+        return try serde.json.fromSlice(models.TaskAgentCloudRequestList, alloc, resp.body);
     }
 };
 
@@ -1029,7 +1029,7 @@ pub const Agentcloudtypes = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get agent cloud types.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.TaskAgentCloudType {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !models.TaskAgentCloudTypeList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1056,7 +1056,7 @@ pub const Agentcloudtypes = struct {
             core.pager.logHttpError("Agentcloudtypes.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TaskAgentCloudType, alloc, resp.body);
+        return try serde.json.fromSlice(models.TaskAgentCloudTypeList, alloc, resp.body);
     }
 };
 
@@ -1065,7 +1065,7 @@ pub const Pools = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of agent pools.
-    pub fn getAgentPoolsByIds(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_ids: []const u8, action_filter: ?enums.GetAgentPoolsByIdsRequestActionFilter) ![]const models.TaskAgentPool {
+    pub fn getAgentPoolsByIds(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_ids: []const u8, action_filter: ?enums.GetAgentPoolsByIdsRequestActionFilter) !models.TaskAgentPoolList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1103,7 +1103,7 @@ pub const Pools = struct {
             core.pager.logHttpError("Pools.getAgentPoolsByIds", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TaskAgentPool, alloc, resp.body);
+        return try serde.json.fromSlice(models.TaskAgentPoolList, alloc, resp.body);
     }
     /// Create an agent pool.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.TaskAgentPool) !models.TaskAgentPool {
@@ -1259,7 +1259,7 @@ pub const Agents = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of agents.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32, agent_name: ?[]const u8, include_capabilities: ?bool, include_assigned_request: ?bool, include_last_completed_request: ?bool, property_filters: ?[]const u8, demands: ?[]const u8) ![]const models.TaskAgent {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32, agent_name: ?[]const u8, include_capabilities: ?bool, include_assigned_request: ?bool, include_last_completed_request: ?bool, property_filters: ?[]const u8, demands: ?[]const u8) !models.TaskAgentList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1324,7 +1324,7 @@ pub const Agents = struct {
             core.pager.logHttpError("Agents.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TaskAgent, alloc, resp.body);
+        return try serde.json.fromSlice(models.TaskAgentList, alloc, resp.body);
     }
     /// Adds an agent to a pool. You probably don't want to call this endpoint directly. Instead, [configure an agent](https://docs.microsoft.com/azure/devops/pipelines/agents/agents) using the agent download package.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32, body: models.TaskAgent) !models.TaskAgent {
@@ -1732,7 +1732,7 @@ pub const Variablegroups = struct {
         return try serde.json.fromSlice(models.VariableGroup, alloc, resp.body);
     }
     /// Get variable groups by ids.
-    pub fn getVariableGroupsById(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, group_ids: []const u8, load_secrets: ?bool) ![]const models.VariableGroup {
+    pub fn getVariableGroupsById(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, group_ids: []const u8, load_secrets: ?bool) !models.VariableGroupList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1770,7 +1770,7 @@ pub const Variablegroups = struct {
             core.pager.logHttpError("Variablegroups.getVariableGroupsById", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.VariableGroup, alloc, resp.body);
+        return try serde.json.fromSlice(models.VariableGroupList, alloc, resp.body);
     }
     /// Get a variable group.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, group_id: i32) !models.VariableGroup {
@@ -1860,7 +1860,7 @@ pub const Deploymentgroups = struct {
             headers: struct {
                 x_ms_continuationtoken: ?[]const u8 = null,
             },
-            body: []const models.DeploymentGroup,
+            body: models.DeploymentGroupList,
         },
     };
     /// Get a list of deployment groups by name or IDs.
@@ -1936,7 +1936,7 @@ pub const Deploymentgroups = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.DeploymentGroup, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.DeploymentGroupList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{
@@ -2119,7 +2119,7 @@ pub const Targets = struct {
             headers: struct {
                 x_ms_continuationtoken: ?[]const u8 = null,
             },
-            body: []const models.DeploymentMachine,
+            body: models.DeploymentMachineList,
         },
     };
     /// Get a list of deployment targets in a deployment group.
@@ -2221,7 +2221,7 @@ pub const Targets = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.DeploymentMachine, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.DeploymentMachineList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{
@@ -2237,7 +2237,7 @@ pub const Targets = struct {
         }
     }
     /// Update tags of a list of deployment targets in a deployment group.
-    pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, deployment_group_id: i32, body: []const models.DeploymentTargetUpdateParameter) ![]const models.DeploymentMachine {
+    pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, deployment_group_id: i32, body: []const models.DeploymentTargetUpdateParameter) !models.DeploymentMachineList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2272,7 +2272,7 @@ pub const Targets = struct {
             core.pager.logHttpError("Targets.update", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.DeploymentMachine, alloc, resp.body);
+        return try serde.json.fromSlice(models.DeploymentMachineList, alloc, resp.body);
     }
     /// Delete a deployment target in a deployment group. This deletes the agent from associated deployment pool too.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, deployment_group_id: i32, target_id: i32) !void {
@@ -2359,7 +2359,7 @@ pub const Queues = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of agent queues by pool ids
-    pub fn getAgentQueuesForPools(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_ids: []const u8, project: []const u8, action_filter: ?enums.GetAgentQueuesForPoolsRequestActionFilter) ![]const models.TaskAgentQueue {
+    pub fn getAgentQueuesForPools(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_ids: []const u8, project: []const u8, action_filter: ?enums.GetAgentQueuesForPoolsRequestActionFilter) !models.TaskAgentQueueList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2399,7 +2399,7 @@ pub const Queues = struct {
             core.pager.logHttpError("Queues.getAgentQueuesForPools", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TaskAgentQueue, alloc, resp.body);
+        return try serde.json.fromSlice(models.TaskAgentQueueList, alloc, resp.body);
     }
     /// Create a new agent queue to connect a project to an agent pool.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, authorize_pipelines: ?bool, body: models.TaskAgentQueue) !models.TaskAgentQueue {
@@ -2523,7 +2523,7 @@ pub const Securefiles = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get secure files
-    pub fn getSecureFilesByNames(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, secure_file_names: []const u8, include_download_tickets: ?bool, action_filter: ?enums.GetSecureFilesByNamesRequestActionFilter) ![]const models.SecureFile {
+    pub fn getSecureFilesByNames(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, secure_file_names: []const u8, include_download_tickets: ?bool, action_filter: ?enums.GetSecureFilesByNamesRequestActionFilter) !models.SecureFileList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2568,10 +2568,10 @@ pub const Securefiles = struct {
             core.pager.logHttpError("Securefiles.getSecureFilesByNames", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.SecureFile, alloc, resp.body);
+        return try serde.json.fromSlice(models.SecureFileList, alloc, resp.body);
     }
     /// Update properties and/or names of a set of secure files. Files are identified by their IDs. Properties provided override the existing one entirely, i.e. do not merge.
-    pub fn updateSecureFiles(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: []const models.SecureFile) ![]const models.SecureFile {
+    pub fn updateSecureFiles(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: []const models.SecureFile) !models.SecureFileList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2604,10 +2604,10 @@ pub const Securefiles = struct {
             core.pager.logHttpError("Securefiles.updateSecureFiles", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.SecureFile, alloc, resp.body);
+        return try serde.json.fromSlice(models.SecureFileList, alloc, resp.body);
     }
     /// Query secure files using a name pattern and a condition on file properties.
-    pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, name_pattern: ?[]const u8, body: []const u8) ![]const models.SecureFile {
+    pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, name_pattern: ?[]const u8, body: []const u8) !models.SecureFileList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2645,7 +2645,7 @@ pub const Securefiles = struct {
             core.pager.logHttpError("Securefiles.query", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.SecureFile, alloc, resp.body);
+        return try serde.json.fromSlice(models.SecureFileList, alloc, resp.body);
     }
     /// Delete a secure file
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, secure_file_id: []const u8) !void {
@@ -2777,7 +2777,7 @@ pub const Taskgroups = struct {
             headers: struct {
                 x_ms_continuationtoken: ?[]const u8 = null,
             },
-            body: []const models.TaskGroup,
+            body: models.TaskGroupList,
         },
     };
     /// Create a task group.
@@ -2927,7 +2927,7 @@ pub const Taskgroups = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.TaskGroup, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.TaskGroupList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{

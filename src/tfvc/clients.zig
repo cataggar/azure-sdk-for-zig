@@ -143,7 +143,7 @@ pub const Changesets = struct {
             headers: struct {
                 x_ms_continuationtoken: ?[]const u8 = null,
             },
-            body: []const models.TfvcChange,
+            body: models.TfvcChangeList,
         },
     };
     /// Retrieve Tfvc changes for a given changeset.
@@ -196,7 +196,7 @@ pub const Changesets = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.TfvcChange, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.TfvcChangeList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{
@@ -212,7 +212,7 @@ pub const Changesets = struct {
         }
     }
     /// Retrieves the work items associated with a particular changeset.
-    pub fn getChangesetWorkItems(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32) ![]const models.AssociatedWorkItem {
+    pub fn getChangesetWorkItems(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32) !models.AssociatedWorkItemList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -241,10 +241,10 @@ pub const Changesets = struct {
             core.pager.logHttpError("Changesets.getChangesetWorkItems", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.AssociatedWorkItem, alloc, resp.body);
+        return try serde.json.fromSlice(models.AssociatedWorkItemList, alloc, resp.body);
     }
     /// Returns changesets for a given list of changeset Ids.
-    pub fn getBatchedChangesets(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.TfvcChangesetsRequestData) ![]const models.TfvcChangesetRef {
+    pub fn getBatchedChangesets(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.TfvcChangesetsRequestData) !models.TfvcChangesetRefList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -275,10 +275,10 @@ pub const Changesets = struct {
             core.pager.logHttpError("Changesets.getBatchedChangesets", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TfvcChangesetRef, alloc, resp.body);
+        return try serde.json.fromSlice(models.TfvcChangesetRefList, alloc, resp.body);
     }
     /// Retrieve Tfvc Changesets Note: This is a new version of the GetChangesets API that doesn't expose the unneeded queryParams present in the 1.0 version of the API.
-    pub fn getChangesets(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, max_comment_length: ?i32, @"$skip": ?i32, @"$top": ?i32, @"$orderby": ?[]const u8, search_criteria_author: ?[]const u8, search_criteria_follow_renames: ?bool, search_criteria_from_date: ?[]const u8, search_criteria_from_id: ?i32, search_criteria_include_links: ?bool, search_criteria_item_path: ?[]const u8, search_criteria_mappings: ?[]const models.TfvcMappingFilter, search_criteria_to_date: ?[]const u8, search_criteria_to_id: ?i32) ![]const models.TfvcChangesetRef {
+    pub fn getChangesets(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, max_comment_length: ?i32, @"$skip": ?i32, @"$top": ?i32, @"$orderby": ?[]const u8, search_criteria_author: ?[]const u8, search_criteria_follow_renames: ?bool, search_criteria_from_date: ?[]const u8, search_criteria_from_id: ?i32, search_criteria_include_links: ?bool, search_criteria_item_path: ?[]const u8, search_criteria_mappings: ?[]const models.TfvcMappingFilter, search_criteria_to_date: ?[]const u8, search_criteria_to_id: ?i32) !models.TfvcChangesetRefList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -392,7 +392,7 @@ pub const Changesets = struct {
             core.pager.logHttpError("Changesets.getChangesets", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TfvcChangesetRef, alloc, resp.body);
+        return try serde.json.fromSlice(models.TfvcChangesetRefList, alloc, resp.body);
     }
     /// Create a new changeset. Accepts TfvcChangeset as JSON body
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.TfvcChangeset) !models.TfvcChangesetRef {
@@ -576,7 +576,7 @@ pub const Labels = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get items under a label.
-    pub fn getLabelItems(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, label_id: []const u8, @"$top": ?i32, @"$skip": ?i32) ![]const models.TfvcItem {
+    pub fn getLabelItems(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, label_id: []const u8, @"$top": ?i32, @"$skip": ?i32) !models.TfvcItemList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -615,10 +615,10 @@ pub const Labels = struct {
             core.pager.logHttpError("Labels.getLabelItems", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TfvcItem, alloc, resp.body);
+        return try serde.json.fromSlice(models.TfvcItemList, alloc, resp.body);
     }
     /// Get a collection of shallow label references.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, request_data_include_links: ?bool, request_data_item_label_filter: ?[]const u8, request_data_label_scope: ?[]const u8, request_data_max_item_count: ?i32, request_data_name: ?[]const u8, request_data_owner: ?[]const u8, @"$top": ?i32, @"$skip": ?i32) ![]const models.TfvcLabelRef {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, request_data_include_links: ?bool, request_data_item_label_filter: ?[]const u8, request_data_label_scope: ?[]const u8, request_data_max_item_count: ?i32, request_data_name: ?[]const u8, request_data_owner: ?[]const u8, @"$top": ?i32, @"$skip": ?i32) !models.TfvcLabelRefList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -695,7 +695,7 @@ pub const Labels = struct {
             core.pager.logHttpError("Labels.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TfvcLabelRef, alloc, resp.body);
+        return try serde.json.fromSlice(models.TfvcLabelRefList, alloc, resp.body);
     }
     /// Get a single deep label.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, label_id: []const u8, project: []const u8, request_data_include_links: ?bool, request_data_item_label_filter: ?[]const u8, request_data_label_scope: ?[]const u8, request_data_max_item_count: ?i32, request_data_name: ?[]const u8, request_data_owner: ?[]const u8) !models.TfvcLabel {
@@ -849,7 +849,7 @@ pub const Shelvesets = struct {
         return try serde.json.fromSlice(models.TfvcShelveset, alloc, resp.body);
     }
     /// Get changes included in a shelveset.
-    pub fn getShelvesetChanges(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, shelveset_id: []const u8, @"$top": ?i32, @"$skip": ?i32) ![]const models.TfvcChange {
+    pub fn getShelvesetChanges(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, shelveset_id: []const u8, @"$top": ?i32, @"$skip": ?i32) !models.TfvcChangeList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -890,10 +890,10 @@ pub const Shelvesets = struct {
             core.pager.logHttpError("Shelvesets.getShelvesetChanges", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TfvcChange, alloc, resp.body);
+        return try serde.json.fromSlice(models.TfvcChangeList, alloc, resp.body);
     }
     /// Get work items associated with a shelveset.
-    pub fn getShelvesetWorkItems(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, shelveset_id: []const u8) ![]const models.AssociatedWorkItem {
+    pub fn getShelvesetWorkItems(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, shelveset_id: []const u8) !models.AssociatedWorkItemList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -924,7 +924,7 @@ pub const Shelvesets = struct {
             core.pager.logHttpError("Shelvesets.getShelvesetWorkItems", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.AssociatedWorkItem, alloc, resp.body);
+        return try serde.json.fromSlice(models.AssociatedWorkItemList, alloc, resp.body);
     }
 };
 
@@ -933,7 +933,7 @@ pub const Branches = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get branch hierarchies below the specified scopePath
-    pub fn getBranchRefs(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, scope_path: []const u8, project: []const u8, include_deleted: ?bool, include_links: ?bool) ![]const models.TfvcBranchRef {
+    pub fn getBranchRefs(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, scope_path: []const u8, project: []const u8, include_deleted: ?bool, include_links: ?bool) !models.TfvcBranchRefList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -976,7 +976,7 @@ pub const Branches = struct {
             core.pager.logHttpError("Branches.getBranchRefs", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TfvcBranchRef, alloc, resp.body);
+        return try serde.json.fromSlice(models.TfvcBranchRefList, alloc, resp.body);
     }
 };
 
@@ -1047,7 +1047,7 @@ pub const Items = struct {
         }
     }
     /// Get a list of Tfvc items
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, scope_path: ?[]const u8, recursion_level: ?enums.ListRequestRecursionLevel, include_links: ?bool, version_descriptor_version: ?[]const u8, @"version_descriptor.version_option": ?enums.ListRequestVersionDescriptorVersionOption, @"version_descriptor.version_type": ?enums.ListRequestVersionDescriptorVersionType) ![]const models.TfvcItem {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, scope_path: ?[]const u8, recursion_level: ?enums.ListRequestRecursionLevel, include_links: ?bool, version_descriptor_version: ?[]const u8, @"version_descriptor.version_option": ?enums.ListRequestVersionDescriptorVersionOption, @"version_descriptor.version_type": ?enums.ListRequestVersionDescriptorVersionType) !models.TfvcItemList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1116,6 +1116,6 @@ pub const Items = struct {
             core.pager.logHttpError("Items.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TfvcItem, alloc, resp.body);
+        return try serde.json.fromSlice(models.TfvcItemList, alloc, resp.body);
     }
 };

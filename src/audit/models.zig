@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `AuditActionInfo` as returned by Azure DevOps.
+pub const AuditActionInfoList = struct {
+    count: ?i32 = null,
+    value: ?[]const AuditActionInfo = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const AuditActionInfo = struct {
     /// The action id for the event, i.e Git.CreateRepo, Project.RenameProject
     action_id: ?[]const u8 = null,
@@ -90,6 +100,16 @@ pub const DecoratedAuditLogEntry = struct {
 };
 
 pub const DecoratedAuditLogEntryDatum = struct {
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `AuditStream` as returned by Azure DevOps.
+pub const AuditStreamList = struct {
+    count: ?i32 = null,
+    value: ?[]const AuditStream = null,
+
     pub const serde = .{
         .rename_all = .camel_case,
     };

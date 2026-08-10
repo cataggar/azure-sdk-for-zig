@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `Consumer` as returned by Azure DevOps.
+pub const ConsumerList = struct {
+    count: ?i32 = null,
+    value: ?[]const Consumer = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Defines the data contract of a consumer.
 pub const Consumer = struct {
     links: ?ReferenceLinks = null,
@@ -207,6 +217,16 @@ pub const ExternalConfigurationDescriptor = struct {
     edit_subscription_property_name: ?[]const u8 = null,
     /// True if the external configuration applies only to hosted.
     hosted_only: ?bool = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `ConsumerAction` as returned by Azure DevOps.
+pub const ConsumerActionList = struct {
+    count: ?i32 = null,
+    value: ?[]const ConsumerAction = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -482,6 +502,26 @@ pub const NotificationResultsSummaryDetail = struct {
     };
 };
 
+/// A collection of `Notification` as returned by Azure DevOps.
+pub const NotificationList = struct {
+    count: ?i32 = null,
+    value: ?[]const Notification = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `Publisher` as returned by Azure DevOps.
+pub const PublisherList = struct {
+    count: ?i32 = null,
+    value: ?[]const Publisher = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Defines the data contract of an event publisher.
 pub const Publisher = struct {
     links: ?ReferenceLinks = null,
@@ -530,6 +570,16 @@ pub const EventTypeDescriptor = struct {
     };
 };
 
+/// A collection of `EventTypeDescriptor` as returned by Azure DevOps.
+pub const EventTypeDescriptorList = struct {
+    count: ?i32 = null,
+    value: ?[]const EventTypeDescriptor = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const InputValuesQuery = struct {
     current_values: ?std.json.ArrayHashMap([]const u8) = null,
     /// The input values to return on input, and the result from the consumer on output.
@@ -556,6 +606,16 @@ pub const PublishersQuery = struct {
     publisher_inputs: ?std.json.ArrayHashMap([]const u8) = null,
     /// Results from the query
     results: ?[]const Publisher = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `Subscription` as returned by Azure DevOps.
+pub const SubscriptionList = struct {
+    count: ?i32 = null,
+    value: ?[]const Subscription = null,
 
     pub const serde = .{
         .rename_all = .camel_case,

@@ -151,7 +151,7 @@ pub const Environments = struct {
             headers: struct {
                 x_ms_continuationtoken: ?[]const u8 = null,
             },
-            body: []const models.EnvironmentInstance,
+            body: models.EnvironmentInstanceList,
         },
     };
     /// Get all environments.
@@ -206,7 +206,7 @@ pub const Environments = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.EnvironmentInstance, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.EnvironmentInstanceList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{
@@ -382,7 +382,7 @@ pub const Environmentdeploymentrecords = struct {
             headers: struct {
                 x_ms_continuationtoken: ?[]const u8 = null,
             },
-            body: []const models.EnvironmentDeploymentExecutionRecord,
+            body: models.EnvironmentDeploymentExecutionRecordList,
         },
     };
     /// Get environment deployment execution history
@@ -432,7 +432,7 @@ pub const Environmentdeploymentrecords = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.EnvironmentDeploymentExecutionRecord, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.EnvironmentDeploymentExecutionRecordList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{
@@ -613,7 +613,7 @@ pub const Vmresource = struct {
             headers: struct {
                 x_ms_continuationtoken: ?[]const u8 = null,
             },
-            body: []const models.VirtualMachineResource,
+            body: models.VirtualMachineResourceList,
         },
     };
     /// Get Virtual Machine Resources
@@ -677,7 +677,7 @@ pub const Vmresource = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.VirtualMachineResource, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.VirtualMachineResourceList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{

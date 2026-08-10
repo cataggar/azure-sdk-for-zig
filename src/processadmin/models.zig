@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `AdminBehavior` as returned by Azure DevOps.
+pub const AdminBehaviorList = struct {
+    count: ?i32 = null,
+    value: ?[]const AdminBehavior = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Describes an admin behavior for a process.
 pub const AdminBehavior = struct {
     /// Is the behavior abstract (i.e. can not be associated with any work item type).

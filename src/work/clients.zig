@@ -305,7 +305,7 @@ pub const Boardcolumns = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get available board columns in a project
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.BoardSuggestedValue {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.BoardSuggestedValueList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -334,7 +334,7 @@ pub const Boardcolumns = struct {
             core.pager.logHttpError("Boardcolumns.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.BoardSuggestedValue, alloc, resp.body);
+        return try serde.json.fromSlice(models.BoardSuggestedValueList, alloc, resp.body);
     }
 };
 
@@ -343,7 +343,7 @@ pub const Boardrows = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get available board rows in a project
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.BoardSuggestedValue {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.BoardSuggestedValueList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -372,7 +372,7 @@ pub const Boardrows = struct {
             core.pager.logHttpError("Boardrows.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.BoardSuggestedValue, alloc, resp.body);
+        return try serde.json.fromSlice(models.BoardSuggestedValueList, alloc, resp.body);
     }
 };
 
@@ -421,7 +421,7 @@ pub const Plans = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get the information for all the plans configured for the given team
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.Plan {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.PlanList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -450,7 +450,7 @@ pub const Plans = struct {
             core.pager.logHttpError("Plans.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Plan, alloc, resp.body);
+        return try serde.json.fromSlice(models.PlanList, alloc, resp.body);
     }
     /// Add a new plan for the team
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.CreatePlan) !models.Plan {
@@ -659,7 +659,7 @@ pub const PredefinedQueries = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieves the set of known queries
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.PredefinedQuery {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.PredefinedQueryList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -688,7 +688,7 @@ pub const PredefinedQueries = struct {
             core.pager.logHttpError("PredefinedQueries.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.PredefinedQuery, alloc, resp.body);
+        return try serde.json.fromSlice(models.PredefinedQueryList, alloc, resp.body);
     }
     /// Retrieves the specified predefined query including the query results
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, id: []const u8, @"$top": ?i32, include_completed: ?bool) !models.PredefinedQuery {
@@ -819,7 +819,7 @@ pub const Backlogs = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// List all backlog levels
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8) ![]const models.BacklogLevelConfiguration {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8) !models.BacklogLevelConfigurationList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -850,7 +850,7 @@ pub const Backlogs = struct {
             core.pager.logHttpError("Backlogs.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.BacklogLevelConfiguration, alloc, resp.body);
+        return try serde.json.fromSlice(models.BacklogLevelConfigurationList, alloc, resp.body);
     }
     /// Get a list of work items within a backlog level
     pub fn getBacklogLevelWorkItems(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, backlog_id: []const u8) !models.BacklogLevelWorkItems {
@@ -931,7 +931,7 @@ pub const Boards = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get boards
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8) ![]const models.BoardReference {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8) !models.BoardReferenceList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -962,7 +962,7 @@ pub const Boards = struct {
             core.pager.logHttpError("Boards.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.BoardReference, alloc, resp.body);
+        return try serde.json.fromSlice(models.BoardReferenceList, alloc, resp.body);
     }
     /// Get board
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, id: []const u8, team: []const u8) !models.Board {
@@ -1610,7 +1610,7 @@ pub const Charts = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get board charts
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8) ![]const models.BoardChartReference {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8) !models.BoardChartReferenceList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1643,7 +1643,7 @@ pub const Charts = struct {
             core.pager.logHttpError("Charts.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.BoardChartReference, alloc, resp.body);
+        return try serde.json.fromSlice(models.BoardChartReferenceList, alloc, resp.body);
     }
     /// Get a board chart
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, name: []const u8, team: []const u8) !models.BoardChart {
@@ -1732,7 +1732,7 @@ pub const Columns = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get columns on a board
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8) ![]const models.BoardColumn {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8) !models.BoardColumnList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1765,10 +1765,10 @@ pub const Columns = struct {
             core.pager.logHttpError("Columns.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.BoardColumn, alloc, resp.body);
+        return try serde.json.fromSlice(models.BoardColumnList, alloc, resp.body);
     }
     /// Update columns on a board
-    pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8, body: []const models.BoardColumn) ![]const models.BoardColumn {
+    pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8, body: []const models.BoardColumn) !models.BoardColumnList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1805,7 +1805,7 @@ pub const Columns = struct {
             core.pager.logHttpError("Columns.update", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.BoardColumn, alloc, resp.body);
+        return try serde.json.fromSlice(models.BoardColumnList, alloc, resp.body);
     }
 };
 
@@ -1814,7 +1814,7 @@ pub const Rows = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get rows on a board
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8) ![]const models.BoardRow {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8) !models.BoardRowList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1847,10 +1847,10 @@ pub const Rows = struct {
             core.pager.logHttpError("Rows.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.BoardRow, alloc, resp.body);
+        return try serde.json.fromSlice(models.BoardRowList, alloc, resp.body);
     }
     /// Update rows on a board
-    pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8, body: []const models.BoardRow) ![]const models.BoardRow {
+    pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8, body: []const models.BoardRow) !models.BoardRowList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1887,7 +1887,7 @@ pub const Rows = struct {
             core.pager.logHttpError("Rows.update", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.BoardRow, alloc, resp.body);
+        return try serde.json.fromSlice(models.BoardRowList, alloc, resp.body);
     }
 };
 
@@ -1896,7 +1896,7 @@ pub const Boardparents = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Returns the list of parent field filter model for the given list of workitem ids
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, child_backlog_context_category_ref_name: []const u8, workitem_ids: []const u8, team: []const u8) ![]const models.ParentChildWIMap {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, child_backlog_context_category_ref_name: []const u8, workitem_ids: []const u8, team: []const u8) !models.ParentChildWIMapList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1935,7 +1935,7 @@ pub const Boardparents = struct {
             core.pager.logHttpError("Boardparents.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ParentChildWIMap, alloc, resp.body);
+        return try serde.json.fromSlice(models.ParentChildWIMapList, alloc, resp.body);
     }
 };
 
@@ -1944,7 +1944,7 @@ pub const Workitemsorder = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Reorder Sprint Backlog/Taskboard Work Items
-    pub fn reorderIterationWorkItems(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, iteration_id: []const u8, body: models.ReorderOperation) ![]const models.ReorderResult {
+    pub fn reorderIterationWorkItems(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, iteration_id: []const u8, body: models.ReorderOperation) !models.ReorderResultList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1981,10 +1981,10 @@ pub const Workitemsorder = struct {
             core.pager.logHttpError("Workitemsorder.reorderIterationWorkItems", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ReorderResult, alloc, resp.body);
+        return try serde.json.fromSlice(models.ReorderResultList, alloc, resp.body);
     }
     /// Reorder Product Backlog/Boards Work Items
-    pub fn reorderBacklogWorkItems(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, body: models.ReorderOperation) ![]const models.ReorderResult {
+    pub fn reorderBacklogWorkItems(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, body: models.ReorderOperation) !models.ReorderResultList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2019,7 +2019,7 @@ pub const Workitemsorder = struct {
             core.pager.logHttpError("Workitemsorder.reorderBacklogWorkItems", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ReorderResult, alloc, resp.body);
+        return try serde.json.fromSlice(models.ReorderResultList, alloc, resp.body);
     }
 };
 
@@ -2106,7 +2106,7 @@ pub const TaskboardWorkItems = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
 
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, iteration_id: []const u8) ![]const models.TaskboardWorkItemColumn {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, iteration_id: []const u8) !models.TaskboardWorkItemColumnList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2139,7 +2139,7 @@ pub const TaskboardWorkItems = struct {
             core.pager.logHttpError("TaskboardWorkItems.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TaskboardWorkItemColumn, alloc, resp.body);
+        return try serde.json.fromSlice(models.TaskboardWorkItemColumnList, alloc, resp.body);
     }
 
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, iteration_id: []const u8, work_item_id: i32, body: models.UpdateTaskboardWorkItemColumn) !void {
@@ -2267,7 +2267,7 @@ pub const Iterations = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get a team's iterations using timeframe filter
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, @"$timeframe": ?[]const u8) ![]const models.TeamSettingsIteration {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, @"$timeframe": ?[]const u8) !models.TeamSettingsIterationList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2305,7 +2305,7 @@ pub const Iterations = struct {
             core.pager.logHttpError("Iterations.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TeamSettingsIteration, alloc, resp.body);
+        return try serde.json.fromSlice(models.TeamSettingsIterationList, alloc, resp.body);
     }
     /// Add an iteration to the team
     pub fn postTeamIteration(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, body: models.TeamSettingsIteration) !models.TeamSettingsIteration {
@@ -2495,7 +2495,7 @@ pub const Capacities = struct {
         return try serde.json.fromSlice(models.TeamCapacity, alloc, resp.body);
     }
     /// Replace a team's capacity
-    pub fn replaceCapacitiesWithIdentityRef(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, iteration_id: []const u8, team: []const u8, body: []const models.TeamMemberCapacityIdentityRef) ![]const models.TeamMemberCapacityIdentityRef {
+    pub fn replaceCapacitiesWithIdentityRef(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, iteration_id: []const u8, team: []const u8, body: []const models.TeamMemberCapacityIdentityRef) !models.TeamMemberCapacityIdentityRefList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2532,7 +2532,7 @@ pub const Capacities = struct {
             core.pager.logHttpError("Capacities.replaceCapacitiesWithIdentityRef", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TeamMemberCapacityIdentityRef, alloc, resp.body);
+        return try serde.json.fromSlice(models.TeamMemberCapacityIdentityRefList, alloc, resp.body);
     }
     /// Get a team member's capacity
     pub fn getCapacityWithIdentityRef(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, iteration_id: []const u8, team_member_id: []const u8, team: []const u8) !models.TeamMemberCapacityIdentityRef {

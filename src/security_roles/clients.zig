@@ -113,7 +113,7 @@ pub const Roleassignments = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get role assignments for the resource
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, scope_id: []const u8, resource_id: []const u8, organization: []const u8) ![]const models.RoleAssignment {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, scope_id: []const u8, resource_id: []const u8, organization: []const u8) !models.RoleAssignmentList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, scope_id);
         defer alloc.free(encoded_path_0);
@@ -144,7 +144,7 @@ pub const Roleassignments = struct {
             core.pager.logHttpError("Roleassignments.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.RoleAssignment, alloc, resp.body);
+        return try serde.json.fromSlice(models.RoleAssignmentList, alloc, resp.body);
     }
 
     pub fn removeRoleAssignments(self: *@This(), alloc: std.mem.Allocator, scope_id: []const u8, resource_id: []const u8, organization: []const u8, body: []const []const u8) !void {
@@ -184,7 +184,7 @@ pub const Roleassignments = struct {
         return;
     }
     /// Set role assignments on a resource
-    pub fn setRoleAssignments(self: *@This(), alloc: std.mem.Allocator, scope_id: []const u8, resource_id: []const u8, organization: []const u8, limit_to_caller_identity_domain: ?bool, body: []const models.UserRoleAssignmentRef) ![]const models.RoleAssignment {
+    pub fn setRoleAssignments(self: *@This(), alloc: std.mem.Allocator, scope_id: []const u8, resource_id: []const u8, organization: []const u8, limit_to_caller_identity_domain: ?bool, body: []const models.UserRoleAssignmentRef) !models.RoleAssignmentList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, scope_id);
         defer alloc.free(encoded_path_0);
@@ -224,7 +224,7 @@ pub const Roleassignments = struct {
             core.pager.logHttpError("Roleassignments.setRoleAssignments", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.RoleAssignment, alloc, resp.body);
+        return try serde.json.fromSlice(models.RoleAssignmentList, alloc, resp.body);
     }
     /// Remove the role assignment on a resource
     pub fn removeRoleAssignment(self: *@This(), alloc: std.mem.Allocator, scope_id: []const u8, resource_id: []const u8, identity_id: []const u8, organization: []const u8) !void {
@@ -308,7 +308,7 @@ pub const Roledefinitions = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
 
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, scope_id: []const u8, organization: []const u8) ![]const models.SecurityRole {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, scope_id: []const u8, organization: []const u8) !models.SecurityRoleList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, scope_id);
         defer alloc.free(encoded_path_0);
@@ -337,6 +337,6 @@ pub const Roledefinitions = struct {
             core.pager.logHttpError("Roledefinitions.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.SecurityRole, alloc, resp.body);
+        return try serde.json.fromSlice(models.SecurityRoleList, alloc, resp.body);
     }
 };

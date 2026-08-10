@@ -393,7 +393,7 @@ pub const Repositories = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve deleted git repositories.
-    pub fn getDeletedRepositories(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.GitDeletedRepository {
+    pub fn getDeletedRepositories(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.GitDeletedRepositoryList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -422,10 +422,10 @@ pub const Repositories = struct {
             core.pager.logHttpError("Repositories.getDeletedRepositories", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitDeletedRepository, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitDeletedRepositoryList, alloc, resp.body);
     }
     /// Retrieve soft-deleted git repositories from the recycle bin.
-    pub fn getRecycleBinRepositories(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.GitDeletedRepository {
+    pub fn getRecycleBinRepositories(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.GitDeletedRepositoryList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -454,7 +454,7 @@ pub const Repositories = struct {
             core.pager.logHttpError("Repositories.getRecycleBinRepositories", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitDeletedRepository, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitDeletedRepositoryList, alloc, resp.body);
     }
     /// Destroy (hard delete) a soft-deleted Git repository.
     pub fn deleteRepositoryFromRecycleBin(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: []const u8) !void {
@@ -528,7 +528,7 @@ pub const Repositories = struct {
         return try serde.json.fromSlice(models.GitRepository, alloc, resp.body);
     }
     /// Retrieve git repositories.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, include_links: ?bool, include_all_urls: ?bool, include_hidden: ?bool) ![]const models.GitRepository {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, include_links: ?bool, include_all_urls: ?bool, include_hidden: ?bool) !models.GitRepositoryList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -572,7 +572,7 @@ pub const Repositories = struct {
             core.pager.logHttpError("Repositories.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitRepository, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitRepositoryList, alloc, resp.body);
     }
     /// Create a git repository in a team project.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, source_ref: ?[]const u8, body: models.GitRepositoryCreateOptions) !models.GitRepository {
@@ -729,7 +729,7 @@ pub const RefsFavorites = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Gets the refs favorites for a repo and an identity.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: ?[]const u8, identity_id: ?[]const u8) ![]const models.GitRefFavorite {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: ?[]const u8, identity_id: ?[]const u8) !models.GitRefFavoriteList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -772,7 +772,7 @@ pub const RefsFavorites = struct {
             core.pager.logHttpError("RefsFavorites.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitRefFavorite, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitRefFavoriteList, alloc, resp.body);
     }
     /// Creates a ref favorite
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.GitRefFavorite) !models.GitRefFavorite {
@@ -884,7 +884,7 @@ pub const RefsFavoritesForProject = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
 
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, identity_id: ?[]const u8) ![]const models.GitRefFavorite {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, identity_id: ?[]const u8) !models.GitRefFavoriteList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -920,7 +920,7 @@ pub const RefsFavoritesForProject = struct {
             core.pager.logHttpError("RefsFavoritesForProject.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitRefFavorite, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitRefFavoriteList, alloc, resp.body);
     }
 };
 
@@ -935,7 +935,7 @@ pub const PolicyConfigurations = struct {
             headers: struct {
                 x_ms_continuationtoken: ?[]const u8 = null,
             },
-            body: []const models.PolicyConfiguration,
+            body: models.PolicyConfigurationList,
         },
     };
     /// Retrieve a list of policy configurations by a given set of scope/filtering criteria. Azure Repos uses two types of policies to protect your code: **Repository policies (push policies)** check every push to your repository. They validate things like file size limits, path restrictions, or commit requirements. When someone pushes code that violates these rules, the push gets rejected - no matter which branch they're pushing to. **Branch policies (PR policies)** protect specific branches by requiring pull requests. When you set a branch policy on `main`, for example, nobody can push directly to `main` anymore. They must create a pull request instead, which can then require reviews, builds, or other checks to pass first. ## How Policies Work with Your Project Structure Both types of policies can be defined at different levels in your project hierarchy. A policy defined at the project level affects all repositories in that project. A policy defined at the repository level affects just that repository. A branch policy can even be defined at the project level to protect all branches with the same name - like protecting all `main` branches across your entire project with one policy. ### Branch Patterns and Wildcards Branches in Git follow a folder-like structure. You might have branches like: - `refs/heads/main` - `refs/heads/releases/1.0.0` - `refs/heads/releases/2.0.0` - `refs/heads/features/new-login` You can create policies for specific branches or for groups of branches using wildcards. When you create a policy for `refs/heads/releases/*`, it protects all branches in the `releases` 'folder' - both the ones that exist now and any new release branches you create later. This pattern matching works recursively, so `refs/heads/releases/*` also covers branches like `refs/heads/releases/v1/hotfix`. This helps you set up consistent protection without creating the same policy over and over. For example, you can require two reviewers for all release branches with just one policy. ## Understanding Policy Inheritance When you query for policies, this endpoint shows you what policies are actually enforcing rules at your specified scope. This includes policies inherited from higher levels. For example, if you query for policies on a specific branch, you get: - Branch policies for that exact branch - Branch policies with wildcards that match your branch - Repository policies for that repo - Any applicable project-level policies Everything that protects that branch shows up in your results. ## How to Query for Policies The `repositoryId` and `refName` parameters let you focus on specific parts of your project. Here's what you get with different combinations: **Both `repositoryId` and `refName` specified:** - When `refName` is a specific branch name: You see all policies affecting that specific branch. This includes exact branch policies, wildcard branch policies that match, repository policies for that repo, and any project-level policies. - When `refName` is `~all`: You see every policy that affects any branch in that repository. This special value gives you the same results as if you called this API once for every single branch in the repo and then combined all the results (removing duplicates). You get all branch-specific policies, all wildcard policies, all repository policies, and all inherited project-level policies that apply to this repository. This helps you see the complete picture of what protects all your branches without making multiple API calls. **Only `repositoryId` specified:** You see policies that apply to the repository as a whole - repository policies and inherited project-level repository policies. Branch policies aren't included because they don't affect the whole repository. **Neither parameter specified:** You see only project-level repository policies. Branch policies defined at the project level aren't included, even though they exist at the project level. This happens because branch policies need a branch context to be meaningful - without specifying a repository or branch name, the API only returns policies that apply to repositories as a whole. **Only `refName` specified:** You see project-level branch policies for branches with that name (like all `main` branch policies defined at project level), plus project-level repository policies. You can add the `policyType` parameter to filter for a specific type of policy, such as 'Minimum number of reviewers' or 'File size restriction'. This parameter accepts the policy type ID and filters the results to show only that specific policy type. ## Common Scenarios - **'What protects my main branch?'** - Use `repositoryId` + `refName=refs/heads/main` - **'What protects all my release branches?'** - Use `repositoryId` + `refName=refs/heads/releases/*` - **'Show me every policy that affects any branch in this repository'** - Use `repositoryId` + `refName=~all` - **'What repository policies apply to this repo?'** - Use `repositoryId` only - **'What file size limits apply to this repository?'** - Use `repositoryId` with the `policyType` for file size restrictions - **'What project-wide repository policies do we have?'** - Don't specify `repositoryId` or `refName` - **'Which policies apply to develop branches across all repositories?'** - Use `refName=refs/heads/develop`
@@ -1004,7 +1004,7 @@ pub const PolicyConfigurations = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.PolicyConfiguration, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.PolicyConfigurationList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{
@@ -1026,7 +1026,7 @@ pub const PullRequests = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve all pull requests matching a specified criteria. Please note that description field will be truncated up to 400 symbols in the result.
-    pub fn getPullRequestsByProject(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, search_criteria_creator_id: ?[]const u8, search_criteria_include_links: ?bool, search_criteria_labels: ?[]const []const u8, search_criteria_max_time: ?[]const u8, search_criteria_min_time: ?[]const u8, @"search_criteria.query_time_range_type": ?enums.GetPullRequestsByProjectRequestSearchCriteriaQueryTimeRangeType, search_criteria_repository_id: ?[]const u8, search_criteria_reviewer_id: ?[]const u8, search_criteria_source_ref_name: ?[]const u8, search_criteria_source_repository_id: ?[]const u8, @"search_criteria.status": ?enums.GetPullRequestsByProjectRequestSearchCriteriaStatus, @"search_criteria.tags_filter_operator": ?enums.GetPullRequestsByProjectRequestSearchCriteriaTagsFilterOperator, search_criteria_target_ref_name: ?[]const u8, search_criteria_title: ?[]const u8, max_comment_length: ?i32, @"$skip": ?i32, @"$top": ?i32) ![]const models.GitPullRequest {
+    pub fn getPullRequestsByProject(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, search_criteria_creator_id: ?[]const u8, search_criteria_include_links: ?bool, search_criteria_labels: ?[]const []const u8, search_criteria_max_time: ?[]const u8, search_criteria_min_time: ?[]const u8, @"search_criteria.query_time_range_type": ?enums.GetPullRequestsByProjectRequestSearchCriteriaQueryTimeRangeType, search_criteria_repository_id: ?[]const u8, search_criteria_reviewer_id: ?[]const u8, search_criteria_source_ref_name: ?[]const u8, search_criteria_source_repository_id: ?[]const u8, @"search_criteria.status": ?enums.GetPullRequestsByProjectRequestSearchCriteriaStatus, @"search_criteria.tags_filter_operator": ?enums.GetPullRequestsByProjectRequestSearchCriteriaTagsFilterOperator, search_criteria_target_ref_name: ?[]const u8, search_criteria_title: ?[]const u8, max_comment_length: ?i32, @"$skip": ?i32, @"$top": ?i32) !models.GitPullRequestList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1174,7 +1174,7 @@ pub const PullRequests = struct {
             core.pager.logHttpError("PullRequests.getPullRequestsByProject", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitPullRequest, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitPullRequestList, alloc, resp.body);
     }
     /// Retrieve a pull request.
     pub fn getPullRequestById(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pull_request_id: i32, project: []const u8) !models.GitPullRequest {
@@ -1211,7 +1211,7 @@ pub const PullRequests = struct {
         return try serde.json.fromSlice(models.GitPullRequest, alloc, resp.body);
     }
     /// Retrieve all pull requests matching a specified criteria. Please note that description field will be truncated up to 400 symbols in the result.
-    pub fn getPullRequests(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, search_criteria_creator_id: ?[]const u8, search_criteria_include_links: ?bool, search_criteria_labels: ?[]const []const u8, search_criteria_max_time: ?[]const u8, search_criteria_min_time: ?[]const u8, @"search_criteria.query_time_range_type": ?enums.GetPullRequestsRequestSearchCriteriaQueryTimeRangeType, search_criteria_repository_id: ?[]const u8, search_criteria_reviewer_id: ?[]const u8, search_criteria_source_ref_name: ?[]const u8, search_criteria_source_repository_id: ?[]const u8, @"search_criteria.status": ?enums.GetPullRequestsRequestSearchCriteriaStatus, @"search_criteria.tags_filter_operator": ?enums.GetPullRequestsRequestSearchCriteriaTagsFilterOperator, search_criteria_target_ref_name: ?[]const u8, search_criteria_title: ?[]const u8, max_comment_length: ?i32, @"$skip": ?i32, @"$top": ?i32) ![]const models.GitPullRequest {
+    pub fn getPullRequests(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, search_criteria_creator_id: ?[]const u8, search_criteria_include_links: ?bool, search_criteria_labels: ?[]const []const u8, search_criteria_max_time: ?[]const u8, search_criteria_min_time: ?[]const u8, @"search_criteria.query_time_range_type": ?enums.GetPullRequestsRequestSearchCriteriaQueryTimeRangeType, search_criteria_repository_id: ?[]const u8, search_criteria_reviewer_id: ?[]const u8, search_criteria_source_ref_name: ?[]const u8, search_criteria_source_repository_id: ?[]const u8, @"search_criteria.status": ?enums.GetPullRequestsRequestSearchCriteriaStatus, @"search_criteria.tags_filter_operator": ?enums.GetPullRequestsRequestSearchCriteriaTagsFilterOperator, search_criteria_target_ref_name: ?[]const u8, search_criteria_title: ?[]const u8, max_comment_length: ?i32, @"$skip": ?i32, @"$top": ?i32) !models.GitPullRequestList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1361,7 +1361,7 @@ pub const PullRequests = struct {
             core.pager.logHttpError("PullRequests.getPullRequests", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitPullRequest, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitPullRequestList, alloc, resp.body);
     }
     /// Create a pull request.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, supports_iterations: ?bool, body: models.GitPullRequest) !models.GitPullRequest {
@@ -1876,7 +1876,7 @@ pub const Commits = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve a list of commits associated with a particular push.
-    pub fn getPushCommits(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, push_id: i32, project: []const u8, top: ?i32, skip: ?i32, include_links: ?bool) ![]const models.GitCommitRef {
+    pub fn getPushCommits(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, push_id: i32, project: []const u8, top: ?i32, skip: ?i32, include_links: ?bool) !models.GitCommitRefList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1924,7 +1924,7 @@ pub const Commits = struct {
             core.pager.logHttpError("Commits.getPushCommits", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitCommitRef, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitCommitRefList, alloc, resp.body);
     }
     /// Retrieve a particular commit.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, commit_id: []const u8, repository_id: []const u8, project: []const u8, change_count: ?i32) !models.GitCommit {
@@ -2014,7 +2014,7 @@ pub const Commits = struct {
         return try serde.json.fromSlice(models.GitCommitChanges, alloc, resp.body);
     }
     /// Retrieve git commits for a project matching the search criteria
-    pub fn getCommitsBatch(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, @"$skip": ?i32, @"$top": ?i32, include_statuses: ?bool, body: models.GitQueryCommitsCriteria) ![]const models.GitCommitRef {
+    pub fn getCommitsBatch(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, @"$skip": ?i32, @"$top": ?i32, include_statuses: ?bool, body: models.GitQueryCommitsCriteria) !models.GitCommitRefList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2064,7 +2064,7 @@ pub const Commits = struct {
             core.pager.logHttpError("Commits.getCommitsBatch", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitCommitRef, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitCommitRefList, alloc, resp.body);
     }
 };
 
@@ -2073,7 +2073,7 @@ pub const Statuses = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get statuses associated with the Git commit.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, commit_id: []const u8, repository_id: []const u8, project: []const u8, top: ?i32, skip: ?i32, latest_only: ?bool) ![]const models.GitStatus {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, commit_id: []const u8, repository_id: []const u8, project: []const u8, top: ?i32, skip: ?i32, latest_only: ?bool) !models.GitStatusList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2121,7 +2121,7 @@ pub const Statuses = struct {
             core.pager.logHttpError("Statuses.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitStatus, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitStatusList, alloc, resp.body);
     }
     /// Create Git commit status.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, commit_id: []const u8, repository_id: []const u8, project: []const u8, body: models.GitStatus) !models.GitStatus {
@@ -2267,7 +2267,7 @@ pub const ImportRequests = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve import requests for a repository.
-    pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: []const u8, include_abandoned: ?bool) ![]const models.GitImportRequest {
+    pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: []const u8, include_abandoned: ?bool) !models.GitImportRequestList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2303,7 +2303,7 @@ pub const ImportRequests = struct {
             core.pager.logHttpError("ImportRequests.query", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitImportRequest, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitImportRequestList, alloc, resp.body);
     }
     /// Create an import request.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: []const u8, body: models.GitImportRequest) !models.GitImportRequest {
@@ -2426,7 +2426,7 @@ pub const Items = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get Item Metadata and/or Content for a collection of items. The download parameter is to indicate whether the content should be available as a download or just sent as a stream in the response. Doesn't apply to zipped content which is always returned as a download.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, scope_path: ?[]const u8, recursion_level: ?enums.ListRequestRecursionLevel, include_content_metadata: ?bool, latest_processed_change: ?bool, download: ?bool, include_links: ?bool, @"$format": ?[]const u8, version_descriptor_version: ?[]const u8, @"version_descriptor.version_options": ?enums.ListRequestVersionDescriptorVersionOptions, @"version_descriptor.version_type": ?enums.ListRequestVersionDescriptorVersionType, zip_for_unix: ?bool) ![]const models.GitItem {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, scope_path: ?[]const u8, recursion_level: ?enums.ListRequestRecursionLevel, include_content_metadata: ?bool, latest_processed_change: ?bool, download: ?bool, include_links: ?bool, @"$format": ?[]const u8, version_descriptor_version: ?[]const u8, @"version_descriptor.version_options": ?enums.ListRequestVersionDescriptorVersionOptions, @"version_descriptor.version_type": ?enums.ListRequestVersionDescriptorVersionType, zip_for_unix: ?bool) !models.GitItemList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2524,7 +2524,7 @@ pub const Items = struct {
             core.pager.logHttpError("Items.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitItem, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitItemList, alloc, resp.body);
     }
     /// Retrieves a batch of items in a repo / project for a given list of paths or a long path
     pub fn getItemsBatch(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, body: models.GitItemRequestData) ![]const []const models.JsonValue {
@@ -2625,7 +2625,7 @@ pub const PullRequestAttachments = struct {
         },
     };
     /// Get a list of files attached to a given pull request.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8) ![]const models.Attachment {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8) !models.AttachmentList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2658,7 +2658,7 @@ pub const PullRequestAttachments = struct {
             core.pager.logHttpError("PullRequestAttachments.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Attachment, alloc, resp.body);
+        return try serde.json.fromSlice(models.AttachmentList, alloc, resp.body);
     }
     /// Delete a pull request attachment.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, file_name: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8) !void {
@@ -2805,7 +2805,7 @@ pub const PullRequestCommits = struct {
             headers: struct {
                 x_ms_continuationtoken: ?[]const u8 = null,
             },
-            body: []const models.GitCommitRef,
+            body: models.GitCommitRefList,
         },
     };
     /// Get the commits for the specified pull request.
@@ -2857,7 +2857,7 @@ pub const PullRequestCommits = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.GitCommitRef, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.GitCommitRefList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{
@@ -2873,7 +2873,7 @@ pub const PullRequestCommits = struct {
         }
     }
     /// Get the commits for the specified iteration of a pull request.
-    pub fn getPullRequestIterationCommits(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, iteration_id: i32, project: []const u8, top: ?i32, skip: ?i32) ![]const models.GitCommitRef {
+    pub fn getPullRequestIterationCommits(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, iteration_id: i32, project: []const u8, top: ?i32, skip: ?i32) !models.GitCommitRefList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2918,7 +2918,7 @@ pub const PullRequestCommits = struct {
             core.pager.logHttpError("PullRequestCommits.getPullRequestIterationCommits", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitCommitRef, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitCommitRefList, alloc, resp.body);
     }
 };
 
@@ -2927,7 +2927,7 @@ pub const PullRequestIterations = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get the list of iterations for the specified pull request.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, include_commits: ?bool) ![]const models.GitPullRequestIteration {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, include_commits: ?bool) !models.GitPullRequestIterationList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2965,7 +2965,7 @@ pub const PullRequestIterations = struct {
             core.pager.logHttpError("PullRequestIterations.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitPullRequestIteration, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitPullRequestIterationList, alloc, resp.body);
     }
     /// Get the specified iteration for a pull request.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, iteration_id: i32, project: []const u8) !models.GitPullRequestIteration {
@@ -3071,7 +3071,7 @@ pub const PullRequestIterationStatuses = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get all the statuses associated with a pull request iteration.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, iteration_id: i32, project: []const u8) ![]const models.GitPullRequestStatus {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, iteration_id: i32, project: []const u8) !models.GitPullRequestStatusList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -3106,7 +3106,7 @@ pub const PullRequestIterationStatuses = struct {
             core.pager.logHttpError("PullRequestIterationStatuses.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitPullRequestStatus, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitPullRequestStatusList, alloc, resp.body);
     }
     /// Update pull request iteration statuses collection. The only supported operation type is `remove`. This operation allows to delete multiple statuses in one call. The path of the `remove` operation should refer to the ID of the pull request status. For example `path='/1'` refers to the pull request status with ID 1.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, iteration_id: i32, project: []const u8, body: models.JsonPatchDocument) !void {
@@ -3277,7 +3277,7 @@ pub const PullRequestLabels = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get all the labels (tags) assigned to a pull request.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, project_id: ?[]const u8) ![]const models.WebApiTagDefinition {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, project_id: ?[]const u8) !models.WebApiTagDefinitionList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -3317,7 +3317,7 @@ pub const PullRequestLabels = struct {
             core.pager.logHttpError("PullRequestLabels.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.WebApiTagDefinition, alloc, resp.body);
+        return try serde.json.fromSlice(models.WebApiTagDefinitionList, alloc, resp.body);
     }
     /// Create a tag (if that does not exists yet) and add that as a label (tag) for a specified pull request. The only required field is the name of the new label (tag).
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, project_id: ?[]const u8, body: models.WebApiCreateTagRequestData) !models.WebApiTagDefinition {
@@ -3544,7 +3544,7 @@ pub const PullRequestReviewers = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve the reviewers for a pull request
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8) ![]const models.IdentityRefWithVote {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8) !models.IdentityRefWithVoteList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -3577,7 +3577,7 @@ pub const PullRequestReviewers = struct {
             core.pager.logHttpError("PullRequestReviewers.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.IdentityRefWithVote, alloc, resp.body);
+        return try serde.json.fromSlice(models.IdentityRefWithVoteList, alloc, resp.body);
     }
     /// Reset the votes of multiple reviewers on a pull request. NOTE: This endpoint only supports updating votes, but does not support updating required reviewers (use policy) or display names.
     pub fn updatePullRequestReviewers(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, body: []const models.IdentityRefWithVote) !void {
@@ -3619,7 +3619,7 @@ pub const PullRequestReviewers = struct {
         return;
     }
     /// Add reviewers to a pull request.
-    pub fn createPullRequestReviewers(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, body: []const models.IdentityRef) ![]const models.IdentityRefWithVote {
+    pub fn createPullRequestReviewers(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, body: []const models.IdentityRef) !models.IdentityRefWithVoteList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -3656,7 +3656,7 @@ pub const PullRequestReviewers = struct {
             core.pager.logHttpError("PullRequestReviewers.createPullRequestReviewers", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.IdentityRefWithVote, alloc, resp.body);
+        return try serde.json.fromSlice(models.IdentityRefWithVoteList, alloc, resp.body);
     }
     /// Add an unmaterialized identity to the reviewers of a pull request.
     pub fn createUnmaterializedPullRequestReviewer(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, body: models.IdentityRefWithVote) !models.IdentityRefWithVote {
@@ -3909,7 +3909,7 @@ pub const PullRequestStatuses = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get all the statuses associated with a pull request.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8) ![]const models.GitPullRequestStatus {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8) !models.GitPullRequestStatusList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -3942,7 +3942,7 @@ pub const PullRequestStatuses = struct {
             core.pager.logHttpError("PullRequestStatuses.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitPullRequestStatus, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitPullRequestStatusList, alloc, resp.body);
     }
     /// Update pull request statuses collection. The only supported operation type is `remove`. This operation allows to delete multiple statuses in one call. The path of the `remove` operation should refer to the ID of the pull request status. For example `path='/1'` refers to the pull request status with ID 1.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, body: models.JsonPatchDocument) !void {
@@ -4105,7 +4105,7 @@ pub const PullRequestThreads = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve all threads in a pull request.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, @"$iteration": ?i32, @"$base_iteration": ?i32) ![]const models.GitPullRequestCommentThread {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, @"$iteration": ?i32, @"$base_iteration": ?i32) !models.GitPullRequestCommentThreadList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -4148,7 +4148,7 @@ pub const PullRequestThreads = struct {
             core.pager.logHttpError("PullRequestThreads.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitPullRequestCommentThread, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitPullRequestCommentThreadList, alloc, resp.body);
     }
     /// Create a thread in a pull request.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, body: models.GitPullRequestCommentThread) !models.GitPullRequestCommentThread {
@@ -4287,7 +4287,7 @@ pub const PullRequestThreadComments = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve all comments associated with a specific thread in a pull request.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, thread_id: i32, project: []const u8) ![]const models.Comment {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, thread_id: i32, project: []const u8) !models.CommentList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -4322,7 +4322,7 @@ pub const PullRequestThreadComments = struct {
             core.pager.logHttpError("PullRequestThreadComments.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Comment, alloc, resp.body);
+        return try serde.json.fromSlice(models.CommentList, alloc, resp.body);
     }
     /// Create a comment on a specific thread in a pull request (up to 500 comments can be created per thread).
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, thread_id: i32, project: []const u8, body: models.Comment) !models.Comment {
@@ -4535,7 +4535,7 @@ pub const PullRequestCommentLikes = struct {
         return;
     }
     /// Get likes for a comment.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, thread_id: i32, comment_id: i32, project: []const u8) ![]const models.IdentityRef {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, thread_id: i32, comment_id: i32, project: []const u8) !models.IdentityRefList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -4572,7 +4572,7 @@ pub const PullRequestCommentLikes = struct {
             core.pager.logHttpError("PullRequestCommentLikes.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.IdentityRef, alloc, resp.body);
+        return try serde.json.fromSlice(models.IdentityRefList, alloc, resp.body);
     }
     /// Add a like on a comment.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, thread_id: i32, comment_id: i32, project: []const u8) !void {
@@ -4620,7 +4620,7 @@ pub const PullRequestWorkItems = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve a list of work items associated with a pull request.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8) ![]const models.ResourceRef {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8) !models.ResourceRefList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -4653,7 +4653,7 @@ pub const PullRequestWorkItems = struct {
             core.pager.logHttpError("PullRequestWorkItems.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ResourceRef, alloc, resp.body);
+        return try serde.json.fromSlice(models.ResourceRefList, alloc, resp.body);
     }
 };
 
@@ -4662,7 +4662,7 @@ pub const Pushes = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieves pushes associated with the specified repository.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, @"$skip": ?i32, @"$top": ?i32, search_criteria_from_date: ?[]const u8, search_criteria_include_links: ?bool, search_criteria_include_ref_updates: ?bool, search_criteria_pusher_id: ?[]const u8, search_criteria_ref_name: ?[]const u8, search_criteria_to_date: ?[]const u8) ![]const models.GitPush {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, @"$skip": ?i32, @"$top": ?i32, search_criteria_from_date: ?[]const u8, search_criteria_include_links: ?bool, search_criteria_include_ref_updates: ?bool, search_criteria_pusher_id: ?[]const u8, search_criteria_ref_name: ?[]const u8, search_criteria_to_date: ?[]const u8) !models.GitPushList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -4741,7 +4741,7 @@ pub const Pushes = struct {
             core.pager.logHttpError("Pushes.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitPush, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitPushList, alloc, resp.body);
     }
     /// Push changes to the repository.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, body: models.GitPush) !models.GitPush {
@@ -4840,7 +4840,7 @@ pub const Refs = struct {
             headers: struct {
                 x_ms_continuationtoken: ?[]const u8 = null,
             },
-            body: []const models.GitRef,
+            body: models.GitRefList,
         },
     };
     /// Queries the provided repository for its refs and returns them.
@@ -4934,7 +4934,7 @@ pub const Refs = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.GitRef, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.GitRefList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{
@@ -4999,7 +4999,7 @@ pub const Refs = struct {
         return try serde.json.fromSlice(models.GitRef, alloc, resp.body);
     }
     /// Creating, updating, or deleting refs(branches). Updating a ref means making it point at a different commit than it used to. You must specify both the old and new commit to avoid race conditions.
-    pub fn updateRefs(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, project_id: ?[]const u8, body: []const models.GitRefUpdate) ![]const models.GitRefUpdateResult {
+    pub fn updateRefs(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, project_id: ?[]const u8, body: []const models.GitRefUpdate) !models.GitRefUpdateResultList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -5041,7 +5041,7 @@ pub const Refs = struct {
             core.pager.logHttpError("Refs.updateRefs", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitRefUpdateResult, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitRefUpdateResultList, alloc, resp.body);
     }
 };
 
@@ -5168,7 +5168,7 @@ pub const Stats = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve statistics about all branches within a repository.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, base_version_descriptor_version: ?[]const u8, @"base_version_descriptor.version_options": ?enums.ListRequestBaseVersionDescriptorVersionOptions, @"base_version_descriptor.version_type": ?enums.ListRequestBaseVersionDescriptorVersionType) ![]const models.GitBranchStats {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, base_version_descriptor_version: ?[]const u8, @"base_version_descriptor.version_options": ?enums.ListRequestBaseVersionDescriptorVersionOptions, @"base_version_descriptor.version_type": ?enums.ListRequestBaseVersionDescriptorVersionType) !models.GitBranchStatsList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -5220,7 +5220,7 @@ pub const Stats = struct {
             core.pager.logHttpError("Stats.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitBranchStats, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitBranchStatsList, alloc, resp.body);
     }
 };
 
@@ -5229,7 +5229,7 @@ pub const Suggestions = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve a pull request suggestion for a particular repository or team project.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, prefer_compare_branch: ?bool) ![]const models.GitSuggestion {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, prefer_compare_branch: ?bool) !models.GitSuggestionList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -5265,7 +5265,7 @@ pub const Suggestions = struct {
             core.pager.logHttpError("Suggestions.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitSuggestion, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitSuggestionList, alloc, resp.body);
     }
 };
 
@@ -5368,7 +5368,7 @@ pub const MergeBases = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Find the merge bases of two commits, optionally across forks. If otherRepositoryId is not specified, the merge bases will only be calculated within the context of the local repositoryNameOrId.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_name_or_id: []const u8, commit_id: []const u8, other_commit_id: []const u8, project: []const u8, other_collection_id: ?[]const u8, other_repository_id: ?[]const u8) ![]const models.GitCommitRef {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_name_or_id: []const u8, commit_id: []const u8, other_commit_id: []const u8, project: []const u8, other_collection_id: ?[]const u8, other_repository_id: ?[]const u8) !models.GitCommitRefList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -5419,7 +5419,7 @@ pub const MergeBases = struct {
             core.pager.logHttpError("MergeBases.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitCommitRef, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitCommitRefList, alloc, resp.body);
     }
 };
 
@@ -5428,7 +5428,7 @@ pub const Forks = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve all forks of a repository in the collection.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_name_or_id: []const u8, collection_id: []const u8, project: []const u8, include_links: ?bool) ![]const models.GitRepositoryRef {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_name_or_id: []const u8, collection_id: []const u8, project: []const u8, include_links: ?bool) !models.GitRepositoryRefList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -5466,10 +5466,10 @@ pub const Forks = struct {
             core.pager.logHttpError("Forks.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitRepositoryRef, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitRepositoryRefList, alloc, resp.body);
     }
     /// Retrieve all requested fork sync operations on this repository.
-    pub fn getForkSyncRequests(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_name_or_id: []const u8, project: []const u8, include_abandoned: ?bool, include_links: ?bool) ![]const models.GitForkSyncRequest {
+    pub fn getForkSyncRequests(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_name_or_id: []const u8, project: []const u8, include_abandoned: ?bool, include_links: ?bool) !models.GitForkSyncRequestList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -5510,7 +5510,7 @@ pub const Forks = struct {
             core.pager.logHttpError("Forks.getForkSyncRequests", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitForkSyncRequest, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitForkSyncRequestList, alloc, resp.body);
     }
     /// Request that another repository's refs be fetched into this one. It syncs two existing forks. To create a fork, please see the <a href='https://docs.microsoft.com/en-us/rest/api/vsts/git/repositories/create?view=azure-devops-rest-5.1'> repositories endpoint</a>
     pub fn createForkSyncRequest(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_name_or_id: []const u8, project: []const u8, include_links: ?bool, body: models.GitForkSyncRequestParameters) !models.GitForkSyncRequest {

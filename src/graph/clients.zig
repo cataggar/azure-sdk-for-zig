@@ -237,7 +237,7 @@ pub const Groups = struct {
             headers: struct {
                 x_ms_continuationtoken: ?[]const u8 = null,
             },
-            body: []const models.GraphGroup,
+            body: models.GraphGroupList,
         },
     };
     /// Gets a list of all groups in the current scope (usually organization or account). The optional parameters are used to filter down the returned results. Returned results are in no guaranteed order. Since the list of groups may be large, results are returned in pages of groups. If there are more results than can be returned in a single page, the result set will contain a continuation token for retrieval of the next set of results.
@@ -292,7 +292,7 @@ pub const Groups = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.GraphGroup, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.GraphGroupList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{
@@ -474,7 +474,7 @@ pub const Memberships = struct {
         },
     };
     /// Get all the memberships where this descriptor is a member in the relationship. The default value for direction is 'up' meaning return all memberships where the subject is a member (e.g. all groups the subject is a member of). Alternatively, passing the direction as 'down' will return all memberships where the subject is a container (e.g. all members of the subject group).
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, subject_descriptor: []const u8, direction: ?enums.ListRequestDirection, depth: ?i32) ![]const models.GraphMembership {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, subject_descriptor: []const u8, direction: ?enums.ListRequestDirection, depth: ?i32) !models.GraphMembershipList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -515,7 +515,7 @@ pub const Memberships = struct {
             core.pager.logHttpError("Memberships.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GraphMembership, alloc, resp.body);
+        return try serde.json.fromSlice(models.GraphMembershipList, alloc, resp.body);
     }
     /// Deletes a membership between a container and subject.
     pub fn removeMembership(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, subject_descriptor: []const u8, container_descriptor: []const u8) !void {
@@ -756,7 +756,7 @@ pub const ServicePrincipals = struct {
             headers: struct {
                 x_ms_continuationtoken: ?[]const u8 = null,
             },
-            body: []const models.GraphServicePrincipal,
+            body: models.GraphServicePrincipalList,
         },
     };
     /// Get a list of all service principals in a given scope. Since the list of service principals may be large, results are returned in pages of service principals. If there are more results than can be returned in a single page, the result set will contain a continuation token for retrieval of the next set of results. The only reliable way to know if there is no more service principals left is the lack of a continuation token.
@@ -804,7 +804,7 @@ pub const ServicePrincipals = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.GraphServicePrincipal, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.GraphServicePrincipalList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{
@@ -1008,7 +1008,7 @@ pub const SubjectQuery = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Search for Azure Devops users, or/and groups. Results will be returned in a batch with no more than 100 graph subjects.
-    pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.GraphSubjectQuery) ![]const models.GraphSubject {
+    pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.GraphSubjectQuery) !models.GraphSubjectList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1039,7 +1039,7 @@ pub const SubjectQuery = struct {
             core.pager.logHttpError("SubjectQuery.query", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GraphSubject, alloc, resp.body);
+        return try serde.json.fromSlice(models.GraphSubjectList, alloc, resp.body);
     }
 };
 
@@ -1172,7 +1172,7 @@ pub const Users = struct {
             headers: struct {
                 x_ms_continuationtoken: ?[]const u8 = null,
             },
-            body: []const models.GraphUser,
+            body: models.GraphUserList,
         },
     };
     /// Get a list of all users in a given scope. Since the list of users may be large, results are returned in pages of users. If there are more results than can be returned in a single page, the result set will contain a continuation token for retrieval of the next set of results.
@@ -1227,7 +1227,7 @@ pub const Users = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.GraphUser, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.GraphUserList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{

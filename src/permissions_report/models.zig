@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `PermissionsReport` as returned by Azure DevOps.
+pub const PermissionsReportList = struct {
+    count: ?i32 = null,
+    value: ?[]const PermissionsReport = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Detailed report of permissions for a set of groups and users over a set of security namespaces
 pub const PermissionsReport = struct {
     /// Error if the report creation failed or empty if successful

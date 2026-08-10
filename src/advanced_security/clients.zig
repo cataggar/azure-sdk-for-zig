@@ -233,7 +233,7 @@ pub const FiltersSettings = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Gets all advanced filters for the organization.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, include_deleted: ?bool, keywords: ?[]const u8) ![]const models.AdvancedFilter {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, include_deleted: ?bool, keywords: ?[]const u8) !models.AdvancedFilterList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -272,7 +272,7 @@ pub const FiltersSettings = struct {
             core.pager.logHttpError("FiltersSettings.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.AdvancedFilter, alloc, resp.body);
+        return try serde.json.fromSlice(models.AdvancedFilterList, alloc, resp.body);
     }
     /// Creates a new advanced filter for the organization.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.AdvancedFilterCreate) !models.AdvancedFilter {
@@ -419,7 +419,7 @@ pub const SummaryDashboard = struct {
             headers: struct {
                 x_ms_continuationtoken: ?[]const u8 = null,
             },
-            body: []const models.DashboardAlert,
+            body: models.DashboardAlertList,
         },
     };
     /// Get Alert summary by severity for the org
@@ -760,7 +760,7 @@ pub const SummaryDashboard = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.DashboardAlert, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.DashboardAlertList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{
@@ -875,7 +875,7 @@ pub const Alerts = struct {
             headers: struct {
                 x_ms_continuationtoken: ?[]const u8 = null,
             },
-            body: []const models.Alert,
+            body: models.AlertList,
         },
     };
     /// Get alerts for a repository
@@ -1132,7 +1132,7 @@ pub const Alerts = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.Alert, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.AlertList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{
@@ -1244,7 +1244,7 @@ pub const Instances = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get instances of an alert on a branch specified with @ref. If @ref is not provided, return instances of an alert on default branch(if the alert exist in default branch) or latest affected branch.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, alert_id: i64, repository: []const u8, ref: ?[]const u8) ![]const models.AlertAnalysisInstance {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, alert_id: i64, repository: []const u8, ref: ?[]const u8) !models.AlertAnalysisInstanceList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1284,7 +1284,7 @@ pub const Instances = struct {
             core.pager.logHttpError("Instances.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.AlertAnalysisInstance, alloc, resp.body);
+        return try serde.json.fromSlice(models.AlertAnalysisInstanceList, alloc, resp.body);
     }
 };
 
@@ -1335,7 +1335,7 @@ pub const MetadataBatch = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get alerts metadata.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository: []const u8, body: models.AlertMetadataBatchRequest) ![]const models.AlertMetadata {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository: []const u8, body: models.AlertMetadataBatchRequest) !models.AlertMetadataList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1370,7 +1370,7 @@ pub const MetadataBatch = struct {
             core.pager.logHttpError("MetadataBatch.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.AlertMetadata, alloc, resp.body);
+        return try serde.json.fromSlice(models.AlertMetadataList, alloc, resp.body);
     }
 };
 
@@ -1379,7 +1379,7 @@ pub const AlertsBatch = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get alerts by alert IDs Currently supports fetching secret alerts only.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository: []const u8, body: models.AlertBatchRequest) ![]const models.Alert {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository: []const u8, body: models.AlertBatchRequest) !models.AlertList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1414,7 +1414,7 @@ pub const AlertsBatch = struct {
             core.pager.logHttpError("AlertsBatch.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Alert, alloc, resp.body);
+        return try serde.json.fromSlice(models.AlertList, alloc, resp.body);
     }
 };
 
@@ -1429,7 +1429,7 @@ pub const Analysis = struct {
             headers: struct {
                 x_ms_continuationtoken: ?[]const u8 = null,
             },
-            body: []const models.Branch,
+            body: models.BranchList,
         },
     };
     /// Returns the branches for which analysis results were submitted.
@@ -1495,7 +1495,7 @@ pub const Analysis = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.Branch, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.BranchList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{

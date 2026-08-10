@@ -129,7 +129,7 @@ pub const Actions = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get all auditable actions filterable by area.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, area_name: ?[]const u8) ![]const models.AuditActionInfo {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, area_name: ?[]const u8) !models.AuditActionInfoList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -163,7 +163,7 @@ pub const Actions = struct {
             core.pager.logHttpError("Actions.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.AuditActionInfo, alloc, resp.body);
+        return try serde.json.fromSlice(models.AuditActionInfoList, alloc, resp.body);
     }
 };
 
@@ -320,7 +320,7 @@ pub const Streams = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Return all Audit Streams scoped to an organization
-    pub fn queryAllStreams(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.AuditStream {
+    pub fn queryAllStreams(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !models.AuditStreamList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -347,7 +347,7 @@ pub const Streams = struct {
             core.pager.logHttpError("Streams.queryAllStreams", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.AuditStream, alloc, resp.body);
+        return try serde.json.fromSlice(models.AuditStreamList, alloc, resp.body);
     }
     /// Create new Audit Stream
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, days_to_backfill: i32, body: models.AuditStream) !models.AuditStream {

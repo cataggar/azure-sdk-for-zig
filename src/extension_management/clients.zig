@@ -105,7 +105,7 @@ pub const InstalledExtensions = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// List the installed extensions in the account / project collection.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, include_disabled_extensions: ?bool, include_errors: ?bool, asset_types: ?[]const u8, include_installation_issues: ?bool) ![]const models.InstalledExtension {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, include_disabled_extensions: ?bool, include_errors: ?bool, asset_types: ?[]const u8, include_installation_issues: ?bool) !models.InstalledExtensionList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -154,7 +154,7 @@ pub const InstalledExtensions = struct {
             core.pager.logHttpError("InstalledExtensions.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.InstalledExtension, alloc, resp.body);
+        return try serde.json.fromSlice(models.InstalledExtensionList, alloc, resp.body);
     }
     /// Update an installed extension. Typically this API is used to enable or disable an extension.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.InstalledExtension) !models.InstalledExtension {

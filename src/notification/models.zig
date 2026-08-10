@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `INotificationDiagnosticLog` as returned by Azure DevOps.
+pub const INotificationDiagnosticLogList = struct {
+    count: ?i32 = null,
+    value: ?[]const INotificationDiagnosticLog = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Abstraction interface for the diagnostic log. Primarily for deserialization.
 pub const INotificationDiagnosticLog = struct {
     /// Identifier used for correlating to other diagnostics that may have been recorded elsewhere.
@@ -34,6 +44,16 @@ pub const NotificationDiagnosticLogMessage = struct {
     level: ?i32 = null,
     message: ?[]const u8 = null,
     time: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `NotificationEventType` as returned by Azure DevOps.
+pub const NotificationEventTypeList = struct {
+    count: ?i32 = null,
+    value: ?[]const NotificationEventType = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -284,6 +304,16 @@ pub const ISubscriptionFilter = struct {
     };
 };
 
+/// A collection of `NotificationSubscription` as returned by Azure DevOps.
+pub const NotificationSubscriptionList = struct {
+    count: ?i32 = null,
+    value: ?[]const NotificationSubscription = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// A subscription defines criteria for matching events and how the subscription's subscriber should be notified about those events.
 pub const NotificationSubscription = struct {
     links: ?ReferenceLinks = null,
@@ -469,6 +499,16 @@ pub const NotificationSubscriptionUpdateParameters = struct {
     /// Optional message that provides more details about the updated status.
     status_message: ?[]const u8 = null,
     user_settings: ?SubscriptionUserSettings = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `NotificationSubscriptionTemplate` as returned by Azure DevOps.
+pub const NotificationSubscriptionTemplateList = struct {
+    count: ?i32 = null,
+    value: ?[]const NotificationSubscriptionTemplate = null,
 
     pub const serde = .{
         .rename_all = .camel_case,

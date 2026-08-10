@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `WorkArtifactLink` as returned by Azure DevOps.
+pub const WorkArtifactLinkList = struct {
+    count: ?i32 = null,
+    value: ?[]const WorkArtifactLink = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// A work artifact link describes an outbound artifact link type.
 pub const WorkArtifactLink = struct {
     /// Target artifact type.
@@ -17,12 +27,32 @@ pub const WorkArtifactLink = struct {
     };
 };
 
+/// A collection of `WorkItemIcon` as returned by Azure DevOps.
+pub const WorkItemIconList = struct {
+    count: ?i32 = null,
+    value: ?[]const WorkItemIcon = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Reference to a work item icon.
 pub const WorkItemIcon = struct {
     /// The identifier of the icon.
     id: ?[]const u8 = null,
     /// The REST URL of the resource.
     url: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `WorkItemRelationType` as returned by Azure DevOps.
+pub const WorkItemRelationTypeList = struct {
+    count: ?i32 = null,
+    value: ?[]const WorkItemRelationType = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -71,6 +101,16 @@ pub const WorkItemRelationTypeAttribute = struct {
     };
 };
 
+/// A collection of `WorkItemNextStateOnTransition` as returned by Azure DevOps.
+pub const WorkItemNextStateOnTransitionList = struct {
+    count: ?i32 = null,
+    value: ?[]const WorkItemNextStateOnTransition = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Describes the next state for a work item.
 pub const WorkItemNextStateOnTransition = struct {
     /// Error code if there is no next state transition possible.
@@ -81,6 +121,16 @@ pub const WorkItemNextStateOnTransition = struct {
     message: ?[]const u8 = null,
     /// Name of the next state on transition.
     state_on_transition: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `AccountRecentActivityWorkItemModel2` as returned by Azure DevOps.
+pub const AccountRecentActivityWorkItemModel2List = struct {
+    count: ?i32 = null,
+    value: ?[]const AccountRecentActivityWorkItemModel2 = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -147,6 +197,16 @@ pub const IdentityRef = struct {
     };
 };
 
+/// A collection of `GitHubConnectionModel` as returned by Azure DevOps.
+pub const GitHubConnectionModelList = struct {
+    count: ?i32 = null,
+    value: ?[]const GitHubConnectionModel = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Describes Github connection.
 pub const GitHubConnectionModel = struct {
     /// Github connection authorization type (f. e. PAT, OAuth)
@@ -158,6 +218,16 @@ pub const GitHubConnectionModel = struct {
     is_connection_valid: ?bool = null,
     /// Github connection name (should contain organization/user name)
     name: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `GitHubConnectionRepoModel` as returned by Azure DevOps.
+pub const GitHubConnectionRepoModelList = struct {
+    count: ?i32 = null,
+    value: ?[]const GitHubConnectionRepoModel = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -240,6 +310,16 @@ pub const DestroyedAttachment = struct {
     };
 };
 
+/// A collection of `WorkItemClassificationNode` as returned by Azure DevOps.
+pub const WorkItemClassificationNodeList = struct {
+    count: ?i32 = null,
+    value: ?[]const WorkItemClassificationNode = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Defines a classification node for work item tracking.
 pub const WorkItemClassificationNode = struct {
     /// REST URL for the resource.
@@ -271,6 +351,16 @@ pub const WorkItemClassificationNode = struct {
 };
 
 pub const WorkItemClassificationNodeAttribute = struct {
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `WorkItemField2` as returned by Azure DevOps.
+pub const WorkItemField2List = struct {
+    count: ?i32 = null,
+    value: ?[]const WorkItemField2 = null,
+
     pub const serde = .{
         .rename_all = .camel_case,
     };
@@ -360,6 +450,16 @@ pub const ProcessMigrationResultModel = struct {
     process_id: ?[]const u8 = null,
     /// The ID of the project.
     project_id: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `QueryHierarchyItem` as returned by Azure DevOps.
+pub const QueryHierarchyItemList = struct {
+    count: ?i32 = null,
+    value: ?[]const QueryHierarchyItem = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -511,6 +611,16 @@ pub const QueryBatchGetRequest = struct {
     error_policy: ?enums.QueryBatchGetRequestErrorPolicy = null,
     /// The requested query ids
     ids: ?[]const []const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `WorkItemDeleteShallowReference` as returned by Azure DevOps.
+pub const WorkItemDeleteShallowReferenceList = struct {
+    count: ?i32 = null,
+    value: ?[]const WorkItemDeleteShallowReference = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -732,6 +842,16 @@ pub const EmailRecipients = struct {
     };
 };
 
+/// A collection of `WorkItemTagDefinition` as returned by Azure DevOps.
+pub const WorkItemTagDefinitionList = struct {
+    count: ?i32 = null,
+    value: ?[]const WorkItemTagDefinition = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const WorkItemTagDefinition = struct {
     id: ?[]const u8 = null,
     last_updated: ?[]const u8 = null,
@@ -763,6 +883,16 @@ pub const TemporaryQueryRequestModel = struct {
 pub const TemporaryQueryResponseModel = struct {
     /// The id of the temporary query item.
     id: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `WorkItem` as returned by Azure DevOps.
+pub const WorkItemList = struct {
+    count: ?i32 = null,
+    value: ?[]const WorkItem = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -812,6 +942,16 @@ pub const WorkItemDeleteBatchRequest = struct {
 pub const WorkItemDeleteBatch = struct {
     /// List of results for each work item
     results: ?[]const WorkItemDelete = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `WorkItemUpdate` as returned by Azure DevOps.
+pub const WorkItemUpdateList = struct {
+    count: ?i32 = null,
+    value: ?[]const WorkItemUpdate = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -1010,6 +1150,36 @@ pub const CommentUpdate = struct {
     };
 };
 
+/// A collection of `CommentReaction` as returned by Azure DevOps.
+pub const CommentReactionList = struct {
+    count: ?i32 = null,
+    value: ?[]const CommentReaction = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `IdentityRef` as returned by Azure DevOps.
+pub const IdentityRefList = struct {
+    count: ?i32 = null,
+    value: ?[]const IdentityRef = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `CommentVersion` as returned by Azure DevOps.
+pub const CommentVersionList = struct {
+    count: ?i32 = null,
+    value: ?[]const CommentVersion = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Represents a specific version of a comment on a work item.
 pub const CommentVersion = struct {
     /// REST URL for the resource.
@@ -1043,6 +1213,16 @@ pub const CommentVersion = struct {
     };
 };
 
+/// A collection of `WorkItemTypeCategory` as returned by Azure DevOps.
+pub const WorkItemTypeCategoryList = struct {
+    count: ?i32 = null,
+    value: ?[]const WorkItemTypeCategory = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Describes a work item type category.
 pub const WorkItemTypeCategory = struct {
     /// REST URL for the resource.
@@ -1070,6 +1250,16 @@ pub const WorkItemTypeReference = struct {
     url: ?[]const u8 = null,
     /// Name of the work item type.
     name: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `WorkItemType` as returned by Azure DevOps.
+pub const WorkItemTypeList = struct {
+    count: ?i32 = null,
+    value: ?[]const WorkItemType = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -1161,6 +1351,16 @@ pub const WorkItemStateTransition = struct {
     };
 };
 
+/// A collection of `WorkItemTypeFieldWithReferences` as returned by Azure DevOps.
+pub const WorkItemTypeFieldWithReferencesList = struct {
+    count: ?i32 = null,
+    value: ?[]const WorkItemTypeFieldWithReferences = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Field Instance of a workItemype with detailed references.
 pub const WorkItemTypeFieldWithReferences = struct {
     /// The friendly name of the field.
@@ -1192,6 +1392,26 @@ pub const WorkItemTypeFieldWithReferencesAllowedValue = struct {
 };
 
 pub const WorkItemTypeFieldWithReferencesDefaultValue = struct {
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `WorkItemStateColor` as returned by Azure DevOps.
+pub const WorkItemStateColorList = struct {
+    count: ?i32 = null,
+    value: ?[]const WorkItemStateColor = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `WorkItemTemplateReference` as returned by Azure DevOps.
+pub const WorkItemTemplateReferenceList = struct {
+    count: ?i32 = null,
+    value: ?[]const WorkItemTemplateReference = null,
+
     pub const serde = .{
         .rename_all = .camel_case,
     };
