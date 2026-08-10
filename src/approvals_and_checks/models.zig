@@ -96,6 +96,26 @@ pub const Resource = struct {
     };
 };
 
+/// A collection of `ResourcePipelinePermissions` as returned by Azure DevOps.
+pub const ResourcePipelinePermissionsList = struct {
+    count: ?i32 = null,
+    value: ?[]const ResourcePipelinePermissions = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `CheckConfiguration` as returned by Azure DevOps.
+pub const CheckConfigurationList = struct {
+    count: ?i32 = null,
+    value: ?[]const CheckConfiguration = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const CheckConfiguration = struct {
     /// Check configuration id.
     id: ?i32 = null,
@@ -245,6 +265,16 @@ pub const CheckSuiteUpdateParameter = struct {
     action: ?enums.CheckSuiteUpdateParameterAction = null,
     /// Check id of the check run to be updated.
     check_id: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `Approval` as returned by Azure DevOps.
+pub const ApprovalList = struct {
+    count: ?i32 = null,
+    value: ?[]const Approval = null,
 
     pub const serde = .{
         .rename_all = .camel_case,

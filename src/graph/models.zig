@@ -32,6 +32,16 @@ pub const ReferenceLinksLink = struct {
     };
 };
 
+/// A collection of `GraphGroup` as returned by Azure DevOps.
+pub const GraphGroupList = struct {
+    count: ?i32 = null,
+    value: ?[]const GraphGroup = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Graph group entity
 pub const GraphGroup = struct {
     links: ?ReferenceLinks = null,
@@ -83,6 +93,16 @@ pub const JsonPatchDocument = struct {
     };
 };
 
+/// A collection of `GraphMembership` as returned by Azure DevOps.
+pub const GraphMembershipList = struct {
+    count: ?i32 = null,
+    value: ?[]const GraphMembership = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Relationship between a container and a member
 pub const GraphMembership = struct {
     links: ?ReferenceLinks = null,
@@ -127,6 +147,16 @@ pub const JToken = struct {
     root: ?*const JToken = null,
     /// Gets the node type for this JToken.
     type: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `GraphServicePrincipal` as returned by Azure DevOps.
+pub const GraphServicePrincipalList = struct {
+    count: ?i32 = null,
+    value: ?[]const GraphServicePrincipal = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -251,11 +281,31 @@ pub const GraphSubjectQuery = struct {
     };
 };
 
+/// A collection of `GraphSubject` as returned by Azure DevOps.
+pub const GraphSubjectList = struct {
+    count: ?i32 = null,
+    value: ?[]const GraphSubject = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const Avatar = struct {
     is_auto_generated: ?bool = null,
     size: ?enums.AvatarSize = null,
     time_stamp: ?[]const u8 = null,
     value: ?[]const []const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `GraphUser` as returned by Azure DevOps.
+pub const GraphUserList = struct {
+    count: ?i32 = null,
+    value: ?[]const GraphUser = null,
 
     pub const serde = .{
         .rename_all = .camel_case,

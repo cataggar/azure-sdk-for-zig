@@ -119,6 +119,16 @@ pub const WidgetMetadataResponse = struct {
     };
 };
 
+/// A collection of `Dashboard` as returned by Azure DevOps.
+pub const DashboardList = struct {
+    count: ?i32 = null,
+    value: ?[]const Dashboard = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Model of a Dashboard.
 pub const Dashboard = struct {
     links: ?ReferenceLinks = null,
@@ -277,5 +287,15 @@ pub const DashboardGroupEntry = struct {
         .rename = .{
             .links = "_links",
         },
+    };
+};
+
+/// A collection of `Widget` as returned by Azure DevOps.
+pub const WidgetList = struct {
+    count: ?i32 = null,
+    value: ?[]const Widget = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
     };
 };

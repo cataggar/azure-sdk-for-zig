@@ -135,7 +135,7 @@ pub const Configurations = struct {
             headers: struct {
                 x_ms_continuationtoken: ?[]const u8 = null,
             },
-            body: []const models.PolicyConfiguration,
+            body: models.PolicyConfigurationList,
         },
     };
     /// Get a list of policy configurations in a project. The 'scope' parameter for this API should not be used, except for legacy compatability reasons. It returns specifically scoped policies and does not support heirarchical nesting. Instead, use the /_apis/git/policy/configurations API, which provides first class scope filtering support. The optional `policyType` parameter can be used to filter the set of policies returned from this method.
@@ -197,7 +197,7 @@ pub const Configurations = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.PolicyConfiguration, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.PolicyConfigurationList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{
@@ -360,7 +360,7 @@ pub const Revisions = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve all revisions for a given policy.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, configuration_id: i32, @"$top": ?i32, @"$skip": ?i32) ![]const models.PolicyConfiguration {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, configuration_id: i32, @"$top": ?i32, @"$skip": ?i32) !models.PolicyConfigurationList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -401,7 +401,7 @@ pub const Revisions = struct {
             core.pager.logHttpError("Revisions.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.PolicyConfiguration, alloc, resp.body);
+        return try serde.json.fromSlice(models.PolicyConfigurationList, alloc, resp.body);
     }
     /// Retrieve a specific revision of a given policy by ID.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, configuration_id: i32, revision_id: i32) !models.PolicyConfiguration {
@@ -446,7 +446,7 @@ pub const Evaluations = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieves a list of all the policy evaluation statuses for a specific pull request. Evaluations are retrieved using an artifact ID which uniquely identifies the pull request. To generate an artifact ID for a pull request, use this template: ``` vstfs:///CodeReview/CodeReviewId/{projectId}/{pullRequestId} ```
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, artifact_id: []const u8, include_not_applicable: ?bool, @"$top": ?i32, @"$skip": ?i32) ![]const models.PolicyEvaluationRecord {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, artifact_id: []const u8, include_not_applicable: ?bool, @"$top": ?i32, @"$skip": ?i32) !models.PolicyEvaluationRecordList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -494,7 +494,7 @@ pub const Evaluations = struct {
             core.pager.logHttpError("Evaluations.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.PolicyEvaluationRecord, alloc, resp.body);
+        return try serde.json.fromSlice(models.PolicyEvaluationRecordList, alloc, resp.body);
     }
     /// Gets the present evaluation state of a policy. Each policy which applies to a pull request will have an evaluation state which is specific to that policy running in the context of that pull request. Each evaluation is uniquely identified via a Guid. You can find all the policy evaluations for a specific pull request using the List operation of this controller.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, evaluation_id: []const u8) !models.PolicyEvaluationRecord {
@@ -571,7 +571,7 @@ pub const Types = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Retrieve all available policy types.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.PolicyType {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.PolicyTypeList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -600,7 +600,7 @@ pub const Types = struct {
             core.pager.logHttpError("Types.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.PolicyType, alloc, resp.body);
+        return try serde.json.fromSlice(models.PolicyTypeList, alloc, resp.body);
     }
     /// Retrieve a specific policy type by ID.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, type_id: []const u8) !models.PolicyType {

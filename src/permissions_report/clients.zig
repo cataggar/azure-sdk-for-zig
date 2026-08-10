@@ -113,7 +113,7 @@ pub const PermissionsReportOperations = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of permissions reports
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.PermissionsReport {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !models.PermissionsReportList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -140,7 +140,7 @@ pub const PermissionsReportOperations = struct {
             core.pager.logHttpError("PermissionsReportOperations.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.PermissionsReport, alloc, resp.body);
+        return try serde.json.fromSlice(models.PermissionsReportList, alloc, resp.body);
     }
     /// Request a permissions report to be created asyncronously
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.PermissionsReportRequest) !models.ReferenceLinks {

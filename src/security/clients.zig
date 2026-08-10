@@ -193,7 +193,7 @@ pub const AccessControlEntries = struct {
         }
     }
     /// Add or update ACEs in the ACL for the provided token. The request body contains the target token, a list of [ACEs](https://docs.microsoft.com/en-us/rest/api/azure/devops/security/access-control-entries/set-access-control-entries?#accesscontrolentry) and a optional merge parameter. In the case of a collision (by identity descriptor) with an existing ACE in the ACL, the 'merge' parameter determines the behavior. If set, the existing ACE has its allow and deny merged with the incoming ACE's allow and deny. If unset, the existing ACE is displaced. For optimal performance and reliability, it is strongly recommended to batch multiple ACEs in a single request rather than sending individual requests. Batching requests improves efficiency, reduces overhead, and helps ensure successful completion of your operations.
-    pub fn setAccessControlEntries(self: *@This(), alloc: std.mem.Allocator, security_namespace_id: []const u8, organization: []const u8, body: models.JObject) ![]const models.AccessControlEntry {
+    pub fn setAccessControlEntries(self: *@This(), alloc: std.mem.Allocator, security_namespace_id: []const u8, organization: []const u8, body: models.JObject) !models.AccessControlEntryList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, security_namespace_id);
         defer alloc.free(encoded_path_0);
@@ -226,7 +226,7 @@ pub const AccessControlEntries = struct {
             core.pager.logHttpError("AccessControlEntries.setAccessControlEntries", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.AccessControlEntry, alloc, resp.body);
+        return try serde.json.fromSlice(models.AccessControlEntryList, alloc, resp.body);
     }
 };
 
@@ -297,7 +297,7 @@ pub const AccessControlLists = struct {
         }
     }
     /// Return a list of access control lists for the specified security namespace and token. All ACLs in the security namespace will be retrieved if no optional parameters are provided. Note that the response will include all project IDs, including projects the current user does not have access to.
-    pub fn query(self: *@This(), alloc: std.mem.Allocator, security_namespace_id: []const u8, organization: []const u8, token: ?[]const u8, descriptors: ?[]const u8, include_extended_info: ?bool, recurse: ?bool) ![]const models.AccessControlList {
+    pub fn query(self: *@This(), alloc: std.mem.Allocator, security_namespace_id: []const u8, organization: []const u8, token: ?[]const u8, descriptors: ?[]const u8, include_extended_info: ?bool, recurse: ?bool) !models.AccessControlListList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, security_namespace_id);
         defer alloc.free(encoded_path_0);
@@ -350,7 +350,7 @@ pub const AccessControlLists = struct {
             core.pager.logHttpError("AccessControlLists.query", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.AccessControlList, alloc, resp.body);
+        return try serde.json.fromSlice(models.AccessControlListList, alloc, resp.body);
     }
     /// Create or update one or more access control lists. All data that currently exists for the ACLs supplied will be overwritten.
     pub fn setAccessControlLists(self: *@This(), alloc: std.mem.Allocator, security_namespace_id: []const u8, organization: []const u8, body: models.VssJsonCollectionWrapper) !void {
@@ -532,7 +532,7 @@ pub const SecurityNamespaces = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// List all security namespaces or just the specified namespace.
-    pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, security_namespace_id: []const u8, local_only: ?bool) ![]const models.SecurityNamespaceDescription {
+    pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, security_namespace_id: []const u8, local_only: ?bool) !models.SecurityNamespaceDescriptionList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -566,6 +566,6 @@ pub const SecurityNamespaces = struct {
             core.pager.logHttpError("SecurityNamespaces.query", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.SecurityNamespaceDescription, alloc, resp.body);
+        return try serde.json.fromSlice(models.SecurityNamespaceDescriptionList, alloc, resp.body);
     }
 };

@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `ReleaseApproval` as returned by Azure DevOps.
+pub const ReleaseApprovalList = struct {
+    count: ?i32 = null,
+    value: ?[]const ReleaseApproval = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const ReleaseApproval = struct {
     /// Gets or sets the type of approval.
     approval_type: ?enums.ReleaseApprovalApprovalType = null,
@@ -167,6 +177,16 @@ pub const ReleaseEnvironmentShallowReference = struct {
         .rename = .{
             .links = "_links",
         },
+    };
+};
+
+/// A collection of `ReleaseDefinition` as returned by Azure DevOps.
+pub const ReleaseDefinitionList = struct {
+    count: ?i32 = null,
+    value: ?[]const ReleaseDefinition = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
     };
 };
 
@@ -723,6 +743,16 @@ pub const ReleaseTriggerBase = struct {
     };
 };
 
+/// A collection of `ReleaseDefinitionRevision` as returned by Azure DevOps.
+pub const ReleaseDefinitionRevisionList = struct {
+    count: ?i32 = null,
+    value: ?[]const ReleaseDefinitionRevision = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const ReleaseDefinitionRevision = struct {
     /// Gets api-version for revision object.
     api_version: ?[]const u8 = null,
@@ -739,6 +769,16 @@ pub const ReleaseDefinitionRevision = struct {
     definition_url: ?[]const u8 = null,
     /// Get revision number of the definition.
     revision: ?i32 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `Deployment` as returned by Azure DevOps.
+pub const DeploymentList = struct {
+    count: ?i32 = null,
+    value: ?[]const Deployment = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -781,6 +821,16 @@ pub const Deployment = struct {
     scheduled_deployment_time: ?[]const u8 = null,
     /// Gets the date on which deployment is started.
     started_on: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `Folder` as returned by Azure DevOps.
+pub const FolderList = struct {
+    count: ?i32 = null,
+    value: ?[]const Folder = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -915,6 +965,16 @@ pub const IgnoredGate = struct {
     last_modified_on: ?[]const u8 = null,
     /// Name of gate ignored.
     name: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `Release` as returned by Azure DevOps.
+pub const ReleaseList = struct {
+    count: ?i32 = null,
+    value: ?[]const Release = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -1358,6 +1418,16 @@ pub const ReleaseEnvironmentUpdateMetadata = struct {
     };
 };
 
+/// A collection of `ReleaseTaskAttachment` as returned by Azure DevOps.
+pub const ReleaseTaskAttachmentList = struct {
+    count: ?i32 = null,
+    value: ?[]const ReleaseTaskAttachment = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const ReleaseTaskAttachment = struct {
     links: ?ReferenceLinks = null,
     /// Data and time when it created.
@@ -1379,6 +1449,16 @@ pub const ReleaseTaskAttachment = struct {
         .rename = .{
             .links = "_links",
         },
+    };
+};
+
+/// A collection of `ManualIntervention` as returned by Azure DevOps.
+pub const ManualInterventionList = struct {
+    count: ?i32 = null,
+    value: ?[]const ManualIntervention = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
     };
 };
 

@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `Identity` as returned by Azure DevOps.
+pub const IdentityList = struct {
+    count: ?i32 = null,
+    value: ?[]const Identity = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const Identity = struct {
     /// The custom display name for the identity (if any). Setting this property to an empty string will clear the existing custom display name. Setting this property to null will not affect the existing persisted value (since null values do not get sent over the wire or to the database)
     custom_display_name: ?[]const u8 = null,

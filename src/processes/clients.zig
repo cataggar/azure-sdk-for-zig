@@ -201,7 +201,7 @@ pub const Processes = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get list of all processes including system and inherited.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, @"$expand": ?enums.ListRequestExpand) ![]const models.ProcessInfo {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, @"$expand": ?enums.ListRequestExpand) !models.ProcessInfoList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -235,7 +235,7 @@ pub const Processes = struct {
             core.pager.logHttpError("Processes.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ProcessInfo, alloc, resp.body);
+        return try serde.json.fromSlice(models.ProcessInfoList, alloc, resp.body);
     }
     /// Creates a process.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.CreateProcessModel) !models.ProcessInfo {
@@ -384,7 +384,7 @@ pub const Behaviors = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Returns a list of all behaviors in the process.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, @"$expand": ?enums.ListRequestExpand1) ![]const models.ProcessBehavior {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, @"$expand": ?enums.ListRequestExpand1) !models.ProcessBehaviorList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -420,7 +420,7 @@ pub const Behaviors = struct {
             core.pager.logHttpError("Behaviors.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ProcessBehavior, alloc, resp.body);
+        return try serde.json.fromSlice(models.ProcessBehaviorList, alloc, resp.body);
     }
     /// Creates a single behavior in the given process.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, body: models.ProcessBehaviorCreateRequest) !models.ProcessBehavior {
@@ -577,7 +577,7 @@ pub const WorkItemTypes = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Returns a list of all work item types in a process.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, @"$expand": ?enums.ListRequestExpand2) ![]const models.ProcessWorkItemType {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, @"$expand": ?enums.ListRequestExpand2) !models.ProcessWorkItemTypeList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -613,7 +613,7 @@ pub const WorkItemTypes = struct {
             core.pager.logHttpError("WorkItemTypes.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ProcessWorkItemType, alloc, resp.body);
+        return try serde.json.fromSlice(models.ProcessWorkItemTypeList, alloc, resp.body);
     }
     /// Creates a work item type in the process.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, body: models.CreateProcessWorkItemTypeRequest) !models.ProcessWorkItemType {
@@ -770,7 +770,7 @@ pub const Fields = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Returns a list of all fields in a work item type.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8) ![]const models.ProcessWorkItemTypeField {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8) !models.ProcessWorkItemTypeFieldList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -801,7 +801,7 @@ pub const Fields = struct {
             core.pager.logHttpError("Fields.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ProcessWorkItemTypeField, alloc, resp.body);
+        return try serde.json.fromSlice(models.ProcessWorkItemTypeFieldList, alloc, resp.body);
     }
     /// Adds a field to a work item type.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, body: models.AddProcessWorkItemTypeFieldRequest) !models.ProcessWorkItemTypeField {
@@ -1476,7 +1476,7 @@ pub const SystemControls = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Gets edited system controls for a work item type in a process. To get all system controls (base + edited) use layout API(s)
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8) ![]const models.Control {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8) !models.ControlList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1507,10 +1507,10 @@ pub const SystemControls = struct {
             core.pager.logHttpError("SystemControls.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Control, alloc, resp.body);
+        return try serde.json.fromSlice(models.ControlList, alloc, resp.body);
     }
     /// Deletes a system control modification on the work item form.
-    pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, control_id: []const u8) ![]const models.Control {
+    pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, control_id: []const u8) !models.ControlList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1543,7 +1543,7 @@ pub const SystemControls = struct {
             core.pager.logHttpError("SystemControls.delete", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Control, alloc, resp.body);
+        return try serde.json.fromSlice(models.ControlList, alloc, resp.body);
     }
     /// Updates/adds a system control on the work item form.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, control_id: []const u8, body: models.Control) !models.Control {
@@ -1592,7 +1592,7 @@ pub const Rules = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Returns a list of all rules in the work item type of the process.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8) ![]const models.ProcessRule {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8) !models.ProcessRuleList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1623,7 +1623,7 @@ pub const Rules = struct {
             core.pager.logHttpError("Rules.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ProcessRule, alloc, resp.body);
+        return try serde.json.fromSlice(models.ProcessRuleList, alloc, resp.body);
     }
     /// Adds a rule to work item type in the process.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, body: models.CreateProcessRuleRequest) !models.ProcessRule {
@@ -1781,7 +1781,7 @@ pub const States = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Returns a list of all state definitions in a work item type of the process.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8) ![]const models.WorkItemStateResultModel {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8) !models.WorkItemStateResultModelList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1812,7 +1812,7 @@ pub const States = struct {
             core.pager.logHttpError("States.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.WorkItemStateResultModel, alloc, resp.body);
+        return try serde.json.fromSlice(models.WorkItemStateResultModelList, alloc, resp.body);
     }
     /// Creates a state definition in the work item type of the process.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, body: models.WorkItemStateInputModel) !models.WorkItemStateResultModel {
@@ -2010,7 +2010,7 @@ pub const WorkItemTypesBehaviors = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Returns a list of all behaviors for the work item type of the process.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name_for_behaviors: []const u8) ![]const models.WorkItemTypeBehavior {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name_for_behaviors: []const u8) !models.WorkItemTypeBehaviorList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2041,7 +2041,7 @@ pub const WorkItemTypesBehaviors = struct {
             core.pager.logHttpError("WorkItemTypesBehaviors.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.WorkItemTypeBehavior, alloc, resp.body);
+        return try serde.json.fromSlice(models.WorkItemTypeBehaviorList, alloc, resp.body);
     }
     /// Updates a behavior for the work item type of the process.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name_for_behaviors: []const u8, body: models.WorkItemTypeBehavior) !models.WorkItemTypeBehavior {
@@ -2197,7 +2197,7 @@ pub const Lists = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Returns meta data of the picklist.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.PickListMetadata {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !models.PickListMetadataList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2224,7 +2224,7 @@ pub const Lists = struct {
             core.pager.logHttpError("Lists.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.PickListMetadata, alloc, resp.body);
+        return try serde.json.fromSlice(models.PickListMetadataList, alloc, resp.body);
     }
     /// Creates a picklist.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.PickList) !models.PickList {

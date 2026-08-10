@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `Favorite` as returned by Azure DevOps.
+pub const FavoriteList = struct {
+    count: ?i32 = null,
+    value: ?[]const Favorite = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Implementation of Favorite contract following modern storage
 pub const Favorite = struct {
     links: ?ReferenceLinks = null,

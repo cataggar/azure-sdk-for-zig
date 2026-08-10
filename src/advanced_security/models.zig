@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `AdvancedFilter` as returned by Azure DevOps.
+pub const AdvancedFilterList = struct {
+    count: ?i32 = null,
+    value: ?[]const AdvancedFilter = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Represents an advanced filter configuration for the Reporting dashboard.
 pub const AdvancedFilter = struct {
     filter_criteria: ?CombinedAlertFilterCriteria = null,
@@ -222,6 +232,16 @@ pub const AlertSummaryByState = struct {
     };
 };
 
+/// A collection of `DashboardAlert` as returned by Azure DevOps.
+pub const DashboardAlertList = struct {
+    count: ?i32 = null,
+    value: ?[]const DashboardAlert = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// An alert entity used in the dashboard for combined alerts.
 pub const DashboardAlert = struct {
     /// Identifier for the alert. It is unique within Azure DevOps organization.
@@ -350,6 +370,16 @@ pub const ScanTypeSummaryProperties = struct {
 pub const ScanTypeSummaryPropertiesData = struct {
     /// Represents the state of the scan type summary property.
     enabled: ?bool = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `Alert` as returned by Azure DevOps.
+pub const AlertList = struct {
+    count: ?i32 = null,
+    value: ?[]const Alert = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -604,6 +634,16 @@ pub const AlertStateUpdate = struct {
     };
 };
 
+/// A collection of `AlertAnalysisInstance` as returned by Azure DevOps.
+pub const AlertAnalysisInstanceList = struct {
+    count: ?i32 = null,
+    value: ?[]const AlertAnalysisInstance = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Summary of the state of the alert for a given analysis configuration.
 pub const AlertAnalysisInstance = struct {
     analysis_configuration: ?AnalysisConfiguration = null,
@@ -831,12 +871,32 @@ pub const AlertMetadataBatchRequest = struct {
     };
 };
 
+/// A collection of `AlertMetadata` as returned by Azure DevOps.
+pub const AlertMetadataList = struct {
+    count: ?i32 = null,
+    value: ?[]const AlertMetadata = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Request model for getting alerts by IDs with optional alert type filter.
 pub const AlertBatchRequest = struct {
     /// List of alert IDs to retrieve.
     alert_ids: ?[]const i64 = null,
     /// Alert type of the alert IDs.
     alert_type: ?enums.AlertBatchRequestAlertType = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `Branch` as returned by Azure DevOps.
+pub const BranchList = struct {
+    count: ?i32 = null,
+    value: ?[]const Branch = null,
 
     pub const serde = .{
         .rename_all = .camel_case,

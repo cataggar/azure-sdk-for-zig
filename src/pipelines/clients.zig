@@ -143,7 +143,7 @@ pub const Pipelines = struct {
             headers: struct {
                 x_ms_continuationtoken: ?[]const u8 = null,
             },
-            body: []const models.Pipeline,
+            body: models.PipelineList,
         },
     };
     /// Get a list of pipelines.
@@ -198,7 +198,7 @@ pub const Pipelines = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.Pipeline, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.PipelineList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{
@@ -344,7 +344,7 @@ pub const Runs = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Gets top 10000 runs for a particular pipeline.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, pipeline_id: i32) ![]const models.Run {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, pipeline_id: i32) !models.RunList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -375,7 +375,7 @@ pub const Runs = struct {
             core.pager.logHttpError("Runs.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Run, alloc, resp.body);
+        return try serde.json.fromSlice(models.RunList, alloc, resp.body);
     }
     /// Runs a pipeline.
     pub fn runPipeline(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, pipeline_id: i32, pipeline_version: ?i32, body: models.RunPipelineParameters) !models.Run {

@@ -137,7 +137,7 @@ pub const Processes = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of processes.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.Process {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !models.ProcessList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -164,7 +164,7 @@ pub const Processes = struct {
             core.pager.logHttpError("Processes.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Process, alloc, resp.body);
+        return try serde.json.fromSlice(models.ProcessList, alloc, resp.body);
     }
     /// Get a process by ID.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8) !models.Process {
@@ -205,7 +205,7 @@ pub const Projects = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get all projects in the organization that the authenticated user has access to.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, state_filter: ?enums.ListRequestStateFilter, @"$top": ?i32, @"$skip": ?i32, continuation_token: ?i32, get_default_team_image_url: ?bool) ![]const models.TeamProjectReference {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, state_filter: ?enums.ListRequestStateFilter, @"$top": ?i32, @"$skip": ?i32, continuation_token: ?i32, get_default_team_image_url: ?bool) !models.TeamProjectReferenceList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -259,7 +259,7 @@ pub const Projects = struct {
             core.pager.logHttpError("Projects.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TeamProjectReference, alloc, resp.body);
+        return try serde.json.fromSlice(models.TeamProjectReferenceList, alloc, resp.body);
     }
     /// Queues a project to be created. Use the [GetOperation](../../operations/operations/get) to periodically check for create project status.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.TeamProject) !models.OperationReference {
@@ -406,7 +406,7 @@ pub const Projects = struct {
         return try serde.json.fromSlice(models.OperationReference, alloc, resp.body);
     }
     /// Get a collection of team project properties.
-    pub fn getProjectProperties(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project_id: []const u8, keys: ?[]const u8) ![]const models.ProjectProperty {
+    pub fn getProjectProperties(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project_id: []const u8, keys: ?[]const u8) !models.ProjectPropertyList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -442,7 +442,7 @@ pub const Projects = struct {
             core.pager.logHttpError("Projects.getProjectProperties", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ProjectProperty, alloc, resp.body);
+        return try serde.json.fromSlice(models.ProjectPropertyList, alloc, resp.body);
     }
     /// Create, update, and delete team project properties.
     pub fn setProjectProperties(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project_id: []const u8, body: models.JsonPatchDocument) !void {
@@ -611,7 +611,7 @@ pub const Teams = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of teams.
-    pub fn getTeams(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project_id: []const u8, @"$mine": ?bool, @"$top": ?i32, @"$skip": ?i32, @"$expand_identity": ?bool) ![]const models.WebApiTeam {
+    pub fn getTeams(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project_id: []const u8, @"$mine": ?bool, @"$top": ?i32, @"$skip": ?i32, @"$expand_identity": ?bool) !models.WebApiTeamList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -660,7 +660,7 @@ pub const Teams = struct {
             core.pager.logHttpError("Teams.getTeams", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.WebApiTeam, alloc, resp.body);
+        return try serde.json.fromSlice(models.WebApiTeamList, alloc, resp.body);
     }
     /// Create a team in a team project. Possible failure scenarios Invalid project name/ID (project doesn't exist) 404 Invalid team name or description 400 Team already exists 400 Insufficient privileges 400
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project_id: []const u8, body: models.WebApiTeam) !models.WebApiTeam {
@@ -809,7 +809,7 @@ pub const Teams = struct {
         return try serde.json.fromSlice(models.WebApiTeam, alloc, resp.body);
     }
     /// Get a list of members for a specific team.
-    pub fn getTeamMembersWithExtendedProperties(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project_id: []const u8, team_id: []const u8, @"$top": ?i32, @"$skip": ?i32) ![]const models.TeamMember {
+    pub fn getTeamMembersWithExtendedProperties(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project_id: []const u8, team_id: []const u8, @"$top": ?i32, @"$skip": ?i32) !models.TeamMemberList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -850,10 +850,10 @@ pub const Teams = struct {
             core.pager.logHttpError("Teams.getTeamMembersWithExtendedProperties", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TeamMember, alloc, resp.body);
+        return try serde.json.fromSlice(models.TeamMemberList, alloc, resp.body);
     }
     /// Get a list of all teams.
-    pub fn getAllTeams(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, @"$mine": ?bool, @"$top": ?i32, @"$skip": ?i32, @"$expand_identity": ?bool) ![]const models.WebApiTeam {
+    pub fn getAllTeams(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, @"$mine": ?bool, @"$top": ?i32, @"$skip": ?i32, @"$expand_identity": ?bool) !models.WebApiTeamList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -900,6 +900,6 @@ pub const Teams = struct {
             core.pager.logHttpError("Teams.getAllTeams", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.WebApiTeam, alloc, resp.body);
+        return try serde.json.fromSlice(models.WebApiTeamList, alloc, resp.body);
     }
 };

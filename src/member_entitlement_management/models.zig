@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `GroupEntitlement` as returned by Azure DevOps.
+pub const GroupEntitlementList = struct {
+    count: ?i32 = null,
+    value: ?[]const GroupEntitlement = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// A group entity with additional properties including its license, extensions, and project membership
 pub const GroupEntitlement = struct {
     group: ?GraphGroup = null,

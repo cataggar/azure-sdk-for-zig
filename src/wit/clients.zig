@@ -353,7 +353,7 @@ pub const ArtifactLinkTypes = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get the list of work item tracking outbound artifact link types.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.WorkArtifactLink {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !models.WorkArtifactLinkList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -380,7 +380,7 @@ pub const ArtifactLinkTypes = struct {
             core.pager.logHttpError("ArtifactLinkTypes.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.WorkArtifactLink, alloc, resp.body);
+        return try serde.json.fromSlice(models.WorkArtifactLinkList, alloc, resp.body);
     }
 };
 
@@ -399,7 +399,7 @@ pub const WorkItemIcons = struct {
         },
     };
     /// Get a list of all work item icons.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.WorkItemIcon {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !models.WorkItemIconList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -426,7 +426,7 @@ pub const WorkItemIcons = struct {
             core.pager.logHttpError("WorkItemIcons.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.WorkItemIcon, alloc, resp.body);
+        return try serde.json.fromSlice(models.WorkItemIconList, alloc, resp.body);
     }
     /// Get a work item icon given the friendly name and icon color.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, icon: []const u8, organization: []const u8, color: ?[]const u8, v: ?i32) !GetResult {
@@ -495,7 +495,7 @@ pub const WorkItemRelationTypes = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Gets the work item relation types.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.WorkItemRelationType {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !models.WorkItemRelationTypeList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -522,7 +522,7 @@ pub const WorkItemRelationTypes = struct {
             core.pager.logHttpError("WorkItemRelationTypes.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.WorkItemRelationType, alloc, resp.body);
+        return try serde.json.fromSlice(models.WorkItemRelationTypeList, alloc, resp.body);
     }
     /// Gets the work item relation type definition.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, relation: []const u8) !models.WorkItemRelationType {
@@ -563,7 +563,7 @@ pub const WorkItemTransitions = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Returns the next state on the given work item IDs.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, ids: []const u8, action: ?[]const u8) ![]const models.WorkItemNextStateOnTransition {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, ids: []const u8, action: ?[]const u8) !models.WorkItemNextStateOnTransitionList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -601,7 +601,7 @@ pub const WorkItemTransitions = struct {
             core.pager.logHttpError("WorkItemTransitions.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.WorkItemNextStateOnTransition, alloc, resp.body);
+        return try serde.json.fromSlice(models.WorkItemNextStateOnTransitionList, alloc, resp.body);
     }
 };
 
@@ -610,7 +610,7 @@ pub const AccountMyWorkRecentActivity = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Gets recent work item activities
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.AccountRecentActivityWorkItemModel2 {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !models.AccountRecentActivityWorkItemModel2List {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -637,7 +637,7 @@ pub const AccountMyWorkRecentActivity = struct {
             core.pager.logHttpError("AccountMyWorkRecentActivity.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.AccountRecentActivityWorkItemModel2, alloc, resp.body);
+        return try serde.json.fromSlice(models.AccountRecentActivityWorkItemModel2List, alloc, resp.body);
     }
 };
 
@@ -646,7 +646,7 @@ pub const GithubConnections = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Gets a list of github connections
-    pub fn getGithubConnections(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.GitHubConnectionModel {
+    pub fn getGithubConnections(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.GitHubConnectionModelList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -675,10 +675,10 @@ pub const GithubConnections = struct {
             core.pager.logHttpError("GithubConnections.getGithubConnections", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitHubConnectionModel, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitHubConnectionModelList, alloc, resp.body);
     }
     /// Gets a list of repos within specified github connection.
-    pub fn getGithubConnectionRepositories(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, connection_id: []const u8) ![]const models.GitHubConnectionRepoModel {
+    pub fn getGithubConnectionRepositories(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, connection_id: []const u8) !models.GitHubConnectionRepoModelList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -709,10 +709,10 @@ pub const GithubConnections = struct {
             core.pager.logHttpError("GithubConnections.getGithubConnectionRepositories", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitHubConnectionRepoModel, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitHubConnectionRepoModelList, alloc, resp.body);
     }
     /// Add/remove list of repos within specified github connection.
-    pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, connection_id: []const u8, body: models.GitHubConnectionReposBatchRequest) ![]const models.GitHubConnectionRepoModel {
+    pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, connection_id: []const u8, body: models.GitHubConnectionReposBatchRequest) !models.GitHubConnectionRepoModelList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -747,7 +747,7 @@ pub const GithubConnections = struct {
             core.pager.logHttpError("GithubConnections.update", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GitHubConnectionRepoModel, alloc, resp.body);
+        return try serde.json.fromSlice(models.GitHubConnectionRepoModelList, alloc, resp.body);
     }
 };
 
@@ -1010,7 +1010,7 @@ pub const ClassificationNodes = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Gets root classification nodes under the project.
-    pub fn getRootNodes(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"$depth": ?i32) ![]const models.WorkItemClassificationNode {
+    pub fn getRootNodes(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"$depth": ?i32) !models.WorkItemClassificationNodeList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1044,7 +1044,7 @@ pub const ClassificationNodes = struct {
             core.pager.logHttpError("ClassificationNodes.getRootNodes", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.WorkItemClassificationNode, alloc, resp.body);
+        return try serde.json.fromSlice(models.WorkItemClassificationNodeList, alloc, resp.body);
     }
     /// Delete an existing classification node.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, structure_group: enums.DeleteRequestStructureGroup, path: []const u8, @"$reclassify_id": ?i32) !void {
@@ -1214,7 +1214,7 @@ pub const Fields = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Returns information for all fields. The project ID/name parameter is optional.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"$expand": ?enums.ListRequestExpand) ![]const models.WorkItemField2 {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"$expand": ?enums.ListRequestExpand) !models.WorkItemField2List {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1250,7 +1250,7 @@ pub const Fields = struct {
             core.pager.logHttpError("Fields.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.WorkItemField2, alloc, resp.body);
+        return try serde.json.fromSlice(models.WorkItemField2List, alloc, resp.body);
     }
     /// Create a new field.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.WorkItemField2) !models.WorkItemField2 {
@@ -1442,7 +1442,7 @@ pub const Queries = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Gets the root queries and their children
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"$expand": ?enums.ListRequestExpand1, @"$depth": ?i32, @"$include_deleted": ?bool) ![]const models.QueryHierarchyItem {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"$expand": ?enums.ListRequestExpand1, @"$depth": ?i32, @"$include_deleted": ?bool) !models.QueryHierarchyItemList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1488,7 +1488,7 @@ pub const Queries = struct {
             core.pager.logHttpError("Queries.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.QueryHierarchyItem, alloc, resp.body);
+        return try serde.json.fromSlice(models.QueryHierarchyItemList, alloc, resp.body);
     }
     /// Delete a query or a folder. This deletes any permission change on the deleted query or folder and any of its descendants if it is a folder. It is important to note that the deleted permission changes cannot be recovered upon undeleting the query or folder.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, query: []const u8) !void {
@@ -1666,7 +1666,7 @@ pub const Queries = struct {
         return try serde.json.fromSlice(models.QueryHierarchyItem, alloc, resp.body);
     }
     /// Gets a list of queries by ids (Maximum 1000)
-    pub fn getQueriesBatch(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.QueryBatchGetRequest) ![]const models.QueryHierarchyItem {
+    pub fn getQueriesBatch(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.QueryBatchGetRequest) !models.QueryHierarchyItemList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1699,7 +1699,7 @@ pub const Queries = struct {
             core.pager.logHttpError("Queries.getQueriesBatch", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.QueryHierarchyItem, alloc, resp.body);
+        return try serde.json.fromSlice(models.QueryHierarchyItemList, alloc, resp.body);
     }
 };
 
@@ -1708,7 +1708,7 @@ pub const Recyclebin = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Gets a list of the IDs and the URLs of the deleted the work items in the Recycle Bin.
-    pub fn getDeletedWorkItemShallowReferences(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.WorkItemDeleteShallowReference {
+    pub fn getDeletedWorkItemShallowReferences(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.WorkItemDeleteShallowReferenceList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1737,7 +1737,7 @@ pub const Recyclebin = struct {
             core.pager.logHttpError("Recyclebin.getDeletedWorkItemShallowReferences", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.WorkItemDeleteShallowReference, alloc, resp.body);
+        return try serde.json.fromSlice(models.WorkItemDeleteShallowReferenceList, alloc, resp.body);
     }
     /// Destroys the specified work item permanently from the Recycle Bin. This action can not be undone.
     pub fn destroyWorkItem(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32, project: []const u8) !void {
@@ -2168,7 +2168,7 @@ pub const Tags = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get all the tags for the project.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.WorkItemTagDefinition {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.WorkItemTagDefinitionList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2197,7 +2197,7 @@ pub const Tags = struct {
             core.pager.logHttpError("Tags.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.WorkItemTagDefinition, alloc, resp.body);
+        return try serde.json.fromSlice(models.WorkItemTagDefinitionList, alloc, resp.body);
     }
     /// Delete the tag for the project. Please note, that the deleted tag will be removed from all Work Items as well as Pull Requests.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, tag_id_or_name: []const u8) !void {
@@ -2353,7 +2353,7 @@ pub const WorkItems = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Returns a list of work items (Maximum 200)
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, ids: []const u8, project: []const u8, fields: ?[]const u8, as_of: ?[]const u8, @"$expand": ?enums.ListRequestExpand2, error_policy: ?enums.ListRequestErrorPolicy) ![]const models.WorkItem {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, ids: []const u8, project: []const u8, fields: ?[]const u8, as_of: ?[]const u8, @"$expand": ?enums.ListRequestExpand2, error_policy: ?enums.ListRequestErrorPolicy) !models.WorkItemList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2414,7 +2414,7 @@ pub const WorkItems = struct {
             core.pager.logHttpError("WorkItems.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.WorkItem, alloc, resp.body);
+        return try serde.json.fromSlice(models.WorkItemList, alloc, resp.body);
     }
     /// Returns a single work item from a template.
     pub fn getWorkItemTemplate(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"type": []const u8, fields: ?[]const u8, as_of: ?[]const u8, @"$expand": ?enums.GetWorkItemTemplateRequestExpand) !models.WorkItem {
@@ -2686,7 +2686,7 @@ pub const WorkItems = struct {
         return try serde.json.fromSlice(models.WorkItem, alloc, resp.body);
     }
     /// Gets work items for a list of work item ids (Maximum 200)
-    pub fn getWorkItemsBatch(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.WorkItemBatchGetRequest) ![]const models.WorkItem {
+    pub fn getWorkItemsBatch(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.WorkItemBatchGetRequest) !models.WorkItemList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2719,7 +2719,7 @@ pub const WorkItems = struct {
             core.pager.logHttpError("WorkItems.getWorkItemsBatch", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.WorkItem, alloc, resp.body);
+        return try serde.json.fromSlice(models.WorkItemList, alloc, resp.body);
     }
     /// Deletes specified work items and sends them to the Recycle Bin, so that it can be restored back, if required. Optionally, if the destroy parameter has been set to true, it destroys the work item permanently. WARNING: If the destroy parameter is set to true, work items deleted by this command will NOT go to recycle-bin and there is no way to restore/recover them after deletion.
     pub fn deleteWorkItems(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.WorkItemDeleteBatchRequest) !models.WorkItemDeleteBatch {
@@ -2764,7 +2764,7 @@ pub const Revisions = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Returns the list of fully hydrated work item revisions, paged.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32, project: []const u8, @"$top": ?i32, @"$skip": ?i32, @"$expand": ?enums.ListRequestExpand3) ![]const models.WorkItem {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32, project: []const u8, @"$top": ?i32, @"$skip": ?i32, @"$expand": ?enums.ListRequestExpand3) !models.WorkItemList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2812,7 +2812,7 @@ pub const Revisions = struct {
             core.pager.logHttpError("Revisions.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.WorkItem, alloc, resp.body);
+        return try serde.json.fromSlice(models.WorkItemList, alloc, resp.body);
     }
     /// Returns a fully hydrated work item for the requested revision
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32, revision_number: i32, project: []const u8, @"$expand": ?enums.GetRequestExpand1) !models.WorkItem {
@@ -2864,7 +2864,7 @@ pub const Updates = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Returns the deltas between work item revisions
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32, project: []const u8, @"$top": ?i32, @"$skip": ?i32) ![]const models.WorkItemUpdate {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32, project: []const u8, @"$top": ?i32, @"$skip": ?i32) !models.WorkItemUpdateList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -2905,7 +2905,7 @@ pub const Updates = struct {
             core.pager.logHttpError("Updates.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.WorkItemUpdate, alloc, resp.body);
+        return try serde.json.fromSlice(models.WorkItemUpdateList, alloc, resp.body);
     }
     /// Returns a single update for a work item
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32, update_number: i32, project: []const u8) !models.WorkItemUpdate {
@@ -3167,7 +3167,7 @@ pub const CommentsReactions = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Gets reactions of a comment.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_id: i32, comment_id: i32) ![]const models.CommentReaction {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_id: i32, comment_id: i32) !models.CommentReactionList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -3200,7 +3200,7 @@ pub const CommentsReactions = struct {
             core.pager.logHttpError("CommentsReactions.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.CommentReaction, alloc, resp.body);
+        return try serde.json.fromSlice(models.CommentReactionList, alloc, resp.body);
     }
     /// Deletes an existing reaction on a comment.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_id: i32, comment_id: i32, reaction_type: enums.DeleteRequestReactionType) !models.CommentReaction {
@@ -3285,7 +3285,7 @@ pub const CommentReactionsEngagedUsers = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get users who reacted on the comment.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_id: i32, comment_id: i32, reaction_type: enums.ListRequestReactionType, @"$top": ?i32, @"$skip": ?i32) ![]const models.IdentityRef {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_id: i32, comment_id: i32, reaction_type: enums.ListRequestReactionType, @"$top": ?i32, @"$skip": ?i32) !models.IdentityRefList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -3330,7 +3330,7 @@ pub const CommentReactionsEngagedUsers = struct {
             core.pager.logHttpError("CommentReactionsEngagedUsers.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.IdentityRef, alloc, resp.body);
+        return try serde.json.fromSlice(models.IdentityRefList, alloc, resp.body);
     }
 };
 
@@ -3339,7 +3339,7 @@ pub const CommentsVersions = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
 
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_id: i32, comment_id: i32) ![]const models.CommentVersion {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_id: i32, comment_id: i32) !models.CommentVersionList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -3372,7 +3372,7 @@ pub const CommentsVersions = struct {
             core.pager.logHttpError("CommentsVersions.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.CommentVersion, alloc, resp.body);
+        return try serde.json.fromSlice(models.CommentVersionList, alloc, resp.body);
     }
 
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_id: i32, comment_id: i32, version: i32) !models.CommentVersion {
@@ -3419,7 +3419,7 @@ pub const WorkItemTypeCategories = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get all work item type categories.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.WorkItemTypeCategory {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.WorkItemTypeCategoryList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -3448,7 +3448,7 @@ pub const WorkItemTypeCategories = struct {
             core.pager.logHttpError("WorkItemTypeCategories.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.WorkItemTypeCategory, alloc, resp.body);
+        return try serde.json.fromSlice(models.WorkItemTypeCategoryList, alloc, resp.body);
     }
     /// Get specific work item type category by name.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, category: []const u8) !models.WorkItemTypeCategory {
@@ -3491,7 +3491,7 @@ pub const WorkItemTypes = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Returns the list of work item types
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.WorkItemType {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.WorkItemTypeList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -3520,7 +3520,7 @@ pub const WorkItemTypes = struct {
             core.pager.logHttpError("WorkItemTypes.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.WorkItemType, alloc, resp.body);
+        return try serde.json.fromSlice(models.WorkItemTypeList, alloc, resp.body);
     }
     /// Returns a work item type definition.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"type": []const u8) !models.WorkItemType {
@@ -3563,7 +3563,7 @@ pub const WorkItemTypesField = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of fields for a work item type with detailed references.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"type": []const u8, @"$expand": ?enums.ListRequestExpand4) ![]const models.WorkItemTypeFieldWithReferences {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"type": []const u8, @"$expand": ?enums.ListRequestExpand4) !models.WorkItemTypeFieldWithReferencesList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -3601,7 +3601,7 @@ pub const WorkItemTypesField = struct {
             core.pager.logHttpError("WorkItemTypesField.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.WorkItemTypeFieldWithReferences, alloc, resp.body);
+        return try serde.json.fromSlice(models.WorkItemTypeFieldWithReferencesList, alloc, resp.body);
     }
     /// Get a field for a work item type with detailed references.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"type": []const u8, field: []const u8, @"$expand": ?enums.GetRequestExpand2) !models.WorkItemTypeFieldWithReferences {
@@ -3653,7 +3653,7 @@ pub const WorkItemTypeStates = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Returns the state names and colors for a work item type.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"type": []const u8) ![]const models.WorkItemStateColor {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"type": []const u8) !models.WorkItemStateColorList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -3684,7 +3684,7 @@ pub const WorkItemTypeStates = struct {
             core.pager.logHttpError("WorkItemTypeStates.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.WorkItemStateColor, alloc, resp.body);
+        return try serde.json.fromSlice(models.WorkItemStateColorList, alloc, resp.body);
     }
 };
 
@@ -3693,7 +3693,7 @@ pub const Templates = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Gets template
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, workitemtypename: ?[]const u8) ![]const models.WorkItemTemplateReference {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, workitemtypename: ?[]const u8) !models.WorkItemTemplateReferenceList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -3731,7 +3731,7 @@ pub const Templates = struct {
             core.pager.logHttpError("Templates.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.WorkItemTemplateReference, alloc, resp.body);
+        return try serde.json.fromSlice(models.WorkItemTemplateReferenceList, alloc, resp.body);
     }
     /// Creates a template
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, body: models.WorkItemTemplate) !models.WorkItemTemplate {

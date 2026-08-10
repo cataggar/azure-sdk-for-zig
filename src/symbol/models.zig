@@ -122,3 +122,13 @@ pub const JsonBlobIdentifier = struct {
         .rename_all = .camel_case,
     };
 };
+
+/// A collection of `DebugEntry` as returned by Azure DevOps.
+pub const DebugEntryList = struct {
+    count: ?i32 = null,
+    value: ?[]const DebugEntry = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};

@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `PolicyConfiguration` as returned by Azure DevOps.
+pub const PolicyConfigurationList = struct {
+    count: ?i32 = null,
+    value: ?[]const PolicyConfiguration = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// The full policy configuration with settings.
 pub const PolicyConfiguration = struct {
     /// The policy configuration ID.
@@ -108,6 +118,16 @@ pub const JObject = struct {
     };
 };
 
+/// A collection of `PolicyEvaluationRecord` as returned by Azure DevOps.
+pub const PolicyEvaluationRecordList = struct {
+    count: ?i32 = null,
+    value: ?[]const PolicyEvaluationRecord = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// This record encapsulates the current state of a policy as it applies to one specific pull request. Each pull request has a unique PolicyEvaluationRecord for each pull request which the policy applies to.
 pub const PolicyEvaluationRecord = struct {
     links: ?ReferenceLinks = null,
@@ -129,6 +149,16 @@ pub const PolicyEvaluationRecord = struct {
         .rename = .{
             .links = "_links",
         },
+    };
+};
+
+/// A collection of `PolicyType` as returned by Azure DevOps.
+pub const PolicyTypeList = struct {
+    count: ?i32 = null,
+    value: ?[]const PolicyType = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
     };
 };
 

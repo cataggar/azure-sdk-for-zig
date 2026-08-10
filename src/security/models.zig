@@ -14,6 +14,16 @@ pub const JObject = struct {
     };
 };
 
+/// A collection of `AccessControlEntry` as returned by Azure DevOps.
+pub const AccessControlEntryList = struct {
+    count: ?i32 = null,
+    value: ?[]const AccessControlEntry = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Class for encapsulating the allowed and denied permissions for a given IdentityDescriptor.
 pub const AccessControlEntry = struct {
     /// The set of permission bits that represent the actions that the associated descriptor is allowed to perform.
@@ -50,6 +60,16 @@ pub const AceExtendedInformation = struct {
     inherited_allow: ?i32 = null,
     /// These are the permissions that are inherited for this identity on this token. If the token does not inherit permissions this will be 0. Note that any permissions that have been explicitly set on this token for this identity, or any groups that this identity is a part of, are not included here.
     inherited_deny: ?i32 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `AccessControlList` as returned by Azure DevOps.
+pub const AccessControlListList = struct {
+    count: ?i32 = null,
+    value: ?[]const AccessControlList = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -106,6 +126,16 @@ pub const PermissionEvaluation = struct {
     token: ?[]const u8 = null,
     /// Permission evaluation value.
     value: ?bool = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `SecurityNamespaceDescription` as returned by Azure DevOps.
+pub const SecurityNamespaceDescriptionList = struct {
+    count: ?i32 = null,
+    value: ?[]const SecurityNamespaceDescription = null,
 
     pub const serde = .{
         .rename_all = .camel_case,

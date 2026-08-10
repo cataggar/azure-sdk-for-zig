@@ -145,7 +145,7 @@ pub const GroupEntitlements = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get the group entitlements for an account.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.GroupEntitlement {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !models.GroupEntitlementList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -172,7 +172,7 @@ pub const GroupEntitlements = struct {
             core.pager.logHttpError("GroupEntitlements.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.GroupEntitlement, alloc, resp.body);
+        return try serde.json.fromSlice(models.GroupEntitlementList, alloc, resp.body);
     }
     /// Create a group entitlement with license rule, extension rule.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, rule_option: ?enums.AddRequestRuleOption, body: models.GroupEntitlement) !models.GroupEntitlementOperationReference {

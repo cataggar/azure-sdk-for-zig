@@ -137,7 +137,7 @@ pub const Consumers = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of available service hook consumer services. Optionally filter by consumers that support at least one event type from the specific publisher.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, publisher_id: ?[]const u8) ![]const models.Consumer {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, publisher_id: ?[]const u8) !models.ConsumerList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -171,7 +171,7 @@ pub const Consumers = struct {
             core.pager.logHttpError("Consumers.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Consumer, alloc, resp.body);
+        return try serde.json.fromSlice(models.ConsumerList, alloc, resp.body);
     }
     /// Get a specific consumer service. Optionally filter out consumer actions that do not support any event types for the specified publisher.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, consumer_id: []const u8, publisher_id: ?[]const u8) !models.Consumer {
@@ -213,7 +213,7 @@ pub const Consumers = struct {
         return try serde.json.fromSlice(models.Consumer, alloc, resp.body);
     }
     /// Get a list of consumer actions for a specific consumer.
-    pub fn listConsumerActions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, consumer_id: []const u8, publisher_id: ?[]const u8) ![]const models.ConsumerAction {
+    pub fn listConsumerActions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, consumer_id: []const u8, publisher_id: ?[]const u8) !models.ConsumerActionList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -249,7 +249,7 @@ pub const Consumers = struct {
             core.pager.logHttpError("Consumers.listConsumerActions", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ConsumerAction, alloc, resp.body);
+        return try serde.json.fromSlice(models.ConsumerActionList, alloc, resp.body);
     }
     /// Get details about a specific consumer action.
     pub fn getConsumerAction(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, consumer_id: []const u8, consumer_action_id: []const u8, publisher_id: ?[]const u8) !models.ConsumerAction {
@@ -333,7 +333,7 @@ pub const Notifications = struct {
         return try serde.json.fromSlice(models.NotificationsQuery, alloc, resp.body);
     }
     /// Get a list of notifications for a specific subscription. A notification includes details about the event, the request to and the response from the consumer service.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, subscription_id: []const u8, max_results: ?i32, status: ?enums.ListRequestStatus, result: ?enums.ListRequestResult) ![]const models.Notification {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, subscription_id: []const u8, max_results: ?i32, status: ?enums.ListRequestStatus, result: ?enums.ListRequestResult) !models.NotificationList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -381,7 +381,7 @@ pub const Notifications = struct {
             core.pager.logHttpError("Notifications.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Notification, alloc, resp.body);
+        return try serde.json.fromSlice(models.NotificationList, alloc, resp.body);
     }
     /// Get a specific notification for a subscription.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, subscription_id: []const u8, notification_id: i32) !models.Notification {
@@ -463,7 +463,7 @@ pub const Publishers = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of publishers.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) ![]const models.Publisher {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !models.PublisherList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -490,7 +490,7 @@ pub const Publishers = struct {
             core.pager.logHttpError("Publishers.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Publisher, alloc, resp.body);
+        return try serde.json.fromSlice(models.PublisherList, alloc, resp.body);
     }
     /// Get a specific service hooks publisher.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, publisher_id: []const u8) !models.Publisher {
@@ -525,7 +525,7 @@ pub const Publishers = struct {
         return try serde.json.fromSlice(models.Publisher, alloc, resp.body);
     }
     /// Get the event types for a specific publisher.
-    pub fn listEventTypes(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, publisher_id: []const u8) ![]const models.EventTypeDescriptor {
+    pub fn listEventTypes(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, publisher_id: []const u8) !models.EventTypeDescriptorList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -554,7 +554,7 @@ pub const Publishers = struct {
             core.pager.logHttpError("Publishers.listEventTypes", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.EventTypeDescriptor, alloc, resp.body);
+        return try serde.json.fromSlice(models.EventTypeDescriptorList, alloc, resp.body);
     }
     /// Get a specific event type.
     pub fn getEventType(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, publisher_id: []const u8, event_type_id: []const u8) !models.EventTypeDescriptor {
@@ -667,7 +667,7 @@ pub const Subscriptions = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of subscriptions.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, publisher_id: ?[]const u8, event_type: ?[]const u8, consumer_id: ?[]const u8, consumer_action_id: ?[]const u8) ![]const models.Subscription {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, publisher_id: ?[]const u8, event_type: ?[]const u8, consumer_id: ?[]const u8, consumer_action_id: ?[]const u8) !models.SubscriptionList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -722,7 +722,7 @@ pub const Subscriptions = struct {
             core.pager.logHttpError("Subscriptions.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Subscription, alloc, resp.body);
+        return try serde.json.fromSlice(models.SubscriptionList, alloc, resp.body);
     }
     /// Create a subscription.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.Subscription) !models.Subscription {

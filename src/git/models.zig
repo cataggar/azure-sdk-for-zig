@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `GitDeletedRepository` as returned by Azure DevOps.
+pub const GitDeletedRepositoryList = struct {
+    count: ?i32 = null,
+    value: ?[]const GitDeletedRepository = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const GitDeletedRepository = struct {
     created_date: ?[]const u8 = null,
     deleted_by: ?IdentityRef = null,
@@ -165,10 +175,30 @@ pub const TeamProjectCollectionReference = struct {
     };
 };
 
+/// A collection of `GitRepository` as returned by Azure DevOps.
+pub const GitRepositoryList = struct {
+    count: ?i32 = null,
+    value: ?[]const GitRepository = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const GitRepositoryCreateOptions = struct {
     name: ?[]const u8 = null,
     parent_repository: ?GitRepositoryRef = null,
     project: ?TeamProjectReference = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `GitRefFavorite` as returned by Azure DevOps.
+pub const GitRefFavoriteList = struct {
+    count: ?i32 = null,
+    value: ?[]const GitRefFavorite = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -189,6 +219,16 @@ pub const GitRefFavorite = struct {
         .rename = .{
             .links = "_links",
         },
+    };
+};
+
+/// A collection of `PolicyConfiguration` as returned by Azure DevOps.
+pub const PolicyConfigurationList = struct {
+    count: ?i32 = null,
+    value: ?[]const PolicyConfiguration = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
     };
 };
 
@@ -232,6 +272,16 @@ pub const PolicyTypeRef = struct {
     id: ?[]const u8 = null,
     /// The URL where the policy type can be retrieved.
     url: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `GitPullRequest` as returned by Azure DevOps.
+pub const GitPullRequestList = struct {
+    count: ?i32 = null,
+    value: ?[]const GitPullRequest = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -705,6 +755,16 @@ pub const GitAsyncRefOperationSource = struct {
     };
 };
 
+/// A collection of `GitCommitRef` as returned by Azure DevOps.
+pub const GitCommitRefList = struct {
+    count: ?i32 = null,
+    value: ?[]const GitCommitRef = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const GitCommit = struct {
     links: ?ReferenceLinks = null,
     author: ?GitUserDate = null,
@@ -806,6 +866,16 @@ pub const GitVersionDescriptor = struct {
     };
 };
 
+/// A collection of `GitStatus` as returned by Azure DevOps.
+pub const GitStatusList = struct {
+    count: ?i32 = null,
+    value: ?[]const GitStatus = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const GitCommitDiffs = struct {
     ahead_count: ?i32 = null,
     all_changes_included: ?bool = null,
@@ -815,6 +885,16 @@ pub const GitCommitDiffs = struct {
     changes: ?[]const GitChange = null,
     common_commit: ?[]const u8 = null,
     target_commit: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `GitImportRequest` as returned by Azure DevOps.
+pub const GitImportRequestList = struct {
+    count: ?i32 = null,
+    value: ?[]const GitImportRequest = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -890,6 +970,16 @@ pub const GitImportTfvcSource = struct {
     import_history_duration_in_days: ?i32 = null,
     /// Path which we want to import (this can be copied from Path Control in Explorer)
     path: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `GitItem` as returned by Azure DevOps.
+pub const GitItemList = struct {
+    count: ?i32 = null,
+    value: ?[]const GitItem = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -994,6 +1084,16 @@ pub const GitPullRequestQueryInput = struct {
     };
 };
 
+/// A collection of `Attachment` as returned by Azure DevOps.
+pub const AttachmentList = struct {
+    count: ?i32 = null,
+    value: ?[]const Attachment = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Meta data for a file attached to an artifact.
 pub const Attachment = struct {
     links: ?ReferenceLinks = null,
@@ -1036,6 +1136,16 @@ pub const PropertiesCollection = struct {
 };
 
 pub const PropertiesCollectionItem = struct {
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `GitPullRequestIteration` as returned by Azure DevOps.
+pub const GitPullRequestIterationList = struct {
+    count: ?i32 = null,
+    value: ?[]const GitPullRequestIteration = null,
+
     pub const serde = .{
         .rename_all = .camel_case,
     };
@@ -1116,6 +1226,16 @@ pub const GitPullRequestIterationChanges = struct {
     };
 };
 
+/// A collection of `GitPullRequestStatus` as returned by Azure DevOps.
+pub const GitPullRequestStatusList = struct {
+    count: ?i32 = null,
+    value: ?[]const GitPullRequestStatus = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// This class contains the metadata of a service/extension posting pull request status. Status can be associated with a pull request or an iteration.
 pub const GitPullRequestStatus = struct {
     links: ?ReferenceLinks = null,
@@ -1152,10 +1272,30 @@ pub const JsonPatchDocument = struct {
     };
 };
 
+/// A collection of `WebApiTagDefinition` as returned by Azure DevOps.
+pub const WebApiTagDefinitionList = struct {
+    count: ?i32 = null,
+    value: ?[]const WebApiTagDefinition = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// The representation of data needed to create a tag definition which is sent across the wire.
 pub const WebApiCreateTagRequestData = struct {
     /// Name of the tag definition that will be created.
     name: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `IdentityRefWithVote` as returned by Azure DevOps.
+pub const IdentityRefWithVoteList = struct {
+    count: ?i32 = null,
+    value: ?[]const IdentityRefWithVote = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -1168,6 +1308,16 @@ pub const ShareNotificationContext = struct {
     message: ?[]const u8 = null,
     /// Identities of users who will receive a share notification.
     receivers: ?[]const IdentityRef = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `GitPullRequestCommentThread` as returned by Azure DevOps.
+pub const GitPullRequestCommentThreadList = struct {
+    count: ?i32 = null,
+    value: ?[]const GitPullRequestCommentThread = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -1300,6 +1450,46 @@ pub const CommentTrackingCriteria = struct {
     };
 };
 
+/// A collection of `Comment` as returned by Azure DevOps.
+pub const CommentList = struct {
+    count: ?i32 = null,
+    value: ?[]const Comment = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `IdentityRef` as returned by Azure DevOps.
+pub const IdentityRefList = struct {
+    count: ?i32 = null,
+    value: ?[]const IdentityRef = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `ResourceRef` as returned by Azure DevOps.
+pub const ResourceRefList = struct {
+    count: ?i32 = null,
+    value: ?[]const ResourceRef = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `GitPush` as returned by Azure DevOps.
+pub const GitPushList = struct {
+    count: ?i32 = null,
+    value: ?[]const GitPush = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const GitPush = struct {
     links: ?ReferenceLinks = null,
     date: ?[]const u8 = null,
@@ -1330,6 +1520,16 @@ pub const GitRefUpdate = struct {
     };
 };
 
+/// A collection of `GitRef` as returned by Azure DevOps.
+pub const GitRefList = struct {
+    count: ?i32 = null,
+    value: ?[]const GitRef = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const GitRef = struct {
     links: ?ReferenceLinks = null,
     creator: ?IdentityRef = null,
@@ -1346,6 +1546,16 @@ pub const GitRef = struct {
         .rename = .{
             .links = "_links",
         },
+    };
+};
+
+/// A collection of `GitRefUpdateResult` as returned by Azure DevOps.
+pub const GitRefUpdateResultList = struct {
+    count: ?i32 = null,
+    value: ?[]const GitRefUpdateResult = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
     };
 };
 
@@ -1391,6 +1601,16 @@ pub const GitRevert = struct {
     };
 };
 
+/// A collection of `GitBranchStats` as returned by Azure DevOps.
+pub const GitBranchStatsList = struct {
+    count: ?i32 = null,
+    value: ?[]const GitBranchStats = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Ahead and behind counts for a particular ref.
 pub const GitBranchStats = struct {
     /// Number of commits ahead.
@@ -1402,6 +1622,16 @@ pub const GitBranchStats = struct {
     is_base_version: ?bool = null,
     /// Name of the ref.
     name: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `GitSuggestion` as returned by Azure DevOps.
+pub const GitSuggestionList = struct {
+    count: ?i32 = null,
+    value: ?[]const GitSuggestion = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -1458,6 +1688,26 @@ pub const GitTreeEntryRef = struct {
     size: ?i64 = null,
     /// url to retrieve tree or blob
     url: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `GitRepositoryRef` as returned by Azure DevOps.
+pub const GitRepositoryRefList = struct {
+    count: ?i32 = null,
+    value: ?[]const GitRepositoryRef = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `GitForkSyncRequest` as returned by Azure DevOps.
+pub const GitForkSyncRequestList = struct {
+    count: ?i32 = null,
+    value: ?[]const GitForkSyncRequest = null,
 
     pub const serde = .{
         .rename_all = .camel_case,

@@ -66,6 +66,16 @@ pub const CodeCoverageStatistics = struct {
     };
 };
 
+/// A collection of `SourceViewBuildCoverage` as returned by Azure DevOps.
+pub const SourceViewBuildCoverageList = struct {
+    count: ?i32 = null,
+    value: ?[]const SourceViewBuildCoverage = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const SourceViewBuildCoverage = struct {
     configuration: ?BuildConfiguration = null,
     folder_coverage_data: ?FolderCoverageData = null,
@@ -144,6 +154,16 @@ pub const FileCoverageData = struct {
     };
 };
 
+/// A collection of `TestRunCoverage` as returned by Azure DevOps.
+pub const TestRunCoverageList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestRunCoverage = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Test Run Code Coverage Details
 pub const TestRunCoverage = struct {
     /// Last Error
@@ -193,6 +213,16 @@ pub const FileCoverageRequest = struct {
     pull_request_id: ?i32 = null,
     pull_request_iteration_id: ?i32 = null,
     repo_id: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `CustomTestFieldDefinition` as returned by Azure DevOps.
+pub const CustomTestFieldDefinitionList = struct {
+    count: ?i32 = null,
+    value: ?[]const CustomTestFieldDefinition = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -816,6 +846,16 @@ pub const AggregatedResultsByOutcomeGroupByValue = struct {
     };
 };
 
+/// A collection of `FieldDetailsForTestResults` as returned by Azure DevOps.
+pub const FieldDetailsForTestResultsList = struct {
+    count: ?i32 = null,
+    value: ?[]const FieldDetailsForTestResults = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const FieldDetailsForTestResults = struct {
     /// Group by field name
     field_name: ?[]const u8 = null,
@@ -881,6 +921,16 @@ pub const QueryModel = struct {
     };
 };
 
+/// A collection of `TestCaseResult` as returned by Azure DevOps.
+pub const TestCaseResultList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestCaseResult = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const TestResultHistory = struct {
     group_by_field: ?[]const u8 = null,
     results_for_group: ?[]const TestResultHistoryDetailsForGroup = null,
@@ -900,6 +950,16 @@ pub const TestResultHistoryDetailsForGroup = struct {
 };
 
 pub const TestResultHistoryDetailsForGroupGroupByValue = struct {
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TestResultMetaData` as returned by Azure DevOps.
+pub const TestResultMetaDataList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestResultMetaData = null,
+
     pub const serde = .{
         .rename_all = .camel_case,
     };
@@ -991,6 +1051,16 @@ pub const TestResultHistoryForGroup = struct {
     };
 };
 
+/// A collection of `WorkItemReference` as returned by Azure DevOps.
+pub const WorkItemReferenceList = struct {
+    count: ?i32 = null,
+    value: ?[]const WorkItemReference = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// WorkItem reference Details.
 pub const WorkItemReference = struct {
     /// WorkItem Id.
@@ -1023,6 +1093,16 @@ pub const TestMethod = struct {
     container: ?[]const u8 = null,
     name: ?[]const u8 = null,
     test_result: ?TestCaseResult = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `ShallowTestCaseResult` as returned by Azure DevOps.
+pub const ShallowTestCaseResultList = struct {
+    count: ?i32 = null,
+    value: ?[]const ShallowTestCaseResult = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -1123,6 +1203,26 @@ pub const TestFailuresAnalysis = struct {
     };
 };
 
+/// A collection of `TestResultSummary` as returned by Azure DevOps.
+pub const TestResultSummaryList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestResultSummary = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TestSummaryForWorkItem` as returned by Azure DevOps.
+pub const TestSummaryForWorkItemList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestSummaryForWorkItem = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const TestSummaryForWorkItem = struct {
     summary: ?AggregatedDataForResultTrend = null,
     work_item: ?WorkItemReference = null,
@@ -1154,6 +1254,26 @@ pub const TestResultTrendFilter = struct {
     publish_context: ?[]const u8 = null,
     test_run_titles: ?[]const []const u8 = null,
     trend_days: ?i32 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `AggregatedDataForResultTrend` as returned by Azure DevOps.
+pub const AggregatedDataForResultTrendList = struct {
+    count: ?i32 = null,
+    value: ?[]const AggregatedDataForResultTrend = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TestRun` as returned by Azure DevOps.
+pub const TestRunList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestRun = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -1470,6 +1590,16 @@ pub const TestMessageLogDetails = struct {
     };
 };
 
+/// A collection of `TestAttachment` as returned by Azure DevOps.
+pub const TestAttachmentList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestAttachment = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const TestAttachment = struct {
     /// Attachment type.
     attachment_type: ?enums.TestAttachmentAttachmentType = null,
@@ -1519,6 +1649,16 @@ pub const TestAttachmentReference = struct {
     };
 };
 
+/// A collection of `TestMessageLogDetails` as returned by Azure DevOps.
+pub const TestMessageLogDetailsList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestMessageLogDetails = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const TestResultDocument = struct {
     operation_reference: ?TestOperationReference = null,
     payload: ?TestResultPayload = null,
@@ -1543,6 +1683,16 @@ pub const TestResultPayload = struct {
     comment: ?[]const u8 = null,
     name: ?[]const u8 = null,
     stream: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TestLog` as returned by Azure DevOps.
+pub const TestLogList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestLog = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -1627,6 +1777,26 @@ pub const TestTagsUpdateModel = struct {
 };
 
 pub const TestTagsUpdateModelTag = struct {
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TestTag` as returned by Azure DevOps.
+pub const TestTagList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestTag = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TestLogStoreAttachment` as returned by Azure DevOps.
+pub const TestLogStoreAttachmentList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestLogStoreAttachment = null,
+
     pub const serde = .{
         .rename_all = .camel_case,
     };
@@ -1774,6 +1944,16 @@ pub const TestResultsUpdateSettings = struct {
 pub const TestTagSummary = struct {
     /// Dictionary which contains tags associated with a test run.
     tags_group_by_test_artifact: ?std.json.ArrayHashMap([]const TestTag) = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TestResultFailureType` as returned by Azure DevOps.
+pub const TestResultFailureTypeList = struct {
+    count: ?i32 = null,
+    value: ?[]const TestResultFailureType = null,
 
     pub const serde = .{
         .rename_all = .camel_case,

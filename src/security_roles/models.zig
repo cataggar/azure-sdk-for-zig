@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `RoleAssignment` as returned by Azure DevOps.
+pub const RoleAssignmentList = struct {
+    count: ?i32 = null,
+    value: ?[]const RoleAssignment = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const RoleAssignment = struct {
     /// Designates the role as explicitly assigned or inherited.
     access: ?enums.RoleAssignmentAccess = null,
@@ -93,6 +103,16 @@ pub const UserRoleAssignmentRef = struct {
     unique_name: ?[]const u8 = null,
     /// Unique id of the user given the role assignment.
     user_id: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `SecurityRole` as returned by Azure DevOps.
+pub const SecurityRoleList = struct {
+    count: ?i32 = null,
+    value: ?[]const SecurityRole = null,
 
     pub const serde = .{
         .rename_all = .camel_case,

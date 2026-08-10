@@ -185,7 +185,7 @@ pub const CodeCoverage = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get code coverage data for a build.
-    pub fn getBuildCodeCoverage(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, flags: i32) ![]const models.BuildCoverage {
+    pub fn getBuildCodeCoverage(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, flags: i32) !models.BuildCoverageList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -218,10 +218,10 @@ pub const CodeCoverage = struct {
             core.pager.logHttpError("CodeCoverage.getBuildCodeCoverage", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.BuildCoverage, alloc, resp.body);
+        return try serde.json.fromSlice(models.BuildCoverageList, alloc, resp.body);
     }
     /// Get code coverage data for a test run
-    pub fn getTestRunCodeCoverage(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, flags: i32) ![]const models.TestRunCoverage {
+    pub fn getTestRunCodeCoverage(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, flags: i32) !models.TestRunCoverageList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -254,7 +254,7 @@ pub const CodeCoverage = struct {
             core.pager.logHttpError("CodeCoverage.getTestRunCodeCoverage", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TestRunCoverage, alloc, resp.body);
+        return try serde.json.fromSlice(models.TestRunCoverageList, alloc, resp.body);
     }
 };
 
@@ -263,7 +263,7 @@ pub const Points = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of test points.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32, wit_fields: ?[]const u8, configuration_id: ?[]const u8, test_case_id: ?[]const u8, test_point_ids: ?[]const u8, include_point_details: ?bool, @"$skip": ?i32, @"$top": ?i32) ![]const models.TestPoint {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32, wit_fields: ?[]const u8, configuration_id: ?[]const u8, test_case_id: ?[]const u8, test_point_ids: ?[]const u8, include_point_details: ?bool, @"$skip": ?i32, @"$top": ?i32) !models.TestPointList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -339,7 +339,7 @@ pub const Points = struct {
             core.pager.logHttpError("Points.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TestPoint, alloc, resp.body);
+        return try serde.json.fromSlice(models.TestPointList, alloc, resp.body);
     }
     /// Get a test point.
     pub fn getPoint(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32, point_ids: i32, wit_fields: ?[]const u8) !models.TestPoint {
@@ -387,7 +387,7 @@ pub const Points = struct {
         return try serde.json.fromSlice(models.TestPoint, alloc, resp.body);
     }
     /// Update test points.
-    pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32, point_ids: []const u8, body: models.PointUpdateModel) ![]const models.TestPoint {
+    pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32, point_ids: []const u8, body: models.PointUpdateModel) !models.TestPointList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -426,7 +426,7 @@ pub const Points = struct {
             core.pager.logHttpError("Points.update", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TestPoint, alloc, resp.body);
+        return try serde.json.fromSlice(models.TestPointList, alloc, resp.body);
     }
     /// Get test points using query.
     pub fn getPointsByQuery(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"$skip": ?i32, @"$top": ?i32, body: models.TestPointsQuery) !models.TestPointsQuery {
@@ -481,7 +481,7 @@ pub const TestSuites = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get all test cases in a suite.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32) ![]const models.SuiteTestCase {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32) !models.SuiteTestCaseList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -514,7 +514,7 @@ pub const TestSuites = struct {
             core.pager.logHttpError("TestSuites.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.SuiteTestCase, alloc, resp.body);
+        return try serde.json.fromSlice(models.SuiteTestCaseList, alloc, resp.body);
     }
     /// The test points associated with the test cases are removed from the test suite. The test case work item is not deleted from the system. See test cases resource to delete a test case permanently.
     pub fn removeTestCasesFromSuiteUrl(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32, test_case_ids: []const u8) !void {
@@ -592,7 +592,7 @@ pub const TestSuites = struct {
         return try serde.json.fromSlice(models.SuiteTestCase, alloc, resp.body);
     }
     /// Updates the properties of the test case association in a suite.
-    pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32, test_case_ids: []const u8, body: models.SuiteTestCaseUpdateModel) ![]const models.SuiteTestCase {
+    pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32, test_case_ids: []const u8, body: models.SuiteTestCaseUpdateModel) !models.SuiteTestCaseList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -631,10 +631,10 @@ pub const TestSuites = struct {
             core.pager.logHttpError("TestSuites.update", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.SuiteTestCase, alloc, resp.body);
+        return try serde.json.fromSlice(models.SuiteTestCaseList, alloc, resp.body);
     }
     /// Add test cases to suite.
-    pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32, test_case_ids: []const u8) ![]const models.SuiteTestCase {
+    pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan_id: i32, suite_id: i32, test_case_ids: []const u8) !models.SuiteTestCaseList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -669,7 +669,7 @@ pub const TestSuites = struct {
             core.pager.logHttpError("TestSuites.add", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.SuiteTestCase, alloc, resp.body);
+        return try serde.json.fromSlice(models.SuiteTestCaseList, alloc, resp.body);
     }
 };
 
@@ -794,7 +794,7 @@ pub const Runs = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of test runs.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_uri: ?[]const u8, owner: ?[]const u8, tmi_run_id: ?[]const u8, plan_id: ?i32, include_run_details: ?bool, automated: ?bool, @"$skip": ?i32, @"$top": ?i32) ![]const models.TestRun {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_uri: ?[]const u8, owner: ?[]const u8, tmi_run_id: ?[]const u8, plan_id: ?i32, include_run_details: ?bool, automated: ?bool, @"$skip": ?i32, @"$top": ?i32) !models.TestRunList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -869,7 +869,7 @@ pub const Runs = struct {
             core.pager.logHttpError("Runs.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TestRun, alloc, resp.body);
+        return try serde.json.fromSlice(models.TestRunList, alloc, resp.body);
     }
     /// Create new test run.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.RunCreateModel) !models.TestRun {
@@ -1078,7 +1078,7 @@ pub const Attachments = struct {
         },
     };
     /// Get list of test run attachments reference.
-    pub fn getTestRunAttachments(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32) ![]const models.TestAttachment {
+    pub fn getTestRunAttachments(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32) !models.TestAttachmentList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1109,7 +1109,7 @@ pub const Attachments = struct {
             core.pager.logHttpError("Attachments.getTestRunAttachments", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TestAttachment, alloc, resp.body);
+        return try serde.json.fromSlice(models.TestAttachmentList, alloc, resp.body);
     }
     /// Attach a file to a test run.
     pub fn createTestRunAttachment(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, body: models.TestAttachmentRequestModel) !models.TestAttachmentReference {
@@ -1203,7 +1203,7 @@ pub const Attachments = struct {
         }
     }
     /// Get list of test result attachments reference.
-    pub fn getTestResultAttachments(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, test_case_result_id: i32) ![]const models.TestAttachment {
+    pub fn getTestResultAttachments(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, test_case_result_id: i32) !models.TestAttachmentList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1236,7 +1236,7 @@ pub const Attachments = struct {
             core.pager.logHttpError("Attachments.getTestResultAttachments", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TestAttachment, alloc, resp.body);
+        return try serde.json.fromSlice(models.TestAttachmentList, alloc, resp.body);
     }
     /// Attach a file to a test result.
     pub fn createTestResultAttachment(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, test_case_result_id: i32, body: models.TestAttachmentRequestModel) !models.TestAttachmentReference {
@@ -1340,7 +1340,7 @@ pub const Results = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get test results for a test run.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, details_to_include: ?enums.ListRequestDetailsToInclude, @"$skip": ?i32, @"$top": ?i32, outcomes: ?[]const u8) ![]const models.TestCaseResult {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, details_to_include: ?enums.ListRequestDetailsToInclude, @"$skip": ?i32, @"$top": ?i32, outcomes: ?[]const u8) !models.TestCaseResultList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1395,10 +1395,10 @@ pub const Results = struct {
             core.pager.logHttpError("Results.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TestCaseResult, alloc, resp.body);
+        return try serde.json.fromSlice(models.TestCaseResultList, alloc, resp.body);
     }
     /// Update test results in a test run.
-    pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, body: []const models.TestCaseResult) ![]const models.TestCaseResult {
+    pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, body: []const models.TestCaseResult) !models.TestCaseResultList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1433,10 +1433,10 @@ pub const Results = struct {
             core.pager.logHttpError("Results.update", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TestCaseResult, alloc, resp.body);
+        return try serde.json.fromSlice(models.TestCaseResultList, alloc, resp.body);
     }
     /// Add test results to a test run.
-    pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, body: []const models.TestCaseResult) ![]const models.TestCaseResult {
+    pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, body: []const models.TestCaseResult) !models.TestCaseResultList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1471,7 +1471,7 @@ pub const Results = struct {
             core.pager.logHttpError("Results.add", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TestCaseResult, alloc, resp.body);
+        return try serde.json.fromSlice(models.TestCaseResultList, alloc, resp.body);
     }
     /// Get a test result for a test run.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, test_case_result_id: i32, details_to_include: ?enums.GetRequestDetailsToInclude) !models.TestCaseResult {
@@ -1523,7 +1523,7 @@ pub const Iterations = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get iterations for a result
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, test_case_result_id: i32, include_action_results: ?bool) ![]const models.TestIterationDetailsModel {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, test_case_result_id: i32, include_action_results: ?bool) !models.TestIterationDetailsModelList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1561,7 +1561,7 @@ pub const Iterations = struct {
             core.pager.logHttpError("Iterations.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TestIterationDetailsModel, alloc, resp.body);
+        return try serde.json.fromSlice(models.TestIterationDetailsModelList, alloc, resp.body);
     }
     /// Get iteration for a result
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, test_case_result_id: i32, iteration_id: i32, include_action_results: ?bool) !models.TestIterationDetailsModel {
@@ -1652,7 +1652,7 @@ pub const Session = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of test sessions
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, period: ?i32, all_sessions: ?bool, include_all_properties: ?bool, source: ?enums.ListRequestSource, include_only_completed_sessions: ?bool) ![]const models.TestSession {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, period: ?i32, all_sessions: ?bool, include_all_properties: ?bool, source: ?enums.ListRequestSource, include_only_completed_sessions: ?bool) !models.TestSessionList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1710,7 +1710,7 @@ pub const Session = struct {
             core.pager.logHttpError("Session.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.TestSession, alloc, resp.body);
+        return try serde.json.fromSlice(models.TestSessionList, alloc, resp.body);
     }
     /// Update a test session
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, body: models.TestSession) !models.TestSession {

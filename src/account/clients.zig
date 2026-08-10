@@ -105,7 +105,7 @@ pub const Accounts = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get a list of accounts for a specific owner or a specific member. One of the following parameters is required: ownerId, memberId.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, owner_id: ?[]const u8, member_id: ?[]const u8, properties: ?[]const u8) ![]const models.Account {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, owner_id: ?[]const u8, member_id: ?[]const u8, properties: ?[]const u8) !models.AccountList {
         @setEvalBranchQuota(100_000);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/_apis/accounts", .{self.endpoint});
         defer alloc.free(base_url);
@@ -151,6 +151,6 @@ pub const Accounts = struct {
             core.pager.logHttpError("Accounts.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Account, alloc, resp.body);
+        return try serde.json.fromSlice(models.AccountList, alloc, resp.body);
     }
 };

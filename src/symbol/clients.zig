@@ -350,17 +350,17 @@ pub const Requests = struct {
         status_200: struct {
             status: u16 = 200,
             headers: struct {},
-            body: []const models.DebugEntry,
+            body: models.DebugEntryList,
         },
         status_400: struct {
             status: u16 = 400,
             headers: struct {},
-            body: []const models.DebugEntry,
+            body: models.DebugEntryList,
         },
         status_409: struct {
             status: u16 = 409,
             headers: struct {},
-            body: []const models.DebugEntry,
+            body: models.DebugEntryList,
         },
     };
     /// Delete a symbol request by request name.
@@ -748,7 +748,7 @@ pub const Requests = struct {
 
         switch (resp.status_code) {
             200 => {
-                const response_body = try serde.json.fromSlice([]const models.DebugEntry, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.DebugEntryList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{},
@@ -756,7 +756,7 @@ pub const Requests = struct {
                 } };
             },
             400 => {
-                const response_body = try serde.json.fromSlice([]const models.DebugEntry, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.DebugEntryList, alloc, resp.body);
                 return .{ .status_400 = .{
                     .status = resp.status_code,
                     .headers = .{},
@@ -764,7 +764,7 @@ pub const Requests = struct {
                 } };
             },
             409 => {
-                const response_body = try serde.json.fromSlice([]const models.DebugEntry, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.DebugEntryList, alloc, resp.body);
                 return .{ .status_409 = .{
                     .status = resp.status_code,
                     .headers = .{},

@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `ProcessInfo` as returned by Azure DevOps.
+pub const ProcessInfoList = struct {
+    count: ?i32 = null,
+    value: ?[]const ProcessInfo = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Process.
 pub const ProcessInfo = struct {
     /// Indicates the type of customization on this process. System Process is default process. Inherited Process is modified process that was System process before.
@@ -71,6 +81,16 @@ pub const UpdateProcessModel = struct {
     is_enabled: ?bool = null,
     /// New name of the process
     name: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `ProcessBehavior` as returned by Azure DevOps.
+pub const ProcessBehaviorList = struct {
+    count: ?i32 = null,
+    value: ?[]const ProcessBehavior = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -150,6 +170,16 @@ pub const ProcessBehaviorUpdateRequest = struct {
     color: ?[]const u8 = null,
     /// Behavior Name.
     name: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `ProcessWorkItemType` as returned by Azure DevOps.
+pub const ProcessWorkItemTypeList = struct {
+    count: ?i32 = null,
+    value: ?[]const ProcessWorkItemType = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -421,6 +451,16 @@ pub const UpdateProcessWorkItemTypeRequest = struct {
     };
 };
 
+/// A collection of `ProcessWorkItemTypeField` as returned by Azure DevOps.
+pub const ProcessWorkItemTypeFieldList = struct {
+    count: ?i32 = null,
+    value: ?[]const ProcessWorkItemTypeField = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Class that describes a field in a work item type and its properties.
 pub const ProcessWorkItemTypeField = struct {
     /// The list of field allowed values.
@@ -515,6 +555,26 @@ pub const UpdateProcessWorkItemTypeFieldRequestDefaultValue = struct {
     };
 };
 
+/// A collection of `Control` as returned by Azure DevOps.
+pub const ControlList = struct {
+    count: ?i32 = null,
+    value: ?[]const Control = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `ProcessRule` as returned by Azure DevOps.
+pub const ProcessRuleList = struct {
+    count: ?i32 = null,
+    value: ?[]const ProcessRule = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Process Rule Response.
 pub const ProcessRule = struct {
     /// List of actions to take when the rule is triggered.
@@ -599,6 +659,16 @@ pub const UpdateProcessRuleRequest = struct {
     };
 };
 
+/// A collection of `WorkItemStateResultModel` as returned by Azure DevOps.
+pub const WorkItemStateResultModelList = struct {
+    count: ?i32 = null,
+    value: ?[]const WorkItemStateResultModel = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Class That represents a work item state input.
 pub const WorkItemStateInputModel = struct {
     /// Color of the state
@@ -619,6 +689,26 @@ pub const WorkItemStateInputModel = struct {
 pub const HideStateModel = struct {
     /// Returns 'true', if workitem state is hidden, 'false' otherwise.
     hidden: ?bool = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `WorkItemTypeBehavior` as returned by Azure DevOps.
+pub const WorkItemTypeBehaviorList = struct {
+    count: ?i32 = null,
+    value: ?[]const WorkItemTypeBehavior = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `PickListMetadata` as returned by Azure DevOps.
+pub const PickListMetadataList = struct {
+    count: ?i32 = null,
+    value: ?[]const PickListMetadata = null,
 
     pub const serde = .{
         .rename_all = .camel_case,

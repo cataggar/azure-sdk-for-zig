@@ -129,7 +129,7 @@ pub const PipelinePermissions = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Batch API to authorize/unauthorize a list of definitions for a multiple resources.
-    pub fn updatePipelinePermisionsForResources(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: []const models.ResourcePipelinePermissions) ![]const models.ResourcePipelinePermissions {
+    pub fn updatePipelinePermisionsForResources(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: []const models.ResourcePipelinePermissions) !models.ResourcePipelinePermissionsList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -162,7 +162,7 @@ pub const PipelinePermissions = struct {
             core.pager.logHttpError("PipelinePermissions.updatePipelinePermisionsForResources", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ResourcePipelinePermissions, alloc, resp.body);
+        return try serde.json.fromSlice(models.ResourcePipelinePermissionsList, alloc, resp.body);
     }
     /// Given a ResourceType and ResourceId, returns authorized definitions for that resource.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, resource_type: []const u8, resource_id: []const u8) !models.ResourcePipelinePermissions {
@@ -247,7 +247,7 @@ pub const CheckConfigurations = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Get Check configuration by resource type and id
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, resource_type: ?[]const u8, resource_id: ?[]const u8, @"$expand": ?enums.ListRequestExpand) ![]const models.CheckConfiguration {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, resource_type: ?[]const u8, resource_id: ?[]const u8, @"$expand": ?enums.ListRequestExpand) !models.CheckConfigurationList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -297,7 +297,7 @@ pub const CheckConfigurations = struct {
             core.pager.logHttpError("CheckConfigurations.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.CheckConfiguration, alloc, resp.body);
+        return try serde.json.fromSlice(models.CheckConfigurationList, alloc, resp.body);
     }
     /// Add a check configuration
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.CheckConfiguration) !models.CheckConfiguration {
@@ -448,7 +448,7 @@ pub const CheckConfigurations = struct {
         return try serde.json.fromSlice(models.CheckConfiguration, alloc, resp.body);
     }
     /// Get check configurations for multiple resources by resource type and id.
-    pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"$expand": ?enums.QueryRequestExpand, body: []const models.Resource) ![]const models.CheckConfiguration {
+    pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"$expand": ?enums.QueryRequestExpand, body: []const models.Resource) !models.CheckConfigurationList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -488,7 +488,7 @@ pub const CheckConfigurations = struct {
             core.pager.logHttpError("CheckConfigurations.query", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.CheckConfiguration, alloc, resp.body);
+        return try serde.json.fromSlice(models.CheckConfigurationList, alloc, resp.body);
     }
 };
 
@@ -632,7 +632,7 @@ pub const Approvals = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// List Approvals. This can be used to get a set of pending approvals in a pipeline, on an user or for a resource..
-    pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, approval_ids: ?[]const u8, @"$expand": ?enums.QueryRequestExpand, assigned_to: ?[]const u8, state: ?enums.QueryRequestState, top: ?i32) ![]const models.Approval {
+    pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, approval_ids: ?[]const u8, @"$expand": ?enums.QueryRequestExpand, assigned_to: ?[]const u8, state: ?enums.QueryRequestState, top: ?i32) !models.ApprovalList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -694,10 +694,10 @@ pub const Approvals = struct {
             core.pager.logHttpError("Approvals.query", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Approval, alloc, resp.body);
+        return try serde.json.fromSlice(models.ApprovalList, alloc, resp.body);
     }
     /// Update approvals.
-    pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: []const models.ApprovalUpdateParameters) ![]const models.Approval {
+    pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: []const models.ApprovalUpdateParameters) !models.ApprovalList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -730,7 +730,7 @@ pub const Approvals = struct {
             core.pager.logHttpError("Approvals.update", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Approval, alloc, resp.body);
+        return try serde.json.fromSlice(models.ApprovalList, alloc, resp.body);
     }
     /// Get an approval.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, approval_id: []const u8, @"$expand": ?enums.GetRequestExpand) !models.Approval {

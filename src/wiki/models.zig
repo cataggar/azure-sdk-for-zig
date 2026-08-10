@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `WikiV2` as returned by Azure DevOps.
+pub const WikiV2List = struct {
+    count: ?i32 = null,
+    value: ?[]const WikiV2 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Defines a wiki resource.
 pub const WikiV2 = struct {
     /// Folder path inside repository which is shown as Wiki. Not required for ProjectWiki type.
@@ -190,6 +200,16 @@ pub const WikiPagesBatchRequest = struct {
     page_views_for_days: ?i32 = null,
     /// Total count of pages on a wiki to return.
     top: ?i32 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `WikiPageDetail` as returned by Azure DevOps.
+pub const WikiPageDetailList = struct {
+    count: ?i32 = null,
+    value: ?[]const WikiPageDetail = null,
 
     pub const serde = .{
         .rename_all = .camel_case,

@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `Process` as returned by Azure DevOps.
+pub const ProcessList = struct {
+    count: ?i32 = null,
+    value: ?[]const Process = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 pub const Process = struct {
     name: ?[]const u8 = null,
     url: ?[]const u8 = null,
@@ -31,6 +41,16 @@ pub const ReferenceLinks = struct {
 };
 
 pub const ReferenceLinksLink = struct {
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TeamProjectReference` as returned by Azure DevOps.
+pub const TeamProjectReferenceList = struct {
+    count: ?i32 = null,
+    value: ?[]const TeamProjectReference = null,
+
     pub const serde = .{
         .rename_all = .camel_case,
     };
@@ -122,6 +142,16 @@ pub const OperationReference = struct {
     status: ?enums.OperationReferenceStatus = null,
     /// URL to get the full operation object.
     url: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `ProjectProperty` as returned by Azure DevOps.
+pub const ProjectPropertyList = struct {
+    count: ?i32 = null,
+    value: ?[]const ProjectProperty = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -252,6 +282,26 @@ pub const PropertiesCollection = struct {
 };
 
 pub const PropertiesCollectionItem = struct {
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `WebApiTeam` as returned by Azure DevOps.
+pub const WebApiTeamList = struct {
+    count: ?i32 = null,
+    value: ?[]const WebApiTeam = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `TeamMember` as returned by Azure DevOps.
+pub const TeamMemberList = struct {
+    count: ?i32 = null,
+    value: ?[]const TeamMember = null,
+
     pub const serde = .{
         .rename_all = .camel_case,
     };

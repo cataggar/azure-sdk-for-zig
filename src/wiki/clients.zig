@@ -145,7 +145,7 @@ pub const Wikis = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Gets all wikis in a project or collection.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.WikiV2 {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.WikiV2List {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -174,7 +174,7 @@ pub const Wikis = struct {
             core.pager.logHttpError("Wikis.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.WikiV2, alloc, resp.body);
+        return try serde.json.fromSlice(models.WikiV2List, alloc, resp.body);
     }
     /// Creates the wiki resource.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.WikiCreateParametersV2) !models.WikiV2 {
@@ -1257,7 +1257,7 @@ pub const PagesBatch = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Returns pageable list of Wiki Pages
-    pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, wiki_identifier: []const u8, version_descriptor_version: ?[]const u8, @"version_descriptor.version_options": ?enums.GetRequestVersionDescriptorVersionOptions, @"version_descriptor.version_type": ?enums.GetRequestVersionDescriptorVersionType, body: models.WikiPagesBatchRequest) ![]const models.WikiPageDetail {
+    pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, wiki_identifier: []const u8, version_descriptor_version: ?[]const u8, @"version_descriptor.version_options": ?enums.GetRequestVersionDescriptorVersionOptions, @"version_descriptor.version_type": ?enums.GetRequestVersionDescriptorVersionType, body: models.WikiPagesBatchRequest) !models.WikiPageDetailList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1313,6 +1313,6 @@ pub const PagesBatch = struct {
             core.pager.logHttpError("PagesBatch.get", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.WikiPageDetail, alloc, resp.body);
+        return try serde.json.fromSlice(models.WikiPageDetailList, alloc, resp.body);
     }
 };

@@ -321,7 +321,7 @@ pub const Controllers = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Gets controller, optionally filtered by name
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, name: ?[]const u8) ![]const models.BuildController {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, name: ?[]const u8) !models.BuildControllerList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -355,7 +355,7 @@ pub const Controllers = struct {
             core.pager.logHttpError("Controllers.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.BuildController, alloc, resp.body);
+        return try serde.json.fromSlice(models.BuildControllerList, alloc, resp.body);
     }
     /// Gets a controller
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, controller_id: i32) !models.BuildController {
@@ -604,7 +604,7 @@ pub const Authorizedresources = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
 
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"type": ?[]const u8, id: ?[]const u8) ![]const models.DefinitionResourceReference {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"type": ?[]const u8, id: ?[]const u8) !models.DefinitionResourceReferenceList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -647,10 +647,10 @@ pub const Authorizedresources = struct {
             core.pager.logHttpError("Authorizedresources.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.DefinitionResourceReference, alloc, resp.body);
+        return try serde.json.fromSlice(models.DefinitionResourceReferenceList, alloc, resp.body);
     }
 
-    pub fn authorizeProjectResources(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: []const models.DefinitionResourceReference) ![]const models.DefinitionResourceReference {
+    pub fn authorizeProjectResources(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: []const models.DefinitionResourceReference) !models.DefinitionResourceReferenceList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -683,7 +683,7 @@ pub const Authorizedresources = struct {
             core.pager.logHttpError("Authorizedresources.authorizeProjectResources", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.DefinitionResourceReference, alloc, resp.body);
+        return try serde.json.fromSlice(models.DefinitionResourceReferenceList, alloc, resp.body);
     }
 };
 
@@ -698,7 +698,7 @@ pub const Builds = struct {
             headers: struct {
                 x_ms_continuationtoken: ?[]const u8 = null,
             },
-            body: []const models.Build,
+            body: models.BuildList,
         },
     };
 
@@ -708,7 +708,7 @@ pub const Builds = struct {
             headers: struct {
                 x_ms_continuationtoken: ?[]const u8 = null,
             },
-            body: []const models.Change,
+            body: models.ChangeList,
         },
     };
 
@@ -718,7 +718,7 @@ pub const Builds = struct {
             headers: struct {
                 content_type: []const u8,
             },
-            body: []const models.BuildLog,
+            body: models.BuildLogList,
         },
     };
 
@@ -900,7 +900,7 @@ pub const Builds = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.Build, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.BuildList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{
@@ -916,7 +916,7 @@ pub const Builds = struct {
         }
     }
     /// Updates multiple builds.
-    pub fn updateBuilds(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: []const models.Build) ![]const models.Build {
+    pub fn updateBuilds(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: []const models.Build) !models.BuildList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -949,7 +949,7 @@ pub const Builds = struct {
             core.pager.logHttpError("Builds.updateBuilds", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Build, alloc, resp.body);
+        return try serde.json.fromSlice(models.BuildList, alloc, resp.body);
     }
     /// Queues a build
     pub fn queue(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, ignore_warnings: ?bool, check_in_ticket: ?[]const u8, source_build_id: ?i32, definition_id: ?i32, body: models.Build) !models.Build {
@@ -1178,7 +1178,7 @@ pub const Builds = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.Change, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.ChangeList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{
@@ -1194,7 +1194,7 @@ pub const Builds = struct {
         }
     }
     /// Gets all retention leases that apply to a specific build.
-    pub fn getRetentionLeasesForBuild(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32) ![]const models.RetentionLease {
+    pub fn getRetentionLeasesForBuild(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32) !models.RetentionLeaseList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1225,7 +1225,7 @@ pub const Builds = struct {
             core.pager.logHttpError("Builds.getRetentionLeasesForBuild", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.RetentionLease, alloc, resp.body);
+        return try serde.json.fromSlice(models.RetentionLeaseList, alloc, resp.body);
     }
     /// Gets the logs for a build.
     pub fn getBuildLogs(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32) !GetBuildLogsResult {
@@ -1262,7 +1262,7 @@ pub const Builds = struct {
                     resp.getHeader("content-type") orelse return error.MissingResponseHeader,
                 );
                 errdefer alloc.free(response_header_0);
-                const response_body = try serde.json.fromSlice([]const models.BuildLog, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.BuildLogList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{
@@ -1341,7 +1341,7 @@ pub const Builds = struct {
         }
     }
     /// Gets the work items associated with a build. Only work items in the same project are returned.
-    pub fn getBuildWorkItemsRefs(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, @"$top": ?i32) ![]const models.ResourceRef {
+    pub fn getBuildWorkItemsRefs(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, @"$top": ?i32) !models.ResourceRefList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1377,10 +1377,10 @@ pub const Builds = struct {
             core.pager.logHttpError("Builds.getBuildWorkItemsRefs", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ResourceRef, alloc, resp.body);
+        return try serde.json.fromSlice(models.ResourceRefList, alloc, resp.body);
     }
     /// Gets the work items associated with a build, filtered to specific commits.
-    pub fn getBuildWorkItemsRefsFromCommits(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, @"$top": ?i32, body: []const []const u8) ![]const models.ResourceRef {
+    pub fn getBuildWorkItemsRefsFromCommits(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, @"$top": ?i32, body: []const []const u8) !models.ResourceRefList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1420,10 +1420,10 @@ pub const Builds = struct {
             core.pager.logHttpError("Builds.getBuildWorkItemsRefsFromCommits", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ResourceRef, alloc, resp.body);
+        return try serde.json.fromSlice(models.ResourceRefList, alloc, resp.body);
     }
     /// Gets the changes made to the repository between two given builds.
-    pub fn getChangesBetweenBuilds(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, from_build_id: ?i32, to_build_id: ?i32, @"$top": ?i32) ![]const models.Change {
+    pub fn getChangesBetweenBuilds(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, from_build_id: ?i32, to_build_id: ?i32, @"$top": ?i32) !models.ChangeList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1467,10 +1467,10 @@ pub const Builds = struct {
             core.pager.logHttpError("Builds.getChangesBetweenBuilds", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Change, alloc, resp.body);
+        return try serde.json.fromSlice(models.ChangeList, alloc, resp.body);
     }
     /// Gets all the work items between two builds.
-    pub fn getWorkItemsBetweenBuilds(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, from_build_id: i32, to_build_id: i32, @"$top": ?i32) ![]const models.ResourceRef {
+    pub fn getWorkItemsBetweenBuilds(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, from_build_id: i32, to_build_id: i32, @"$top": ?i32) !models.ResourceRefList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1508,7 +1508,7 @@ pub const Builds = struct {
             core.pager.logHttpError("Builds.getWorkItemsBetweenBuilds", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.ResourceRef, alloc, resp.body);
+        return try serde.json.fromSlice(models.ResourceRefList, alloc, resp.body);
     }
 };
 
@@ -1586,7 +1586,7 @@ pub const Attachments = struct {
         }
     }
     /// Gets the list of attachments of a specific type that are associated with a build.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, @"type": []const u8) ![]const models.Attachment {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, @"type": []const u8) !models.AttachmentList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1619,7 +1619,7 @@ pub const Attachments = struct {
             core.pager.logHttpError("Attachments.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Attachment, alloc, resp.body);
+        return try serde.json.fromSlice(models.AttachmentList, alloc, resp.body);
     }
 };
 
@@ -1628,7 +1628,7 @@ pub const Artifacts = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Gets all artifacts for a build.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32) ![]const models.BuildArtifact {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32) !models.BuildArtifactList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -1659,7 +1659,7 @@ pub const Artifacts = struct {
             core.pager.logHttpError("Artifacts.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.BuildArtifact, alloc, resp.body);
+        return try serde.json.fromSlice(models.BuildArtifactList, alloc, resp.body);
     }
     /// Associates an artifact with a build.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, body: models.BuildArtifact) !models.BuildArtifact {
@@ -2593,7 +2593,7 @@ pub const Definitions = struct {
             headers: struct {
                 x_ms_continuationtoken: ?[]const u8 = null,
             },
-            body: []const models.BuildDefinitionReference,
+            body: models.BuildDefinitionReferenceList,
         },
     };
     /// Gets a list of definitions.
@@ -2733,7 +2733,7 @@ pub const Definitions = struct {
                 else
                     null;
                 errdefer if (response_header_0) |value| alloc.free(value);
-                const response_body = try serde.json.fromSlice([]const models.BuildDefinitionReference, alloc, resp.body);
+                const response_body = try serde.json.fromSlice(models.BuildDefinitionReferenceList, alloc, resp.body);
                 return .{ .status_200 = .{
                     .status = resp.status_code,
                     .headers = .{
@@ -2975,7 +2975,7 @@ pub const Definitions = struct {
         return try serde.json.fromSlice(models.BuildDefinition, alloc, resp.body);
     }
     /// Gets all revisions of a definition.
-    pub fn getDefinitionRevisions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: i32) ![]const models.BuildDefinitionRevision {
+    pub fn getDefinitionRevisions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: i32) !models.BuildDefinitionRevisionList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -3006,7 +3006,7 @@ pub const Definitions = struct {
             core.pager.logHttpError("Definitions.getDefinitionRevisions", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.BuildDefinitionRevision, alloc, resp.body);
+        return try serde.json.fromSlice(models.BuildDefinitionRevisionList, alloc, resp.body);
     }
 };
 
@@ -3015,7 +3015,7 @@ pub const Metrics = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Gets build metrics for a definition.
-    pub fn getDefinitionMetrics(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: i32, min_metrics_time: ?[]const u8) ![]const models.BuildMetric {
+    pub fn getDefinitionMetrics(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: i32, min_metrics_time: ?[]const u8) !models.BuildMetricList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -3053,10 +3053,10 @@ pub const Metrics = struct {
             core.pager.logHttpError("Metrics.getDefinitionMetrics", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.BuildMetric, alloc, resp.body);
+        return try serde.json.fromSlice(models.BuildMetricList, alloc, resp.body);
     }
     /// Gets build metrics for a project.
-    pub fn getProjectMetrics(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, metric_aggregation_type: []const u8, min_metrics_time: ?[]const u8) ![]const models.BuildMetric {
+    pub fn getProjectMetrics(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, metric_aggregation_type: []const u8, min_metrics_time: ?[]const u8) !models.BuildMetricList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -3094,7 +3094,7 @@ pub const Metrics = struct {
             core.pager.logHttpError("Metrics.getProjectMetrics", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.BuildMetric, alloc, resp.body);
+        return try serde.json.fromSlice(models.BuildMetricList, alloc, resp.body);
     }
 };
 
@@ -3103,7 +3103,7 @@ pub const Resources = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
 
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: i32) ![]const models.DefinitionResourceReference {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: i32) !models.DefinitionResourceReferenceList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -3134,10 +3134,10 @@ pub const Resources = struct {
             core.pager.logHttpError("Resources.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.DefinitionResourceReference, alloc, resp.body);
+        return try serde.json.fromSlice(models.DefinitionResourceReferenceList, alloc, resp.body);
     }
 
-    pub fn authorizeDefinitionResources(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: i32, body: []const models.DefinitionResourceReference) ![]const models.DefinitionResourceReference {
+    pub fn authorizeDefinitionResources(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: i32, body: []const models.DefinitionResourceReference) !models.DefinitionResourceReferenceList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -3172,7 +3172,7 @@ pub const Resources = struct {
             core.pager.logHttpError("Resources.authorizeDefinitionResources", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.DefinitionResourceReference, alloc, resp.body);
+        return try serde.json.fromSlice(models.DefinitionResourceReferenceList, alloc, resp.body);
     }
 };
 
@@ -3245,7 +3245,7 @@ pub const Templates = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Gets all definition templates.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.BuildDefinitionTemplate {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.BuildDefinitionTemplateList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -3274,7 +3274,7 @@ pub const Templates = struct {
             core.pager.logHttpError("Templates.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.BuildDefinitionTemplate, alloc, resp.body);
+        return try serde.json.fromSlice(models.BuildDefinitionTemplateList, alloc, resp.body);
     }
     /// Deletes a build definition template.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, template_id: []const u8) !void {
@@ -3503,7 +3503,7 @@ pub const Folders = struct {
         return try serde.json.fromSlice(models.Folder, alloc, resp.body);
     }
     /// Gets a list of build definition folders.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, path: []const u8, query_order: ?enums.ListRequestQueryOrder2) ![]const models.Folder {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, path: []const u8, query_order: ?enums.ListRequestQueryOrder2) !models.FolderList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -3541,7 +3541,7 @@ pub const Folders = struct {
             core.pager.logHttpError("Folders.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.Folder, alloc, resp.body);
+        return try serde.json.fromSlice(models.FolderList, alloc, resp.body);
     }
 };
 
@@ -3671,7 +3671,7 @@ pub const Options = struct {
     api_version: []const u8,
     pipeline: core.pipeline.HttpPipeline,
     /// Gets all build definition options supported by the system.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.BuildOptionDefinition {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.BuildOptionDefinitionList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -3700,7 +3700,7 @@ pub const Options = struct {
             core.pager.logHttpError("Options.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.BuildOptionDefinition, alloc, resp.body);
+        return try serde.json.fromSlice(models.BuildOptionDefinitionList, alloc, resp.body);
     }
 };
 
@@ -3818,7 +3818,7 @@ pub const Leases = struct {
         return;
     }
     /// Returns any leases matching the specified MinimalRetentionLeases
-    pub fn getRetentionLeasesByMinimalRetentionLeases(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, leases_to_fetch: []const u8) ![]const models.RetentionLease {
+    pub fn getRetentionLeasesByMinimalRetentionLeases(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, leases_to_fetch: []const u8) !models.RetentionLeaseList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -3851,10 +3851,10 @@ pub const Leases = struct {
             core.pager.logHttpError("Leases.getRetentionLeasesByMinimalRetentionLeases", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.RetentionLease, alloc, resp.body);
+        return try serde.json.fromSlice(models.RetentionLeaseList, alloc, resp.body);
     }
     /// Adds new leases for pipeline runs.
-    pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: []const models.NewRetentionLease) ![]const models.RetentionLease {
+    pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: []const models.NewRetentionLease) !models.RetentionLeaseList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -3887,7 +3887,7 @@ pub const Leases = struct {
             core.pager.logHttpError("Leases.add", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.RetentionLease, alloc, resp.body);
+        return try serde.json.fromSlice(models.RetentionLeaseList, alloc, resp.body);
     }
     /// Returns the details of the retention lease given a lease id.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, lease_id: i32) !models.RetentionLease {
@@ -4145,7 +4145,7 @@ pub const SourceProviders = struct {
         },
     };
     /// Get a list of source providers and their capabilities.
-    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) ![]const models.SourceProviderAttributes {
+    pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.SourceProviderAttributesList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -4174,7 +4174,7 @@ pub const SourceProviders = struct {
             core.pager.logHttpError("SourceProviders.list", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.SourceProviderAttributes, alloc, resp.body);
+        return try serde.json.fromSlice(models.SourceProviderAttributesList, alloc, resp.body);
     }
     /// Gets a list of branches for the given source code repository.
     pub fn listBranches(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, provider_name: []const u8, service_endpoint_id: ?[]const u8, repository: ?[]const u8, branch_name: ?[]const u8) ![]const []const u8 {
@@ -4311,7 +4311,7 @@ pub const SourceProviders = struct {
         }
     }
     /// Gets the contents of a directory in the given source code repository.
-    pub fn getPathContents(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, provider_name: []const u8, service_endpoint_id: ?[]const u8, repository: ?[]const u8, commit_or_branch: ?[]const u8, path: ?[]const u8) ![]const models.SourceRepositoryItem {
+    pub fn getPathContents(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, provider_name: []const u8, service_endpoint_id: ?[]const u8, repository: ?[]const u8, commit_or_branch: ?[]const u8, path: ?[]const u8) !models.SourceRepositoryItemList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -4370,7 +4370,7 @@ pub const SourceProviders = struct {
             core.pager.logHttpError("SourceProviders.getPathContents", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.SourceRepositoryItem, alloc, resp.body);
+        return try serde.json.fromSlice(models.SourceRepositoryItemList, alloc, resp.body);
     }
     /// Gets a pull request object from source provider.
     pub fn getPullRequest(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, provider_name: []const u8, pull_request_id: []const u8, repository_id: ?[]const u8, service_endpoint_id: ?[]const u8) !models.PullRequest {
@@ -4490,7 +4490,7 @@ pub const SourceProviders = struct {
         return try serde.json.fromSlice(models.SourceRepositories, alloc, resp.body);
     }
     /// Gets a list of webhooks installed in the given source code repository.
-    pub fn listWebhooks(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, provider_name: []const u8, service_endpoint_id: ?[]const u8, repository: ?[]const u8) ![]const models.RepositoryWebhook {
+    pub fn listWebhooks(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, provider_name: []const u8, service_endpoint_id: ?[]const u8, repository: ?[]const u8) !models.RepositoryWebhookList {
         @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, organization);
         defer alloc.free(encoded_path_0);
@@ -4535,7 +4535,7 @@ pub const SourceProviders = struct {
             core.pager.logHttpError("SourceProviders.listWebhooks", resp.status_code, resp.body);
             return error.AzureRequestFailed;
         }
-        return try serde.json.fromSlice([]const models.RepositoryWebhook, alloc, resp.body);
+        return try serde.json.fromSlice(models.RepositoryWebhookList, alloc, resp.body);
     }
     /// Recreates the webhooks for the specified triggers in the given source code repository.
     pub fn restoreWebhooks(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, provider_name: []const u8, service_endpoint_id: ?[]const u8, repository: ?[]const u8, body: []const []const u8) !void {

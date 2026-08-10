@@ -3,6 +3,16 @@
 const std = @import("std");
 const enums = @import("enums.zig");
 
+/// A collection of `EnvironmentInstance` as returned by Azure DevOps.
+pub const EnvironmentInstanceList = struct {
+    count: ?i32 = null,
+    value: ?[]const EnvironmentInstance = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
 /// Environment.
 pub const EnvironmentInstance = struct {
     created_by: ?IdentityRef = null,
@@ -105,6 +115,16 @@ pub const EnvironmentUpdateParameter = struct {
     description: ?[]const u8 = null,
     /// Name of the environment.
     name: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `EnvironmentDeploymentExecutionRecord` as returned by Azure DevOps.
+pub const EnvironmentDeploymentExecutionRecordList = struct {
+    count: ?i32 = null,
+    value: ?[]const EnvironmentDeploymentExecutionRecord = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -214,6 +234,16 @@ pub const KubernetesResourceCreateParametersExistingEndpoint = struct {
     /// Tags of the kubernetes resource.
     tags: ?[]const []const u8 = null,
     service_endpoint_id: ?[]const u8 = null,
+
+    pub const serde = .{
+        .rename_all = .camel_case,
+    };
+};
+
+/// A collection of `VirtualMachineResource` as returned by Azure DevOps.
+pub const VirtualMachineResourceList = struct {
+    count: ?i32 = null,
+    value: ?[]const VirtualMachineResource = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
