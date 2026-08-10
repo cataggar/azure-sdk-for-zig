@@ -1729,11 +1729,11 @@ pub const TestLogReference = struct {
     /// runid for test log, if context is run
     run_id: ?i32 = null,
     /// Test Log Scope
-    scope: ?[]const u8 = null,
+    scope: ?enums.TestLogReferenceScope = null,
     /// SubResultid for test log, if context is run and log is related to subresult
     sub_result_id: ?i32 = null,
     /// Log Type
-    type: ?[]const u8 = null,
+    type: ?enums.TestLogReferenceType = null,
 
     pub const serde = .{
         .rename_all = .camel_case,

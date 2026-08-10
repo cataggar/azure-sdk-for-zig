@@ -1,6 +1,6 @@
 generator_commit=5ec3759d9bf33e1047fcbd884e8ad66519f60156
 source_repository=https://github.com/cataggar/vsts-rest-api-specs
-source_commit=a8ac46b877b40178b07457fbadde128bddfc513a
+source_commit=30b2105a165ce0f057e6adafe5f5e5b9b71502b7
 source_branch=typespec
 source_path=typespec/specs
 selected_api_version=7.2

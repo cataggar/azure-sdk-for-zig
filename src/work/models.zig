@@ -74,7 +74,7 @@ pub const Plan = struct {
     /// Revision of the plan. Used to safeguard users from overwriting each other's changes.
     revision: ?i32 = null,
     /// Type of the plan
-    type: ?[]const u8 = null,
+    type: ?enums.PlanType = null,
     /// The resource url to locate the plan via rest api
     url: ?[]const u8 = null,
     /// Bit flag indicating set of permissions a user has to the plan.
@@ -148,7 +148,7 @@ pub const CreatePlan = struct {
     /// Plan properties.
     properties: ?CreatePlanProperties = null,
     /// Type of plan to create.
-    type: ?[]const u8 = null,
+    type: ?enums.CreatePlanType = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -171,7 +171,7 @@ pub const UpdatePlan = struct {
     /// Revision of the plan that was updated - the value used here should match the one the server gave the client in the Plan.
     revision: ?i32 = null,
     /// Type of the plan
-    type: ?[]const u8 = null,
+    type: ?enums.UpdatePlanType = null,
 
     pub const serde = .{
         .rename_all = .camel_case,

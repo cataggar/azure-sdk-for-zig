@@ -8,168 +8,157 @@
 const std = @import("std");
 const core = @import("azure_sdk_core");
 
-pub const AuditActionInfoCategory = enum {
+pub const AuditActionInfoCategory = union(enum) {
     unknown,
     modify,
     remove,
     create,
     access,
     execute,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .unknown => "unknown",
-            .modify => "modify",
-            .remove => "remove",
-            .create => "create",
-            .access => "access",
-            .execute => "execute",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "unknown")) return .unknown;
-        if (std.mem.eql(u8, s, "modify")) return .modify;
-        if (std.mem.eql(u8, s, "remove")) return .remove;
-        if (std.mem.eql(u8, s, "create")) return .create;
-        if (std.mem.eql(u8, s, "access")) return .access;
-        if (std.mem.eql(u8, s, "execute")) return .execute;
-        return null;
-    }
+    const wire_names = .{
+        .unknown = "unknown",
+        .modify = "modify",
+        .remove = "remove",
+        .create = "create",
+        .access = "access",
+        .execute = "execute",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const DecoratedAuditLogEntryCategory = enum {
+pub const DecoratedAuditLogEntryCategory = union(enum) {
     unknown,
     modify,
     remove,
     create,
     access,
     execute,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .unknown => "unknown",
-            .modify => "modify",
-            .remove => "remove",
-            .create => "create",
-            .access => "access",
-            .execute => "execute",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "unknown")) return .unknown;
-        if (std.mem.eql(u8, s, "modify")) return .modify;
-        if (std.mem.eql(u8, s, "remove")) return .remove;
-        if (std.mem.eql(u8, s, "create")) return .create;
-        if (std.mem.eql(u8, s, "access")) return .access;
-        if (std.mem.eql(u8, s, "execute")) return .execute;
-        return null;
-    }
+    const wire_names = .{
+        .unknown = "unknown",
+        .modify = "modify",
+        .remove = "remove",
+        .create = "create",
+        .access = "access",
+        .execute = "execute",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const DecoratedAuditLogEntryScopeType = enum {
+pub const DecoratedAuditLogEntryScopeType = union(enum) {
     unknown,
     deployment,
     enterprise,
     organization,
     project,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .unknown => "unknown",
-            .deployment => "deployment",
-            .enterprise => "enterprise",
-            .organization => "organization",
-            .project => "project",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "unknown")) return .unknown;
-        if (std.mem.eql(u8, s, "deployment")) return .deployment;
-        if (std.mem.eql(u8, s, "enterprise")) return .enterprise;
-        if (std.mem.eql(u8, s, "organization")) return .organization;
-        if (std.mem.eql(u8, s, "project")) return .project;
-        return null;
-    }
+    const wire_names = .{
+        .unknown = "unknown",
+        .deployment = "deployment",
+        .enterprise = "enterprise",
+        .organization = "organization",
+        .project = "project",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const AuditStreamStatus = enum {
+pub const AuditStreamStatus = union(enum) {
     unknown,
     enabled,
     disabled_by_user,
     disabled_by_system,
     deleted,
     backfilling,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .unknown => "unknown",
-            .enabled => "enabled",
-            .disabled_by_user => "disabledByUser",
-            .disabled_by_system => "disabledBySystem",
-            .deleted => "deleted",
-            .backfilling => "backfilling",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "unknown")) return .unknown;
-        if (std.mem.eql(u8, s, "enabled")) return .enabled;
-        if (std.mem.eql(u8, s, "disabledByUser")) return .disabled_by_user;
-        if (std.mem.eql(u8, s, "disabledBySystem")) return .disabled_by_system;
-        if (std.mem.eql(u8, s, "deleted")) return .deleted;
-        if (std.mem.eql(u8, s, "backfilling")) return .backfilling;
-        return null;
-    }
+    const wire_names = .{
+        .unknown = "unknown",
+        .enabled = "enabled",
+        .disabled_by_user = "disabledByUser",
+        .disabled_by_system = "disabledBySystem",
+        .deleted = "deleted",
+        .backfilling = "backfilling",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 

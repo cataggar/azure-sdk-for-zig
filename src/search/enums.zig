@@ -8,36 +8,36 @@
 const std = @import("std");
 const core = @import("azure_sdk_core");
 
-pub const RepositoryType = enum {
+pub const RepositoryType = union(enum) {
     git,
     tfvc,
     custom,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .git => "git",
-            .tfvc => "tfvc",
-            .custom => "custom",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "git")) return .git;
-        if (std.mem.eql(u8, s, "tfvc")) return .tfvc;
-        if (std.mem.eql(u8, s, "custom")) return .custom;
-        return null;
-    }
+    const wire_names = .{
+        .git = "git",
+        .tfvc = "tfvc",
+        .custom = "custom",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 

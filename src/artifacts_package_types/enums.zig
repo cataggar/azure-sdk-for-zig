@@ -8,144 +8,141 @@
 const std = @import("std");
 const core = @import("azure_sdk_core");
 
-pub const UpstreamingBehaviorVersionsFromExternalUpstreams = enum {
+pub const UpstreamingBehaviorVersionsFromExternalUpstreams = union(enum) {
     auto,
     allow_external_versions,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .auto => "auto",
-            .allow_external_versions => "allowExternalVersions",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "auto")) return .auto;
-        if (std.mem.eql(u8, s, "allowExternalVersions")) return .allow_external_versions;
-        return null;
-    }
+    const wire_names = .{
+        .auto = "auto",
+        .allow_external_versions = "allowExternalVersions",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const UpstreamSourceInfoSourceType = enum {
+pub const UpstreamSourceInfoSourceType = union(enum) {
     public,
     internal,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .public => "public",
-            .internal => "internal",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "public")) return .public;
-        if (std.mem.eql(u8, s, "internal")) return .internal;
-        return null;
-    }
+    const wire_names = .{
+        .public = "public",
+        .internal = "internal",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const JsonPatchOperationOp = enum {
+pub const JsonPatchOperationOp = union(enum) {
     add,
     remove,
     replace,
     move,
     copy,
     @"test",
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .add => "add",
-            .remove => "remove",
-            .replace => "replace",
-            .move => "move",
-            .copy => "copy",
-            .@"test" => "test",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "add")) return .add;
-        if (std.mem.eql(u8, s, "remove")) return .remove;
-        if (std.mem.eql(u8, s, "replace")) return .replace;
-        if (std.mem.eql(u8, s, "move")) return .move;
-        if (std.mem.eql(u8, s, "copy")) return .copy;
-        if (std.mem.eql(u8, s, "test")) return .@"test";
-        return null;
-    }
+    const wire_names = .{
+        .add = "add",
+        .remove = "remove",
+        .replace = "replace",
+        .move = "move",
+        .copy = "copy",
+        .@"test" = "test",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const CargoPackagesBatchRequestOperation = enum {
+pub const CargoPackagesBatchRequestOperation = union(enum) {
     promote,
     delete,
     permanent_delete,
     restore_to_feed,
     yank,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .promote => "promote",
-            .delete => "delete",
-            .permanent_delete => "permanentDelete",
-            .restore_to_feed => "restoreToFeed",
-            .yank => "yank",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "promote")) return .promote;
-        if (std.mem.eql(u8, s, "delete")) return .delete;
-        if (std.mem.eql(u8, s, "permanentDelete")) return .permanent_delete;
-        if (std.mem.eql(u8, s, "restoreToFeed")) return .restore_to_feed;
-        if (std.mem.eql(u8, s, "yank")) return .yank;
-        return null;
-    }
+    const wire_names = .{
+        .promote = "promote",
+        .delete = "delete",
+        .permanent_delete = "permanentDelete",
+        .restore_to_feed = "restoreToFeed",
+        .yank = "yank",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -176,191 +173,183 @@ pub const ServiceApiVersions = enum {
     }
 };
 
-pub const MavenPackagesBatchRequestOperation = enum {
+pub const MavenPackagesBatchRequestOperation = union(enum) {
     promote,
     delete,
     permanent_delete,
     restore_to_feed,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .promote => "promote",
-            .delete => "delete",
-            .permanent_delete => "permanentDelete",
-            .restore_to_feed => "restoreToFeed",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "promote")) return .promote;
-        if (std.mem.eql(u8, s, "delete")) return .delete;
-        if (std.mem.eql(u8, s, "permanentDelete")) return .permanent_delete;
-        if (std.mem.eql(u8, s, "restoreToFeed")) return .restore_to_feed;
-        return null;
-    }
+    const wire_names = .{
+        .promote = "promote",
+        .delete = "delete",
+        .permanent_delete = "permanentDelete",
+        .restore_to_feed = "restoreToFeed",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const NpmPackagesBatchRequestOperation = enum {
+pub const NpmPackagesBatchRequestOperation = union(enum) {
     promote,
     deprecate,
     unpublish,
     permanent_delete,
     restore_to_feed,
     delete,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .promote => "promote",
-            .deprecate => "deprecate",
-            .unpublish => "unpublish",
-            .permanent_delete => "permanentDelete",
-            .restore_to_feed => "restoreToFeed",
-            .delete => "delete",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "promote")) return .promote;
-        if (std.mem.eql(u8, s, "deprecate")) return .deprecate;
-        if (std.mem.eql(u8, s, "unpublish")) return .unpublish;
-        if (std.mem.eql(u8, s, "permanentDelete")) return .permanent_delete;
-        if (std.mem.eql(u8, s, "restoreToFeed")) return .restore_to_feed;
-        if (std.mem.eql(u8, s, "delete")) return .delete;
-        return null;
-    }
+    const wire_names = .{
+        .promote = "promote",
+        .deprecate = "deprecate",
+        .unpublish = "unpublish",
+        .permanent_delete = "permanentDelete",
+        .restore_to_feed = "restoreToFeed",
+        .delete = "delete",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const NuGetPackagesBatchRequestOperation = enum {
+pub const NuGetPackagesBatchRequestOperation = union(enum) {
     promote,
     list,
     delete,
     permanent_delete,
     restore_to_feed,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .promote => "promote",
-            .list => "list",
-            .delete => "delete",
-            .permanent_delete => "permanentDelete",
-            .restore_to_feed => "restoreToFeed",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "promote")) return .promote;
-        if (std.mem.eql(u8, s, "list")) return .list;
-        if (std.mem.eql(u8, s, "delete")) return .delete;
-        if (std.mem.eql(u8, s, "permanentDelete")) return .permanent_delete;
-        if (std.mem.eql(u8, s, "restoreToFeed")) return .restore_to_feed;
-        return null;
-    }
+    const wire_names = .{
+        .promote = "promote",
+        .list = "list",
+        .delete = "delete",
+        .permanent_delete = "permanentDelete",
+        .restore_to_feed = "restoreToFeed",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const PyPiPackagesBatchRequestOperation = enum {
+pub const PyPiPackagesBatchRequestOperation = union(enum) {
     promote,
     delete,
     permanent_delete,
     restore_to_feed,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .promote => "promote",
-            .delete => "delete",
-            .permanent_delete => "permanentDelete",
-            .restore_to_feed => "restoreToFeed",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "promote")) return .promote;
-        if (std.mem.eql(u8, s, "delete")) return .delete;
-        if (std.mem.eql(u8, s, "permanentDelete")) return .permanent_delete;
-        if (std.mem.eql(u8, s, "restoreToFeed")) return .restore_to_feed;
-        return null;
-    }
+    const wire_names = .{
+        .promote = "promote",
+        .delete = "delete",
+        .permanent_delete = "permanentDelete",
+        .restore_to_feed = "restoreToFeed",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
-pub const UPackPackagesBatchRequestOperation = enum {
+pub const UPackPackagesBatchRequestOperation = union(enum) {
     promote,
     delete,
     permanent_delete,
     restore_to_feed,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .promote => "promote",
-            .delete => "delete",
-            .permanent_delete => "permanentDelete",
-            .restore_to_feed => "restoreToFeed",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "promote")) return .promote;
-        if (std.mem.eql(u8, s, "delete")) return .delete;
-        if (std.mem.eql(u8, s, "permanentDelete")) return .permanent_delete;
-        if (std.mem.eql(u8, s, "restoreToFeed")) return .restore_to_feed;
-        return null;
-    }
+    const wire_names = .{
+        .promote = "promote",
+        .delete = "delete",
+        .permanent_delete = "permanentDelete",
+        .restore_to_feed = "restoreToFeed",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };

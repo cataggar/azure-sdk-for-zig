@@ -8,36 +8,36 @@
 const std = @import("std");
 const core = @import("azure_sdk_core");
 
-pub const ProfileProfileState = enum {
+pub const ProfileProfileState = union(enum) {
     custom,
     custom_read_only,
     read_only,
+    unrecognized: []const u8,
 
-    pub fn toWire(self: @This()) []const u8 {
-        return switch (self) {
-            .custom => "custom",
-            .custom_read_only => "customReadOnly",
-            .read_only => "readOnly",
-        };
-    }
-
-    pub fn fromWire(s: []const u8) ?@This() {
-        if (std.mem.eql(u8, s, "custom")) return .custom;
-        if (std.mem.eql(u8, s, "customReadOnly")) return .custom_read_only;
-        if (std.mem.eql(u8, s, "readOnly")) return .read_only;
-        return null;
-    }
+    const wire_names = .{
+        .custom = "custom",
+        .custom_read_only = "customReadOnly",
+        .read_only = "readOnly",
+    };
 
     pub fn zerdeDeserialize(
         comptime T: type,
         allocator: std.mem.Allocator,
         deserializer: anytype,
     ) @TypeOf(deserializer.*).Error!T {
-        return core.fixed_enum.deserialize(T, allocator, deserializer);
+        return core.open_enum.deserialize(T, wire_names, allocator, deserializer);
     }
 
     pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
-        return core.fixed_enum.serialize(self, serializer);
+        return core.open_enum.serialize(self, wire_names, serializer);
+    }
+
+    pub fn toWire(self: @This()) []const u8 {
+        return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
