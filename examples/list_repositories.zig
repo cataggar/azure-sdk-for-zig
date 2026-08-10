@@ -12,7 +12,11 @@ const core = @import("azure_sdk_core");
 const support = @import("devops_example_support");
 
 pub fn main(init: std.process.Init) !void {
-    const allocator = init.gpa;
+    // The parsed response owns a string per field; an arena frees the
+    // whole graph at once rather than walking it.
+    var arena = std.heap.ArenaAllocator.init(init.gpa);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
     var transport = core.http.StdHttpTransport.init(allocator, init.io);
     defer transport.deinit();
@@ -25,7 +29,7 @@ pub fn main(init: std.process.Init) !void {
 
     var git = client.git();
     var repositories = git.repositories();
-    const list = try repositories.list(
+    const result = try repositories.list(
         allocator,
         settings.organization,
         project,
@@ -33,7 +37,7 @@ pub fn main(init: std.process.Init) !void {
         null,
         null,
     );
-    defer allocator.free(list);
+    const list = result.value orelse &.{};
 
     std.debug.print("{d} repositories in {s}\n", .{ list.len, project });
     for (list) |repository| {

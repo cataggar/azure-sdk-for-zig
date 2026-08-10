@@ -91,7 +91,7 @@ pub fn build(b: *std.Build) void {
                 },
             }),
         });
-        examples_step.dependOn(&executable.step);
+        examples_step.dependOn(&b.addInstallArtifact(executable, .{}).step);
         test_step.dependOn(&executable.step);
     }
 

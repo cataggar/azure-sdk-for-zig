@@ -29,7 +29,7 @@ pub fn main(init: std.process.Init) !void {
 
     var git = client.git();
     var repositories = git.repositories();
-    const list = try repositories.list(
+    const result = try repositories.list(
         init.gpa,
         "contoso",
         "my-project",
@@ -37,9 +37,10 @@ pub fn main(init: std.process.Init) !void {
         null,
         null,
     );
-    defer init.gpa.free(list);
 
-    for (list) |repository| {
+    // Azure DevOps wraps every collection in a `{count, value}` envelope,
+    // so list operations return that rather than a bare slice.
+    for (result.value orelse &.{}) |repository| {
         std.debug.print("{s}\n", .{repository.name orelse "<unnamed>"});
     }
 }
@@ -49,6 +50,12 @@ pub fn main(init: std.process.Init) !void {
 The generated operations take it as a path parameter, so the field exists
 so callers can write `client.organization` instead of threading the name
 through every call site.
+
+Azure DevOps never returns a bare JSON array: every collection comes back
+wrapped in an object carrying a `value` array and, on most endpoints, a
+`count`. List operations therefore return a generated `<Item>List`
+envelope, and callers read `.value`. `count` is optional because some
+endpoints omit it.
 
 ## The 44 areas
 
@@ -130,8 +137,9 @@ pub fn fetch(self: *Fetcher, allocator: std.mem.Allocator, token: ?[]const u8) !
 Some Azure DevOps operations report the next token in the response body
 and some in the `x-ms-continuationtoken` response header. Both are
 reachable: header-paged operations return a result union whose
-`status_200.headers` carries `x_ms_continuationtoken`, and an absent
-header is the end-of-collection signal. See
+`status_200.headers` carries `x_ms_continuationtoken` and whose
+`status_200.body` is the collection envelope, so the fetcher reads
+`body.value`. An absent header is the end-of-collection signal. See
 `examples/list_builds.zig` for a header-token pager and
 `examples/page_audit_log.zig` for a body-token one.
 

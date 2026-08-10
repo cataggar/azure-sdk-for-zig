@@ -28,8 +28,12 @@ const batch_size: i32 = 100;
 const AuditFetcher = struct {
     audit_log: devops.protocol.audit.AuditLog,
     organization: []const u8,
-    /// The service's token is owned by the parsed body, which is freed
-    /// once the page is handed back, so it is copied here to outlive it.
+    /// One page's worth of parsed response. Reset before each fetch, so
+    /// memory stays bounded no matter how long the listing runs. Safe
+    /// because the caller is done with a page before asking for the next.
+    page_arena: std.heap.ArenaAllocator,
+    /// The service's token is owned by the parsed body, which is
+    /// discarded with the arena, so it is copied here to outlive it.
     token_buffer: ?[]u8 = null,
     allocator: std.mem.Allocator,
 
@@ -38,8 +42,9 @@ const AuditFetcher = struct {
         allocator: std.mem.Allocator,
         token: ?[]const u8,
     ) !devops.Page(Entry) {
+        _ = self.page_arena.reset(.retain_capacity);
         const result = try self.audit_log.query(
-            allocator,
+            self.page_arena.allocator(),
             self.organization,
             null,
             null,
@@ -68,6 +73,7 @@ const AuditFetcher = struct {
     fn deinit(self: *AuditFetcher) void {
         if (self.token_buffer) |buffer| self.allocator.free(buffer);
         self.token_buffer = null;
+        self.page_arena.deinit();
     }
 };
 
@@ -86,6 +92,7 @@ pub fn main(init: std.process.Init) !void {
     var fetcher: AuditFetcher = .{
         .audit_log = audit.auditLog(),
         .organization = settings.organization,
+        .page_arena = .init(allocator),
         .allocator = allocator,
     };
     defer fetcher.deinit();
