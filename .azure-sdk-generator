@@ -5,4 +5,4 @@ source_branch=typespec
 source_path=typespec/specs
 selected_api_version=7.2
 api_areas=44
-command=(node codegen/devops/build-devops-models.mjs <specs-dir> <model-dir> && cd codegen/cli && zig build -Ddevops-models=<model-dir> -Ddevops-output=<package-output> -Dazure-sdk-core-commit=5acfa4e5a9c5c7047f74eff472d8f3e1ebc1fe7b -Dazure-sdk-core-hash=azure_sdk_core-0.2.0-eFY0EglTBgB_64f-rD5Fd-CYsYveOH0iWOEG_eaomVNX generate-devops-package)
+command=(node codegen/devops/build-devops-models.mjs <specs-dir> <model-dir> && cd codegen/cli && zig build -Ddevops-models=<model-dir> -Ddevops-output=<package-output> -Dazure-sdk-core-commit=3acfe9d5779b98d2ffcbddbf4112348e11de7122 -Dazure-sdk-core-hash=azure_sdk_core-0.2.0-eFY0Eq5jBgD71A09kDRyNUP1rUohQrm6KUpENFnYWQzY generate-devops-package)
