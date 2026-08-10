@@ -920,13 +920,11 @@ const StdStreamingOperation = struct {
         self.redirect_buffer = try allocator.alloc(u8, 8 * 1024);
 
         const uri = try std.Uri.parse(request.url);
-        const accept_encoding = getHeaderFromMap(
-            &self.request_headers,
-            "Accept-Encoding",
-        );
         var standard_headers: std.http.Client.Request.Headers = .{};
-        if (accept_encoding) |value| {
-            standard_headers.accept_encoding = .{ .override = value };
+        inline for (well_known_headers) |known| {
+            if (getHeaderFromMap(&self.request_headers, known.name)) |value| {
+                @field(standard_headers, known.field) = .{ .override = value };
+            }
         }
         self.request = try self.shared_client.client.request(request.method.toStd(), uri, .{
             .headers = standard_headers,
@@ -1015,7 +1013,7 @@ const StdStreamingOperation = struct {
             errdefer self.allocator.free(name);
             const value = try self.allocator.dupe(u8, entry.value_ptr.*);
             errdefer self.allocator.free(value);
-            if (!std.ascii.eqlIgnoreCase(name, "Accept-Encoding")) {
+            if (!isWellKnownHeader(name)) {
                 try extra.append(self.allocator, .{ .name = name, .value = value });
             }
             try self.request_headers.put(name, value);
@@ -1543,6 +1541,35 @@ fn clearOwnedHeaders(
         allocator.free(entry.value_ptr.*);
     }
     headers.clearRetainingCapacity();
+}
+
+/// The request headers `std.http.Client` models as dedicated fields on
+/// `Request.Headers` rather than as free-form extra headers.
+///
+/// Several of them — `user-agent`, `connection`, `accept-encoding`, `host`
+/// — are emitted from a built-in default whenever the field is left at
+/// `.default`. Passing the same header through `extra_headers` therefore
+/// does not replace that default, it *appends* to it, and the request goes
+/// out with the header twice.
+///
+/// Duplicates are not merely untidy. Azure DevOps' front end rejects a
+/// request carrying two `User-Agent` headers with
+/// `400 Bad Request - Invalid Header`, so a pipeline that sets a telemetry
+/// user agent could not reach the service at all.
+const well_known_headers = [_]struct { name: []const u8, field: []const u8 }{
+    .{ .name = "Host", .field = "host" },
+    .{ .name = "Authorization", .field = "authorization" },
+    .{ .name = "User-Agent", .field = "user_agent" },
+    .{ .name = "Connection", .field = "connection" },
+    .{ .name = "Accept-Encoding", .field = "accept_encoding" },
+    .{ .name = "Content-Type", .field = "content_type" },
+};
+
+fn isWellKnownHeader(name: []const u8) bool {
+    inline for (well_known_headers) |known| {
+        if (std.ascii.eqlIgnoreCase(name, known.name)) return true;
+    }
+    return false;
 }
 
 fn getHeaderFromMap(
@@ -2585,6 +2612,135 @@ const HeadOnlyServer = struct {
         // would return, but carries no body itself.
         try writer.interface.writeAll(
             "HTTP/1.1 200 OK\r\nContent-Length: 42\r\nConnection: close\r\n\r\n",
+        );
+        try writer.interface.flush();
+    }
+};
+
+// Regression guard for duplicated well-known headers. `std.http.Client`
+// emits a built-in default for `user-agent`, `connection`, `host` and
+// `accept-encoding` unless the corresponding `Request.Headers` field is
+// overridden, so routing those through `extra_headers` appends a second
+// copy instead of replacing the default. Azure DevOps answers a request
+// carrying two `User-Agent` headers with `400 Bad Request - Invalid
+// Header`, which made every pipeline with a telemetry policy unusable
+// against that service.
+test "standard transport sends well-known headers exactly once" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var address: std.Io.net.IpAddress = .{ .ip4 = .loopback(0) };
+    var server = try address.listen(io, .{ .reuse_address = true });
+    defer server.deinit(io);
+
+    var context = HeaderRecordingServer{ .io = io, .server = &server, .allocator = allocator };
+    defer context.deinit();
+    const thread = try std.Thread.spawn(.{}, HeaderRecordingServer.run, .{&context});
+
+    const url = try std.fmt.allocPrint(
+        allocator,
+        "http://127.0.0.1:{d}/headers",
+        .{server.socket.address.getPort()},
+    );
+    defer allocator.free(url);
+
+    var transport = StdHttpTransport.init(allocator, io);
+    defer transport.deinit();
+    var request = Request.init(allocator, .GET, url);
+    defer request.deinit();
+    try request.setHeader("User-Agent", "azsdk-zig-test/1.0");
+    try request.setHeader("Accept-Encoding", "gzip");
+    try request.setHeader("Accept", "application/json");
+
+    var operation = transport.asTransport().open(&request, .{}) catch |err| {
+        thread.join();
+        if (context.failure) |failure| return failure;
+        return err;
+    };
+    defer operation.deinit();
+    try operation.finish();
+    thread.join();
+    if (context.failure) |failure| return failure;
+
+    try std.testing.expectEqual(@as(usize, 1), context.count("user-agent"));
+    try std.testing.expectEqual(@as(usize, 1), context.count("accept-encoding"));
+    try std.testing.expectEqual(@as(usize, 1), context.count("host"));
+    try std.testing.expectEqual(@as(usize, 1), context.count("connection"));
+    try std.testing.expectEqual(@as(usize, 1), context.count("accept"));
+    // The caller's value must win over the built-in default.
+    try std.testing.expectEqualStrings(
+        "azsdk-zig-test/1.0",
+        context.value("user-agent").?,
+    );
+    try std.testing.expectEqualStrings("gzip", context.value("accept-encoding").?);
+}
+
+const HeaderRecordingServer = struct {
+    io: std.Io,
+    server: *std.Io.net.Server,
+    allocator: std.mem.Allocator,
+    lines: std.ArrayList([]u8) = .empty,
+    failure: ?anyerror = null,
+
+    fn run(self: *HeaderRecordingServer) void {
+        self.serve() catch |err| {
+            self.failure = err;
+        };
+    }
+
+    fn deinit(self: *HeaderRecordingServer) void {
+        for (self.lines.items) |line| self.allocator.free(line);
+        self.lines.deinit(self.allocator);
+    }
+
+    fn split(line: []const u8) ?struct { name: []const u8, value: []const u8 } {
+        const colon = std.mem.indexOfScalar(u8, line, ':') orelse return null;
+        return .{
+            .name = line[0..colon],
+            .value = std.mem.trim(u8, line[colon + 1 ..], " "),
+        };
+    }
+
+    fn count(self: *const HeaderRecordingServer, name: []const u8) usize {
+        var total: usize = 0;
+        for (self.lines.items) |line| {
+            const header = split(line) orelse continue;
+            if (std.ascii.eqlIgnoreCase(header.name, name)) total += 1;
+        }
+        return total;
+    }
+
+    fn value(self: *const HeaderRecordingServer, name: []const u8) ?[]const u8 {
+        for (self.lines.items) |line| {
+            const header = split(line) orelse continue;
+            if (std.ascii.eqlIgnoreCase(header.name, name)) return header.value;
+        }
+        return null;
+    }
+
+    fn serve(self: *HeaderRecordingServer) !void {
+        const stream = try self.server.accept(self.io);
+        defer stream.close(self.io);
+        var read_buffer: [4096]u8 = undefined;
+        var reader = std.Io.net.Stream.Reader.init(stream, self.io, &read_buffer);
+        var write_buffer: [1024]u8 = undefined;
+        var writer = std.Io.net.Stream.Writer.init(stream, self.io, &write_buffer);
+
+        var first_line = true;
+        while (true) {
+            const raw_line = (reader.interface.takeDelimiter('\n') catch
+                return error.ServerHeaderReadFailed) orelse
+                return error.ServerHeaderReadFailed;
+            const line = std.mem.trimEnd(u8, raw_line, "\r");
+            if (line.len == 0) break;
+            if (first_line) {
+                first_line = false;
+                continue;
+            }
+            try self.lines.append(self.allocator, try self.allocator.dupe(u8, line));
+        }
+
+        try writer.interface.writeAll(
+            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
         );
         try writer.interface.flush();
     }
