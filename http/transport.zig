@@ -747,7 +747,16 @@ pub const StdHttpTransport = struct {
     /// safely outlive the transport.
     client: std.http.Client,
     shared_client: ?*SharedHttpClient = null,
+    /// Ceiling on a buffered response body, guarding against a runaway or
+    /// hostile server. Raise it for services that return large collections
+    /// in one response, or set `.unlimited` to remove the ceiling. Only
+    /// applies to `send`; a streaming operation reads at the caller's pace.
+    max_response_body: std.Io.Limit = .limited(default_max_response_body),
     transport: HttpTransport,
+
+    /// Chosen to hold the largest responses seen in practice while still
+    /// failing fast on a stream that never ends.
+    pub const default_max_response_body = 64 * 1024 * 1024;
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) StdHttpTransport {
         return initWithClient(allocator, .{ .allocator = allocator, .io = io });
@@ -803,7 +812,7 @@ pub const StdHttpTransport = struct {
 
         const body = operation.body_reader.allocRemaining(
             allocator,
-            .limited(16 * 1024 * 1024),
+            self.max_response_body,
         ) catch |err| switch (err) {
             error.ReadFailed => return operation.bodyError() orelse error.ReadFailed,
             else => |other| return other,
@@ -2775,6 +2784,106 @@ const CancellingReader = struct {
         self.emitted = true;
         self.token.cancel();
         return bytes.len;
+    }
+};
+
+// Azure DevOps returns collections of many megabytes in a single
+// response — an organization's Git repositories exceeded 17 MB — so a
+// hard-coded ceiling made those operations permanently unusable.
+test "buffered response body honours a configurable size ceiling" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const body = "0123456789abcdef";
+
+    // Comfortably below the ceiling the body arrives intact.
+    {
+        var address: std.Io.net.IpAddress = .{ .ip4 = .loopback(0) };
+        var server = try address.listen(io, .{ .reuse_address = true });
+        defer server.deinit(io);
+        var context = FixedBodyServer{ .io = io, .server = &server, .body = body };
+        const thread = try std.Thread.spawn(.{}, FixedBodyServer.run, .{&context});
+
+        const url = try std.fmt.allocPrint(
+            allocator,
+            "http://127.0.0.1:{d}/body",
+            .{server.socket.address.getPort()},
+        );
+        defer allocator.free(url);
+
+        var transport = StdHttpTransport.init(allocator, io);
+        defer transport.deinit();
+        transport.max_response_body = .limited(body.len * 4);
+        var request = Request.init(allocator, .GET, url);
+        defer request.deinit();
+
+        var response = try transport.asTransport().send(&request);
+        defer response.deinit();
+        thread.join();
+        if (context.failure) |failure| return failure;
+        try std.testing.expectEqualStrings(body, response.body);
+    }
+
+    // Above it, the read fails rather than truncating.
+    {
+        var address: std.Io.net.IpAddress = .{ .ip4 = .loopback(0) };
+        var server = try address.listen(io, .{ .reuse_address = true });
+        defer server.deinit(io);
+        var context = FixedBodyServer{ .io = io, .server = &server, .body = body };
+        const thread = try std.Thread.spawn(.{}, FixedBodyServer.run, .{&context});
+
+        const url = try std.fmt.allocPrint(
+            allocator,
+            "http://127.0.0.1:{d}/body",
+            .{server.socket.address.getPort()},
+        );
+        defer allocator.free(url);
+
+        var transport = StdHttpTransport.init(allocator, io);
+        defer transport.deinit();
+        transport.max_response_body = .limited(body.len / 2);
+        var request = Request.init(allocator, .GET, url);
+        defer request.deinit();
+
+        try std.testing.expectError(
+            error.StreamTooLong,
+            transport.asTransport().send(&request),
+        );
+        thread.join();
+    }
+}
+
+const FixedBodyServer = struct {
+    io: std.Io,
+    server: *std.Io.net.Server,
+    body: []const u8,
+    failure: ?anyerror = null,
+
+    fn run(self: *FixedBodyServer) void {
+        self.serve() catch |err| {
+            self.failure = err;
+        };
+    }
+
+    fn serve(self: *FixedBodyServer) !void {
+        const stream = try self.server.accept(self.io);
+        defer stream.close(self.io);
+        var read_buffer: [1024]u8 = undefined;
+        var reader = std.Io.net.Stream.Reader.init(stream, self.io, &read_buffer);
+        var write_buffer: [1024]u8 = undefined;
+        var writer = std.Io.net.Stream.Writer.init(stream, self.io, &write_buffer);
+
+        while (true) {
+            const raw_line = (reader.interface.takeDelimiter('\n') catch
+                return error.ServerHeaderReadFailed) orelse
+                return error.ServerHeaderReadFailed;
+            if (std.mem.trimEnd(u8, raw_line, "\r").len == 0) break;
+        }
+
+        try writer.interface.print(
+            "HTTP/1.1 200 OK\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}",
+            .{ self.body.len, self.body },
+        );
+        try writer.interface.flush();
     }
 };
 
