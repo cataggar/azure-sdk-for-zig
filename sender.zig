@@ -1155,3 +1155,428 @@ test "entityPathFor targets the hub or one partition" {
     defer allocator.free(partition);
     try testing.expectEqualStrings("my-hub/Partitions/3", partition);
 }
+
+// ───────────── Round trips, measured against a reactive peer ─────────────
+
+const Transport = amqp.transport.Transport;
+const TransportError = amqp.transport.TransportError;
+
+// A test peer that answers only what the client has already asked for.
+//
+// `MemoryTransport` plus `test_peer` scripts the broker's whole side of a
+// conversation into the client's read buffer before the client writes
+// anything. That is fine for asserting *what* the client sends, but it makes
+// round trips unobservable: the answers are in the buffer before the questions
+// are written, so there is nothing to wait for. "a peer that answers before it
+// is asked shows no round trips at all" pins that — eight batches, zero stalls.
+//
+// That is why no claim about pipelining could be supported here. What
+// pipelining buys is one round trip per window rather than one per batch, and
+// a peer that has already answered cannot show it.
+//
+// `ReactivePeer` withholds each response until the client has flushed the
+// request that justifies it. A response is released only when the client
+// stalls, which makes a stall countable: `round_trips` is the number of times
+// the client could not proceed without hearing from the peer. That count is
+// deterministic, so it can be asserted rather than timed — which matters
+// here, because the wall-clock ranking of the two send benchmarks flips with
+// run order and means nothing.
+//
+// It counts round trips and deliberately does not simulate one. Charging each
+// a delay would need a `std.Io` the transport vtable has nowhere to put, and
+// would turn a figure that repeats exactly into one this host cannot measure
+// twice the same way. A caller wanting elapsed time can multiply.
+
+const ReactivePeer = struct {
+    allocator: Allocator,
+    mem: *amqp.MemoryTransport,
+    units: []const Unit,
+    released: usize = 0,
+    round_trips: usize = 0,
+    /// Delivery ids seen on the wire, in the order the client sent them.
+    seen: std.ArrayList(u32) = .empty,
+    /// Whether stalls are tallied. Each caller picks its own window: the send
+    /// measurements switch it on after the connection handshake, leaving the
+    /// link attach ahead of them but pre-answered by the greeting, while the
+    /// unanswered-stall test switches it on from the first byte precisely so
+    /// that one stall is counted.
+    counting: bool = false,
+
+    /// One thing the peer says, and what the client must have said first.
+    const Unit = union(enum) {
+        /// Released on the first stall, whatever the client has sent. The
+        /// handshake, attach and flow are these: they answer frames that carry
+        /// no delivery at all.
+        greeting: []const u8,
+        /// Accept the nth delivery, once the client has flushed it.
+        ///
+        /// By the id the client actually used, never by `n`. This driver
+        /// assigns a delivery the session's `next_outgoing_id` (`link.zig`,
+        /// `Sender.sendBytesAsync`), which §2.5.6 advances once per transfer
+        /// *frame*, so id and index coincide only while every delivery fits in
+        /// one frame. The spec does not require that identity — §2.6.12 says
+        /// only that a session assigns the id — so a peer must read the id off
+        /// the wire rather than assume either. A scripted id silently stops
+        /// matching the moment a batch splits, and the client then waits out
+        /// its deadline on a message that had arrived.
+        settle: usize,
+    };
+
+    fn deinit(self: *ReactivePeer) void {
+        self.seen.deinit(self.allocator);
+    }
+
+    fn transport(self: *ReactivePeer) Transport {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+
+    const vtable: Transport.VTable = .{
+        .read = read,
+        .write = write,
+        .flush = flush,
+        .close = close,
+    };
+
+    fn unread(self: *const ReactivePeer) usize {
+        return self.mem.inbound.items.len - self.mem.inbound_pos;
+    }
+
+    /// Release every response the client has now earned.
+    ///
+    /// Releasing all of them together, rather than one per stall, is the whole
+    /// point: a real peer that has received eight transfers answers all eight
+    /// without waiting to be asked again, so a window costs one round trip
+    /// however many deliveries it holds. Releasing one at a time would charge
+    /// pipelining the same as sequential sending and quietly erase the very
+    /// difference this exists to measure.
+    fn serve(self: *ReactivePeer) TransportError!void {
+        self.seen.clearRetainingCapacity();
+        observeDeliveries(self.allocator, self.mem.written(), &self.seen) catch
+            return error.ReadFailed;
+
+        var released_any = false;
+        while (self.released < self.units.len) {
+            switch (self.units[self.released]) {
+                .greeting => |bytes| try self.mem.pushPeerBytes(bytes),
+                .settle => |n| {
+                    if (n >= self.seen.items.len) break;
+                    self.accept(self.seen.items[n]) catch return error.ReadFailed;
+                },
+            }
+            self.released += 1;
+            released_any = true;
+        }
+        // A stall the peer cannot answer is not a round trip: nothing was
+        // asked for that has not been said. `MemoryTransport` reports an
+        // exhausted buffer as end of stream unless `starve` is set, so in the
+        // send measurements below this never happens — but it is reachable,
+        // and "a stall the peer cannot answer ends the connection" counts the
+        // one stall of a connection that gets no answer at all, which without
+        // this guard would be charged as a round trip.
+        if (!released_any) return;
+
+        if (self.counting) self.round_trips += 1;
+    }
+
+    fn accept(self: *ReactivePeer, delivery_id: u32) !void {
+        var scratch = amqp.MemoryTransport.init(self.allocator);
+        defer scratch.deinit();
+        const peer = amqp.test_peer.Peer{
+            .allocator = self.allocator,
+            .mem = &scratch,
+        };
+        try peer.push(0, .{ .disposition = .{
+            .role = .receiver,
+            .first = delivery_id,
+            .last = delivery_id,
+            .settled = true,
+            .state = .accepted,
+        } });
+        try self.mem.pushPeerBytes(scratch.inbound.items);
+    }
+
+    fn read(ptr: *anyopaque, buffer: []u8) TransportError!usize {
+        const self: *ReactivePeer = @ptrCast(@alignCast(ptr));
+        // Only an exhausted buffer is a stall. A read that the peer can
+        // already satisfy costs nothing on a real link either.
+        if (self.unread() == 0) try self.serve();
+        return self.mem.transport().read(buffer);
+    }
+
+    fn write(ptr: *anyopaque, bytes: []const u8) TransportError!void {
+        const self: *ReactivePeer = @ptrCast(@alignCast(ptr));
+        return self.mem.transport().write(bytes);
+    }
+
+    fn flush(ptr: *anyopaque) TransportError!void {
+        const self: *ReactivePeer = @ptrCast(@alignCast(ptr));
+        return self.mem.transport().flush();
+    }
+
+    fn close(ptr: *anyopaque) void {
+        const self: *ReactivePeer = @ptrCast(@alignCast(ptr));
+        self.mem.transport().close();
+    }
+};
+
+/// Delivery ids the client has flushed, in order, read from its own frames.
+///
+/// A delivery is a transfer carrying a `delivery_id`; the continuation frames
+/// of a split message omit it, so a message larger than one frame is one
+/// delivery — which matters, because a batch over the negotiated frame size
+/// would otherwise look like several and be settled before it had finished
+/// being sent. Reading the client's own output rather than tracking calls into
+/// the pool keeps this honest about what actually reached the wire.
+fn observeDeliveries(
+    allocator: Allocator,
+    written: []const u8,
+    out: *std.ArrayList(u32),
+) !void {
+    return collect(allocator, written, out, true);
+}
+
+/// Transfer *frames*, including the continuations `observeDeliveries` skips.
+/// A test asserting that a fixture really did split needs this; without it,
+/// "a split delivery counts once" passes vacuously on a fixture that never
+/// split.
+fn countTransferFrames(allocator: Allocator, written: []const u8) !usize {
+    var all: std.ArrayList(u32) = .empty;
+    defer all.deinit(allocator);
+    try collect(allocator, written, &all, false);
+    return all.items.len;
+}
+
+/// Walks the client's flushed frames. With `out` collecting only the ids of
+/// delivery-bearing transfers when `deliveries_only`, every transfer frame
+/// otherwise (continuations contribute a placeholder id, never read).
+fn collect(
+    allocator: Allocator,
+    written: []const u8,
+    out: *std.ArrayList(u32),
+    deliveries_only: bool,
+) !void {
+    var offset: usize = if (std.mem.startsWith(u8, written, "AMQP")) 8 else 0;
+
+    while (offset + amqp.uamqp.frame.frame_header_size <= written.len) {
+        const header = try amqp.uamqp.frame.FrameHeader.parse(
+            written[offset..][0..amqp.uamqp.frame.frame_header_size],
+        );
+        const header_len = @as(usize, header.doff) * 4;
+        if (header.size < header_len or offset + header.size > written.len) break;
+        const body = written[offset + header_len ..][0 .. header.size - header_len];
+        offset += @intCast(header.size);
+
+        if (amqp.performative.peekDescriptor(body) != amqp.performative.descriptor.transfer) {
+            continue;
+        }
+
+        var decode_buf: [512]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&decode_buf);
+        var decoded = amqp.performative.decode(fba.allocator(), body) catch continue;
+        defer decoded.deinit();
+
+        if (decoded.performative.transfer.delivery_id) |id| {
+            try out.append(allocator, id);
+        } else if (!deliveries_only) {
+            try out.append(allocator, 0);
+        }
+    }
+}
+
+/// The peer's side as withheld units: the connection greeting, then one
+/// settlement per delivery, each owed only once that delivery is on the wire.
+fn reactiveSendUnits(
+    allocator: Allocator,
+    units: *std.ArrayList(ReactivePeer.Unit),
+    deliveries: u32,
+    prescripted: bool,
+) !void {
+    var scratch = MemoryTransport.init(allocator);
+    defer scratch.deinit();
+    const peer = Peer{ .allocator = allocator, .mem = &scratch };
+    try scriptSender(peer, null, deliveries);
+
+    // `prescripted` reproduces what the send benchmarks do: settle every
+    // delivery in the greeting, before the client has sent one. Delivery ids
+    // can be guessed here only because each batch fits in a single frame.
+    if (prescripted) {
+        var id: u32 = 0;
+        while (id < deliveries) : (id += 1) try peer.push(0, .{ .disposition = .{
+            .role = .receiver,
+            .first = id,
+            .last = id,
+            .settled = true,
+            .state = .accepted,
+        } });
+    }
+
+    try units.append(allocator, .{
+        .greeting = try allocator.dupe(u8, scratch.inbound.items),
+    });
+    if (prescripted) return;
+
+    var n: usize = 0;
+    while (n < deliveries) : (n += 1) try units.append(allocator, .{ .settle = n });
+}
+
+fn freeUnits(allocator: Allocator, units: *std.ArrayList(ReactivePeer.Unit)) void {
+    for (units.items) |unit| switch (unit) {
+        .greeting => |bytes| allocator.free(bytes),
+        .settle => {},
+    };
+    units.deinit(allocator);
+}
+
+const RoundTripRun = struct {
+    round_trips: usize,
+    accepted: usize,
+    /// Transfer frames the client flushed, so a test can prove its fixture
+    /// really did split a delivery rather than assume it.
+    transfer_frames: usize,
+};
+
+const Mode = enum { sequential, pipelined, prescripted };
+
+fn measureRoundTrips(
+    allocator: Allocator,
+    mode: Mode,
+    count: u32,
+    body_len: usize,
+) !RoundTripRun {
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+
+    var units: std.ArrayList(ReactivePeer.Unit) = .empty;
+    defer freeUnits(allocator, &units);
+    try reactiveSendUnits(allocator, &units, count, mode == .prescripted);
+
+    var peer = ReactivePeer{
+        .allocator = allocator,
+        .mem = &mem,
+        .units = units.items,
+    };
+    defer peer.deinit();
+    var clock: driver.ManualClock = .{};
+    var conn = try driver.Driver.init(
+        allocator,
+        peer.transport(),
+        clock.clock(),
+        harness.driver_options,
+    );
+    defer conn.deinit();
+
+    var scripted: Scripted = undefined;
+    try scripted.openWith(allocator, &mem, &clock, &conn, .{
+        .deadline_ms = 10_000,
+        .max_in_flight = count,
+    });
+    defer scripted.deinit();
+
+    var batches = try allocator.alloc(EventDataBatch, count);
+    defer allocator.free(batches);
+    var built: usize = 0;
+    defer for (batches[0..built]) |*b| b.deinit(allocator);
+    const body = try allocator.alloc(u8, body_len);
+    defer allocator.free(body);
+    @memset(body, 'x');
+    for (batches) |*b| {
+        b.* = try batchOf(allocator, &.{body}, .{});
+        built += 1;
+    }
+
+    // The connection is open, but the link is not: `SenderPool` attaches
+    // lazily, so the attach and its flow are exchanged inside the first send,
+    // after counting starts. They cost no stall because `reactiveSendUnits`
+    // deliberately folds them into the greeting, which answers frames that
+    // carry no delivery. What is being counted is the deliveries.
+    peer.counting = true;
+    var accepted: usize = 0;
+    if (mode == .pipelined) {
+        const result = scripted.pool.sendPipelined(allocator, "my-hub", batches);
+        if (result.err) |err| return err;
+        accepted = result.accepted;
+    } else {
+        for (batches) |b| {
+            try scripted.pool.send(allocator, "my-hub", b);
+            accepted += 1;
+        }
+    }
+    return .{
+        .round_trips = peer.round_trips,
+        .accepted = accepted,
+        .transfer_frames = try countTransferFrames(allocator, mem.written()),
+    };
+}
+
+test "a sequential send waits for the peer once per batch" {
+    // The scripted peer cannot show this: it answers before it is asked, so
+    // eight batches cost one read whichever way they are sent. Against a peer
+    // that withholds each settlement until its transfer is on the wire, the
+    // blocking path pays a full round trip for every batch.
+    const run = try measureRoundTrips(testing.allocator, .sequential, 8, 5);
+    try testing.expectEqual(@as(usize, 8), run.accepted);
+    try testing.expectEqual(@as(usize, 8), run.round_trips);
+}
+
+test "a pipelined window waits for the peer once for the whole window" {
+    // The same eight batches and the same peer, differing only in whether the
+    // window is kept full. This is the entire benefit of pipelining, and it is
+    // the first measurement in this package able to see it.
+    const run = try measureRoundTrips(testing.allocator, .pipelined, 8, 5);
+    try testing.expectEqual(@as(usize, 8), run.accepted);
+    try testing.expectEqual(@as(usize, 1), run.round_trips);
+}
+
+test "a batch split across frames is one delivery, not one per frame" {
+    // The peer settles delivery i once transfer i is on the wire, so counting
+    // continuation frames as deliveries would settle a batch before it had
+    // finished being sent. The negotiated frame size here is 512, so a 2 KiB
+    // body must split; `transfer_frames` proves it did rather than leaving
+    // this to pass vacuously on a fixture that fits in one frame.
+    const run = try measureRoundTrips(testing.allocator, .sequential, 3, 2048);
+    try testing.expectEqual(@as(usize, 3), run.accepted);
+    try testing.expect(run.transfer_frames > 3);
+    try testing.expectEqual(@as(usize, 3), run.round_trips);
+}
+
+test "a peer that answers before it is asked shows no round trips at all" {
+    // The control for the two figures above, and the reason they needed a new
+    // peer: this is exactly the arrangement `benchSendSequential` uses — every
+    // settlement pushed into the client's read buffer before the first batch
+    // is written. The same eight batches then stall zero times, so no
+    // instrument placed on that peer could have told sequential from
+    // pipelined.
+    const run = try measureRoundTrips(testing.allocator, .prescripted, 8, 5);
+    try testing.expectEqual(@as(usize, 8), run.accepted);
+    try testing.expectEqual(@as(usize, 0), run.round_trips);
+}
+
+test "a stall the peer cannot answer ends the connection" {
+    // Two things at once: an exhausted read buffer is end of stream, which is
+    // why the send measurements never meet an unanswered stall; and a stall
+    // the peer says nothing into is not a round trip. Counting is on from the
+    // first byte here, so `serve` charging every stall rather than only the
+    // answered ones would read 1 instead of 0.
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+
+    var peer = ReactivePeer{
+        .allocator = allocator,
+        .mem = &mem,
+        .units = &.{},
+    };
+    defer peer.deinit();
+    peer.counting = true;
+    var clock: driver.ManualClock = .{};
+    var conn = try driver.Driver.init(
+        allocator,
+        peer.transport(),
+        clock.clock(),
+        harness.driver_options,
+    );
+    defer conn.deinit();
+
+    try testing.expectError(error.ConnectionClosed, conn.open(100));
+    try testing.expectEqual(@as(usize, 0), peer.round_trips);
+}
