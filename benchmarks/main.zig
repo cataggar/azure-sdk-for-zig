@@ -259,12 +259,24 @@ fn sendScripted(allocator: std.mem.Allocator, count: usize) !void {
 /// Paired with `benchSendPipelined`, which does identical work and differs
 /// only in whether the eight batches overlap. Both measure the same
 /// allocations and bytes in steady state, so pipelining changes neither. Its
-/// real benefit is one round trip per window rather than one per batch, and a
-/// `MemoryTransport` peer has zero round-trip latency, so that benefit is
-/// invisible here by construction. Do not read either line as evidence for or
-/// against pipelining. The timings are a worse trap than the counts: which of
-/// the two looks faster flips with run order, so the ops/s ranking here means
-/// nothing at all.
+/// real benefit is one round trip per window rather than one per batch, and
+/// this peer has already answered before it is asked: `buildSendScript` puts
+/// every settlement in the client's read buffer before the first batch is
+/// written, so nothing here ever waits and there is no round trip to see. Do
+/// not read either line as evidence for or against pipelining. The timings are
+/// a worse trap than the counts: which of the two looks faster flips with run
+/// order, so the ops/s ranking here means nothing at all.
+///
+/// That benefit is measured, just not by a benchmark. `ReactivePeer` in
+/// `sender.zig` withholds each settlement until the delivery it answers is on
+/// the wire, which makes waiting countable; "a sequential send waits for the
+/// peer once per batch" and "a pipelined window waits for the peer once for
+/// the whole window" assert 8 against 1 for eight batches, and "a peer that
+/// answers before it is asked shows no round trips at all" pins this peer at
+/// 0. Those tests use a much smaller payload and frame size than these
+/// benchmarks; what carries over is the send path and the window, which is all
+/// the round-trip count depends on. A count is also a better instrument than a
+/// timing on this host.
 ///
 /// One or both of the two also pay a few extra 95400 B allocations across
 /// their early iterations, so those lines read higher than the steady state.
