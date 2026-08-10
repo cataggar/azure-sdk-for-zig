@@ -20,7 +20,11 @@ const wiql_query =
 ;
 
 pub fn main(init: std.process.Init) !void {
-    const allocator = init.gpa;
+    // The parsed response owns a string per field; an arena frees the
+    // whole graph at once rather than walking it.
+    var arena = std.heap.ArenaAllocator.init(init.gpa);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
     var transport = core.http.StdHttpTransport.init(allocator, init.io);
     defer transport.deinit();

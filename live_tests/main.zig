@@ -33,7 +33,9 @@ fn load(env: *const std.process.Environ.Map) !Settings {
 }
 
 test "live: the organization's projects can be listed with a PAT" {
-    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     var env = try std.process.Environ.createMap(std.testing.environ, allocator);
     defer env.deinit();
     const settings = try load(&env);
@@ -50,7 +52,7 @@ test "live: the organization's projects can be listed with a PAT" {
 
     var core_area = client.core_area();
     var projects = core_area.projects();
-    const list = try projects.list(
+    const result = try projects.list(
         allocator,
         settings.organization,
         null,
@@ -59,12 +61,15 @@ test "live: the organization's projects can be listed with a PAT" {
         null,
         null,
     );
-    defer allocator.free(list);
+    // Azure DevOps wraps every collection in a `{count, value}` envelope.
+    const list = result.value orelse return error.MissingCollectionEnvelope;
     try std.testing.expect(list.len > 0);
 }
 
 test "live: a project's Git repositories can be listed" {
-    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     var env = try std.process.Environ.createMap(std.testing.environ, allocator);
     defer env.deinit();
     const settings = try load(&env);
@@ -82,7 +87,7 @@ test "live: a project's Git repositories can be listed" {
 
     var git = client.git();
     var repositories = git.repositories();
-    const list = try repositories.list(
+    const result = try repositories.list(
         allocator,
         settings.organization,
         project,
@@ -90,14 +95,16 @@ test "live: a project's Git repositories can be listed" {
         null,
         null,
     );
-    defer allocator.free(list);
+    const list = result.value orelse return error.MissingCollectionEnvelope;
     for (list) |repository| {
         try std.testing.expect(repository.id != null);
     }
 }
 
 test "live: an invalid PAT is rejected rather than silently succeeding" {
-    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     var env = try std.process.Environ.createMap(std.testing.environ, allocator);
     defer env.deinit();
     const settings = try load(&env);

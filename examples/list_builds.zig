@@ -5,6 +5,10 @@
 //! The generated operation surfaces it on `status_200.headers`, so the
 //! pager can drive the listing to exhaustion.
 //!
+//! A busy project holds tens of thousands of builds, so this stops after
+//! `max_pages` rather than reading them all: `next` may be abandoned at
+//! any point. Drop the check to walk the whole listing.
+//!
 //! See `page_audit_log.zig` for the other flavour, where the token
 //! arrives on the response *body* instead.
 //!
@@ -24,6 +28,7 @@ const models = devops.protocol.build.models;
 const Build = models.Build;
 
 const page_size: i32 = 25;
+const max_pages: usize = 4;
 
 /// Captures the sub-client and the operation's fixed parameters so the
 /// pager only has to supply the continuation token.
@@ -31,8 +36,12 @@ const BuildFetcher = struct {
     builds: devops.protocol.build.Builds,
     organization: []const u8,
     project: []const u8,
-    /// The header value is owned by the response, which is freed once
-    /// the page is handed back, so it is copied here to outlive it.
+    /// One page's worth of parsed response. Reset before each fetch, so
+    /// memory stays bounded no matter how long the listing runs. Safe
+    /// because the caller is done with a page before asking for the next.
+    page_arena: std.heap.ArenaAllocator,
+    /// The header value is owned by the response, which is discarded with
+    /// the arena, so it is copied here to outlive it.
     token_buffer: ?[]u8 = null,
     allocator: std.mem.Allocator,
 
@@ -41,8 +50,9 @@ const BuildFetcher = struct {
         allocator: std.mem.Allocator,
         token: ?[]const u8,
     ) !devops.Page(Build) {
+        _ = self.page_arena.reset(.retain_capacity);
         const result = try self.builds.list(
-            allocator,
+            self.page_arena.allocator(),
             self.organization,
             self.project,
             null,
@@ -60,7 +70,10 @@ const BuildFetcher = struct {
             token,
             null,
             null,
-            null,
+            // Azure DevOps only issues a continuation token for this
+            // operation when an explicit order is requested; with the
+            // default order it returns the first page and nothing else.
+            .queue_time_descending,
             null,
             null,
             null,
@@ -69,8 +82,7 @@ const BuildFetcher = struct {
 
         switch (result) {
             .status_200 => |ok| {
-                defer allocator.free(ok.body);
-                const items = try allocator.dupe(Build, ok.body);
+                const items = try allocator.dupe(Build, ok.body.value orelse &.{});
                 errdefer allocator.free(items);
 
                 if (self.token_buffer) |buffer| self.allocator.free(buffer);
@@ -88,6 +100,7 @@ const BuildFetcher = struct {
     fn deinit(self: *BuildFetcher) void {
         if (self.token_buffer) |buffer| self.allocator.free(buffer);
         self.token_buffer = null;
+        self.page_arena.deinit();
     }
 };
 
@@ -108,6 +121,7 @@ pub fn main(init: std.process.Init) !void {
         .builds = build_client.builds(),
         .organization = settings.organization,
         .project = project,
+        .page_arena = .init(allocator),
         .allocator = allocator,
     };
     defer fetcher.deinit();
@@ -115,18 +129,26 @@ pub fn main(init: std.process.Init) !void {
     var pages = devops.ContinuationPager(Build, BuildFetcher).init(&fetcher);
 
     var total: usize = 0;
+    var page_count: usize = 0;
     while (try pages.next(allocator)) |page| {
         defer allocator.free(page);
+        page_count += 1;
         for (page) |build| {
             total += 1;
             std.debug.print(
                 "  #{s}  {s}\n",
                 .{
                     build.build_number orelse "<none>",
-                    if (build.status) |status| @tagName(status) else "unknown",
+                    // `toWire` gives the service's spelling, including
+                    // for values this build of the SDK doesn't know.
+                    if (build.status) |status| status.toWire() else "unknown",
                 },
             );
         }
+        if (page_count == max_pages) break;
     }
-    std.debug.print("{d} builds in {s}\n", .{ total, project });
+    std.debug.print(
+        "{d} builds across {d} pages in {s}\n",
+        .{ total, page_count, project },
+    );
 }
