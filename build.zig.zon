@@ -5,12 +5,12 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .azure_sdk_core = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#b7b47b2b172fa069fdb3979e8dea395f97c008a8",
-            .hash = "azure_sdk_core-0.1.3-eFY0Eu3NBQCWhAf8JkUhPNkV_vNq_w68JXIUYNFAEamz",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#3acfe9d5779b98d2ffcbddbf4112348e11de7122",
+            .hash = "azure_sdk_core-0.2.0-eFY0Eq5jBgD71A09kDRyNUP1rUohQrm6KUpENFnYWQzY",
         },
         .azure_sdk_kusto = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#7c46275089fdb0566513925fa62f540236c25bf5",
-            .hash = "azure_sdk_kusto-0.1.0-KOUZfIy-CwCCnXJaalBcsqlGi5HL9nLIZ7qlP7UmuMW7",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#5cbfe4272956b617244736f5c78ec160821e6f34",
+            .hash = "azure_sdk_kusto-0.1.0-KOUZfIy-CwAqn0n1rAgSizE2hlm4Pi1s1krT-xJ-JpK7",
         },
     },
     .paths = .{
