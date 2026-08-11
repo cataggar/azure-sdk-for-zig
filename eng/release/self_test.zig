@@ -163,7 +163,7 @@ const Ctx = struct {
         }
     }
 
-    fn writeRegistry(self: *Ctx, tracing_version: []const u8, core_version: []const u8) !void {
+    fn writeRegistry(self: *Ctx) !void {
         try self.writeFile(try self.joinp(&.{ self.source, ".gitignore" }), ".release/\n");
         const path = try self.joinp(&.{ self.source, "eng", "packages.zig" });
         const content = try self.cat(&.{
@@ -177,9 +177,6 @@ const Ctx = struct {
             TRACING,
             "\",\n",
             "        .branch = \"sdk/core_tracing\",\n",
-            "        .version = \"",
-            tracing_version,
-            "\",\n",
             "        .publish_paths = &.{\n",
             "            \".gitignore\",\n",
             "            \"build.zig\",\n",
@@ -198,9 +195,6 @@ const Ctx = struct {
             CORE,
             "\",\n",
             "        .branch = \"sdk/core\",\n",
-            "        .version = \"",
-            core_version,
-            "\",\n",
             "        .dependencies = &.{\"",
             TRACING,
             "\"},\n",
@@ -221,7 +215,6 @@ const Ctx = struct {
             ARM,
             "\",\n",
             "        .branch = \"rest/arm_avs\",\n",
-            "        .version = \"0.1.0\",\n",
             "        .historical_names = &.{\"arm_avs\"},\n",
             "        .publish_paths = &.{\n",
             "            \".gitignore\",\n",
@@ -360,7 +353,7 @@ const Ctx = struct {
     }
 
     fn updateVersions(self: *Ctx, tracing_version: []const u8, core_version: []const u8) !void {
-        try self.writeRegistry(tracing_version, core_version);
+        try self.writeRegistry();
         try self.writePackage("sdk/core/tracing", TRACING, tracing_version, &.{});
         try self.writePackage("sdk/core", CORE, core_version, &.{.{ .name = TRACING, .path = "tracing" }});
         try self.writePackage("rest/arm_avs", ARM, "0.1.0", &.{});
@@ -678,7 +671,7 @@ pub fn runSelfTest(gpa: Allocator, io: Io, env: *Environ.Map, repository_root: [
     e = try self.newEngine(false);
     {
         const r = e.prepare(TRACING, true);
-        try self.expectFailure("malformed version", r, e.message, null);
+        try self.expectFailure("malformed version", r, e.message, "malformed release version");
     }
     try self.assertCleanup(&e);
 
@@ -688,17 +681,21 @@ pub fn runSelfTest(gpa: Allocator, io: Io, env: *Environ.Map, repository_root: [
     e = try self.newEngine(false);
     {
         const r = e.prepare(TRACING, true);
-        try self.expectFailure("non-monotonic version", r, e.message, null);
+        try self.expectFailure("non-monotonic version", r, e.message, "is not greater than");
     }
     try self.assertCleanup(&e);
 
+    // Re-releasing an existing version is stopped by the tag-collision
+    // check, which runs before the history reuse scan. The reuse scan
+    // itself needs a non-monotonic branch whose tag is absent, which
+    // the monotonic check makes unreachable here.
     try self.updateVersions("0.2.0", "0.1.0");
     _ = try self.commitAll("reused version");
     try self.pushMain();
     e = try self.newEngine(false);
     {
         const r = e.prepare(TRACING, true);
-        try self.expectFailure("reused version", r, e.message, null);
+        try self.expectFailure("prepare rejects an existing release tag", r, e.message, "release tag already exists");
     }
     try self.assertCleanup(&e);
 
@@ -783,7 +780,7 @@ pub fn runSelfTest(gpa: Allocator, io: Io, env: *Environ.Map, repository_root: [
     const branch_before2 = try engine.remoteRef(gpa, io, remote, "refs/heads/sdk/core", source);
     {
         const r = e.publish(CORE, false);
-        try self.expectFailure("tag collision", r, e.message, null);
+        try self.expectFailure("publish rejects a tag created after prepare", r, e.message, "release tag already exists");
     }
     if (!optEq(try engine.remoteRef(gpa, io, remote, "refs/heads/sdk/core", source), branch_before2))
         return self.fail2("failed atomic push changed the branch");

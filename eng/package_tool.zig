@@ -205,9 +205,6 @@ fn checkManifest(
     const manifest = try readFile(allocator, io, manifest_path);
     const parsed = try zon_manifest.parse(allocator, manifest);
     if (!std.mem.eql(u8, parsed.name, entry.name)) return error.ManifestNameMismatch;
-    if (!std.mem.eql(u8, parsed.version, entry.version)) {
-        return error.ManifestVersionMismatch;
-    }
     try expectExactSet(entry.publish_paths, parsed.paths, error.ManifestPathMismatch);
 
     const expected_dependency_count =
@@ -292,11 +289,6 @@ fn syncManifest(
             try output.appendSlice(allocator, ".name = .");
             try output.appendSlice(allocator, entry.name);
             try output.appendSlice(allocator, ",");
-        } else if (std.mem.startsWith(u8, trimmed, ".version = \"")) {
-            try output.appendSlice(allocator, indent);
-            try output.appendSlice(allocator, ".version = \"");
-            try output.appendSlice(allocator, entry.version);
-            try output.appendSlice(allocator, "\",");
         } else {
             try output.appendSlice(allocator, line);
         }

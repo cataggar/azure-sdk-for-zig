@@ -20,7 +20,6 @@ pub const Package = struct {
     module_name: []const u8,
     branch: []const u8,
     identity_override: bool = false,
-    version: []const u8 = "0.1.0",
     historical_names: []const []const u8 = &.{},
     dependencies: []const []const u8 = &.{},
     external_dependencies: []const []const u8 = &.{},
@@ -67,7 +66,6 @@ pub const all = [_]Package{
         .name = "azure_sdk_core",
         .module_name = "azure_sdk_core",
         .branch = "sdk/core",
-        .version = "0.1.2",
         .external_dependencies = &.{"serde"},
         .publish_paths = &.{
             ".gitignore",
@@ -617,8 +615,14 @@ pub fn find(entries: []const Package, name: []const u8) ?usize {
     return null;
 }
 
-pub fn tagAlloc(allocator: std.mem.Allocator, entry: Package) ![]u8 {
-    return std.fmt.allocPrint(allocator, "{s}/v{s}", .{ entry.name, entry.version });
+/// Release tags are `<package>/v<version>`. The version is the package
+/// manifest's, which is the only place a package's version is declared.
+pub fn tagAlloc(
+    allocator: std.mem.Allocator,
+    entry: Package,
+    version: []const u8,
+) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}/v{s}", .{ entry.name, version });
 }
 
 pub fn validate(allocator: std.mem.Allocator, entries: []const Package) !void {
@@ -754,11 +758,6 @@ fn validateEntry(allocator: std.mem.Allocator, entry: Package) !void {
             }
         }
     }
-
-    const version = std.SemanticVersion.parse(entry.version) catch {
-        return error.InvalidVersion;
-    };
-    if (version.pre != null or version.build != null) return error.InvalidVersion;
 
     if (entry.identity_override) return;
 

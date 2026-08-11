@@ -36,9 +36,13 @@ test "topological order places dependencies before dependents" {
 }
 
 test "package tags are package scoped" {
-    const tag = try registry.tagAlloc(std.testing.allocator, registry.all[0]);
+    const tag = try registry.tagAlloc(
+        std.testing.allocator,
+        registry.all[0],
+        "0.4.0",
+    );
     defer std.testing.allocator.free(tag);
-    try std.testing.expectEqualStrings("azure_sdk_amqp/v0.1.0", tag);
+    try std.testing.expectEqualStrings("azure_sdk_amqp/v0.4.0", tag);
 }
 
 test "registry rejects duplicate names" {
@@ -73,17 +77,10 @@ test "registry rejects dependency cycles" {
     );
 }
 
-test "registry rejects invalid derived identities and versions" {
-    var wrong_name = testPackage("sdk/a", "azure_sdk_wrong", "sdk/a", &.{});
+test "registry rejects invalid derived identities" {
+    const wrong_name = testPackage("sdk/a", "azure_sdk_wrong", "sdk/a", &.{});
     try std.testing.expectError(
         error.InvalidPackageName,
-        registry.validate(std.testing.allocator, (&[_]registry.Package{wrong_name})[0..]),
-    );
-
-    wrong_name = testPackage("sdk/a", "azure_sdk_a", "sdk/a", &.{});
-    wrong_name.version = "1.0";
-    try std.testing.expectError(
-        error.InvalidVersion,
         registry.validate(std.testing.allocator, (&[_]registry.Package{wrong_name})[0..]),
     );
 
