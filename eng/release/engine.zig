@@ -968,18 +968,10 @@ pub const Engine = struct {
         const text = try self.readText(zon_path);
         const manifest = zon.parse(self.gpa, text) catch |err|
             return self.fail("{s}: {s}", .{ pkg.name, zonErrorMessage(err) });
-        const version = zon.parseSemver(manifest.version) catch |err|
-            return self.fail("{s}: {s}", .{ pkg.name, zonErrorMessage(err) });
-        const registry_version = zon.parseSemver(pkg.version) catch |err|
+        _ = zon.parseSemver(manifest.version) catch |err|
             return self.fail("{s}: {s}", .{ pkg.name, zonErrorMessage(err) });
         if (!std.mem.eql(u8, manifest.name, pkg.name)) {
             return self.fail("{s}: manifest package name is {s}", .{ pkg.name, manifest.name });
-        }
-        if (!version.eql(registry_version)) {
-            return self.fail(
-                "{s}: manifest version {s} does not match registry version {s}",
-                .{ pkg.name, manifest.version, pkg.version },
-            );
         }
         if (!samePathSet(manifest.paths, pkg.publish_paths)) {
             return self.fail("{s}: .paths must exactly match registry publish_paths", .{pkg.name});
@@ -1245,12 +1237,17 @@ pub const Engine = struct {
             self.fail("published branch has malformed manifest: {s}", .{zonErrorMessage(err)});
     }
 
-    fn inspectBranch(self: *Engine, pkg: *Package, work: []const u8) !BranchState {
+    fn inspectBranch(
+        self: *Engine,
+        pkg: *Package,
+        target: []const u8,
+        work: []const u8,
+    ) !BranchState {
         const fetch_url = (try self.resolveRemoteIdentity()).fetch_url;
         const fetched = try self.fetchBranchRepo(pkg, work);
-        const target_version = zon.parseSemver(pkg.version) catch
-            return self.fail("{s}: malformed registry version", .{pkg.name});
-        const tag = try std.fmt.allocPrint(self.gpa, "{s}/v{s}", .{ pkg.name, pkg.version });
+        const target_version = zon.parseSemver(target) catch
+            return self.fail("{s}: malformed manifest version", .{pkg.name});
+        const tag = try std.fmt.allocPrint(self.gpa, "{s}/v{s}", .{ pkg.name, target });
         if ((try remoteTagCommit(self.gpa, self.io, fetch_url, tag, self.root)) != null) {
             return self.fail("{s}: release tag already exists: {s}", .{ pkg.name, tag });
         }
@@ -1268,7 +1265,7 @@ pub const Engine = struct {
             return self.fail("{s}: release branch contains unexpected package {s}", .{ pkg.name, tip_manifest.name });
         }
         if (target_version.order(previous_version) != .gt) {
-            return self.fail("{s}: version {s} is not greater than {s}", .{ pkg.name, pkg.version, tip_manifest.version });
+            return self.fail("{s}: version {s} is not greater than {s}", .{ pkg.name, target, tip_manifest.version });
         }
         const history = try self.gitAt(repository, &.{ "rev-list", commit }, true);
         var lines = std.mem.splitScalar(u8, history, '\n');
@@ -1278,8 +1275,8 @@ pub const Engine = struct {
             if (!std.mem.eql(u8, manifest.name, pkg.name)) continue;
             _ = zon.parseSemver(manifest.version) catch
                 return self.fail("{s}: malformed version in release history", .{pkg.name});
-            if (std.mem.eql(u8, manifest.version, pkg.version)) {
-                return self.fail("{s}: version {s} was already used", .{ pkg.name, pkg.version });
+            if (std.mem.eql(u8, manifest.version, target)) {
+                return self.fail("{s}: version {s} was already used", .{ pkg.name, target });
             }
             const historical_tag = try std.fmt.allocPrint(self.gpa, "{s}/v{s}", .{ pkg.name, manifest.version });
             const tagged = try remoteTagCommit(self.gpa, self.io, fetch_url, historical_tag, self.root);
@@ -1418,19 +1415,26 @@ pub const Engine = struct {
         const pkg = try self.package(name);
         try self.requireMainOwned(pkg);
         const prov = try self.sourceProvenance();
-        _ = try self.validateSourceWorkspace(pkg, try self.packageRoot(pkg), self.root);
+        const manifest = try self.validateSourceWorkspace(pkg, try self.packageRoot(pkg), self.root);
         const work = try self.cleanWork(pkg);
-        const result = self.prepareInner(pkg, prov, work, run_commands);
+        const result = self.prepareInner(pkg, manifest.version, prov, work, run_commands);
         self.safeRemove(work, self.release_root) catch {};
         try result;
-        try self.print("prepared {s} {s}\n", .{ pkg.name, pkg.version });
+        try self.print("prepared {s} {s}\n", .{ pkg.name, manifest.version });
         try self.print("stage: {s}\n", .{try self.stageDir(pkg)});
         try self.print("manifest: {s}\n", .{try self.manifestPath(pkg)});
     }
 
-    fn prepareInner(self: *Engine, pkg: *Package, prov: Provenance, work: []const u8, run_commands: bool) !void {
+    fn prepareInner(
+        self: *Engine,
+        pkg: *Package,
+        target: []const u8,
+        prov: Provenance,
+        work: []const u8,
+        run_commands: bool,
+    ) !void {
         try self.verifyRegeneration(pkg, prov.commit, work);
-        const branch_state = try self.inspectBranch(pkg, try self.join(&.{ work, "release-state" }));
+        const branch_state = try self.inspectBranch(pkg, target, try self.join(&.{ work, "release-state" }));
         const stage = try self.stageSource(pkg, prov.commit, try self.join(&.{ work, "source" }));
 
         var dependency_records: std.ArrayList(DependencyRecord) = .empty;
@@ -1470,12 +1474,12 @@ pub const Engine = struct {
 
         const inv = try fileInventory(self.gpa, self.io, stage);
         const remote_identity = try self.resolveRemoteIdentity();
-        const tag = try std.fmt.allocPrint(self.gpa, "{s}/v{s}", .{ pkg.name, pkg.version });
+        const tag = try std.fmt.allocPrint(self.gpa, "{s}/v{s}", .{ pkg.name, target });
         const source_path = try pkg.sourcePath();
         const seal = Seal{
             .schema = 1,
             .source = .{ .ref = prov.ref, .commit = prov.commit, .remote_main_commit = prov.remote_main_commit },
-            .package = .{ .name = pkg.name, .version = pkg.version, .source_path = source_path, .branch = pkg.branch, .tag = tag },
+            .package = .{ .name = pkg.name, .version = target, .source_path = source_path, .branch = pkg.branch, .tag = tag },
             .remote = .{
                 .name = self.remote,
                 .fetch_url = remote_identity.fetch_url,
@@ -1527,10 +1531,10 @@ pub const Engine = struct {
         if (!strListEqual(seal.declared_paths, pkg.publish_paths)) {
             return self.fail("{s}: sealed declared paths differ", .{pkg.name});
         }
-        const tag = try std.fmt.allocPrint(self.gpa, "{s}/v{s}", .{ pkg.name, pkg.version });
+        const tag = try std.fmt.allocPrint(self.gpa, "{s}/v{s}", .{ pkg.name, staged_manifest.version });
         const source_path = try pkg.sourcePath();
         const pkg_ok = std.mem.eql(u8, seal.package.name, pkg.name) and
-            std.mem.eql(u8, seal.package.version, pkg.version) and
+            std.mem.eql(u8, seal.package.version, staged_manifest.version) and
             std.mem.eql(u8, seal.package.source_path, source_path) and
             std.mem.eql(u8, seal.package.branch, pkg.branch) and
             std.mem.eql(u8, seal.package.tag, tag);
@@ -1547,7 +1551,7 @@ pub const Engine = struct {
             std.mem.eql(u8, seal.remote.repository, remote_identity.repository) and
             std.mem.eql(u8, seal.remote.zig_url, remote_identity.zig_url);
         if (!rem_ok) return self.fail("{s}: publication remote identity differs from prepare", .{pkg.name});
-        const branch_state = try self.inspectBranch(pkg, try self.join(&.{ work, "release-state" }));
+        const branch_state = try self.inspectBranch(pkg, staged_manifest.version, try self.join(&.{ work, "release-state" }));
         const branch_ok = eqOpt(branch_state.commit, seal.branch.expected_tip) and
             eqOpt(branch_state.previous_name, seal.branch.previous_name) and
             eqOpt(branch_state.previous_version, seal.branch.previous_version);
@@ -1735,7 +1739,7 @@ pub const Engine = struct {
         try self.copyTopLevelInto(stage, worktree);
         _ = try self.gitAt(worktree, &.{ "add", "--all", "--", "." }, true);
         try self.verifyIndex(worktree, stage);
-        const message = try std.fmt.allocPrint(self.gpa, "{s}: release {s}\n\nSource-Commit: {s}", .{ pkg.name, pkg.version, seal.source.commit });
+        const message = try std.fmt.allocPrint(self.gpa, "{s}: release {s}\n\nSource-Commit: {s}", .{ pkg.name, seal.package.version, seal.source.commit });
         _ = try self.gitAt(worktree, &.{ "-c", hooks_arg, "commit", "--quiet", "--no-verify", "-m", message }, true);
         const release_commit = try self.gitAt(worktree, &.{ "rev-parse", "HEAD" }, true);
         try self.verifyCommitTree(worktree, release_commit, stage);
@@ -1761,8 +1765,8 @@ pub const Engine = struct {
         if (!std.mem.startsWith(u8, release_hash, prefix)) {
             return self.fail("{s}: Zig returned an unexpected release hash", .{pkg.name});
         }
-        const tag = try std.fmt.allocPrint(self.gpa, "{s}/v{s}", .{ pkg.name, pkg.version });
-        try self.print("package: {s} {s}\n", .{ pkg.name, pkg.version });
+        const tag = try std.fmt.allocPrint(self.gpa, "{s}/v{s}", .{ pkg.name, seal.package.version });
+        try self.print("package: {s} {s}\n", .{ pkg.name, seal.package.version });
         try self.print("branch: {s}\n", .{pkg.branch});
         try self.print("parent: {s}\n", .{branch_state.commit orelse "<orphan>"});
         for (seal.dependencies) |dependency| {
