@@ -1,5 +1,8 @@
 const std = @import("std");
 const context_mod = @import("../context.zig");
+const crypto_mod = @import("../crypto.zig");
+const transport = @import("../http/transport.zig");
+const HttpRuntime = @import("../http/runtime.zig").HttpRuntime;
 
 /// An OAuth2 access token with expiry.
 pub const AccessToken = struct {
@@ -21,19 +24,24 @@ pub const TokenRequestContext = struct {
 };
 
 /// Abstract credential — any type that can produce an access token.
+///
+/// The runtime is supplied for each acquisition. Network credentials use its
+/// transport instead of retaining an independent transport descriptor.
 pub const TokenCredential = struct {
     getTokenFn: *const fn (
         self: *TokenCredential,
         request_context: TokenRequestContext,
         ctx: context_mod.Context,
+        runtime: HttpRuntime,
     ) anyerror!AccessToken,
 
     pub fn getToken(
         self: *TokenCredential,
         request_context: TokenRequestContext,
         ctx: context_mod.Context,
+        runtime: HttpRuntime,
     ) !AccessToken {
-        return self.getTokenFn(self, request_context, ctx);
+        return self.getTokenFn(self, request_context, ctx, runtime);
     }
 };
 
@@ -77,6 +85,7 @@ pub const CachedTokenCredential = struct {
         cred: *TokenCredential,
         request_context: TokenRequestContext,
         ctx: context_mod.Context,
+        runtime: HttpRuntime,
     ) anyerror!AccessToken {
         const self: *CachedTokenCredential = @alignCast(@fieldParentPtr("credential", cred));
         const now = currentTimestamp();
@@ -89,7 +98,7 @@ pub const CachedTokenCredential = struct {
         }
 
         // Fetch fresh token.
-        var fresh = try self.inner.getToken(request_context, ctx);
+        var fresh = try self.inner.getToken(request_context, ctx, runtime);
         defer fresh.deinit();
 
         const replacement = try self.allocator.dupe(u8, fresh.token);
@@ -121,6 +130,7 @@ test "CachedTokenCredential caches token" {
             _: *TokenCredential,
             _: TokenRequestContext,
             _: context_mod.Context,
+            _: HttpRuntime,
         ) anyerror!AccessToken {
             call_count += 1;
             const token = try allocator.dupe(u8, "test-token");
@@ -140,14 +150,18 @@ test "CachedTokenCredential caches token" {
 
     const ctx = context_mod.Context.none;
     const req = TokenRequestContext{ .scopes = &.{"https://vault.azure.net/.default"} };
+    var mock = transport.MockTransport.init(allocator, 200, "unused");
+    defer mock.deinit();
+    var crypto = crypto_mod.StdCryptoProvider.init(std.testing.io);
+    const runtime = HttpRuntime.init(mock.asTransport(), crypto.asProvider());
 
     // First call fetches.
-    const t1 = try cached.asCredential().getToken(req, ctx);
+    const t1 = try cached.asCredential().getToken(req, ctx, runtime);
     try std.testing.expectEqualStrings("test-token", t1.token);
     try std.testing.expectEqual(@as(u32, 1), Counter.call_count);
 
     // Second call returns cached — no new fetch.
-    const t2 = try cached.asCredential().getToken(req, ctx);
+    const t2 = try cached.asCredential().getToken(req, ctx, runtime);
     try std.testing.expectEqualStrings("test-token", t2.token);
     try std.testing.expectEqual(@as(u32, 1), Counter.call_count);
 }

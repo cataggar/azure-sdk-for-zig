@@ -12,9 +12,8 @@
 ///!   Base64 → std.base64
 
 // Re-export sub-modules for `@import("azure_sdk_core").http`, etc.
-pub const http = @import("http/transport.zig");
-pub const pipeline = @import("http/pipeline.zig");
-pub const decompression = @import("http/decompression.zig");
+pub const http = @import("http.zig");
+pub const crypto = @import("crypto.zig");
 pub const credentials = @import("credentials/token.zig");
 pub const identity = @import("identity/root.zig");
 pub const context = @import("context.zig");
@@ -36,16 +35,6 @@ pub const arm = @import("arm/resource.zig");
 pub const open_enum = @import("open_enum.zig");
 pub const fixed_enum = @import("fixed_enum.zig");
 pub const env_token = @import("credentials/env_token.zig");
-
-/// WASI HTTP transport for running the SDK inside a `wasi:http`-capable
-/// WebAssembly component (wamr / wasmtime). Only present on `wasm32-wasi`;
-/// resolves to an empty namespace on every other target so consumers can
-/// reference `core.wasi_http` unconditionally.
-pub const wasi_http = if (@import("builtin").target.cpu.arch == .wasm32 and
-    @import("builtin").target.os.tag == .wasi)
-    @import("http/wasi_http.zig")
-else
-    struct {};
 
 pub const version: []const u8 = @import("build_options").version;
 pub const user_agent_prefix: []const u8 = "azsdk-zig-core/" ++ version;

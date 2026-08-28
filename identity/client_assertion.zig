@@ -7,6 +7,12 @@ const TokenCredential = core.credentials.TokenCredential;
 const TokenRequestContext = core.credentials.TokenRequestContext;
 const Context = core.context.Context;
 
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+fn testingRuntime(http_transport: core.http.HttpTransport) core.http.HttpRuntime {
+    return .init(http_transport, testing_crypto_provider.asProvider());
+}
+
 /// Callback type that returns a JWT assertion string.
 /// The caller owns the returned memory and must free it.
 pub const AssertionCallback = *const fn (allocator: std.mem.Allocator) anyerror![]u8;
@@ -27,13 +33,11 @@ pub const ClientAssertionCredential = struct {
     client_id: []const u8,
     authority_host: []const u8 = "https://login.microsoftonline.com",
     allocator: std.mem.Allocator,
-    transport: *core.http.HttpTransport,
     credential: TokenCredential,
     get_assertion: AssertionCallback,
 
     pub fn init(
         allocator: std.mem.Allocator,
-        transport: *core.http.HttpTransport,
         tenant_id: []const u8,
         client_id: []const u8,
         get_assertion: AssertionCallback,
@@ -42,7 +46,6 @@ pub const ClientAssertionCredential = struct {
             .tenant_id = tenant_id,
             .client_id = client_id,
             .allocator = allocator,
-            .transport = transport,
             .credential = .{ .getTokenFn = &getTokenImpl },
             .get_assertion = get_assertion,
         };
@@ -56,6 +59,7 @@ pub const ClientAssertionCredential = struct {
         cred: *TokenCredential,
         request_context: TokenRequestContext,
         _: Context,
+        runtime: core.http.HttpRuntime,
     ) anyerror!AccessToken {
         const self: *ClientAssertionCredential = @fieldParentPtr("credential", cred);
         const allocator = self.allocator;
@@ -97,7 +101,7 @@ pub const ClientAssertionCredential = struct {
         try req.setHeader("Content-Type", "application/x-www-form-urlencoded");
         req.body = body;
 
-        var resp = try self.transport.send(&req);
+        var resp = try runtime.transport.send(&req);
         defer resp.deinit();
 
         if (!resp.isSuccess()) return error.AuthenticationFailed;
@@ -147,7 +151,6 @@ test "ClientAssertionCredential getToken" {
 
     var cred = ClientAssertionCredential.init(
         allocator,
-        mock.asTransport(),
         "tenant-1",
         "client-1",
         &getAssertion,
@@ -156,6 +159,7 @@ test "ClientAssertionCredential getToken" {
     const token = try cred.asCredential().getToken(
         .{ .scopes = &.{"https://vault.azure.net/.default"} },
         core.context.Context.none,
+        testingRuntime(mock.asTransport()),
     );
     defer allocator.free(token.token);
 

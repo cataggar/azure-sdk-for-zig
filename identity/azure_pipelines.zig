@@ -21,14 +21,12 @@ pub const AzurePipelinesCredential = struct {
     client_id: []const u8,
     service_connection_id: []const u8,
     allocator: std.mem.Allocator,
-    transport: *core.http.HttpTransport,
     credential: TokenCredential,
     oidc_request_uri: ?[]const u8,
     system_access_token: ?[]const u8,
 
     pub fn init(
         allocator: std.mem.Allocator,
-        transport: *core.http.HttpTransport,
         tenant_id: []const u8,
         client_id: []const u8,
         service_connection_id: []const u8,
@@ -38,7 +36,6 @@ pub const AzurePipelinesCredential = struct {
             .client_id = client_id,
             .service_connection_id = service_connection_id,
             .allocator = allocator,
-            .transport = transport,
             .credential = .{ .getTokenFn = &getTokenImpl },
             .oidc_request_uri = std.process.getEnvVarOwned(allocator, "SYSTEM_OIDCREQUESTURI") catch null,
             .system_access_token = std.process.getEnvVarOwned(allocator, "SYSTEM_ACCESSTOKEN") catch null,
@@ -58,6 +55,7 @@ pub const AzurePipelinesCredential = struct {
         cred: *TokenCredential,
         request_context: TokenRequestContext,
         ctx: Context,
+        runtime: core.http.HttpRuntime,
     ) anyerror!AccessToken {
         const self: *AzurePipelinesCredential = @fieldParentPtr("credential", cred);
         const allocator = self.allocator;
@@ -82,7 +80,7 @@ pub const AzurePipelinesCredential = struct {
         try req.setHeader("Authorization", auth_header);
         req.body = "{}";
 
-        var resp = try self.transport.send(&req);
+        var resp = try runtime.transport.send(&req);
         defer resp.deinit();
 
         if (!resp.isSuccess()) return error.OidcTokenRequestFailed;
@@ -105,13 +103,12 @@ pub const AzurePipelinesCredential = struct {
 
         var assertion_cred = client_assertion.ClientAssertionCredential.init(
             allocator,
-            self.transport,
             self.tenant_id,
             self.client_id,
             &getAssertion.call,
         );
 
-        return assertion_cred.asCredential().getToken(request_context, ctx);
+        return assertion_cred.asCredential().getToken(request_context, ctx, runtime);
     }
 };
 

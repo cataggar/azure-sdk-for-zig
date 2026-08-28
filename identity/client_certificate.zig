@@ -23,12 +23,10 @@ pub const ClientCertificateCredential = struct {
     certificate_path: []const u8,
     authority_host: []const u8 = "https://login.microsoftonline.com",
     allocator: std.mem.Allocator,
-    transport: *core.http.HttpTransport,
     credential: TokenCredential,
 
     pub fn init(
         allocator: std.mem.Allocator,
-        transport: *core.http.HttpTransport,
         tenant_id: []const u8,
         client_id: []const u8,
         certificate_path: []const u8,
@@ -38,7 +36,6 @@ pub const ClientCertificateCredential = struct {
             .client_id = client_id,
             .certificate_path = certificate_path,
             .allocator = allocator,
-            .transport = transport,
             .credential = .{ .getTokenFn = &getTokenImpl },
         };
     }
@@ -51,6 +48,7 @@ pub const ClientCertificateCredential = struct {
         cred: *TokenCredential,
         request_context: TokenRequestContext,
         ctx: Context,
+        runtime: core.http.HttpRuntime,
     ) anyerror!AccessToken {
         const self: *ClientCertificateCredential = @fieldParentPtr("credential", cred);
         const allocator = self.allocator;
@@ -90,14 +88,13 @@ pub const ClientCertificateCredential = struct {
 
         var assertion_cred = client_assertion.ClientAssertionCredential.init(
             allocator,
-            self.transport,
             self.tenant_id,
             self.client_id,
             &StaticAssertion.getAssertion,
         );
         assertion_cred.authority_host = self.authority_host;
 
-        return assertion_cred.asCredential().getToken(request_context, ctx);
+        return assertion_cred.asCredential().getToken(request_context, ctx, runtime);
     }
 };
 
@@ -131,12 +128,9 @@ fn buildCertificateAssertion(
 
 test "ClientCertificateCredential fields" {
     const allocator = std.testing.allocator;
-    var mock = core.http.MockTransport.init(allocator, 200, "{}");
-    defer mock.deinit();
 
     const cred = ClientCertificateCredential.init(
         allocator,
-        mock.asTransport(),
         "tenant-1",
         "client-1",
         "/path/to/cert.pem",

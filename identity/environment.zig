@@ -6,6 +6,12 @@ const TokenCredential = core.credentials.TokenCredential;
 const TokenRequestContext = core.credentials.TokenRequestContext;
 const Context = core.context.Context;
 
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+fn testingRuntime(http_transport: core.http.HttpTransport) core.http.HttpRuntime {
+    return .init(http_transport, testing_crypto_provider.asProvider());
+}
+
 /// Authenticates using environment variables.
 ///
 /// Requires `AZURE_TENANT_ID` + `AZURE_CLIENT_ID`, then one of:
@@ -15,7 +21,6 @@ const Context = core.context.Context;
 /// Optional: `AZURE_AUTHORITY_HOST` overrides the AAD endpoint.
 pub const EnvironmentCredential = struct {
     allocator: std.mem.Allocator,
-    transport: *core.http.HttpTransport,
     credential: TokenCredential,
 
     // Captured from env at init time.
@@ -28,7 +33,6 @@ pub const EnvironmentCredential = struct {
     /// if the required vars are missing.
     pub fn init(
         allocator: std.mem.Allocator,
-        transport: *core.http.HttpTransport,
         env: anytype,
     ) !EnvironmentCredential {
         const tenant_source = envGet(env, "AZURE_TENANT_ID") orelse return error.EnvironmentNotConfigured;
@@ -49,7 +53,6 @@ pub const EnvironmentCredential = struct {
 
         return .{
             .allocator = allocator,
-            .transport = transport,
             .credential = .{ .getTokenFn = &getTokenImpl },
             .tenant_id = tenant_id,
             .client_id = client_id,
@@ -74,19 +77,19 @@ pub const EnvironmentCredential = struct {
         cred: *TokenCredential,
         request_context: TokenRequestContext,
         ctx: Context,
+        runtime: core.http.HttpRuntime,
     ) anyerror!AccessToken {
         const self: *EnvironmentCredential = @fieldParentPtr("credential", cred);
         // Delegate to ClientSecretCredential.
         const client_secret_mod = @import("client_secret.zig");
         var inner = client_secret_mod.ClientSecretCredential.init(
             self.allocator,
-            self.transport,
             self.tenant_id,
             self.client_id,
             self.client_secret,
         );
         inner.authority_host = self.authority_host;
-        return inner.asCredential().getToken(request_context, ctx);
+        return inner.asCredential().getToken(request_context, ctx, runtime);
     }
 };
 
@@ -121,7 +124,7 @@ test "EnvironmentCredential missing vars" {
     var env = TestEnv.init(allocator);
     defer env.deinit();
     // No vars set → should fail.
-    const result = EnvironmentCredential.init(allocator, mock.asTransport(), env);
+    const result = EnvironmentCredential.init(allocator, env);
     try std.testing.expectError(error.EnvironmentNotConfigured, result);
 }
 
@@ -137,11 +140,12 @@ test "EnvironmentCredential with secret" {
     try env.put("AZURE_CLIENT_ID", "c");
     try env.put("AZURE_CLIENT_SECRET", "s");
 
-    var cred = try EnvironmentCredential.init(allocator, mock.asTransport(), env);
+    var cred = try EnvironmentCredential.init(allocator, env);
     defer cred.deinit();
     const token = try cred.asCredential().getToken(
         .{ .scopes = &.{"https://management.azure.com/.default"} },
         Context.none,
+        testingRuntime(mock.asTransport()),
     );
     defer allocator.free(token.token);
     try std.testing.expectEqualStrings("env-token", token.token);

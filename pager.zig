@@ -2,7 +2,15 @@ const std = @import("std");
 const serde = @import("serde");
 const pipeline_mod = @import("http/pipeline.zig");
 const transport = @import("http/transport.zig");
+const crypto_mod = @import("crypto.zig");
+const HttpRuntime = @import("http/runtime.zig").HttpRuntime;
 const url_mod = @import("url.zig");
+
+var testing_crypto_provider = crypto_mod.StdCryptoProvider.init(std.testing.io);
+
+fn testingRuntime(http_transport: transport.HttpTransport) HttpRuntime {
+    return .init(http_transport, testing_crypto_provider.asProvider());
+}
 
 /// Log a non-2xx HTTP response body so the developer sees the ARM/data-plane
 /// error message before the generic `PageFetchFailed` propagates upward.
@@ -370,7 +378,7 @@ test "PipelinePager single page" {
     defer mock.deinit();
 
     var pip = PipelinePager([]const u8).init(
-        .{ .policies = &.{}, .transport_impl = mock.asTransport() },
+        pipeline_mod.HttpPipeline.init(testingRuntime(mock.asTransport()), &.{}),
         "https://example.com/items",
         allocator,
         &parseTestPage,
@@ -406,7 +414,7 @@ test "PipelinePager multiple pages" {
     var seq = transport.SequenceMockTransport.init(allocator, &responses);
 
     var pip = PipelinePager([]const u8).init(
-        .{ .policies = &.{}, .transport_impl = seq.asTransport() },
+        pipeline_mod.HttpPipeline.init(testingRuntime(seq.asTransport()), &.{}),
         "https://example.com/items",
         allocator,
         &parseTestPage,
@@ -442,7 +450,7 @@ test "PipelinePager error propagation" {
     defer mock.deinit();
 
     var pip = PipelinePager([]const u8).init(
-        .{ .policies = &.{}, .transport_impl = mock.asTransport() },
+        pipeline_mod.HttpPipeline.init(testingRuntime(mock.asTransport()), &.{}),
         "https://example.com/items",
         allocator,
         &parseTestPage,
@@ -482,7 +490,7 @@ test "XmlPager paginates via NextMarker" {
     var seq = transport.SequenceMockTransport.init(allocator, &responses);
 
     var pager = try XmlPager(Envelope).init(
-        .{ .policies = &.{}, .transport_impl = seq.asTransport() },
+        pipeline_mod.HttpPipeline.init(testingRuntime(seq.asTransport()), &.{}),
         "https://example.com/?comp=list",
         "2026-06-06",
         null,
@@ -512,7 +520,7 @@ test "Pager interface via asPager" {
     defer mock.deinit();
 
     var pip = PipelinePager([]const u8).init(
-        .{ .policies = &.{}, .transport_impl = mock.asTransport() },
+        pipeline_mod.HttpPipeline.init(testingRuntime(mock.asTransport()), &.{}),
         "https://example.com/items",
         allocator,
         &parseTestPage,

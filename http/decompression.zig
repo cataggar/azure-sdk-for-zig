@@ -8,13 +8,21 @@
 ///! may compress responses. The actual decompression is handled by the
 ///! `StdHttpTransport` (std.http.Client).
 const std = @import("std");
+const crypto_mod = @import("../crypto.zig");
 const transport = @import("transport.zig");
 const pipeline_mod = @import("pipeline.zig");
+const HttpRuntime = @import("runtime.zig").HttpRuntime;
 
 const Request = transport.Request;
 const Response = transport.Response;
 const HttpTransport = transport.HttpTransport;
 const HttpPolicy = pipeline_mod.HttpPolicy;
+
+var testing_crypto_provider = crypto_mod.StdCryptoProvider.init(std.testing.io);
+
+fn testingRuntime(http_transport: HttpTransport) HttpRuntime {
+    return .init(http_transport, testing_crypto_provider.asProvider());
+}
 
 /// Pipeline policy that requests compressed responses.
 ///
@@ -36,22 +44,22 @@ pub const DecompressionPolicy = struct {
         policy: *HttpPolicy,
         request: *Request,
         next: []*HttpPolicy,
-        final_transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) !Response {
-        try prepareImpl(policy, request);
-        return callNext(request, next, final_transport);
+        try prepareImpl(policy, request, runtime);
+        return callNext(request, next, runtime);
     }
 
-    fn prepareImpl(_: *HttpPolicy, request: *Request) !void {
+    fn prepareImpl(_: *HttpPolicy, request: *Request, _: HttpRuntime) !void {
         try request.setHeader("Accept-Encoding", "gzip, deflate");
     }
 };
 
-fn callNext(request: *Request, next: []*HttpPolicy, final_transport: *HttpTransport) !Response {
+fn callNext(request: *Request, next: []*HttpPolicy, runtime: HttpRuntime) !Response {
     if (next.len == 0) {
-        return final_transport.send(request);
+        return runtime.transport.send(request);
     }
-    return next[0].process(request, next[1..], final_transport);
+    return next[0].process(request, next[1..], runtime);
 }
 
 test "DecompressionPolicy sets Accept-Encoding" {
@@ -60,10 +68,7 @@ test "DecompressionPolicy sets Accept-Encoding" {
     defer mock.deinit();
     var decomp = DecompressionPolicy.init();
     var policy_ptrs = [_]*HttpPolicy{decomp.asPolicy()};
-    var pip = pipeline_mod.HttpPipeline{
-        .policies = &policy_ptrs,
-        .transport_impl = mock.asTransport(),
-    };
+    var pip = pipeline_mod.HttpPipeline.init(testingRuntime(mock.asTransport()), &policy_ptrs);
     var req = Request.init(allocator, .GET, "https://example.com");
     defer req.deinit();
     var resp = try pip.send(&req);
@@ -77,10 +82,7 @@ test "DecompressionPolicy prepares streaming request" {
     defer mock.deinit();
     var decomp = DecompressionPolicy.init();
     var policy_ptrs = [_]*HttpPolicy{decomp.asPolicy()};
-    var pip = pipeline_mod.HttpPipeline{
-        .policies = &policy_ptrs,
-        .transport_impl = mock.asTransport(),
-    };
+    var pip = pipeline_mod.HttpPipeline.init(testingRuntime(mock.asTransport()), &policy_ptrs);
     var req = Request.init(allocator, .GET, "https://example.com");
     defer req.deinit();
     var operation = try pip.open(&req, .{});

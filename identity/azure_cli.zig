@@ -33,6 +33,7 @@ pub const AzureCliCredential = struct {
         cred: *TokenCredential,
         request_context: TokenRequestContext,
         _: Context,
+        _: core.http.HttpRuntime,
     ) anyerror!AccessToken {
         const self: *AzureCliCredential = @fieldParentPtr("credential", cred);
         const allocator = self.allocator;

@@ -6,6 +6,12 @@ const TokenCredential = core.credentials.TokenCredential;
 const TokenRequestContext = core.credentials.TokenRequestContext;
 const Context = core.context.Context;
 
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+fn testingRuntime(http_transport: core.http.HttpTransport) core.http.HttpRuntime {
+    return .init(http_transport, testing_crypto_provider.asProvider());
+}
+
 fn envGet(env: anytype, key: []const u8) ?[]const u8 {
     return env.get(key);
 }
@@ -35,11 +41,12 @@ pub const ChainedTokenCredential = struct {
         cred: *TokenCredential,
         request_context: TokenRequestContext,
         ctx: Context,
+        runtime: core.http.HttpRuntime,
     ) anyerror!AccessToken {
         const self: *ChainedTokenCredential = @fieldParentPtr("credential", cred);
         var last_err: anyerror = error.NoCredentialSucceeded;
         for (self.sources) |source| {
-            const result = source.cred.getToken(request_context, ctx);
+            const result = source.cred.getToken(request_context, ctx, runtime);
             if (result) |token| return token else |err| {
                 last_err = err;
                 std.log.debug("azure-identity: {s} failed: {}", .{ source.name, err });
@@ -169,13 +176,11 @@ pub const DefaultAzureCredential = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         io: std.Io,
-        transport: *core.http.HttpTransport,
         env: anytype,
     ) !DefaultAzureCredential {
         return initWithSelection(
             allocator,
             io,
-            transport,
             env,
             try TokenCredentialSelection.fromEnv(env),
         );
@@ -186,7 +191,6 @@ pub const DefaultAzureCredential = struct {
     pub fn initWithSelection(
         allocator: std.mem.Allocator,
         io: std.Io,
-        transport: *core.http.HttpTransport,
         env: anytype,
         requested: TokenCredentialSelection,
     ) !DefaultAzureCredential {
@@ -194,7 +198,7 @@ pub const DefaultAzureCredential = struct {
         state.* = .{
             .chain = undefined,
             .selection = requested,
-            .mi_cred = @import("managed_identity.zig").ManagedIdentityCredential.init(allocator, transport),
+            .mi_cred = @import("managed_identity.zig").ManagedIdentityCredential.init(allocator),
             .cli_cred = @import("azure_cli.zig").AzureCliCredential.init(allocator, io),
             .azd_cred = @import("azure_developer_cli.zig").AzureDeveloperCliCredential.init(allocator, io),
         };
@@ -216,7 +220,6 @@ pub const DefaultAzureCredential = struct {
         if (requested.includes(.environment)) {
             state.env_cred = @import("environment.zig").EnvironmentCredential.init(
                 allocator,
-                transport,
                 env,
             ) catch |err| switch (err) {
                 error.EnvironmentNotConfigured => null,
@@ -232,7 +235,6 @@ pub const DefaultAzureCredential = struct {
             if (wi_tenant != null and wi_client != null and wi_file != null) {
                 state.wi_cred = try @import("workload_identity.zig").WorkloadIdentityCredential.init(
                     allocator,
-                    transport,
                     wi_tenant.?,
                     wi_client.?,
                     wi_file.?,
@@ -333,18 +335,16 @@ fn expectChain(
 
 test "ChainedTokenCredential uses first success" {
     const allocator = std.testing.allocator;
-    var mock_fail = core.http.MockTransport.init(allocator, 401, "fail");
-    defer mock_fail.deinit();
-    var mock_ok = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"chained-ok","expires_in":3600}
-    );
-    defer mock_ok.deinit();
+    var sequence = core.http.SequenceMockTransport.init(allocator, &.{
+        .{ .status = 401, .body = "fail" },
+        .{ .status = 200, .body = "{\"access_token\":\"chained-ok\",\"expires_in\":3600}" },
+    });
 
     const client_secret = @import("client_secret.zig");
     // First credential will fail (401).
-    var cred1 = client_secret.ClientSecretCredential.init(allocator, mock_fail.asTransport(), "t", "c", "s");
+    var cred1 = client_secret.ClientSecretCredential.init(allocator, "t", "c", "s");
     // Second will succeed.
-    var cred2 = client_secret.ClientSecretCredential.init(allocator, mock_ok.asTransport(), "t", "c", "s");
+    var cred2 = client_secret.ClientSecretCredential.init(allocator, "t", "c", "s");
 
     var sources = [_]ChainedTokenCredential.Source{
         .{ .name = "fail", .cred = cred1.asCredential() },
@@ -354,6 +354,7 @@ test "ChainedTokenCredential uses first success" {
     const token = try chain.asCredential().getToken(
         .{ .scopes = &.{"https://vault.azure.net/.default"} },
         Context.none,
+        testingRuntime(sequence.asTransport()),
     );
     defer allocator.free(token.token);
     try std.testing.expectEqualStrings("chained-ok", token.token);
@@ -371,21 +372,16 @@ test "DefaultAzureCredential remains valid after return and move" {
     try env.put("AZURE_TOKEN_CREDENTIALS", "ManagedIdentityCredential");
 
     const Factory = struct {
-        fn create(
-            alloc: std.mem.Allocator,
-            transport: *core.http.HttpTransport,
-            test_env: TestEnv,
-        ) !DefaultAzureCredential {
+        fn create(alloc: std.mem.Allocator, test_env: TestEnv) !DefaultAzureCredential {
             return DefaultAzureCredential.init(
                 alloc,
                 std.testing.io,
-                transport,
                 test_env,
             );
         }
     };
 
-    var returned = try Factory.create(allocator, mock.asTransport(), env);
+    var returned = try Factory.create(allocator, env);
     var moved = returned;
     returned = undefined;
     defer moved.deinit();
@@ -393,6 +389,7 @@ test "DefaultAzureCredential remains valid after return and move" {
     const token = try moved.asCredential().getToken(
         .{ .scopes = &.{"https://vault.azure.net/.default"} },
         Context.none,
+        testingRuntime(mock.asTransport()),
     );
     defer allocator.free(token.token);
     try std.testing.expectEqualStrings("managed-identity-token", token.token);
@@ -418,7 +415,6 @@ test "DefaultAzureCredential owns environment credential values" {
     var credential = try DefaultAzureCredential.init(
         allocator,
         std.testing.io,
-        mock.asTransport(),
         env,
     );
     defer credential.deinit();
@@ -433,6 +429,7 @@ test "DefaultAzureCredential owns environment credential values" {
     const token = try credential.asCredential().getToken(
         .{ .scopes = &.{"https://vault.azure.net/.default"} },
         Context.none,
+        testingRuntime(mock.asTransport()),
     );
     defer allocator.free(token.token);
     try std.testing.expectEqualStrings("environment-token", token.token);
@@ -461,8 +458,6 @@ test "TokenCredentialSelection parses AZURE_TOKEN_CREDENTIALS values" {
 
 test "DefaultAzureCredential omits managed identity by default" {
     const allocator = std.testing.allocator;
-    var mock = core.http.MockTransport.init(allocator, 200, "{}");
-    defer mock.deinit();
 
     var env = TestEnv.init(allocator);
     defer env.deinit();
@@ -470,7 +465,6 @@ test "DefaultAzureCredential omits managed identity by default" {
     var credential = try DefaultAzureCredential.init(
         allocator,
         std.testing.io,
-        mock.asTransport(),
         env,
     );
     defer credential.deinit();
@@ -482,8 +476,6 @@ test "DefaultAzureCredential omits managed identity by default" {
 
 test "DefaultAzureCredential prod selection enables managed identity" {
     const allocator = std.testing.allocator;
-    var mock = core.http.MockTransport.init(allocator, 200, "{}");
-    defer mock.deinit();
 
     var env = TestEnv.init(allocator);
     defer env.deinit();
@@ -496,7 +488,6 @@ test "DefaultAzureCredential prod selection enables managed identity" {
     var credential = try DefaultAzureCredential.init(
         allocator,
         std.testing.io,
-        mock.asTransport(),
         env,
     );
     defer credential.deinit();
@@ -511,8 +502,6 @@ test "DefaultAzureCredential prod selection enables managed identity" {
 
 test "DefaultAzureCredential dev selection uses developer tools only" {
     const allocator = std.testing.allocator;
-    var mock = core.http.MockTransport.init(allocator, 200, "{}");
-    defer mock.deinit();
 
     var env = TestEnv.init(allocator);
     defer env.deinit();
@@ -524,7 +513,6 @@ test "DefaultAzureCredential dev selection uses developer tools only" {
     var credential = try DefaultAzureCredential.init(
         allocator,
         std.testing.io,
-        mock.asTransport(),
         env,
     );
     defer credential.deinit();
@@ -534,8 +522,6 @@ test "DefaultAzureCredential dev selection uses developer tools only" {
 
 test "DefaultAzureCredential honors a named credential" {
     const allocator = std.testing.allocator;
-    var mock = core.http.MockTransport.init(allocator, 200, "{}");
-    defer mock.deinit();
 
     var env = TestEnv.init(allocator);
     defer env.deinit();
@@ -547,7 +533,6 @@ test "DefaultAzureCredential honors a named credential" {
     var credential = try DefaultAzureCredential.init(
         allocator,
         std.testing.io,
-        mock.asTransport(),
         env,
     );
     defer credential.deinit();
@@ -557,8 +542,6 @@ test "DefaultAzureCredential honors a named credential" {
 
 test "DefaultAzureCredential rejects an unknown selection" {
     const allocator = std.testing.allocator;
-    var mock = core.http.MockTransport.init(allocator, 200, "{}");
-    defer mock.deinit();
 
     var env = TestEnv.init(allocator);
     defer env.deinit();
@@ -567,15 +550,12 @@ test "DefaultAzureCredential rejects an unknown selection" {
     try std.testing.expectError(error.UnknownTokenCredentialSelection, DefaultAzureCredential.init(
         allocator,
         std.testing.io,
-        mock.asTransport(),
         env,
     ));
 }
 
 test "DefaultAzureCredential rejects a selection with no configured credential" {
     const allocator = std.testing.allocator;
-    var mock = core.http.MockTransport.init(allocator, 200, "{}");
-    defer mock.deinit();
 
     var env = TestEnv.init(allocator);
     defer env.deinit();
@@ -584,7 +564,6 @@ test "DefaultAzureCredential rejects a selection with no configured credential" 
     try std.testing.expectError(error.NoCredentialConfigured, DefaultAzureCredential.init(
         allocator,
         std.testing.io,
-        mock.asTransport(),
         env,
     ));
 }

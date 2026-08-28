@@ -1,15 +1,13 @@
 const std = @import("std");
+const crypto = @import("crypto.zig");
 
 /// UUID v4 (random).
-///
-/// Accepts a `std.Random` so callers can supply their own source
-/// (e.g. `std.Random.DefaultCsprng` seeded from `std.Io.random`).
 pub const Uuid = struct {
     bytes: [16]u8,
 
-    pub fn init(rng: std.Random) Uuid {
+    pub fn init(provider: crypto.CryptoProvider) !Uuid {
         var bytes: [16]u8 = undefined;
-        rng.bytes(&bytes);
+        try provider.randomBytes(&bytes);
         // Set version 4 (bits 48-51).
         bytes[6] = (bytes[6] & 0x0f) | 0x40;
         // Set variant 1 (bits 64-65).
@@ -36,9 +34,50 @@ pub const Uuid = struct {
 };
 
 test "uuid v4 format" {
-    // Use a deterministic PRNG for reproducible tests.
-    var prng = std.Random.DefaultPrng.init(42);
-    const id = Uuid.init(prng.random());
+    const DeterministicProvider = struct {
+        const vtable: crypto.CryptoProvider.VTable = .{
+            .random_bytes = &randomBytes,
+            .md5 = &md5,
+            .sha256 = &sha256,
+            .hmac_sha256 = &hmacSha256,
+            .sha256_init = &sha256Init,
+        };
+
+        fn provider(self: *@This()) crypto.CryptoProvider {
+            return .{ .context = self, .vtable = &vtable };
+        }
+
+        fn randomBytes(_: *anyopaque, out: []u8) !void {
+            for (out, 0..) |*byte, index| byte.* = @truncate(index);
+        }
+
+        fn md5(_: *anyopaque, _: []const u8, _: *crypto.Md5Digest) !void {
+            return error.Unused;
+        }
+
+        fn sha256(_: *anyopaque, _: []const u8, _: *crypto.Sha256Digest) !void {
+            return error.Unused;
+        }
+
+        fn hmacSha256(
+            _: *anyopaque,
+            _: []const u8,
+            _: []const u8,
+            _: *crypto.HmacSha256Digest,
+        ) !void {
+            return error.Unused;
+        }
+
+        fn sha256Init(
+            _: *anyopaque,
+            _: std.mem.Allocator,
+        ) !crypto.Sha256Operation {
+            return error.Unused;
+        }
+    };
+
+    var provider = DeterministicProvider{};
+    const id = try Uuid.init(provider.provider());
     const s = id.toString();
     // Version nibble
     try std.testing.expectEqual(@as(u8, '4'), s[14]);

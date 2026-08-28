@@ -13,12 +13,15 @@ The canonical package/module name is `azure_sdk_core`, released from
 | `http.StdHttpTransport` | Streaming HTTP via `std.http.Client` with gzip, deflate, and zstd response decoding |
 | `http.MockTransport` | Canned buffered and streaming responses for tests |
 | `http.SequenceMockTransport` | Ordered responses for retry tests |
-| `pipeline.HttpPipeline` | Policies followed by one transport |
-| `pipeline.TelemetryPolicy` | Adds `User-Agent` |
-| `pipeline.LoggingPolicy` | Logs requests through `std.log` |
-| `pipeline.RetryPolicy` | Bounded exponential backoff, jitter, and `Retry-After` |
-| `pipeline.BearerTokenAuthPolicy` | Bearer authentication with token caching |
-| `pipeline.RequestIdPolicy` | Adds an `x-ms-client-request-id` UUID |
+| `http.HttpRuntime` | Selected HTTP transport and SDK crypto provider |
+| `http.HttpPipeline` | Policies followed by one runtime |
+| `http.TelemetryPolicy` | Adds `User-Agent` |
+| `http.LoggingPolicy` | Logs requests through `std.log` |
+| `http.RetryPolicy` | Bounded exponential backoff, jitter, and `Retry-After` |
+| `http.BearerTokenAuthPolicy` | Bearer authentication with token caching |
+| `http.RequestIdPolicy` | Adds an `x-ms-client-request-id` UUID |
+| `crypto.CryptoProvider` | Pluggable random, MD5, SHA-256, and HMAC-SHA256 operations |
+| `crypto.StdCryptoProvider` | Pure-Zig provider backed by `std.Io` and `std.crypto` |
 | `credentials.CachedTokenCredential` | In-memory token cache with expiry |
 | `base64` | Base64, HMAC-SHA256, SHA-256, and MD5 helpers |
 | `url` | URL parsing and RFC 3986 percent encoding |
@@ -33,6 +36,26 @@ single-owner `HttpOperation`. Consume its reader and call `finish` to drain for
 connection reuse, or `abort`/`cancel` to close early. Always call `deinit`;
 it aborts an active operation. Streaming request preparation runs once and
 does not replay a consumed reader.
+
+HTTP construction has one explicit dependency path:
+
+```zig
+var transport = core.http.StdHttpTransport.init(allocator, io);
+defer transport.deinit();
+var crypto = core.crypto.StdCryptoProvider.init(io);
+const runtime = core.http.HttpRuntime.init(
+    transport.asTransport(),
+    crypto.asProvider(),
+);
+var pipeline = core.http.HttpPipeline.init(runtime, policies);
+```
+
+Transport and crypto descriptors, and therefore `HttpRuntime`, copy by value
+while borrowing their backend contexts. Keep `transport` and `crypto` alive
+for every pipeline, credential call, client, and open operation that uses
+them. `StdHttpTransport` remains caller-serialized. Custom crypto provider
+contexts must be concurrent-safe or caller-serialized. Incremental SHA-256
+operations own stable allocator-backed state and must be deinitialized once.
 
 ## Identity
 
