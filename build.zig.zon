@@ -14,6 +14,8 @@
         "build.zig",
         "build.zig.zon",
         "root.zig",
+        "crypto.zig",
+        "http.zig",
         "arm",
         "credentials",
         "http",
