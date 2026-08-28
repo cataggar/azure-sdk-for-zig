@@ -23,7 +23,7 @@ The canonical package/module name is `azure_sdk_core`, released from
 | `crypto.CryptoProvider` | Pluggable random, MD5, SHA-256, and HMAC-SHA256 operations |
 | `crypto.StdCryptoProvider` | Pure-Zig provider backed by `std.Io` and `std.crypto` |
 | `credentials.CachedTokenCredential` | In-memory token cache with expiry |
-| `base64` | Base64, HMAC-SHA256, SHA-256, and MD5 helpers |
+| `base64` | Provider-backed HMAC-SHA256, SHA-256, and integrity-only MD5 helpers |
 | `url` | URL parsing and RFC 3986 percent encoding |
 | `errors` | Azure error-envelope parsing |
 | `lro` | Long-running-operation polling |
