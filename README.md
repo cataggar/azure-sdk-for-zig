@@ -49,9 +49,8 @@ to each `TokenCredential.getToken` call, so provider selection follows the
 client runtime and no provider is retained by the credential. A pre-formed
 token remains independent of the runtime provider.
 
-The `azure_sdk_core` dependency is provisionally pinned to the merged provider
-API commit. It must be repinned to the final `azure_sdk_core/v0.3.0` release
-commit and package hash before this package change is merged.
+The `azure_sdk_core` dependency is pinned to the
+`azure_sdk_core/v0.3.0` release commit and package hash.
 
 Use `sas.audienceFor` to build the `amqps://{namespace}/{entity}` resource. An
 entity-scoped token authorizes every partition and consumer group beneath it,
