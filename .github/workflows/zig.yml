@@ -51,7 +51,10 @@ jobs:
       - name: Test TypeSpec emitter
         if: matrix.os == 'ubuntu-latest'
         working-directory: codegen/cli
-        run: zig build test --summary all
+        run: |
+          git fetch origin sdk/core:refs/remotes/origin/sdk/core
+          git worktree add --detach ../../.core origin/sdk/core
+          zig build -Dazure-sdk-core-path=../../.core test --summary all
 
       - name: Validate documentation links
         if: matrix.os == 'ubuntu-latest'

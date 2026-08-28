@@ -498,10 +498,9 @@ fn hasODataStringPathParameter(model: cm.CodeModel) bool {
 /// literally called `Options`, which collides with `init(…, options:
 /// InitOptions)`. Such names get an `_op` suffix.
 const reserved_members = [_][]const u8{
-    "alloc",            "allocator", "api_version", "auth_policy",
-    "deinit",           "endpoint",  "init",        "InitOptions",
-    "initWithPipeline", "options",   "pipeline",    "PipelineOptions",
-    "policy_ptrs",      "self",
+    "alloc",    "allocator", "api_version", "deinit",
+    "endpoint", "init",      "InitOptions", "options",
+    "pipeline", "self",
 };
 
 /// Renders `name` as a client member, avoiding the emitter's own names.
@@ -567,12 +566,7 @@ fn renderRootConstants(w: *std.Io.Writer, c: cm.Client) !void {
     if (c.api_version_default) |ver| {
         try w.print("const default_api_version = \"{s}\";\n", .{ver});
     }
-    try w.writeAll("const auth_scopes: []const []const u8 = &.{");
-    for (c.credential_scopes, 0..) |s, i| {
-        if (i != 0) try w.writeAll(", ");
-        try w.print("\"{s}\"", .{s});
-    }
-    try w.writeAll("};\n\n");
+    try w.writeByte('\n');
 }
 
 fn renderClient(
@@ -589,7 +583,7 @@ fn renderClient(
     try w.writeAll(
         \\    endpoint: []const u8,
         \\    api_version: []const u8,
-        \\    pipeline: core.pipeline.HttpPipeline,
+        \\    pipeline: core.http.HttpPipeline,
         \\
     );
     for (c.init_parameters) |p| {
@@ -601,17 +595,7 @@ fn renderClient(
     }
 
     if (c.is_root) {
-        // Root-only: own the bearer-token policy + policy_ptrs slice
-        // and expose `init()`/`deinit()`.
-        try w.writeAll(
-            \\    allocator: std.mem.Allocator,
-            \\    auth_policy: ?*core.pipeline.BearerTokenAuthPolicy,
-            \\    policy_ptrs: []*core.pipeline.HttpPolicy,
-            \\
-        );
         try renderRootInit(allocator, w, c);
-        try renderPipelineInit(allocator, w, c);
-        try renderRootDeinit(w);
     }
 
     for (c.sub_clients) |sc| {
@@ -644,11 +628,6 @@ fn renderRootInit(allocator: std.mem.Allocator, w: *std.Io.Writer, c: cm.Client)
         defer allocator.free(ty);
         try w.print("        {s}: {s},\n", .{ id, ty });
     }
-    try w.writeAll(
-        \\        credential: *core.credentials.TokenCredential,
-        \\        transport: *core.http.HttpTransport,
-        \\
-    );
     if (c.endpoint.default_value != null) {
         try w.writeAll("        endpoint: []const u8 = default_endpoint,\n");
     } else {
@@ -664,92 +643,14 @@ fn renderRootInit(allocator: std.mem.Allocator, w: *std.Io.Writer, c: cm.Client)
         \\
         \\
     );
-    try renderPipelineOptions(allocator, w, c);
-
     try w.print(
-        \\    pub fn init(allocator: std.mem.Allocator, options: InitOptions) !{s} {{
-        \\        const auth_policy = try allocator.create(core.pipeline.BearerTokenAuthPolicy);
-        \\        errdefer allocator.destroy(auth_policy);
-        \\        auth_policy.* = core.pipeline.BearerTokenAuthPolicy.init(
-        \\            allocator,
-        \\            options.credential,
-        \\            auth_scopes,
-        \\        );
-        \\
-        \\        const policy_ptrs = try allocator.alloc(*core.pipeline.HttpPolicy, 1);
-        \\        errdefer allocator.free(policy_ptrs);
-        \\        policy_ptrs[0] = auth_policy.asPolicy();
-        \\
-        \\        return .{{
-        \\            .allocator = allocator,
-        \\            .endpoint = options.endpoint,
-        \\            .api_version = options.api_version,
-        \\            .auth_policy = auth_policy,
-        \\            .policy_ptrs = policy_ptrs,
-        \\            .pipeline = .{{
-        \\                .policies = policy_ptrs,
-        \\                .transport_impl = options.transport,
-        \\            }},
-        \\
-    , .{c.name});
-    for (c.init_parameters) |p| {
-        const id = try ids.quoteIfNeeded(allocator, p.name);
-        defer allocator.free(id);
-        try w.print("            .{s} = options.{s},\n", .{ id, id });
-    }
-    try w.writeAll(
-        \\        };
-        \\    }
-        \\
-    );
-}
-
-fn renderPipelineOptions(
-    allocator: std.mem.Allocator,
-    w: *std.Io.Writer,
-    c: cm.Client,
-) !void {
-    try w.writeAll(
-        \\    pub const PipelineOptions = struct {
-        \\
-    );
-    for (c.init_parameters) |p| {
-        const id = try ids.quoteIfNeeded(allocator, p.name);
-        defer allocator.free(id);
-        const ty = try renderFieldType(allocator, p.param_type, p.optional, .clients);
-        defer allocator.free(ty);
-        try w.print("        {s}: {s},\n", .{ id, ty });
-    }
-    if (c.endpoint.default_value != null) {
-        try w.writeAll("        endpoint: []const u8 = default_endpoint,\n");
-    } else {
-        try w.writeAll("        endpoint: []const u8,\n");
-    }
-    if (c.api_version_default != null) {
-        try w.writeAll("        api_version: []const u8 = default_api_version,\n");
-    } else {
-        try w.writeAll("        api_version: []const u8,\n");
-    }
-    try w.writeAll(
-        \\    };
-        \\
-        \\
-    );
-}
-
-fn renderPipelineInit(allocator: std.mem.Allocator, w: *std.Io.Writer, c: cm.Client) !void {
-    try w.print(
-        \\    pub fn initWithPipeline(
-        \\        allocator: std.mem.Allocator,
-        \\        pipeline: core.pipeline.HttpPipeline,
-        \\        options: PipelineOptions,
+        \\    pub fn init(
+        \\        pipeline: core.http.HttpPipeline,
+        \\        options: InitOptions,
         \\    ) {s} {{
         \\        return .{{
-        \\            .allocator = allocator,
         \\            .endpoint = options.endpoint,
         \\            .api_version = options.api_version,
-        \\            .auth_policy = null,
-        \\            .policy_ptrs = &.{{}},
         \\            .pipeline = pipeline,
         \\
     , .{c.name});
@@ -760,20 +661,6 @@ fn renderPipelineInit(allocator: std.mem.Allocator, w: *std.Io.Writer, c: cm.Cli
     }
     try w.writeAll(
         \\        };
-        \\    }
-        \\
-    );
-}
-
-fn renderRootDeinit(w: *std.Io.Writer) !void {
-    try w.writeAll(
-        \\
-        \\    pub fn deinit(self: *@This()) void {
-        \\        if (self.auth_policy) |auth_policy| {
-        \\            auth_policy.deinit();
-        \\            self.allocator.destroy(auth_policy);
-        \\            self.allocator.free(self.policy_ptrs);
-        \\        }
         \\    }
         \\
     );

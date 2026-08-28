@@ -150,7 +150,7 @@ pub fn build(b: *std.Build) void {
     const azure_sdk_core_path = b.option(
         []const u8,
         "azure-sdk-core-path",
-        "Local azure_sdk_core dependency path in generated build.zig.zon",
+        "Local azure_sdk_core path for fixture tests and generated build.zig.zon",
     );
     if ((azure_sdk_core_commit == null) != (azure_sdk_core_hash == null)) {
         std.debug.panic(
@@ -269,20 +269,34 @@ pub fn build(b: *std.Build) void {
     );
     generate_devops_step.dependOn(&generate_devops.step);
 
-    const azure_sdk_core_dep = b.dependency("azure_sdk_core", .{
-        .target = host_target,
-        .optimize = optimize,
-    });
     const serde_dep = b.dependency("serde", .{
         .target = host_target,
         .optimize = optimize,
     });
+    const azure_sdk_core_mod = if (azure_sdk_core_path) |path| blk: {
+        const core_options = b.addOptions();
+        core_options.addOption([]const u8, "version", "0.2.0");
+        break :blk b.createModule(.{
+            .root_source_file = .{
+                .cwd_relative = b.pathJoin(&.{ path, "root.zig" }),
+            },
+            .target = host_target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "serde", .module = serde_dep.module("serde") },
+                .{ .name = "build_options", .module = core_options.createModule() },
+            },
+        });
+    } else b.dependency("azure_sdk_core", .{
+        .target = host_target,
+        .optimize = optimize,
+    }).module("azure_sdk_core");
     const generated_data_tables_mod = b.createModule(.{
         .root_source_file = generated_data_tables_dir.path(b, "src/root.zig"),
         .target = host_target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "azure_sdk_core", .module = azure_sdk_core_dep.module("azure_sdk_core") },
+            .{ .name = "azure_sdk_core", .module = azure_sdk_core_mod },
             .{ .name = "serde", .module = serde_dep.module("serde") },
         },
     });
@@ -295,7 +309,7 @@ pub fn build(b: *std.Build) void {
         .target = host_target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "azure_sdk_core", .module = azure_sdk_core_dep.module("azure_sdk_core") },
+            .{ .name = "azure_sdk_core", .module = azure_sdk_core_mod },
             .{ .name = "serde", .module = serde_dep.module("serde") },
         },
     });
