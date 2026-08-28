@@ -29,74 +29,26 @@ fn encodeODataStringLiteral(allocator: std.mem.Allocator, value: []const u8) ![]
     return core.url.encodePathSegment(allocator, escaped.items);
 }
 const default_api_version = "2019-02-02";
-const auth_scopes: []const []const u8 = &.{"https://storage.azure.com/.default"};
 
 pub const TablesClient = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
-    allocator: std.mem.Allocator,
-    auth_policy: ?*core.pipeline.BearerTokenAuthPolicy,
-    policy_ptrs: []*core.pipeline.HttpPolicy,
+    pipeline: core.http.HttpPipeline,
 
     pub const InitOptions = struct {
-        credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
         endpoint: []const u8,
         api_version: []const u8 = default_api_version,
     };
 
-    pub const PipelineOptions = struct {
-        endpoint: []const u8,
-        api_version: []const u8 = default_api_version,
-    };
-
-    pub fn init(allocator: std.mem.Allocator, options: InitOptions) !TablesClient {
-        const auth_policy = try allocator.create(core.pipeline.BearerTokenAuthPolicy);
-        errdefer allocator.destroy(auth_policy);
-        auth_policy.* = core.pipeline.BearerTokenAuthPolicy.init(
-            allocator,
-            options.credential,
-            auth_scopes,
-        );
-
-        const policy_ptrs = try allocator.alloc(*core.pipeline.HttpPolicy, 1);
-        errdefer allocator.free(policy_ptrs);
-        policy_ptrs[0] = auth_policy.asPolicy();
-
-        return .{
-            .allocator = allocator,
-            .endpoint = options.endpoint,
-            .api_version = options.api_version,
-            .auth_policy = auth_policy,
-            .policy_ptrs = policy_ptrs,
-            .pipeline = .{
-                .policies = policy_ptrs,
-                .transport_impl = options.transport,
-            },
-        };
-    }
-    pub fn initWithPipeline(
-        allocator: std.mem.Allocator,
-        pipeline: core.pipeline.HttpPipeline,
-        options: PipelineOptions,
+    pub fn init(
+        pipeline: core.http.HttpPipeline,
+        options: InitOptions,
     ) TablesClient {
         return .{
-            .allocator = allocator,
             .endpoint = options.endpoint,
             .api_version = options.api_version,
-            .auth_policy = null,
-            .policy_ptrs = &.{},
             .pipeline = pipeline,
         };
-    }
-
-    pub fn deinit(self: *@This()) void {
-        if (self.auth_policy) |auth_policy| {
-            auth_policy.deinit();
-            self.allocator.destroy(auth_policy);
-            self.allocator.free(self.policy_ptrs);
-        }
     }
 
     pub fn table(self: *@This()) Table {
@@ -119,7 +71,7 @@ pub const TablesClient = struct {
 pub const Table = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const QueryResult = union(enum) {
         status_200: struct {
@@ -305,41 +257,42 @@ pub const Table = struct {
     };
     /// Queries tables under the given account.
     pub fn query(self: *@This(), alloc: std.mem.Allocator, client_request_id: ?[]const u8, @"$format": ?enums.OdataMetadataFormat, @"$top": ?i32, @"$select": ?[]const u8, @"$filter": ?[]const u8, next_table_name: ?[]const u8) !QueryResult {
+        @setEvalBranchQuota(100_000);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/Tables", .{self.endpoint});
         defer alloc.free(base_url);
         var url_buf: std.ArrayList(u8) = .empty;
         defer url_buf.deinit(alloc);
         try url_buf.appendSlice(alloc, base_url);
         var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
-        if (@"$format") |v| {
+        if (@"$format") |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            const enc = try core.url.percentEncode(alloc, v.toWire());
+            const enc = try core.url.percentEncode(alloc, query_value.toWire());
             defer alloc.free(enc);
             try url_buf.print(alloc, "{s}$format={s}", .{ sep, enc });
             has_query = true;
         }
-        if (@"$top") |v| {
+        if (@"$top") |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            try url_buf.print(alloc, "{s}$top={d}", .{ sep, v });
+            try url_buf.print(alloc, "{s}$top={d}", .{ sep, query_value });
             has_query = true;
         }
-        if (@"$select") |v| {
+        if (@"$select") |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            const enc = try core.url.percentEncode(alloc, v);
+            const enc = try core.url.percentEncode(alloc, query_value);
             defer alloc.free(enc);
             try url_buf.print(alloc, "{s}$select={s}", .{ sep, enc });
             has_query = true;
         }
-        if (@"$filter") |v| {
+        if (@"$filter") |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            const enc = try core.url.percentEncode(alloc, v);
+            const enc = try core.url.percentEncode(alloc, query_value);
             defer alloc.free(enc);
             try url_buf.print(alloc, "{s}$filter={s}", .{ sep, enc });
             has_query = true;
         }
-        if (next_table_name) |v| {
+        if (next_table_name) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            const enc = try core.url.percentEncode(alloc, v);
+            const enc = try core.url.percentEncode(alloc, query_value);
             defer alloc.free(enc);
             try url_buf.print(alloc, "{s}NextTableName={s}", .{ sep, enc });
             has_query = true;
@@ -410,15 +363,16 @@ pub const Table = struct {
     }
     /// Creates a new table under the given account.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, client_request_id: ?[]const u8, @"$format": ?enums.OdataMetadataFormat, table_properties: models.TableProperties, prefer: ?enums.ResponseFormat) !CreateResult {
+        @setEvalBranchQuota(100_000);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/Tables", .{self.endpoint});
         defer alloc.free(base_url);
         var url_buf: std.ArrayList(u8) = .empty;
         defer url_buf.deinit(alloc);
         try url_buf.appendSlice(alloc, base_url);
         var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
-        if (@"$format") |v| {
+        if (@"$format") |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            const enc = try core.url.percentEncode(alloc, v.toWire());
+            const enc = try core.url.percentEncode(alloc, query_value.toWire());
             defer alloc.free(enc);
             try url_buf.print(alloc, "{s}$format={s}", .{ sep, enc });
             has_query = true;
@@ -532,6 +486,7 @@ pub const Table = struct {
     }
     /// Deletes an existing table.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, client_request_id: ?[]const u8, table: []const u8) !DeleteResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try encodeODataStringLiteral(alloc, table);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/Tables('{s}')", .{ self.endpoint, encoded_path_0 });
@@ -587,6 +542,7 @@ pub const Table = struct {
     }
     /// Queries entities under the given table.
     pub fn queryEntities(self: *@This(), alloc: std.mem.Allocator, client_request_id: ?[]const u8, table: []const u8, @"$format": ?enums.OdataMetadataFormat, @"$top": ?i32, @"$select": ?[]const u8, @"$filter": ?[]const u8, timeout: ?i32, next_partition_key: ?[]const u8, next_row_key: ?[]const u8) !QueryEntitiesResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, table);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}()", .{ self.endpoint, encoded_path_0 });
@@ -595,47 +551,47 @@ pub const Table = struct {
         defer url_buf.deinit(alloc);
         try url_buf.appendSlice(alloc, base_url);
         var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
-        if (@"$format") |v| {
+        if (@"$format") |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            const enc = try core.url.percentEncode(alloc, v.toWire());
+            const enc = try core.url.percentEncode(alloc, query_value.toWire());
             defer alloc.free(enc);
             try url_buf.print(alloc, "{s}$format={s}", .{ sep, enc });
             has_query = true;
         }
-        if (@"$top") |v| {
+        if (@"$top") |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            try url_buf.print(alloc, "{s}$top={d}", .{ sep, v });
+            try url_buf.print(alloc, "{s}$top={d}", .{ sep, query_value });
             has_query = true;
         }
-        if (@"$select") |v| {
+        if (@"$select") |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            const enc = try core.url.percentEncode(alloc, v);
+            const enc = try core.url.percentEncode(alloc, query_value);
             defer alloc.free(enc);
             try url_buf.print(alloc, "{s}$select={s}", .{ sep, enc });
             has_query = true;
         }
-        if (@"$filter") |v| {
+        if (@"$filter") |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            const enc = try core.url.percentEncode(alloc, v);
+            const enc = try core.url.percentEncode(alloc, query_value);
             defer alloc.free(enc);
             try url_buf.print(alloc, "{s}$filter={s}", .{ sep, enc });
             has_query = true;
         }
-        if (timeout) |v| {
+        if (timeout) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            try url_buf.print(alloc, "{s}timeout={d}", .{ sep, v });
+            try url_buf.print(alloc, "{s}timeout={d}", .{ sep, query_value });
             has_query = true;
         }
-        if (next_partition_key) |v| {
+        if (next_partition_key) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            const enc = try core.url.percentEncode(alloc, v);
+            const enc = try core.url.percentEncode(alloc, query_value);
             defer alloc.free(enc);
             try url_buf.print(alloc, "{s}NextPartitionKey={s}", .{ sep, enc });
             has_query = true;
         }
-        if (next_row_key) |v| {
+        if (next_row_key) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            const enc = try core.url.percentEncode(alloc, v);
+            const enc = try core.url.percentEncode(alloc, query_value);
             defer alloc.free(enc);
             try url_buf.print(alloc, "{s}NextRowKey={s}", .{ sep, enc });
             has_query = true;
@@ -712,6 +668,7 @@ pub const Table = struct {
     }
     /// Retrieve a single entity.
     pub fn queryEntityWithPartitionAndRowKey(self: *@This(), alloc: std.mem.Allocator, client_request_id: ?[]const u8, table: []const u8, timeout: ?i32, @"$format": ?enums.OdataMetadataFormat, @"$select": ?[]const u8, @"$filter": ?[]const u8, partition_key: []const u8, row_key: []const u8) !QueryEntityWithPartitionAndRowKeyResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, table);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try encodeODataStringLiteral(alloc, partition_key);
@@ -724,28 +681,28 @@ pub const Table = struct {
         defer url_buf.deinit(alloc);
         try url_buf.appendSlice(alloc, base_url);
         var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
-        if (timeout) |v| {
+        if (timeout) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            try url_buf.print(alloc, "{s}timeout={d}", .{ sep, v });
+            try url_buf.print(alloc, "{s}timeout={d}", .{ sep, query_value });
             has_query = true;
         }
-        if (@"$format") |v| {
+        if (@"$format") |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            const enc = try core.url.percentEncode(alloc, v.toWire());
+            const enc = try core.url.percentEncode(alloc, query_value.toWire());
             defer alloc.free(enc);
             try url_buf.print(alloc, "{s}$format={s}", .{ sep, enc });
             has_query = true;
         }
-        if (@"$select") |v| {
+        if (@"$select") |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            const enc = try core.url.percentEncode(alloc, v);
+            const enc = try core.url.percentEncode(alloc, query_value);
             defer alloc.free(enc);
             try url_buf.print(alloc, "{s}$select={s}", .{ sep, enc });
             has_query = true;
         }
-        if (@"$filter") |v| {
+        if (@"$filter") |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            const enc = try core.url.percentEncode(alloc, v);
+            const enc = try core.url.percentEncode(alloc, query_value);
             defer alloc.free(enc);
             try url_buf.print(alloc, "{s}$filter={s}", .{ sep, enc });
             has_query = true;
@@ -828,6 +785,7 @@ pub const Table = struct {
     }
     /// Update entity in a table.
     pub fn updateEntity(self: *@This(), alloc: std.mem.Allocator, client_request_id: ?[]const u8, table: []const u8, timeout: ?i32, if_match: ?[]const u8, partition_key: []const u8, row_key: []const u8, table_entity_properties: ?std.json.ArrayHashMap(models.JsonValue)) !UpdateEntityResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, table);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try encodeODataStringLiteral(alloc, partition_key);
@@ -840,9 +798,9 @@ pub const Table = struct {
         defer url_buf.deinit(alloc);
         try url_buf.appendSlice(alloc, base_url);
         var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
-        if (timeout) |v| {
+        if (timeout) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            try url_buf.print(alloc, "{s}timeout={d}", .{ sep, v });
+            try url_buf.print(alloc, "{s}timeout={d}", .{ sep, query_value });
             has_query = true;
         }
         const url = try url_buf.toOwnedSlice(alloc);
@@ -913,6 +871,7 @@ pub const Table = struct {
     }
     /// Merge entity in a table.
     pub fn mergeEntity(self: *@This(), alloc: std.mem.Allocator, client_request_id: ?[]const u8, table: []const u8, timeout: ?i32, if_match: ?[]const u8, partition_key: []const u8, row_key: []const u8, table_entity_properties: ?std.json.ArrayHashMap(models.JsonValue)) !MergeEntityResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, table);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try encodeODataStringLiteral(alloc, partition_key);
@@ -925,9 +884,9 @@ pub const Table = struct {
         defer url_buf.deinit(alloc);
         try url_buf.appendSlice(alloc, base_url);
         var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
-        if (timeout) |v| {
+        if (timeout) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            try url_buf.print(alloc, "{s}timeout={d}", .{ sep, v });
+            try url_buf.print(alloc, "{s}timeout={d}", .{ sep, query_value });
             has_query = true;
         }
         const url = try url_buf.toOwnedSlice(alloc);
@@ -998,6 +957,7 @@ pub const Table = struct {
     }
     /// Deletes the specified entity in a table.
     pub fn deleteEntity(self: *@This(), alloc: std.mem.Allocator, client_request_id: ?[]const u8, table: []const u8, timeout: ?i32, if_match: []const u8, partition_key: []const u8, row_key: []const u8) !DeleteEntityResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, table);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try encodeODataStringLiteral(alloc, partition_key);
@@ -1010,9 +970,9 @@ pub const Table = struct {
         defer url_buf.deinit(alloc);
         try url_buf.appendSlice(alloc, base_url);
         var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
-        if (timeout) |v| {
+        if (timeout) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            try url_buf.print(alloc, "{s}timeout={d}", .{ sep, v });
+            try url_buf.print(alloc, "{s}timeout={d}", .{ sep, query_value });
             has_query = true;
         }
         const url = try url_buf.toOwnedSlice(alloc);
@@ -1069,6 +1029,7 @@ pub const Table = struct {
     }
     /// Insert entity in a table.
     pub fn insertEntity(self: *@This(), alloc: std.mem.Allocator, table: []const u8, timeout: ?i32, @"$format": ?enums.OdataMetadataFormat, client_request_id: ?[]const u8, prefer: ?enums.ResponseFormat, table_entity_properties: ?std.json.ArrayHashMap(models.JsonValue)) !InsertEntityResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, table);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ self.endpoint, encoded_path_0 });
@@ -1077,14 +1038,14 @@ pub const Table = struct {
         defer url_buf.deinit(alloc);
         try url_buf.appendSlice(alloc, base_url);
         var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
-        if (timeout) |v| {
+        if (timeout) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            try url_buf.print(alloc, "{s}timeout={d}", .{ sep, v });
+            try url_buf.print(alloc, "{s}timeout={d}", .{ sep, query_value });
             has_query = true;
         }
-        if (@"$format") |v| {
+        if (@"$format") |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            const enc = try core.url.percentEncode(alloc, v.toWire());
+            const enc = try core.url.percentEncode(alloc, query_value.toWire());
             defer alloc.free(enc);
             try url_buf.print(alloc, "{s}$format={s}", .{ sep, enc });
             has_query = true;
@@ -1215,6 +1176,7 @@ pub const Table = struct {
     /// Retrieves details about any stored access policies specified on the table that
     /// may be used with Shared Access Signatures.
     pub fn getAccessPolicy(self: *@This(), alloc: std.mem.Allocator, client_request_id: ?[]const u8, table: []const u8, timeout: ?i32) !GetAccessPolicyResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, table);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}?comp=acl", .{ self.endpoint, encoded_path_0 });
@@ -1223,9 +1185,9 @@ pub const Table = struct {
         defer url_buf.deinit(alloc);
         try url_buf.appendSlice(alloc, base_url);
         var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
-        if (timeout) |v| {
+        if (timeout) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            try url_buf.print(alloc, "{s}timeout={d}", .{ sep, v });
+            try url_buf.print(alloc, "{s}timeout={d}", .{ sep, query_value });
             has_query = true;
         }
         const url = try url_buf.toOwnedSlice(alloc);
@@ -1288,6 +1250,7 @@ pub const Table = struct {
     /// Sets stored access policies for the table that may be used with Shared Access
     /// Signatures.
     pub fn setAccessPolicy(self: *@This(), alloc: std.mem.Allocator, client_request_id: ?[]const u8, table: []const u8, table_acl: models.SignedIdentifiers, timeout: ?i32) !SetAccessPolicyResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, table);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/{s}?comp=acl", .{ self.endpoint, encoded_path_0 });
@@ -1296,9 +1259,9 @@ pub const Table = struct {
         defer url_buf.deinit(alloc);
         try url_buf.appendSlice(alloc, base_url);
         var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
-        if (timeout) |v| {
+        if (timeout) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            try url_buf.print(alloc, "{s}timeout={d}", .{ sep, v });
+            try url_buf.print(alloc, "{s}timeout={d}", .{ sep, query_value });
             has_query = true;
         }
         const url = try url_buf.toOwnedSlice(alloc);
@@ -1360,7 +1323,7 @@ pub const Table = struct {
 pub const Service = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const SetPropertiesResult = union(enum) {
         status_202: struct {
@@ -1403,15 +1366,16 @@ pub const Service = struct {
     /// Sets properties for an account's Table service endpoint, including properties
     /// for Analytics and CORS (Cross-Origin Resource Sharing) rules.
     pub fn setProperties(self: *@This(), alloc: std.mem.Allocator, client_request_id: ?[]const u8, timeout: ?i32, table_service_properties: models.TableServiceProperties) !SetPropertiesResult {
+        @setEvalBranchQuota(100_000);
         const base_url = try std.fmt.allocPrint(alloc, "{s}?restype=service&comp=properties", .{self.endpoint});
         defer alloc.free(base_url);
         var url_buf: std.ArrayList(u8) = .empty;
         defer url_buf.deinit(alloc);
         try url_buf.appendSlice(alloc, base_url);
         var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
-        if (timeout) |v| {
+        if (timeout) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            try url_buf.print(alloc, "{s}timeout={d}", .{ sep, v });
+            try url_buf.print(alloc, "{s}timeout={d}", .{ sep, query_value });
             has_query = true;
         }
         const url = try url_buf.toOwnedSlice(alloc);
@@ -1465,15 +1429,16 @@ pub const Service = struct {
     /// Gets the properties of an account's Table service, including properties for
     /// Analytics and CORS (Cross-Origin Resource Sharing) rules.
     pub fn getProperties(self: *@This(), alloc: std.mem.Allocator, client_request_id: ?[]const u8, timeout: ?i32) !GetPropertiesResult {
+        @setEvalBranchQuota(100_000);
         const base_url = try std.fmt.allocPrint(alloc, "{s}?restype=service&comp=properties", .{self.endpoint});
         defer alloc.free(base_url);
         var url_buf: std.ArrayList(u8) = .empty;
         defer url_buf.deinit(alloc);
         try url_buf.appendSlice(alloc, base_url);
         var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
-        if (timeout) |v| {
+        if (timeout) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            try url_buf.print(alloc, "{s}timeout={d}", .{ sep, v });
+            try url_buf.print(alloc, "{s}timeout={d}", .{ sep, query_value });
             has_query = true;
         }
         const url = try url_buf.toOwnedSlice(alloc);
@@ -1531,15 +1496,16 @@ pub const Service = struct {
     /// available on the secondary location endpoint when read-access geo-redundant
     /// replication is enabled for the account.
     pub fn getStatistics(self: *@This(), alloc: std.mem.Allocator, client_request_id: ?[]const u8, timeout: ?i32) !GetStatisticsResult {
+        @setEvalBranchQuota(100_000);
         const base_url = try std.fmt.allocPrint(alloc, "{s}?restype=service&comp=stats", .{self.endpoint});
         defer alloc.free(base_url);
         var url_buf: std.ArrayList(u8) = .empty;
         defer url_buf.deinit(alloc);
         try url_buf.appendSlice(alloc, base_url);
         var has_query = std.mem.indexOfScalar(u8, base_url, '?') != null;
-        if (timeout) |v| {
+        if (timeout) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            try url_buf.print(alloc, "{s}timeout={d}", .{ sep, v });
+            try url_buf.print(alloc, "{s}timeout={d}", .{ sep, query_value });
             has_query = true;
         }
         const url = try url_buf.toOwnedSlice(alloc);

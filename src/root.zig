@@ -6,6 +6,8 @@ const clients = @import("clients.zig");
 pub const models = @import("models.zig");
 pub const enums = @import("enums.zig");
 pub const TablesClient = clients.TablesClient;
+pub const Table = clients.Table;
+pub const Service = clients.Service;
 
 test {
     _ = @import("clients_test.zig");
