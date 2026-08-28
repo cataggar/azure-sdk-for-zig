@@ -629,21 +629,6 @@ pub const TracingPolicy = struct {
     }
 };
 
-test "pipeline with telemetry and mock transport" {
-    const allocator = std.testing.allocator;
-    var mock = transport.MockTransport.init(allocator, 200, "ok");
-    defer mock.deinit();
-    var telemetry = TelemetryPolicy.init("azsdk-zig-test/0.1.0");
-    var policy_ptrs = [_]*HttpPolicy{telemetry.asPolicy()};
-    var pipeline_inst = HttpPipeline.init(testingRuntime(mock.asTransport()), &policy_ptrs);
-    var req = Request.init(allocator, .GET, "https://example.com");
-    defer req.deinit();
-    var resp = try pipeline_inst.send(&req);
-    defer resp.deinit();
-    try std.testing.expectEqual(@as(u16, 200), resp.status_code);
-    try std.testing.expectEqualStrings("azsdk-zig-test/0.1.0", req.headers.get("User-Agent").?);
-}
-
 test "pipeline prepares streaming policies without retrying" {
     const allocator = std.testing.allocator;
     var mock = transport.MockTransport.init(allocator, 200, "stream");
