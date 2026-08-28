@@ -1,8 +1,13 @@
 const std = @import("std");
 
-pub const Md5Digest = [std.crypto.hash.Md5.digest_length]u8;
-pub const Sha256Digest = [std.crypto.hash.sha2.Sha256.digest_length]u8;
-pub const HmacSha256Digest = [std.crypto.auth.hmac.sha2.HmacSha256.mac_length]u8;
+pub const Md5Digest = [16]u8;
+pub const Sha256Digest = [32]u8;
+pub const HmacSha256Digest = [32]u8;
+
+fn wipe(bytes: []u8) void {
+    const volatile_bytes: []volatile u8 = bytes;
+    @memset(volatile_bytes, 0);
+}
 
 /// A single-owner incremental SHA-256 operation.
 ///
@@ -27,6 +32,7 @@ pub const Sha256Operation = struct {
 
     pub fn final(self: *Sha256Operation) !Sha256Digest {
         var out: Sha256Digest = undefined;
+        errdefer wipe(&out);
         try self.vtable.final(self.context, &out);
         return out;
     }
@@ -74,12 +80,14 @@ pub const CryptoProvider = struct {
 
     pub fn md5(self: CryptoProvider, data: []const u8) !Md5Digest {
         var out: Md5Digest = undefined;
+        errdefer wipe(&out);
         try self.vtable.md5(self.context, data, &out);
         return out;
     }
 
     pub fn sha256(self: CryptoProvider, data: []const u8) !Sha256Digest {
         var out: Sha256Digest = undefined;
+        errdefer wipe(&out);
         try self.vtable.sha256(self.context, data, &out);
         return out;
     }
@@ -90,6 +98,7 @@ pub const CryptoProvider = struct {
         message: []const u8,
     ) !HmacSha256Digest {
         var out: HmacSha256Digest = undefined;
+        errdefer wipe(&out);
         try self.vtable.hmac_sha256(self.context, key, message, &out);
         return out;
     }
@@ -189,7 +198,7 @@ const StdSha256State = struct {
     fn deinit(context: *anyopaque) void {
         const self: *StdSha256State = @ptrCast(@alignCast(context));
         const allocator = self.allocator;
-        self.* = undefined;
+        wipe(std.mem.asBytes(self));
         allocator.destroy(self);
     }
 };
@@ -232,6 +241,28 @@ test "StdCryptoProvider incremental SHA-256 has stable allocated state" {
         0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad,
     }, &digest);
     try std.testing.expectError(error.Sha256AlreadyFinalized, operation.update("d"));
+}
+
+test "StdCryptoProvider incremental SHA-256 handles empty input" {
+    var provider_impl = StdCryptoProvider.init(std.testing.io);
+    var operation = try provider_impl.asProvider().sha256Init(std.testing.allocator);
+    defer operation.deinit();
+
+    const digest = try operation.final();
+    try std.testing.expectEqualSlices(u8, &.{
+        0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14,
+        0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24,
+        0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c,
+        0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55,
+    }, &digest);
+}
+
+test "StdCryptoProvider incremental SHA-256 propagates allocation failure" {
+    var provider_impl = StdCryptoProvider.init(std.testing.io);
+    try std.testing.expectError(
+        error.OutOfMemory,
+        provider_impl.asProvider().sha256Init(std.testing.failing_allocator),
+    );
 }
 
 test "CryptoProvider descriptors copy and dispatch through borrowed context" {

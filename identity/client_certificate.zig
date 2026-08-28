@@ -16,7 +16,7 @@ const Context = core.context.Context;
 /// Note: This implementation sends the raw PEM content as the assertion.
 /// A production implementation would sign a JWT with the private key
 /// and use the certificate thumbprint in the JWT header. This requires
-/// RSA/EC signing which could be added via `std.crypto`.
+/// RSA/EC signing which could be added through `CryptoProvider`.
 pub const ClientCertificateCredential = struct {
     tenant_id: []const u8,
     client_id: []const u8,

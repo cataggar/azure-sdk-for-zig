@@ -2,6 +2,7 @@
 ///!
 ///! Wraps `std.base64.standard` with allocator-aware helpers.
 const std = @import("std");
+const crypto = @import("crypto.zig");
 
 const encoder = std.base64.standard.Encoder;
 const decoder = std.base64.standard.Decoder;
@@ -44,28 +45,44 @@ pub fn urlDecode(allocator: std.mem.Allocator, encoded: []const u8) ![]u8 {
 
 // ─────────────── Crypto helpers (thin wrappers) ───────────────
 
-const HmacSha256 = std.crypto.auth.hmac.sha2.HmacSha256;
-const Sha256 = std.crypto.hash.sha2.Sha256;
-const Md5 = std.crypto.hash.Md5;
+fn wipe(bytes: []u8) void {
+    const volatile_bytes: []volatile u8 = bytes;
+    @memset(volatile_bytes, 0);
+}
 
 /// HMAC-SHA256: sign `message` with `key`, return base64-encoded MAC.
-pub fn hmacSha256Base64(allocator: std.mem.Allocator, key: []const u8, message: []const u8) ![]u8 {
-    var mac: [HmacSha256.mac_length]u8 = undefined;
-    HmacSha256.create(&mac, message, key);
+pub fn hmacSha256Base64(
+    allocator: std.mem.Allocator,
+    provider: crypto.CryptoProvider,
+    key: []const u8,
+    message: []const u8,
+) ![]u8 {
+    var mac = try provider.hmacSha256(key, message);
+    defer wipe(&mac);
     return encode(allocator, &mac);
 }
 
 /// SHA-256 hash of `data`, base64-encoded.
-pub fn sha256Base64(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
-    var hash: [Sha256.digest_length]u8 = undefined;
-    Sha256.hash(data, &hash, .{});
+pub fn sha256Base64(
+    allocator: std.mem.Allocator,
+    provider: crypto.CryptoProvider,
+    data: []const u8,
+) ![]u8 {
+    var hash = try provider.sha256(data);
+    defer wipe(&hash);
     return encode(allocator, &hash);
 }
 
-/// MD5 hash of `data`, base64-encoded (for Content-MD5 header).
-pub fn md5Base64(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
-    var hash: [Md5.digest_length]u8 = undefined;
-    Md5.hash(data, &hash, .{});
+/// MD5 hash of `data`, base64-encoded for integrity and compatibility only.
+///
+/// MD5 must not be used as a security primitive.
+pub fn md5Base64(
+    allocator: std.mem.Allocator,
+    provider: crypto.CryptoProvider,
+    data: []const u8,
+) ![]u8 {
+    var hash = try provider.md5(data);
+    defer wipe(&hash);
     return encode(allocator, &hash);
 }
 
@@ -107,28 +124,185 @@ test "invalid base64url does not leak" {
     );
 }
 
-test "hmacSha256Base64 known vector" {
+const TestCryptoProvider = struct {
+    const Operation = enum {
+        none,
+        md5,
+        sha256,
+        hmac_sha256,
+    };
+
+    calls: usize = 0,
+    operation: Operation = .none,
+    data: []const u8 = "",
+    key: []const u8 = "",
+    message: []const u8 = "",
+    fail: bool = false,
+
+    const vtable: crypto.CryptoProvider.VTable = .{
+        .random_bytes = &randomBytes,
+        .md5 = &md5,
+        .sha256 = &sha256,
+        .hmac_sha256 = &hmacSha256,
+        .sha256_init = &sha256Init,
+    };
+
+    fn provider(self: *@This()) crypto.CryptoProvider {
+        return .{ .context = self, .vtable = &vtable };
+    }
+
+    fn record(self: *@This(), operation: Operation) !void {
+        self.calls += 1;
+        self.operation = operation;
+        if (self.fail) return error.ProviderFailure;
+    }
+
+    fn randomBytes(_: *anyopaque, _: []u8) !void {
+        return error.Unused;
+    }
+
+    fn md5(context: *anyopaque, data: []const u8, out: *crypto.Md5Digest) !void {
+        const self: *@This() = @ptrCast(@alignCast(context));
+        self.data = data;
+        @memset(out, 0xa5);
+        try self.record(.md5);
+    }
+
+    fn sha256(context: *anyopaque, data: []const u8, out: *crypto.Sha256Digest) !void {
+        const self: *@This() = @ptrCast(@alignCast(context));
+        self.data = data;
+        @memset(out, 0xa5);
+        try self.record(.sha256);
+    }
+
+    fn hmacSha256(
+        context: *anyopaque,
+        key: []const u8,
+        message: []const u8,
+        out: *crypto.HmacSha256Digest,
+    ) !void {
+        const self: *@This() = @ptrCast(@alignCast(context));
+        self.key = key;
+        self.message = message;
+        @memset(out, 0xa5);
+        try self.record(.hmac_sha256);
+    }
+
+    fn sha256Init(
+        _: *anyopaque,
+        _: std.mem.Allocator,
+    ) !crypto.Sha256Operation {
+        return error.Unused;
+    }
+};
+
+test "provider-backed base64 crypto helpers use standard vectors" {
     const allocator = std.testing.allocator;
-    // HMAC-SHA256("", "key") is a known value.
-    const mac = try hmacSha256Base64(allocator, "key", "");
+    var provider_impl = crypto.StdCryptoProvider.init(std.testing.io);
+    const provider = provider_impl.asProvider();
+
+    const mac = try hmacSha256Base64(allocator, provider, "key", "");
     defer allocator.free(mac);
-    // Just verify it's base64 and 44 chars (32 bytes → 44 base64 chars with padding).
-    try std.testing.expectEqual(@as(usize, 44), mac.len);
-    try std.testing.expectEqual(@as(u8, '='), mac[43]);
+    try std.testing.expectEqualStrings(
+        "XV0TlWPJW1lnub2ajJsjOp3ttFByeUzSMtwbdIMmB9A=",
+        mac,
+    );
+
+    const sha256 = try sha256Base64(allocator, provider, "hello");
+    defer allocator.free(sha256);
+    try std.testing.expectEqualStrings(
+        "LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ=",
+        sha256,
+    );
+
+    const md5 = try md5Base64(allocator, provider, "hello");
+    defer allocator.free(md5);
+    try std.testing.expectEqualStrings("XUFAKrxLKna5cZ2REBfFkg==", md5);
 }
 
-test "sha256Base64" {
+test "provider-backed base64 crypto helpers handle empty input" {
     const allocator = std.testing.allocator;
-    const hash = try sha256Base64(allocator, "hello");
-    defer allocator.free(hash);
-    // SHA-256("hello") = LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ= (known)
-    try std.testing.expectEqualStrings("LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ=", hash);
+    var provider_impl = crypto.StdCryptoProvider.init(std.testing.io);
+    const provider = provider_impl.asProvider();
+
+    const sha256 = try sha256Base64(allocator, provider, "");
+    defer allocator.free(sha256);
+    try std.testing.expectEqualStrings(
+        "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=",
+        sha256,
+    );
+
+    const md5 = try md5Base64(allocator, provider, "");
+    defer allocator.free(md5);
+    try std.testing.expectEqualStrings("1B2M2Y8AsgTpgAmY7PhCfg==", md5);
 }
 
-test "md5Base64" {
+test "base64 crypto helpers dispatch to the selected provider" {
     const allocator = std.testing.allocator;
-    const hash = try md5Base64(allocator, "hello");
-    defer allocator.free(hash);
-    // MD5("hello") = XUFAKrxLKna5cZ2REBfFkg== (known)
-    try std.testing.expectEqualStrings("XUFAKrxLKna5cZ2REBfFkg==", hash);
+    var spy = TestCryptoProvider{};
+    const provider = spy.provider();
+
+    const md5 = try md5Base64(allocator, provider, "md5-data");
+    defer allocator.free(md5);
+    try std.testing.expectEqual(.md5, spy.operation);
+    try std.testing.expectEqualStrings("md5-data", spy.data);
+    try std.testing.expectEqualStrings("paWlpaWlpaWlpaWlpaWlpQ==", md5);
+
+    const sha256 = try sha256Base64(allocator, provider, "sha-data");
+    defer allocator.free(sha256);
+    try std.testing.expectEqual(.sha256, spy.operation);
+    try std.testing.expectEqualStrings("sha-data", spy.data);
+    try std.testing.expectEqualStrings(
+        "paWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaU=",
+        sha256,
+    );
+
+    const mac = try hmacSha256Base64(allocator, provider, "secret", "message");
+    defer allocator.free(mac);
+    try std.testing.expectEqual(.hmac_sha256, spy.operation);
+    try std.testing.expectEqualStrings("secret", spy.key);
+    try std.testing.expectEqualStrings("message", spy.message);
+    try std.testing.expectEqualStrings(
+        "paWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaU=",
+        mac,
+    );
+    try std.testing.expectEqual(@as(usize, 3), spy.calls);
+}
+
+test "provider failures propagate before base64 output allocation" {
+    var fault = TestCryptoProvider{ .fail = true };
+    const provider = fault.provider();
+
+    try std.testing.expectError(
+        error.ProviderFailure,
+        md5Base64(std.testing.failing_allocator, provider, "data"),
+    );
+    try std.testing.expectError(
+        error.ProviderFailure,
+        sha256Base64(std.testing.failing_allocator, provider, "data"),
+    );
+    try std.testing.expectError(
+        error.ProviderFailure,
+        hmacSha256Base64(std.testing.failing_allocator, provider, "key", "message"),
+    );
+    try std.testing.expectEqual(@as(usize, 3), fault.calls);
+}
+
+test "base64 crypto helpers return allocation failures without output" {
+    var spy = TestCryptoProvider{};
+    const provider = spy.provider();
+
+    try std.testing.expectError(
+        error.OutOfMemory,
+        md5Base64(std.testing.failing_allocator, provider, "data"),
+    );
+    try std.testing.expectError(
+        error.OutOfMemory,
+        sha256Base64(std.testing.failing_allocator, provider, "data"),
+    );
+    try std.testing.expectError(
+        error.OutOfMemory,
+        hmacSha256Base64(std.testing.failing_allocator, provider, "key", "message"),
+    );
+    try std.testing.expectEqual(@as(usize, 3), spy.calls);
 }

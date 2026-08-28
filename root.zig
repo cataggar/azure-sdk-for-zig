@@ -8,7 +8,7 @@
 ///!   TLS    → std.crypto.tls
 ///!   JSON   → serde.json (typed schemas)
 ///!   XML    → serde.xml (typed schemas)
-///!   Crypto → std.crypto (HMAC-SHA256, SHA-256, MD5)
+///!   Crypto → configured CryptoProvider (HMAC-SHA256, SHA-256, MD5)
 ///!   Base64 → std.base64
 
 // Re-export sub-modules for `@import("azure_sdk_core").http`, etc.
