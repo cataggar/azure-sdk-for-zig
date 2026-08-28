@@ -29,10 +29,24 @@ const content_md5 = try storage_common.contentMd5(
     body,
 );
 defer allocator.free(content_md5);
+
+const account_sas = try (storage_common.SasBuilder{
+    .account_name = account_name,
+    .permissions = "rl",
+    .services = "b",
+    .resource_types = "sco",
+    .start = optional_start,
+    .expiry = expiry,
+    .ip = optional_ip,
+    .protocol = "https",
+    .encryption_scope = optional_encryption_scope,
+}).sign(allocator, runtime.crypto, encoded_account_key);
+defer allocator.free(account_sas);
 ```
 
 Credential-free SAS sends likewise take a `core.http.HttpRuntime`, ensuring
 request IDs and transport behavior use the caller's configured providers.
+SAS query values, including Base64 signatures, are percent-encoded.
 
 ```bash
 zig build test --summary all

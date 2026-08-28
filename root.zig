@@ -37,6 +37,288 @@ fn decodeAccountKey(allocator: std.mem.Allocator, encoded: []const u8) ![]u8 {
     return decoded;
 }
 
+fn versionAtLeast(version: ?[]const u8, minimum: []const u8) bool {
+    const value = version orelse return true;
+    return std.mem.order(u8, value, minimum) != .lt;
+}
+
+fn contentLengthToSign(request: *const core.http.Request) []const u8 {
+    const value = request.getHeader("Content-Length") orelse return "";
+    if (std.mem.eql(u8, value, "0")) {
+        const version = request.getHeader("x-ms-version") orelse return "";
+        if (std.mem.order(u8, version, "2014-02-14") == .gt) return "";
+    }
+    return value;
+}
+
+const CanonicalHeader = struct {
+    name: []const u8,
+    value: []const u8,
+};
+
+fn canonicalHeaderLessThan(_: void, lhs: CanonicalHeader, rhs: CanonicalHeader) bool {
+    // Azure SDKs use invariant header collation, where punctuation is
+    // ignorable at the primary comparison level.
+    var lhs_index: usize = 0;
+    var rhs_index: usize = 0;
+    while (true) {
+        while (lhs_index < lhs.name.len and
+            !std.ascii.isAlphanumeric(lhs.name[lhs_index])) : (lhs_index += 1)
+        {}
+        while (rhs_index < rhs.name.len and
+            !std.ascii.isAlphanumeric(rhs.name[rhs_index])) : (rhs_index += 1)
+        {}
+        if (lhs_index == lhs.name.len or rhs_index == rhs.name.len) break;
+
+        const lhs_lower = std.ascii.toLower(lhs.name[lhs_index]);
+        const rhs_lower = std.ascii.toLower(rhs.name[rhs_index]);
+        if (lhs_lower != rhs_lower) return lhs_lower < rhs_lower;
+        lhs_index += 1;
+        rhs_index += 1;
+    }
+    if (lhs_index == lhs.name.len and rhs_index != rhs.name.len) return true;
+    if (rhs_index == rhs.name.len and lhs_index != lhs.name.len) return false;
+    return std.ascii.orderIgnoreCase(lhs.name, rhs.name) == .lt;
+}
+
+fn appendCanonicalHeaderValue(
+    output: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    value: []const u8,
+) !void {
+    const trimmed = std.mem.trim(u8, value, " \t\r\n");
+    var in_quotes = false;
+    var escaped = false;
+    var pending_space = false;
+    var emitted = false;
+
+    for (trimmed) |byte| {
+        if (!in_quotes and (byte == ' ' or byte == '\t' or byte == '\r' or byte == '\n')) {
+            pending_space = emitted;
+            continue;
+        }
+        if (pending_space) {
+            try output.append(allocator, ' ');
+            pending_space = false;
+        }
+        try output.append(allocator, byte);
+        emitted = true;
+
+        if (in_quotes and byte == '\\' and !escaped) {
+            escaped = true;
+            continue;
+        }
+        if (byte == '"' and !escaped) in_quotes = !in_quotes;
+        escaped = false;
+    }
+}
+
+fn appendCanonicalizedHeaders(
+    output: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    request: *const core.http.Request,
+) !void {
+    var headers: std.ArrayList(CanonicalHeader) = .empty;
+    defer headers.deinit(allocator);
+
+    var iterator = request.headers.iterator();
+    while (iterator.next()) |entry| {
+        if (!std.ascii.startsWithIgnoreCase(entry.key_ptr.*, "x-ms-")) continue;
+        if (entry.value_ptr.*.len == 0 and
+            !versionAtLeast(request.getHeader("x-ms-version"), "2016-05-31"))
+        {
+            continue;
+        }
+        try headers.append(allocator, .{
+            .name = entry.key_ptr.*,
+            .value = entry.value_ptr.*,
+        });
+    }
+
+    std.mem.sort(CanonicalHeader, headers.items, {}, canonicalHeaderLessThan);
+    for (headers.items) |header| {
+        for (header.name) |byte| {
+            try output.append(allocator, std.ascii.toLower(byte));
+        }
+        try output.append(allocator, ':');
+        try appendCanonicalHeaderValue(output, allocator, header.value);
+        try output.append(allocator, '\n');
+    }
+}
+
+const UrlParts = struct {
+    path: []const u8,
+    query: []const u8,
+};
+
+fn splitUrl(url: []const u8) UrlParts {
+    const without_fragment = if (std.mem.findScalar(u8, url, '#')) |index|
+        url[0..index]
+    else
+        url;
+    const query_start = std.mem.findScalar(u8, without_fragment, '?');
+    const before_query = if (query_start) |index| without_fragment[0..index] else without_fragment;
+    const query = if (query_start) |index| without_fragment[index + 1 ..] else "";
+
+    if (std.mem.find(u8, before_query, "://")) |scheme_end| {
+        const authority = before_query[scheme_end + 3 ..];
+        if (std.mem.findScalar(u8, authority, '/')) |slash| {
+            return .{ .path = authority[slash..], .query = query };
+        }
+        return .{ .path = "/", .query = query };
+    }
+
+    if (before_query.len == 0) return .{ .path = "/", .query = query };
+    return .{ .path = before_query, .query = query };
+}
+
+fn hexValue(byte: u8) ?u8 {
+    return switch (byte) {
+        '0'...'9' => byte - '0',
+        'a'...'f' => byte - 'a' + 10,
+        'A'...'F' => byte - 'A' + 10,
+        else => null,
+    };
+}
+
+fn decodeQueryComponent(
+    allocator: std.mem.Allocator,
+    encoded: []const u8,
+) ![]u8 {
+    const decoded = try allocator.alloc(u8, encoded.len);
+    errdefer allocator.free(decoded);
+
+    var source_index: usize = 0;
+    var destination_index: usize = 0;
+    while (source_index < encoded.len) {
+        if (encoded[source_index] == '%') {
+            if (source_index + 2 >= encoded.len) return error.InvalidPercentEncoding;
+            const high = hexValue(encoded[source_index + 1]) orelse
+                return error.InvalidPercentEncoding;
+            const low = hexValue(encoded[source_index + 2]) orelse
+                return error.InvalidPercentEncoding;
+            decoded[destination_index] = (high << 4) | low;
+            source_index += 3;
+        } else {
+            decoded[destination_index] = if (encoded[source_index] == '+')
+                ' '
+            else
+                encoded[source_index];
+            source_index += 1;
+        }
+        destination_index += 1;
+    }
+    return allocator.realloc(decoded, destination_index);
+}
+
+const QueryPair = struct {
+    name: []u8,
+    value: []u8,
+};
+
+fn queryPairLessThan(_: void, lhs: QueryPair, rhs: QueryPair) bool {
+    const name_order = std.mem.order(u8, lhs.name, rhs.name);
+    if (name_order != .eq) return name_order == .lt;
+    return std.mem.order(u8, lhs.value, rhs.value) == .lt;
+}
+
+fn appendCanonicalizedResource(
+    output: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    account_name: []const u8,
+    url: []const u8,
+) !void {
+    const parts = splitUrl(url);
+    try output.append(allocator, '/');
+    try output.appendSlice(allocator, account_name);
+    if (parts.path.len == 0 or parts.path[0] != '/') {
+        try output.append(allocator, '/');
+    }
+    try output.appendSlice(allocator, parts.path);
+
+    var pairs: std.ArrayList(QueryPair) = .empty;
+    defer {
+        for (pairs.items) |pair| {
+            allocator.free(pair.name);
+            allocator.free(pair.value);
+        }
+        pairs.deinit(allocator);
+    }
+
+    var query_iterator = std.mem.splitScalar(u8, parts.query, '&');
+    while (query_iterator.next()) |parameter| {
+        if (parameter.len == 0) continue;
+        {
+            const equals = std.mem.findScalar(u8, parameter, '=');
+            const encoded_name = if (equals) |index| parameter[0..index] else parameter;
+            const encoded_value = if (equals) |index| parameter[index + 1 ..] else "";
+
+            const name = try decodeQueryComponent(allocator, encoded_name);
+            errdefer allocator.free(name);
+            for (name) |*byte| byte.* = std.ascii.toLower(byte.*);
+            const value = try decodeQueryComponent(allocator, encoded_value);
+            errdefer allocator.free(value);
+            try pairs.append(allocator, .{ .name = name, .value = value });
+        }
+    }
+
+    std.mem.sort(QueryPair, pairs.items, {}, queryPairLessThan);
+    var index: usize = 0;
+    while (index < pairs.items.len) {
+        const name = pairs.items[index].name;
+        try output.append(allocator, '\n');
+        try output.appendSlice(allocator, name);
+        try output.append(allocator, ':');
+
+        var value_index = index;
+        while (value_index < pairs.items.len and
+            std.mem.eql(u8, pairs.items[value_index].name, name))
+        {
+            if (value_index != index) try output.append(allocator, ',');
+            try output.appendSlice(allocator, pairs.items[value_index].value);
+            value_index += 1;
+        }
+        index = value_index;
+    }
+}
+
+fn buildSharedKeyStringToSign(
+    allocator: std.mem.Allocator,
+    account_name: []const u8,
+    request: *const core.http.Request,
+) ![]u8 {
+    var output: std.ArrayList(u8) = .empty;
+    errdefer output.deinit(allocator);
+
+    const date = if (request.getHeader("x-ms-date") != null)
+        ""
+    else
+        request.getHeader("Date") orelse "";
+    const standard_headers = [_][]const u8{
+        request.getHeader("Content-Encoding") orelse "",
+        request.getHeader("Content-Language") orelse "",
+        contentLengthToSign(request),
+        request.getHeader("Content-MD5") orelse "",
+        request.getHeader("Content-Type") orelse "",
+        date,
+        request.getHeader("If-Modified-Since") orelse "",
+        request.getHeader("If-Match") orelse "",
+        request.getHeader("If-None-Match") orelse "",
+        request.getHeader("If-Unmodified-Since") orelse "",
+        request.getHeader("Range") orelse "",
+    };
+
+    try output.appendSlice(allocator, @tagName(request.method));
+    try output.append(allocator, '\n');
+    for (standard_headers) |value| {
+        try output.appendSlice(allocator, value);
+        try output.append(allocator, '\n');
+    }
+    try appendCanonicalizedHeaders(&output, allocator, request);
+    try appendCanonicalizedResource(&output, allocator, account_name, request.url);
+    return output.toOwnedSlice(allocator);
+}
+
 /// Shared Key credential for Azure Storage.
 ///
 /// This is a single-owner value because it owns decoded key material. Do not
@@ -90,25 +372,10 @@ pub const StorageSharedKeyCredential = struct {
         crypto_provider: crypto.CryptoProvider,
     ) !void {
         const allocator = request.allocator;
-        const method_str = @tagName(request.method);
-        const content_length = request.headers.get("Content-Length") orelse "";
-        const content_type = request.headers.get("Content-Type") orelse "";
-        const date = request.headers.get("x-ms-date") orelse request.headers.get("Date") orelse "";
-        const ms_version = request.headers.get("x-ms-version") orelse "";
-        const resource = extractResource(request.url);
-
-        const string_to_sign = try std.fmt.allocPrint(
+        const string_to_sign = try buildSharedKeyStringToSign(
             allocator,
-            "{s}\n\n\n{s}\n\n{s}\n\n\n\n\n\n\nx-ms-date:{s}\nx-ms-version:{s}\n/{s}{s}",
-            .{
-                method_str,
-                content_length,
-                content_type,
-                date,
-                ms_version,
-                self.account_name,
-                resource,
-            },
+            self.account_name,
+            request,
         );
         defer allocator.free(string_to_sign);
 
@@ -130,38 +397,126 @@ pub const StorageSharedKeyCredential = struct {
     }
 };
 
-/// Extract the path portion from a URL for the canonicalized resource.
-fn extractResource(url: []const u8) []const u8 {
-    if (std.mem.find(u8, url, "://")) |schema_end| {
-        const after_schema = url[schema_end + 3 ..];
-        if (std.mem.findScalar(u8, after_schema, '/')) |slash| {
-            return after_schema[slash..];
+fn appendPercentEncodedQueryValue(
+    output: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    value: []const u8,
+) !void {
+    const hex = "0123456789ABCDEF";
+    for (value) |byte| {
+        if (std.ascii.isAlphanumeric(byte) or
+            byte == '-' or byte == '.' or byte == '_' or byte == '~')
+        {
+            try output.append(allocator, byte);
+        } else {
+            try output.append(allocator, '%');
+            try output.append(allocator, hex[byte >> 4]);
+            try output.append(allocator, hex[byte & 0x0f]);
         }
     }
-    return "/";
 }
 
-/// Generate a service-level or resource-level SAS token.
+fn appendQueryParameter(
+    output: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    value: []const u8,
+) !void {
+    if (output.items.len != 0) try output.append(allocator, '&');
+    try output.appendSlice(allocator, name);
+    try output.append(allocator, '=');
+    try appendPercentEncodedQueryValue(output, allocator, value);
+}
+
+/// Generate an account SAS token.
 pub const SasBuilder = struct {
+    account_name: []const u8,
     permissions: []const u8 = "r",
     resource_types: []const u8 = "sco",
     services: []const u8 = "b",
+    start: ?[]const u8 = null,
     expiry: []const u8,
-    protocol: []const u8 = "https",
+    ip: ?[]const u8 = null,
+    protocol: ?[]const u8 = "https",
     version: []const u8 = "2024-11-04",
+    encryption_scope: ?[]const u8 = null,
+
+    fn validate(self: SasBuilder) !void {
+        if (self.account_name.len == 0) return error.InvalidAccountName;
+        if (self.permissions.len == 0) return error.SasPermissionsRequired;
+        if (self.services.len == 0) return error.SasServicesRequired;
+        if (self.resource_types.len == 0) return error.SasResourceTypesRequired;
+        if (self.expiry.len == 0) return error.SasExpiryRequired;
+        if (self.version.len == 0) return error.SasVersionRequired;
+        if (!versionAtLeast(self.version, "2015-04-05"))
+            return error.AccountSasVersionUnsupported;
+        if (self.encryption_scope != null and
+            !versionAtLeast(self.version, "2020-12-06"))
+        {
+            return error.EncryptionScopeUnsupported;
+        }
+    }
 
     /// Render the SAS query string (without leading '?'), unsigned.
     pub fn toQueryString(self: SasBuilder, allocator: std.mem.Allocator) ![]u8 {
+        try self.validate();
+
+        var output: std.ArrayList(u8) = .empty;
+        errdefer output.deinit(allocator);
+        try appendQueryParameter(&output, allocator, "sv", self.version);
+        try appendQueryParameter(&output, allocator, "ss", self.services);
+        try appendQueryParameter(&output, allocator, "srt", self.resource_types);
+        try appendQueryParameter(&output, allocator, "sp", self.permissions);
+        if (self.start) |start| {
+            try appendQueryParameter(&output, allocator, "st", start);
+        }
+        try appendQueryParameter(&output, allocator, "se", self.expiry);
+        if (self.ip) |ip| {
+            try appendQueryParameter(&output, allocator, "sip", ip);
+        }
+        if (self.protocol) |protocol| {
+            try appendQueryParameter(&output, allocator, "spr", protocol);
+        }
+        if (self.encryption_scope) |encryption_scope| {
+            try appendQueryParameter(&output, allocator, "ses", encryption_scope);
+        }
+        return output.toOwnedSlice(allocator);
+    }
+
+    fn stringToSign(self: SasBuilder, allocator: std.mem.Allocator) ![]u8 {
+        try self.validate();
+
+        if (versionAtLeast(self.version, "2020-12-06")) {
+            return std.fmt.allocPrint(
+                allocator,
+                "{s}\n{s}\n{s}\n{s}\n{s}\n{s}\n{s}\n{s}\n{s}\n{s}\n",
+                .{
+                    self.account_name,
+                    self.permissions,
+                    self.services,
+                    self.resource_types,
+                    self.start orelse "",
+                    self.expiry,
+                    self.ip orelse "",
+                    self.protocol orelse "",
+                    self.version,
+                    self.encryption_scope orelse "",
+                },
+            );
+        }
         return std.fmt.allocPrint(
             allocator,
-            "sv={s}&ss={s}&srt={s}&sp={s}&se={s}&spr={s}",
+            "{s}\n{s}\n{s}\n{s}\n{s}\n{s}\n{s}\n{s}\n{s}\n",
             .{
-                self.version,
+                self.account_name,
+                self.permissions,
                 self.services,
                 self.resource_types,
-                self.permissions,
+                self.start orelse "",
                 self.expiry,
-                self.protocol,
+                self.ip orelse "",
+                self.protocol orelse "",
+                self.version,
             },
         );
     }
@@ -173,21 +528,11 @@ pub const SasBuilder = struct {
         crypto_provider: crypto.CryptoProvider,
         encoded_account_key: []const u8,
     ) ![]u8 {
+        try self.validate();
         const decoded_account_key = try decodeAccountKey(allocator, encoded_account_key);
         defer wipeAndFree(allocator, decoded_account_key);
 
-        const string_to_sign = try std.fmt.allocPrint(
-            allocator,
-            "{s}\n{s}\n{s}\n{s}\n\n{s}\n\n{s}\n",
-            .{
-                self.permissions,
-                self.services,
-                self.resource_types,
-                self.expiry,
-                self.protocol,
-                self.version,
-            },
-        );
+        const string_to_sign = try self.stringToSign(allocator);
         defer allocator.free(string_to_sign);
 
         const signature = try base64.hmacSha256Base64(
@@ -200,7 +545,12 @@ pub const SasBuilder = struct {
 
         const query = try self.toQueryString(allocator);
         defer allocator.free(query);
-        return std.fmt.allocPrint(allocator, "{s}&sig={s}", .{ query, signature });
+
+        var signed_query: std.ArrayList(u8) = .empty;
+        errdefer signed_query.deinit(allocator);
+        try signed_query.appendSlice(allocator, query);
+        try appendQueryParameter(&signed_query, allocator, "sig", signature);
+        return signed_query.toOwnedSlice(allocator);
     }
 };
 
@@ -248,7 +598,7 @@ const TestCryptoProvider = struct {
     data_len: usize = 0,
     key: [128]u8 = undefined,
     key_len: usize = 0,
-    message: [512]u8 = undefined,
+    message: [2048]u8 = undefined,
     message_len: usize = 0,
 
     const vtable: crypto.CryptoProvider.VTable = .{
@@ -301,6 +651,7 @@ const TestCryptoProvider = struct {
         @memcpy(self.message[0..message.len], message);
         self.message_len = message.len;
         @memset(out, 0xa5);
+        out[0..3].* = .{ 0xfb, 0xff, 0xfe };
         try self.record(.hmac_sha256);
     }
 
@@ -380,58 +731,172 @@ const TestWipeAllocator = struct {
     }
 };
 
-const zero_account_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+const azurite_account_key =
+    "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
 
-test "StorageSharedKeyCredential standard provider vector" {
+test "Shared Key matches Azure SDK arbitrary x-ms header vector" {
+    // Azure.Storage.Common's StorageSharedKeyPipelinePolicyTests.BuildSignature.
     const allocator = std.testing.allocator;
     var provider_impl = crypto.StdCryptoProvider.init(std.testing.io);
-    const provider = provider_impl.asProvider();
     var credential = try StorageSharedKeyCredential.init(
         allocator,
-        "myaccount",
-        zero_account_key,
+        "accountName",
+        "YWNjb3VudEtleQ==",
     );
     defer credential.deinit();
-
     var request = core.http.Request.init(
         allocator,
         .GET,
-        "https://myaccount.blob.core.windows.net/container/blob",
+        "http://dummyaccount.blob.core.windows.net",
     );
     defer request.deinit();
-    try request.setHeader("x-ms-date", "Sun, 01 Apr 2026 12:00:00 GMT");
-    try request.setHeader("x-ms-version", "2024-11-04");
+    try request.setHeader("x-ms-version", "2021-10-04");
+    try request.setHeader("Accept-Ranges", "bytes");
+    try request.setHeader("Accept", "application/xml");
+    try request.setHeader("ETag", "\"0x8DAB6A893E4304F\"");
+    try request.setHeader("Server", "Windows-Azure-Blob/1.0,Microsoft-HTTPAPI/2.0");
+    try request.setHeader("x-ms-request-id", "a12bc899-001e-003a-3a91-e8439e000000");
+    try request.setHeader("x-ms-client-request-id", "8f978611-738a-4cd4-a318-33b2f31068d9");
+    try request.setHeader("x-ms-creation-time", "Tue, 25 Oct 2022 16:47:17 GMT");
+    try request.setHeader("x-ms-Return-Client-request-id", "true");
+    try request.setHeader("x-ms-blob-content-md5", "2OD7XGeI0jSOrsBn8ZwHTw==");
+    try request.setHeader("x-ms-lease-status", "unlocked");
+    try request.setHeader("x-ms-meta-foo", "bar");
+    try request.setHeader("x-ms-meta-meta", "data");
+    try request.setHeader("x-ms-meta-Capital", "letter");
+    try request.setHeader("x-ms-meta-UPPER", "case");
+    try request.setHeader("x-ms-enable-snapshot-virtual-directory-access", "true");
+    try request.setHeader("x-ms-enabled-protocols", "NFS");
+    try request.setHeader("Date", "Thu, 24 Feb 2022 02:39:43 GMT");
+    try request.setHeader("x-ms-date", "Wed, 23 Feb 2022 02:39:43 GMT");
 
-    try credential.signRequest(&request, provider);
+    const expected_string =
+        "GET\n" ++
+        "\n" ** 11 ++
+        "x-ms-blob-content-md5:2OD7XGeI0jSOrsBn8ZwHTw==\n" ++
+        "x-ms-client-request-id:8f978611-738a-4cd4-a318-33b2f31068d9\n" ++
+        "x-ms-creation-time:Tue, 25 Oct 2022 16:47:17 GMT\n" ++
+        "x-ms-date:Wed, 23 Feb 2022 02:39:43 GMT\n" ++
+        "x-ms-enabled-protocols:NFS\n" ++
+        "x-ms-enable-snapshot-virtual-directory-access:true\n" ++
+        "x-ms-lease-status:unlocked\n" ++
+        "x-ms-meta-capital:letter\n" ++
+        "x-ms-meta-foo:bar\n" ++
+        "x-ms-meta-meta:data\n" ++
+        "x-ms-meta-upper:case\n" ++
+        "x-ms-request-id:a12bc899-001e-003a-3a91-e8439e000000\n" ++
+        "x-ms-return-client-request-id:true\n" ++
+        "x-ms-version:2021-10-04\n" ++
+        "/accountName/";
+
+    try credential.signRequest(&request, provider_impl.asProvider());
     try std.testing.expectEqualStrings(
-        "SharedKey myaccount:D11Jhk5PBTOi/UBho44/gLCuSN1yiDiRY+LGm5Nt6t0=",
-        request.headers.get("Authorization").?,
+        "SharedKey accountName:Wjhed5+kLPnT9/EhIgKd7e0y/AEau6G4KKxrUqZxA8s=",
+        request.getHeader("Authorization").?,
+    );
+    var spy = TestCryptoProvider{};
+    try credential.signRequest(&request, spy.provider());
+    try std.testing.expectEqual(.hmac_sha256, spy.operation);
+    try std.testing.expectEqualStrings(expected_string, spy.message[0..spy.message_len]);
+    try std.testing.expectEqualStrings(
+        "SharedKey accountName:+//+paWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaU=",
+        request.getHeader("Authorization").?,
     );
 }
 
-test "StorageSharedKeyCredential dispatches to selected provider" {
+test "Shared Key canonicalizes Date Content-MD5 whitespace and repeated encoded queries" {
+    // Microsoft Learn's Shared Key sequence and query rules, signed with the
+    // documented Azurite development account credentials.
     const allocator = std.testing.allocator;
-    var spy = TestCryptoProvider{};
+    var provider_impl = crypto.StdCryptoProvider.init(std.testing.io);
     var credential = try StorageSharedKeyCredential.init(
         allocator,
-        "myaccount",
-        "AQID",
+        "devstoreaccount1",
+        azurite_account_key,
     );
     defer credential.deinit();
     var request = core.http.Request.init(
         allocator,
-        .GET,
-        "https://myaccount.blob.core.windows.net/container/blob",
+        .PUT,
+        "https://devstoreaccount1.blob.core.windows.net/container/blob%20name?include=uncommittedblobs&Comp=metadata&include=snapshots&include=metadata%2Fencoded&z=a%2Bb&Z=a+b&empty=",
     );
     defer request.deinit();
+    try request.setHeader("Content-Encoding", "gzip");
+    try request.setHeader("Content-Language", "en-US");
+    try request.setHeader("Content-Length", "0");
+    try request.setHeader("Content-MD5", "Q2hlY2sgSW50ZWdyaXR5IQ==");
+    try request.setHeader("Content-Type", "application/octet-stream");
+    try request.setHeader("Date", "Fri, 26 Jun 2015 23:39:12 GMT");
+    try request.setHeader("If-Modified-Since", "Thu, 25 Jun 2015 23:39:12 GMT");
+    try request.setHeader("If-Match", "\"etag\"");
+    try request.setHeader("If-None-Match", "\"other\"");
+    try request.setHeader("If-Unmodified-Since", "Sat, 27 Jun 2015 23:39:12 GMT");
+    try request.setHeader("Range", "bytes=0-511");
+    try request.setHeader("X-Ms-Meta-Zeta", "  alpha\t beta  ");
+    try request.setHeader("x-ms-meta-quoted", "\"a  b\"");
+    try request.setHeader("x-ms-version", "2021-10-04");
 
-    try credential.signRequest(&request, spy.provider());
-    try std.testing.expectEqual(.hmac_sha256, spy.operation);
-    try std.testing.expectEqualSlices(u8, &.{ 1, 2, 3 }, spy.key[0..spy.key_len]);
+    const expected_string =
+        "PUT\n" ++
+        "gzip\n" ++
+        "en-US\n" ++
+        "\n" ++
+        "Q2hlY2sgSW50ZWdyaXR5IQ==\n" ++
+        "application/octet-stream\n" ++
+        "Fri, 26 Jun 2015 23:39:12 GMT\n" ++
+        "Thu, 25 Jun 2015 23:39:12 GMT\n" ++
+        "\"etag\"\n" ++
+        "\"other\"\n" ++
+        "Sat, 27 Jun 2015 23:39:12 GMT\n" ++
+        "bytes=0-511\n" ++
+        "x-ms-meta-quoted:\"a  b\"\n" ++
+        "x-ms-meta-zeta:alpha beta\n" ++
+        "x-ms-version:2021-10-04\n" ++
+        "/devstoreaccount1/container/blob%20name\n" ++
+        "comp:metadata\n" ++
+        "empty:\n" ++
+        "include:metadata/encoded,snapshots,uncommittedblobs\n" ++
+        "z:a b,a+b";
+
+    try credential.signRequest(&request, provider_impl.asProvider());
     try std.testing.expectEqualStrings(
-        "SharedKey myaccount:paWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaU=",
-        request.headers.get("Authorization").?,
+        "SharedKey devstoreaccount1:7iPGWBPwxm5aCgpfzy/CB1QsJGpKx/GCg8WGNQpSU38=",
+        request.getHeader("Authorization").?,
     );
+    var spy = TestCryptoProvider{};
+    try credential.signRequest(&request, spy.provider());
+    try std.testing.expectEqualStrings(expected_string, spy.message[0..spy.message_len]);
+}
+
+test "Shared Key applies versioned zero length and Blob Queue File resource rules" {
+    const allocator = std.testing.allocator;
+    const urls = [_][]const u8{
+        "https://account.blob.core.windows.net/container",
+        "https://account.queue.core.windows.net/queue",
+        "https://account.file.core.windows.net/share/file",
+    };
+    const resources = [_][]const u8{
+        "/account/container",
+        "/account/queue",
+        "/account/share/file",
+    };
+
+    for (urls, resources) |url, resource| {
+        var request = core.http.Request.init(allocator, .PUT, url);
+        defer request.deinit();
+        try request.setHeader("Content-Length", "0");
+        try request.setHeader("x-ms-version", "2014-02-14");
+        const old_string = try buildSharedKeyStringToSign(allocator, "account", &request);
+        defer allocator.free(old_string);
+        try std.testing.expect(std.mem.startsWith(u8, old_string, "PUT\n\n\n0\n"));
+        try std.testing.expect(std.mem.endsWith(u8, old_string, resource));
+
+        try request.setHeader("x-ms-version", "2014-08-16");
+        const current_string = try buildSharedKeyStringToSign(allocator, "account", &request);
+        defer allocator.free(current_string);
+        try std.testing.expect(std.mem.startsWith(u8, current_string, "PUT\n\n\n\n"));
+        try std.testing.expect(std.mem.endsWith(u8, current_string, resource));
+    }
 }
 
 test "StorageSharedKeyCredential provider failure leaves authorization unchanged" {
@@ -440,7 +905,7 @@ test "StorageSharedKeyCredential provider failure leaves authorization unchanged
     var credential = try StorageSharedKeyCredential.init(
         allocator,
         "myaccount",
-        zero_account_key,
+        azurite_account_key,
     );
     defer credential.deinit();
     var request = core.http.Request.init(
@@ -458,6 +923,34 @@ test "StorageSharedKeyCredential provider failure leaves authorization unchanged
     try std.testing.expectEqualStrings(
         "unchanged",
         request.headers.get("Authorization").?,
+    );
+}
+
+test "Shared Key canonicalization failure leaves authorization unchanged" {
+    const allocator = std.testing.allocator;
+    var spy = TestCryptoProvider{};
+    var credential = try StorageSharedKeyCredential.init(
+        allocator,
+        "devstoreaccount1",
+        azurite_account_key,
+    );
+    defer credential.deinit();
+    var request = core.http.Request.init(
+        allocator,
+        .GET,
+        "https://devstoreaccount1.queue.core.windows.net/queue?comp=%ZZ",
+    );
+    defer request.deinit();
+    try request.setHeader("Authorization", "unchanged");
+
+    try std.testing.expectError(
+        error.InvalidPercentEncoding,
+        credential.signRequest(&request, spy.provider()),
+    );
+    try std.testing.expectEqual(@as(usize, 0), spy.calls);
+    try std.testing.expectEqualStrings(
+        "unchanged",
+        request.getHeader("Authorization").?,
     );
 }
 
@@ -515,28 +1008,93 @@ test "decoded credential keys are wiped on failure replacement and deinit" {
     try std.testing.expect(allocator.freed_was_zero[3]);
 }
 
-test "SasBuilder standard provider vector" {
+test "SasBuilder matches Azure SDK account SAS vector" {
+    // Azure/azure-storage-node test/common/sharedkey-tests.js.
     const allocator = std.testing.allocator;
     var provider_impl = crypto.StdCryptoProvider.init(std.testing.io);
     const builder = SasBuilder{
-        .permissions = "rl",
-        .expiry = "2026-12-31T23:59:59Z",
+        .account_name = "devstoreaccount1",
+        .permissions = "r",
+        .services = "b",
+        .resource_types = "s",
+        .start = "2016-02-16T00:00:00Z",
+        .expiry = "2016-02-16T00:30:00Z",
+        .ip = "168.1.5.60-168.1.5.70",
+        .protocol = "https",
+        .version = "2018-03-28",
     };
     const query = try builder.sign(
         allocator,
         provider_impl.asProvider(),
-        zero_account_key,
+        azurite_account_key,
     );
     defer allocator.free(query);
     try std.testing.expectEqualStrings(
-        "sv=2024-11-04&ss=b&srt=sco&sp=rl&se=2026-12-31T23:59:59Z&spr=https&sig=75UtD4FYkG6TWw426Imzj8aCtpniyx8++LQO8UYUevU=",
+        "sv=2018-03-28&ss=b&srt=s&sp=r&st=2016-02-16T00%3A00%3A00Z&se=2016-02-16T00%3A30%3A00Z&sip=168.1.5.60-168.1.5.70&spr=https&sig=AHRdNnjupqU4dUXLlbOX6ACUA7JQNFBob%2FzbFHKKzwI%3D",
         query,
+    );
+
+    var spy = TestCryptoProvider{};
+    const spy_query = try builder.sign(allocator, spy.provider(), azurite_account_key);
+    defer allocator.free(spy_query);
+    try std.testing.expectEqualStrings(
+        "devstoreaccount1\nr\nb\ns\n2016-02-16T00:00:00Z\n2016-02-16T00:30:00Z\n168.1.5.60-168.1.5.70\nhttps\n2018-03-28\n",
+        spy.message[0..spy.message_len],
+    );
+    try std.testing.expect(std.mem.endsWith(
+        u8,
+        spy_query,
+        "sig=%2B%2F%2F%2BpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaU%3D",
+    ));
+}
+
+test "SasBuilder signs encryption scope only for supported versions" {
+    // Microsoft Learn's account SAS 2020-12-06 string-to-sign extension.
+    const allocator = std.testing.allocator;
+    var provider_impl = crypto.StdCryptoProvider.init(std.testing.io);
+    const builder = SasBuilder{
+        .account_name = "devstoreaccount1",
+        .permissions = "rwdlacup",
+        .services = "bfqt",
+        .resource_types = "sco",
+        .start = "2021-01-01T00:00:00Z",
+        .expiry = "2021-01-02T00:00:00Z",
+        .ip = "168.1.5.60-168.1.5.70",
+        .protocol = "https,http",
+        .version = "2020-12-06",
+        .encryption_scope = "scope-2",
+    };
+    const query = try builder.sign(
+        allocator,
+        provider_impl.asProvider(),
+        azurite_account_key,
+    );
+    defer allocator.free(query);
+    try std.testing.expectEqualStrings(
+        "sv=2020-12-06&ss=bfqt&srt=sco&sp=rwdlacup&st=2021-01-01T00%3A00%3A00Z&se=2021-01-02T00%3A00%3A00Z&sip=168.1.5.60-168.1.5.70&spr=https%2Chttp&ses=scope-2&sig=%2B7sBhcx8KqEYxxP4N54W%2FvES8O8I4nFZKRztwMalUlI%3D",
+        query,
+    );
+
+    var unsupported = builder;
+    unsupported.version = "2020-10-02";
+    try std.testing.expectError(
+        error.EncryptionScopeUnsupported,
+        unsupported.sign(allocator, provider_impl.asProvider(), azurite_account_key),
+    );
+    unsupported.encryption_scope = null;
+    unsupported.version = "2014-02-14";
+    try std.testing.expectError(
+        error.AccountSasVersionUnsupported,
+        unsupported.sign(allocator, provider_impl.asProvider(), azurite_account_key),
     );
 }
 
 test "SasBuilder dispatches provider and rejects invalid keys without output" {
     const allocator = std.testing.allocator;
-    const builder = SasBuilder{ .expiry = "2026-12-31T23:59:59Z" };
+    const builder = SasBuilder{
+        .account_name = "devstoreaccount1",
+        .expiry = "2026-12-31T23:59:59Z",
+    };
     var spy = TestCryptoProvider{};
     const query = try builder.sign(allocator, spy.provider(), "AQID");
     defer allocator.free(query);
@@ -565,13 +1123,18 @@ test "SasBuilder dispatches provider and rejects invalid keys without output" {
 test "SasBuilder toQueryString unsigned" {
     const allocator = std.testing.allocator;
     const builder = SasBuilder{
+        .account_name = "devstoreaccount1",
         .permissions = "rl",
+        .start = "2026-01-01T00:00:00Z",
         .expiry = "2026-12-31T23:59:59Z",
+        .ip = "127.0.0.1",
+        .protocol = "https,http",
+        .encryption_scope = "scope/name",
     };
     const query = try builder.toQueryString(allocator);
     defer allocator.free(query);
     try std.testing.expectEqualStrings(
-        "sv=2024-11-04&ss=b&srt=sco&sp=rl&se=2026-12-31T23:59:59Z&spr=https",
+        "sv=2024-11-04&ss=b&srt=sco&sp=rl&st=2026-01-01T00%3A00%3A00Z&se=2026-12-31T23%3A59%3A59Z&sip=127.0.0.1&spr=https%2Chttp&ses=scope%2Fname",
         query,
     );
 }
@@ -639,7 +1202,7 @@ fn sharedKeyAllocationCase(allocator: std.mem.Allocator) !void {
     var credential = try StorageSharedKeyCredential.init(
         allocator,
         "myaccount",
-        zero_account_key,
+        azurite_account_key,
     );
     defer credential.deinit();
     var request = core.http.Request.init(
@@ -653,7 +1216,7 @@ fn sharedKeyAllocationCase(allocator: std.mem.Allocator) !void {
     credential.signRequest(&request, provider_impl.asProvider()) catch |err| {
         try std.testing.expectEqualStrings(
             "unchanged",
-            request.headers.get("Authorization").?,
+            request.getHeader("Authorization").?,
         );
         return err;
     };
@@ -661,11 +1224,14 @@ fn sharedKeyAllocationCase(allocator: std.mem.Allocator) !void {
 
 fn sasAllocationCase(allocator: std.mem.Allocator) !void {
     var provider_impl = crypto.StdCryptoProvider.init(std.testing.io);
-    const builder = SasBuilder{ .expiry = "2026-12-31T23:59:59Z" };
+    const builder = SasBuilder{
+        .account_name = "devstoreaccount1",
+        .expiry = "2026-12-31T23:59:59Z",
+    };
     const query = try builder.sign(
         allocator,
         provider_impl.asProvider(),
-        zero_account_key,
+        azurite_account_key,
     );
     defer allocator.free(query);
 }
@@ -703,11 +1269,4 @@ test "crypto operations clean up on every allocation failure" {
         contentSha256AllocationCase,
         .{},
     );
-}
-
-test "extractResource" {
-    const resource = extractResource(
-        "https://myaccount.blob.core.windows.net/container/blob?x=1",
-    );
-    try std.testing.expect(std.mem.startsWith(u8, resource, "/container/blob"));
 }
