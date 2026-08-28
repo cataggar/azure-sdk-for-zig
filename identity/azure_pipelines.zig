@@ -76,6 +76,7 @@ pub const AzurePipelinesCredential = struct {
 
         var req = core.http.Request.init(allocator, .POST, oidc_url);
         defer req.deinit();
+        req.redirect_policy = .not_allowed;
         try req.setHeader("Content-Type", "application/json");
         try req.setHeader("Authorization", auth_header);
         req.body = "{}";

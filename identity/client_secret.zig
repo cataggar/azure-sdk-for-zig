@@ -85,6 +85,7 @@ pub const ClientSecretCredential = struct {
 
         var req = core.http.Request.init(allocator, .POST, url);
         defer req.deinit();
+        req.redirect_policy = .not_allowed;
         try req.setHeader("Content-Type", "application/x-www-form-urlencoded");
         req.body = body;
 
@@ -218,6 +219,7 @@ test "ClientSecretCredential init" {
     try std.testing.expect(token.expires_on >= before + 3600);
     try std.testing.expect(token.expires_on <= after + 3600);
     try std.testing.expectEqual(core.http.Method.POST, mock.last_method.?);
+    try std.testing.expectEqual(core.http.RedirectPolicy.not_allowed, mock.last_redirect_policy.?);
 }
 
 test "ClientSecretCredential auth failure" {
@@ -262,6 +264,45 @@ test "ClientSecretCredential form-encodes dynamic fields" {
         "grant_type=client_credentials&client_id=client%26id&client_secret=secret%2B%3D%26%25&scope=scope%20one",
         mock.last_body.?,
     );
+}
+
+test "ClientSecretCredential does not replay secret body across 307 redirect" {
+    const allocator = std.testing.allocator;
+    var sequence = core.http.SequenceMockTransport.init(allocator, &.{
+        .{
+            .status = 307,
+            .body = "",
+            .headers = &.{.{
+                .name = "Location",
+                .value = "https://attacker.example/token",
+            }},
+        },
+        .{
+            .status = 200,
+            .body = "{\"access_token\":\"stolen\",\"expires_in\":3600}",
+        },
+    });
+    var credential = ClientSecretCredential.init(
+        allocator,
+        "tenant",
+        "client",
+        "super-secret",
+    );
+
+    try std.testing.expectError(
+        error.AuthenticationFailed,
+        credential.asCredential().getToken(
+            .{ .scopes = &.{"https://vault.azure.net/.default"} },
+            Context.none,
+            testingRuntime(sequence.asTransport()),
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 1), sequence.call_count);
+    try std.testing.expect(std.mem.find(
+        u8,
+        sequence.capturedBody(0),
+        "client_secret=super-secret",
+    ) != null);
 }
 
 test "parseTokenResponse malformed JSON" {

@@ -98,6 +98,7 @@ pub const ClientAssertionCredential = struct {
 
         var req = core.http.Request.init(allocator, .POST, url);
         defer req.deinit();
+        req.redirect_policy = .not_allowed;
         try req.setHeader("Content-Type", "application/x-www-form-urlencoded");
         req.body = body;
 
@@ -167,4 +168,49 @@ test "ClientAssertionCredential getToken" {
     // Verify the request was sent to the correct token endpoint.
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "tenant-1/oauth2/v2.0/token") != null);
     try std.testing.expectEqual(core.http.Method.POST, mock.last_method.?);
+    try std.testing.expectEqual(core.http.RedirectPolicy.not_allowed, mock.last_redirect_policy.?);
+}
+
+test "ClientAssertionCredential does not replay assertion across 308 redirect" {
+    const allocator = std.testing.allocator;
+    var sequence = core.http.SequenceMockTransport.init(allocator, &.{
+        .{
+            .status = 308,
+            .body = "",
+            .headers = &.{.{
+                .name = "Location",
+                .value = "https://attacker.example/token",
+            }},
+        },
+        .{
+            .status = 200,
+            .body = "{\"access_token\":\"stolen\",\"expires_in\":3600}",
+        },
+    });
+    const getAssertion = struct {
+        fn call(alloc: std.mem.Allocator) anyerror![]u8 {
+            return alloc.dupe(u8, "signed-assertion");
+        }
+    }.call;
+    var credential = ClientAssertionCredential.init(
+        allocator,
+        "tenant",
+        "client",
+        &getAssertion,
+    );
+
+    try std.testing.expectError(
+        error.AuthenticationFailed,
+        credential.asCredential().getToken(
+            .{ .scopes = &.{"https://vault.azure.net/.default"} },
+            Context.none,
+            testingRuntime(sequence.asTransport()),
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 1), sequence.call_count);
+    try std.testing.expect(std.mem.find(
+        u8,
+        sequence.capturedBody(0),
+        "client_assertion=signed-assertion",
+    ) != null);
 }

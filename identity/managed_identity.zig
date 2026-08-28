@@ -74,6 +74,7 @@ pub const ManagedIdentityCredential = struct {
 
         var req = core.http.Request.init(allocator, .GET, url_str);
         defer req.deinit();
+        req.redirect_policy = .not_allowed;
         try req.setHeader("Metadata", "true");
 
         var resp = try runtime.transport.send(&req);
@@ -133,6 +134,7 @@ test "ManagedIdentityCredential" {
     try std.testing.expectEqualStrings("msi-token", token.token);
     try std.testing.expectEqual(@as(i64, 1743523200), token.expires_on);
     try std.testing.expectEqual(core.http.Method.GET, mock.last_method.?);
+    try std.testing.expectEqual(core.http.RedirectPolicy.not_allowed, mock.last_redirect_policy.?);
     // Verify URL contains resource without /.default.
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "resource=https://vault.azure.net") != null);
 }
