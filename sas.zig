@@ -195,16 +195,13 @@ pub const RequestOutcome = union(enum) {
 /// pipeline. No caller-supplied pipeline is accepted, so a bearer policy
 /// cannot be attached to this request class.
 pub fn send(
-    transport: *core.http.HttpTransport,
+    runtime: core.http.HttpRuntime,
     request: *core.http.Request,
     body: ?core.http.StreamingRequestBody,
 ) !RequestOutcome {
     request.retryable = false;
     request.redirect_policy = .not_allowed;
-    var pipeline = core.pipeline.HttpPipeline{
-        .policies = &.{},
-        .transport_impl = transport,
-    };
+    var pipeline = core.http.HttpPipeline.init(runtime, &.{});
     const operation = pipeline.open(request, .{ .body = body }) catch |err| {
         if (request.transport_started)
             return .{ .unknown = .{ .cause = err } };
