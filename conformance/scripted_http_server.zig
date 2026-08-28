@@ -15,6 +15,13 @@ pub const Response = struct {
     omit_body: bool = false,
 };
 
+const StopInterleaveHooks = struct {
+    stream_active: *std.Io.Event,
+    stop_locked: *std.Io.Event,
+    release_stop: *std.Io.Event,
+    cleanup_entered: *std.Io.Event,
+};
+
 /// A one-request loopback HTTP/1.1 server for deterministic transport tests.
 ///
 /// Request bodies are counted while only a bounded prefix is retained, so
@@ -31,6 +38,7 @@ pub const ScriptedHttpServer = struct {
     mutex: std.Io.Mutex = .init,
     active_stream: ?std.Io.net.Stream = null,
     done: std.Io.Event = .unset,
+    stop_interleave: ?StopInterleaveHooks = null,
     allow_peer_failure: bool = false,
     failure: ?anyerror = null,
     request_line: []u8 = &.{},
@@ -123,18 +131,26 @@ pub const ScriptedHttpServer = struct {
     fn requestStop(self: *ScriptedHttpServer) void {
         self.mutex.lockUncancelable(self.io);
         self.stopping = true;
-        const active_stream = self.active_stream;
+        if (self.active_stream) |stream| {
+            if (self.stop_interleave) |hooks| {
+                hooks.stop_locked.set(self.io);
+                hooks.release_stop.waitUncancelable(self.io);
+            }
+            // Keep the native handle protected until shutdown completes.
+            // Stream cleanup takes the same mutex before clearing and closing.
+            stream.shutdown(self.io, .both) catch {};
+            self.mutex.unlock(self.io);
+            return;
+        }
         self.mutex.unlock(self.io);
 
-        if (active_stream) |stream| {
-            stream.shutdown(self.io, .both) catch {};
-        } else {
-            const wake_stream = self.listener.socket.address.connect(
-                self.io,
-                .{ .mode = .stream },
-            ) catch return;
-            wake_stream.close(self.io);
-        }
+        // The listener remains open until after the server thread joins.
+        // Once `stopping` is set, serve cannot publish a newly accepted stream.
+        const wake_stream = self.listener.socket.address.connect(
+            self.io,
+            .{ .mode = .stream },
+        ) catch return;
+        wake_stream.close(self.io);
     }
 
     fn isStopping(self: *ScriptedHttpServer) bool {
@@ -195,7 +211,9 @@ pub const ScriptedHttpServer = struct {
         }
         self.active_stream = stream;
         self.mutex.unlock(self.io);
+        if (self.stop_interleave) |hooks| hooks.stream_active.set(self.io);
         defer {
+            if (self.stop_interleave) |hooks| hooks.cleanup_entered.set(self.io);
             self.mutex.lockUncancelable(self.io);
             self.active_stream = null;
             self.mutex.unlock(self.io);
@@ -385,4 +403,88 @@ test "scripted server teardown interrupts a stalled request body" {
     try std.testing.expect(
         elapsedNanoseconds(io, start) < 5 * std.time.ns_per_s,
     );
+}
+
+test "requestStop protects stream handle through concurrent cleanup" {
+    const Stopper = struct {
+        fn run(server: *ScriptedHttpServer) void {
+            server.requestStop();
+        }
+    };
+
+    const io = std.testing.io;
+    var stream_active: std.Io.Event = .unset;
+    var stop_locked: std.Io.Event = .unset;
+    var release_stop: std.Io.Event = .unset;
+    var cleanup_entered: std.Io.Event = .unset;
+    var server = try ScriptedHttpServer.init(
+        std.testing.allocator,
+        io,
+        .{},
+    );
+    var server_deinitialized = false;
+    defer if (!server_deinitialized) server.deinit();
+    server.stop_interleave = .{
+        .stream_active = &stream_active,
+        .stop_locked = &stop_locked,
+        .release_stop = &release_stop,
+        .cleanup_entered = &cleanup_entered,
+    };
+    try server.start();
+
+    const client = try server.listener.socket.address.connect(
+        io,
+        .{ .mode = .stream },
+    );
+    var client_closed = false;
+    defer if (!client_closed) client.close(io);
+    var write_buffer: [1024]u8 = undefined;
+    var writer = std.Io.net.Stream.Writer.init(client, io, &write_buffer);
+    try writer.interface.writeAll(
+        "POST /interleave HTTP/1.1\r\n" ++
+            "Host: 127.0.0.1\r\n" ++
+            "Content-Length: 1024\r\n\r\n" ++
+            "x",
+    );
+    try writer.interface.flush();
+    stream_active.waitUncancelable(io);
+
+    server.mutex.lockUncancelable(io);
+    const protected_handle = server.active_stream.?.socket.handle;
+    server.mutex.unlock(io);
+
+    const stopper = try std.Thread.spawn(.{}, Stopper.run, .{&server});
+    var stopper_joined = false;
+    defer if (!stopper_joined) {
+        release_stop.set(io);
+        stopper.join();
+    };
+    stop_locked.waitUncancelable(io);
+    client.close(io);
+    client_closed = true;
+    cleanup_entered.waitUncancelable(io);
+
+    // If cleanup could close between the stop snapshot and shutdown, the OS
+    // could immediately reuse that descriptor for one of these connections.
+    var churn_address: std.Io.net.IpAddress = .{ .ip4 = .loopback(0) };
+    var churn_listener = try churn_address.listen(io, .{ .reuse_address = true });
+    defer churn_listener.deinit(io);
+    for (0..32) |_| {
+        const churn_client = try churn_listener.socket.address.connect(
+            io,
+            .{ .mode = .stream },
+        );
+        const churn_server = try churn_listener.accept(io);
+        try std.testing.expect(churn_client.socket.handle != protected_handle);
+        try std.testing.expect(churn_server.socket.handle != protected_handle);
+        churn_client.close(io);
+        churn_server.close(io);
+    }
+
+    release_stop.set(io);
+    stopper.join();
+    stopper_joined = true;
+    try server.join();
+    server.deinit();
+    server_deinitialized = true;
 }
