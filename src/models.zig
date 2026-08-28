@@ -88,7 +88,7 @@ pub const KeyVaultErrorError = struct {
     /// The error message.
     message: ?[]const u8 = null,
     /// The key vault server error.
-    inner_error: ?KeyVaultErrorError = null,
+    inner_error: ?*const KeyVaultErrorError = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
