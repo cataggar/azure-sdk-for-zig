@@ -25,9 +25,9 @@ Every slice borrows from the connection string, which must outlive the result.
 SharedAccessSignature sr={encoded resource}&sig={encoded HMAC}&se={expiry}&skn={key name}
 ```
 
-The string-to-sign is `encoded_resource + "\n" + expiry`. The
-`SharedAccessKey` is standard Base64 and is decoded before HMAC-SHA256. Decoded
-key bytes and temporary MAC encodings are wiped on every success and failure
+The string-to-sign is `encoded_resource + "\n" + expiry`. HMAC-SHA256 uses the
+exact UTF-8 bytes of `SharedAccessKey`; the value is not Base64-decoded. Raw
+and Base64-encoded temporary MAC material is wiped on every success and failure
 path. Signing uses an explicit `azure_sdk_core.crypto.CryptoProvider`; there is
 no fallback to the standard provider. Encoding follows Go's
 `url.QueryEscape`: everything outside `A-Za-z0-9-_.~` is escaped and a space
@@ -44,11 +44,10 @@ signature cannot be re-signed, so `isRefreshable` is false and a request made
 after it expires fails with `error.SignatureExpired` instead of handing back a
 token the broker will reject.
 
-A shared-key credential copies the provider descriptor supplied to
-`initSharedKey` or `initFromConnectionString` and borrows its context. The
-context must outlive the credential and token acquisitions. A pre-formed token
-does not require a provider. `initFromConnectionString` returns
-`error.MissingCryptoProvider` when shared-key properties are used without one.
+A shared-key credential signs with the provider in the `HttpRuntime` supplied
+to each `TokenCredential.getToken` call, so provider selection follows the
+client runtime and no provider is retained by the credential. A pre-formed
+token remains independent of the runtime provider.
 
 The `azure_sdk_core` dependency is provisionally pinned to the merged provider
 API commit. It must be repinned to the final `azure_sdk_core/v0.3.0` release
