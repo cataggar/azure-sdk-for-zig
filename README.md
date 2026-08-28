@@ -4,7 +4,8 @@ Core HTTP, authentication, error, paging, long-running-operation, URL, crypto,
 and utility infrastructure for the Azure SDK for Zig.
 
 The canonical package/module name is `azure_sdk_core`, released from
-`sdk/core`. Identity remains part of this package.
+`sdk/core`. Identity remains part of this package. The current breaking
+provider/streaming release line is `0.3.0`.
 
 ## Core surface
 
@@ -56,6 +57,47 @@ for every pipeline, credential call, client, and open operation that uses
 them. `StdHttpTransport` remains caller-serialized. Custom crypto provider
 contexts must be concurrent-safe or caller-serialized. Incremental SHA-256
 operations own stable allocator-backed state and must be deinitialized once.
+
+## Adapter conformance
+
+Core exports two test-only build modules in addition to the production
+`azure_sdk_core` module:
+
+- `azure_sdk_core_http_conformance`
+- `azure_sdk_core_crypto_conformance`
+
+Optional adapter packages import these modules from their pinned Core
+dependency and invoke the public factory-based runners. They are deliberately
+not imported by `root.zig`, and Core has no dependency on optional HTTP or
+crypto adapters.
+
+```zig
+const core_dep = b.dependency("azure_sdk_core", .{
+    .target = target,
+    .optimize = optimize,
+});
+const http_contracts = core_dep.module("azure_sdk_core_http_conformance");
+const crypto_contracts = core_dep.module("azure_sdk_core_crypto_conformance");
+```
+
+HTTP factories publish explicit capabilities for streaming, response-header
+ordering, framing validation, response limits, cancellation grade,
+decompression ownership, lifecycle observation, and bounded-memory
+logical-large uploads. Crypto factories publish incremental-allocation and
+concurrency guarantees. A skipped capability is not evidence of runtime
+support.
+
+Core CI runs the raw transport suite against `StdHttpTransport` and
+`MockTransport`, the pipeline and allocation-failure suites against reusable
+fakes, and the crypto suite against `StdCryptoProvider`. The standard
+transport is caller-serialized; the standard SDK crypto provider supports
+concurrent hash/HMAC calls.
+
+The WASI HTTP implementation separates target-neutral request adaptation from
+the `wasi:http@0.2.6` host externs. Native tests use an injectable fake host for
+the target-neutral seam. `zig build wasi-check` only proves that the
+`wasm32-wasi` guest code builds; it does **not** claim a runtime WASI engine,
+network, TLS, or trust-provider test.
 
 ## Identity
 

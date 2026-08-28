@@ -1912,47 +1912,6 @@ test "mock transport" {
     try std.testing.expectEqualStrings("sha256:second", digests[1]);
 }
 
-test "mock streaming transport accepts known and chunked uploads" {
-    const allocator = std.testing.allocator;
-    var mock = MockTransport.init(allocator, 201, "response-data");
-    defer mock.deinit();
-    mock.stream_upload_chunk_size = 3;
-    mock.stream_response_chunk_size = 2;
-
-    {
-        var known_source = std.Io.Reader.fixed("known-body");
-        var known_request = Request.init(allocator, .POST, "https://example.com/known");
-        defer known_request.deinit();
-        var known = try mock.asTransport().open(&known_request, .{
-            .body = .{ .reader = &known_source, .content_length = 10 },
-        });
-        defer known.deinit();
-        try std.testing.expectEqual(@as(u16, 201), known.status_code);
-        try std.testing.expectEqualStrings("known-body", mock.last_body.?);
-        var response_buffer: [32]u8 = undefined;
-        const first_count = try (try known.reader()).readSliceShort(response_buffer[0..3]);
-        try std.testing.expect(first_count > 0);
-        try known.finish();
-    }
-
-    {
-        var chunked_source = std.Io.Reader.fixed("chunked-body");
-        var chunked_request = Request.init(allocator, .POST, "https://example.com/chunked");
-        defer chunked_request.deinit();
-        var chunked = try mock.asTransport().open(&chunked_request, .{
-            .body = .{ .reader = &chunked_source },
-        });
-        defer chunked.deinit();
-        try std.testing.expectEqualStrings("chunked-body", mock.last_body.?);
-        chunked.abort();
-    }
-
-    try std.testing.expectEqual(@as(usize, 2), mock.call_count);
-    try std.testing.expectEqual(@as(usize, 1), mock.stream_finish_count);
-    try std.testing.expectEqual(@as(usize, 1), mock.stream_abort_count);
-    try std.testing.expectEqual(@as(usize, 2), mock.stream_deinit_count);
-}
-
 test "ReplayableBytes rewinds without copying" {
     var replay = ReplayableBytes.init("replay-body");
     var body = replay.body();

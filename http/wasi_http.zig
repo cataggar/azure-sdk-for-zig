@@ -19,6 +19,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const transport = @import("transport.zig");
+const adapter = @import("wasi_http_adapter.zig");
 
 comptime {
     if (!(builtin.target.cpu.arch == .wasm32 and builtin.target.os.tag == .wasi))
@@ -104,21 +105,9 @@ inline fn retClear() void {
     @memset(&ret_area, 0);
 }
 
-// ── Transport ──────────────────────────────────────────────────────────
+// ── Canonical host ─────────────────────────────────────────────────────
 
-pub const WasiHttpTransport = struct {
-    allocator: std.mem.Allocator,
-
-    const vtable: transport.HttpTransport.VTable = .{ .send = &sendImpl };
-
-    pub fn init(allocator: std.mem.Allocator) WasiHttpTransport {
-        return .{ .allocator = allocator };
-    }
-
-    pub fn asTransport(self: *WasiHttpTransport) transport.HttpTransport {
-        return .{ .context = self, .vtable = &vtable };
-    }
-
+const CanonicalHost = struct {
     fn methodDisc(m: transport.Method) i32 {
         return switch (m) {
             .GET => 0,
@@ -131,23 +120,15 @@ pub const WasiHttpTransport = struct {
         };
     }
 
-    fn sendImpl(context: *anyopaque, request: *transport.Request) anyerror!transport.Response {
-        const self: *WasiHttpTransport = @ptrCast(@alignCast(context));
-        const allocator = self.allocator;
-
-        if (request.body != null) return error.RequestBodyUnsupported;
-
-        // Split "scheme://authority/path?query".
-        const url = request.url;
-        const sep = std.mem.indexOf(u8, url, "://") orelse return error.InvalidUrl;
-        const scheme = url[0..sep];
-        const after = url[sep + 3 ..];
-        const slash = std.mem.indexOfScalar(u8, after, '/') orelse after.len;
-        const authority = after[0..slash];
-        const path_query: []const u8 = if (slash < after.len) after[slash..] else "/";
-
-        const scheme_disc: i32 = if (std.ascii.eqlIgnoreCase(scheme, "http")) 0 else 1; // default HTTPS
-
+    fn send(
+        _: *CanonicalHost,
+        allocator: std.mem.Allocator,
+        request: adapter.HostRequest,
+    ) !adapter.HostResponse {
+        const scheme_disc: i32 = switch (request.scheme) {
+            .http => 0,
+            .https => 1,
+        };
         // Build headers (skip Host — wasi:http derives it from authority).
         const headers = @"[constructor]fields"();
         var it = request.headers.iterator();
@@ -167,19 +148,24 @@ pub const WasiHttpTransport = struct {
 
         // Build + configure the outgoing request.
         const req_handle = @"[constructor]outgoing-request"(headers);
-        _ = @"[method]outgoing-request.set-method"(req_handle, methodDisc(request.method), 0, 0);
+        _ = @"[method]outgoing-request.set-method"(
+            req_handle,
+            methodDisc(request.method),
+            0,
+            0,
+        );
         _ = @"[method]outgoing-request.set-scheme"(req_handle, 1, scheme_disc, 0, 0);
         _ = @"[method]outgoing-request.set-authority"(
             req_handle,
             1,
-            @intCast(@intFromPtr(authority.ptr)),
-            @intCast(authority.len),
+            @intCast(@intFromPtr(request.authority.ptr)),
+            @intCast(request.authority.len),
         );
         _ = @"[method]outgoing-request.set-path-with-query"(
             req_handle,
             1,
-            @intCast(@intFromPtr(path_query.ptr)),
-            @intCast(path_query.len),
+            @intCast(@intFromPtr(request.path_with_query.ptr)),
+            @intCast(request.path_with_query.len),
         );
 
         // Fire the request: handle(request, none) -> result<own<future>, error-code>.
@@ -241,11 +227,28 @@ pub const WasiHttpTransport = struct {
             try body.appendSlice(allocator, chunk[0..len]);
         }
 
-        return .{
+        return adapter.HostResponse{
             .status_code = status,
-            .headers = std.StringHashMap([]const u8).init(allocator),
             .body = try body.toOwnedSlice(allocator),
-            .allocator = allocator,
         };
+    }
+};
+
+// ── Public transport ───────────────────────────────────────────────────
+
+pub const WasiHttpTransport = struct {
+    inner: adapter.HttpTransportAdapter(CanonicalHost),
+
+    pub fn init(allocator: std.mem.Allocator) WasiHttpTransport {
+        return .{
+            .inner = adapter.HttpTransportAdapter(CanonicalHost).init(
+                allocator,
+                .{},
+            ),
+        };
+    }
+
+    pub fn asTransport(self: *WasiHttpTransport) transport.HttpTransport {
+        return self.inner.asTransport();
     }
 };
