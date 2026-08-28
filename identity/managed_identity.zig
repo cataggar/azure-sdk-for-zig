@@ -6,6 +6,12 @@ const TokenCredential = core.credentials.TokenCredential;
 const TokenRequestContext = core.credentials.TokenRequestContext;
 const Context = core.context.Context;
 
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+fn testingRuntime(http_transport: core.http.HttpTransport) core.http.HttpRuntime {
+    return .init(http_transport, testing_crypto_provider.asProvider());
+}
+
 /// Authenticates using the Azure Instance Metadata Service (IMDS).
 ///
 /// GET `http://169.254.169.254/metadata/identity/oauth2/token`
@@ -13,18 +19,13 @@ const Context = core.context.Context;
 ///   Header: `Metadata: true`
 pub const ManagedIdentityCredential = struct {
     allocator: std.mem.Allocator,
-    transport: *core.http.HttpTransport,
     credential: TokenCredential,
     client_id: ?[]const u8 = null,
     endpoint: []const u8 = "http://169.254.169.254/metadata/identity/oauth2/token",
 
-    pub fn init(
-        allocator: std.mem.Allocator,
-        transport: *core.http.HttpTransport,
-    ) ManagedIdentityCredential {
+    pub fn init(allocator: std.mem.Allocator) ManagedIdentityCredential {
         return .{
             .allocator = allocator,
-            .transport = transport,
             .credential = .{ .getTokenFn = &getTokenImpl },
         };
     }
@@ -41,6 +42,7 @@ pub const ManagedIdentityCredential = struct {
         cred: *TokenCredential,
         request_context: TokenRequestContext,
         _: Context,
+        runtime: core.http.HttpRuntime,
     ) anyerror!AccessToken {
         const self: *ManagedIdentityCredential = @fieldParentPtr("credential", cred);
         const allocator = self.allocator;
@@ -72,9 +74,10 @@ pub const ManagedIdentityCredential = struct {
 
         var req = core.http.Request.init(allocator, .GET, url_str);
         defer req.deinit();
+        req.redirect_policy = .not_allowed;
         try req.setHeader("Metadata", "true");
 
-        var resp = try self.transport.send(&req);
+        var resp = try runtime.transport.send(&req);
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
@@ -121,15 +124,17 @@ test "ManagedIdentityCredential" {
         \\{"access_token":"msi-token","expires_in":"86400","expires_on":"1743523200"}
     );
     defer mock.deinit();
-    var cred = ManagedIdentityCredential.init(allocator, mock.asTransport());
+    var cred = ManagedIdentityCredential.init(allocator);
     var token = try cred.asCredential().getToken(
         .{ .scopes = &.{"https://vault.azure.net/.default"} },
         Context.none,
+        testingRuntime(mock.asTransport()),
     );
     defer token.deinit();
     try std.testing.expectEqualStrings("msi-token", token.token);
     try std.testing.expectEqual(@as(i64, 1743523200), token.expires_on);
     try std.testing.expectEqual(core.http.Method.GET, mock.last_method.?);
+    try std.testing.expectEqual(core.http.RedirectPolicy.not_allowed, mock.last_redirect_policy.?);
     // Verify URL contains resource without /.default.
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "resource=https://vault.azure.net") != null);
 }
@@ -140,11 +145,12 @@ test "ManagedIdentityCredential with client_id" {
         \\{"access_token":"msi-ua","expires_on":1743523200}
     );
     defer mock.deinit();
-    var cred = ManagedIdentityCredential.init(allocator, mock.asTransport());
+    var cred = ManagedIdentityCredential.init(allocator);
     cred.withClientId("user-assigned-id");
     var token = try cred.asCredential().getToken(
         .{ .scopes = &.{"https://storage.azure.com/.default"} },
         Context.none,
+        testingRuntime(mock.asTransport()),
     );
     defer token.deinit();
     try std.testing.expectEqualStrings("msi-ua", token.token);

@@ -7,6 +7,12 @@ const TokenCredential = core.credentials.TokenCredential;
 const TokenRequestContext = core.credentials.TokenRequestContext;
 const Context = core.context.Context;
 
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+fn testingRuntime(http_transport: core.http.HttpTransport) core.http.HttpRuntime {
+    return .init(http_transport, testing_crypto_provider.asProvider());
+}
+
 /// Authenticates a service principal with a client secret (OAuth 2.0 client_credentials).
 ///
 /// POST `{authority}/{tenant_id}/oauth2/v2.0/token`
@@ -17,12 +23,10 @@ pub const ClientSecretCredential = struct {
     client_secret: []const u8,
     authority_host: []const u8 = "https://login.microsoftonline.com",
     allocator: std.mem.Allocator,
-    transport: *core.http.HttpTransport,
     credential: TokenCredential,
 
     pub fn init(
         allocator: std.mem.Allocator,
-        transport: *core.http.HttpTransport,
         tenant_id: []const u8,
         client_id: []const u8,
         client_secret: []const u8,
@@ -32,7 +36,6 @@ pub const ClientSecretCredential = struct {
             .client_id = client_id,
             .client_secret = client_secret,
             .allocator = allocator,
-            .transport = transport,
             .credential = .{ .getTokenFn = &getTokenImpl },
         };
     }
@@ -45,6 +48,7 @@ pub const ClientSecretCredential = struct {
         cred: *TokenCredential,
         request_context: TokenRequestContext,
         _: Context,
+        runtime: core.http.HttpRuntime,
     ) anyerror!AccessToken {
         const self: *ClientSecretCredential = @fieldParentPtr("credential", cred);
         const allocator = self.allocator;
@@ -81,10 +85,11 @@ pub const ClientSecretCredential = struct {
 
         var req = core.http.Request.init(allocator, .POST, url);
         defer req.deinit();
+        req.redirect_policy = .not_allowed;
         try req.setHeader("Content-Type", "application/x-www-form-urlencoded");
         req.body = body;
 
-        var resp = try self.transport.send(&req);
+        var resp = try runtime.transport.send(&req);
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
@@ -198,7 +203,6 @@ test "ClientSecretCredential init" {
     defer mock.deinit();
     var cred = ClientSecretCredential.init(
         allocator,
-        mock.asTransport(),
         "tenant-123",
         "client-456",
         "secret-789",
@@ -207,6 +211,7 @@ test "ClientSecretCredential init" {
     const token = try cred.asCredential().getToken(
         .{ .scopes = &.{"https://vault.azure.net/.default"} },
         Context.none,
+        testingRuntime(mock.asTransport()),
     );
     const after = currentTimestamp();
     defer allocator.free(token.token);
@@ -214,6 +219,7 @@ test "ClientSecretCredential init" {
     try std.testing.expect(token.expires_on >= before + 3600);
     try std.testing.expect(token.expires_on <= after + 3600);
     try std.testing.expectEqual(core.http.Method.POST, mock.last_method.?);
+    try std.testing.expectEqual(core.http.RedirectPolicy.not_allowed, mock.last_redirect_policy.?);
 }
 
 test "ClientSecretCredential auth failure" {
@@ -224,7 +230,6 @@ test "ClientSecretCredential auth failure" {
     defer mock.deinit();
     var cred = ClientSecretCredential.init(
         allocator,
-        mock.asTransport(),
         "tenant-123",
         "client-456",
         "bad-secret",
@@ -232,6 +237,7 @@ test "ClientSecretCredential auth failure" {
     const result = cred.asCredential().getToken(
         .{ .scopes = &.{"https://vault.azure.net/.default"} },
         Context.none,
+        testingRuntime(mock.asTransport()),
     );
     try std.testing.expectError(error.AuthenticationFailed, result);
 }
@@ -244,7 +250,6 @@ test "ClientSecretCredential form-encodes dynamic fields" {
     defer mock.deinit();
     var credential = ClientSecretCredential.init(
         allocator,
-        mock.asTransport(),
         "tenant",
         "client&id",
         "secret+=&%",
@@ -252,12 +257,52 @@ test "ClientSecretCredential form-encodes dynamic fields" {
     var token = try credential.asCredential().getToken(
         .{ .scopes = &.{"scope one"} },
         Context.none,
+        testingRuntime(mock.asTransport()),
     );
     defer token.deinit();
     try std.testing.expectEqualStrings(
         "grant_type=client_credentials&client_id=client%26id&client_secret=secret%2B%3D%26%25&scope=scope%20one",
         mock.last_body.?,
     );
+}
+
+test "ClientSecretCredential does not replay secret body across 307 redirect" {
+    const allocator = std.testing.allocator;
+    var sequence = core.http.SequenceMockTransport.init(allocator, &.{
+        .{
+            .status = 307,
+            .body = "",
+            .headers = &.{.{
+                .name = "Location",
+                .value = "https://attacker.example/token",
+            }},
+        },
+        .{
+            .status = 200,
+            .body = "{\"access_token\":\"stolen\",\"expires_in\":3600}",
+        },
+    });
+    var credential = ClientSecretCredential.init(
+        allocator,
+        "tenant",
+        "client",
+        "super-secret",
+    );
+
+    try std.testing.expectError(
+        error.AuthenticationFailed,
+        credential.asCredential().getToken(
+            .{ .scopes = &.{"https://vault.azure.net/.default"} },
+            Context.none,
+            testingRuntime(sequence.asTransport()),
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 1), sequence.call_count);
+    try std.testing.expect(std.mem.find(
+        u8,
+        sequence.capturedBody(0),
+        "client_secret=super-secret",
+    ) != null);
 }
 
 test "parseTokenResponse malformed JSON" {

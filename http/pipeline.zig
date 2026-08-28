@@ -1,11 +1,19 @@
 const std = @import("std");
+const crypto_mod = @import("../crypto.zig");
 const transport = @import("transport.zig");
+const HttpRuntime = @import("runtime.zig").HttpRuntime;
 
 const Request = transport.Request;
 const Response = transport.Response;
 const HttpTransport = transport.HttpTransport;
 const HttpOperation = transport.HttpOperation;
 const OpenOptions = transport.OpenOptions;
+
+var testing_crypto_provider = crypto_mod.StdCryptoProvider.init(std.testing.io);
+
+fn testingRuntime(http_transport: HttpTransport) HttpRuntime {
+    return .init(http_transport, testing_crypto_provider.asProvider());
+}
 
 fn nanoTimestamp() i128 {
     var threaded: std.Io.Threaded = .init_single_threaded;
@@ -36,32 +44,33 @@ pub const HttpPolicy = struct {
         self: *HttpPolicy,
         request: *Request,
         next: []*HttpPolicy,
-        final_transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) anyerror!Response,
     prepareFn: ?*const fn (
         self: *HttpPolicy,
         request: *Request,
+        runtime: HttpRuntime,
     ) anyerror!void = null,
     openFn: ?*const fn (
         self: *HttpPolicy,
         request: *Request,
         options: OpenOptions,
         next: []*HttpPolicy,
-        final_transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) anyerror!*HttpOperation = null,
 
     pub fn process(
         self: *HttpPolicy,
         request: *Request,
         next: []*HttpPolicy,
-        final_transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) !Response {
-        return self.processFn(self, request, next, final_transport);
+        return self.processFn(self, request, next, runtime);
     }
 
-    pub fn prepare(self: *HttpPolicy, request: *Request) !void {
+    pub fn prepare(self: *HttpPolicy, request: *Request, runtime: HttpRuntime) !void {
         const prepareFn = self.prepareFn orelse return error.StreamingPolicyUnsupported;
-        return prepareFn(self, request);
+        return prepareFn(self, request, runtime);
     }
 
     pub fn open(
@@ -69,22 +78,29 @@ pub const HttpPolicy = struct {
         request: *Request,
         options: OpenOptions,
         next: []*HttpPolicy,
-        final_transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) !*HttpOperation {
-        if (self.openFn) |openFn| return openFn(self, request, options, next, final_transport);
-        try self.prepare(request);
-        return callNextOpen(request, options, next, final_transport);
+        if (self.openFn) |openFn| return openFn(self, request, options, next, runtime);
+        try self.prepare(request, runtime);
+        return callNextOpen(request, options, next, runtime);
     }
 };
 
-/// Ordered chain of policy pointers that terminates at an `HttpTransport`.
+/// Ordered policy chain with an explicit runtime copied by value.
 pub const HttpPipeline = struct {
     policies: []*HttpPolicy,
-    transport_impl: *HttpTransport,
+    runtime: HttpRuntime,
+
+    pub fn init(runtime: HttpRuntime, policies: []*HttpPolicy) HttpPipeline {
+        return .{
+            .policies = policies,
+            .runtime = runtime,
+        };
+    }
 
     pub fn send(self: *HttpPipeline, request: *Request) !Response {
         request.transport_started = false;
-        return callNext(request, self.policies, self.transport_impl);
+        return callNext(request, self.policies, self.runtime);
     }
 
     /// Opens a streaming operation through the same ordered policy chain used
@@ -96,7 +112,7 @@ pub const HttpPipeline = struct {
     ) !*HttpOperation {
         request.transport_started = false;
         try checkOpenCancelled(options);
-        return callNextOpen(request, options, self.policies, self.transport_impl);
+        return callNextOpen(request, options, self.policies, self.runtime);
     }
 };
 
@@ -107,22 +123,22 @@ fn checkOpenCancelled(options: OpenOptions) !void {
 }
 
 /// Advance through the remaining policies, calling the transport at the end.
-fn callNext(request: *Request, next: []*HttpPolicy, final_transport: *HttpTransport) !Response {
+fn callNext(request: *Request, next: []*HttpPolicy, runtime: HttpRuntime) !Response {
     if (next.len == 0) {
-        return final_transport.send(request);
+        return runtime.transport.send(request);
     }
-    return next[0].process(request, next[1..], final_transport);
+    return next[0].process(request, next[1..], runtime);
 }
 
 fn callNextOpen(
     request: *Request,
     options: OpenOptions,
     next: []*HttpPolicy,
-    final_transport: *HttpTransport,
+    runtime: HttpRuntime,
 ) !*HttpOperation {
     try checkOpenCancelled(options);
-    if (next.len == 0) return final_transport.open(request, options);
-    return next[0].open(request, options, next[1..], final_transport);
+    if (next.len == 0) return runtime.transport.open(request, options);
+    return next[0].open(request, options, next[1..], runtime);
 }
 
 // ───────────────────────────── Policies ─────────────────────────────
@@ -147,13 +163,13 @@ pub const TelemetryPolicy = struct {
         policy: *HttpPolicy,
         request: *Request,
         next: []*HttpPolicy,
-        final_transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) !Response {
-        try prepareImpl(policy, request);
-        return callNext(request, next, final_transport);
+        try prepareImpl(policy, request, runtime);
+        return callNext(request, next, runtime);
     }
 
-    fn prepareImpl(policy: *HttpPolicy, request: *Request) !void {
+    fn prepareImpl(policy: *HttpPolicy, request: *Request, _: HttpRuntime) !void {
         const self: *TelemetryPolicy = @alignCast(@fieldParentPtr("policy", policy));
         try request.setHeader("User-Agent", self.user_agent);
     }
@@ -175,15 +191,15 @@ pub const LoggingPolicy = struct {
         policy: *HttpPolicy,
         request: *Request,
         next: []*HttpPolicy,
-        final_transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) !Response {
-        try prepareImpl(policy, request);
-        const response = try callNext(request, next, final_transport);
+        try prepareImpl(policy, request, runtime);
+        const response = try callNext(request, next, runtime);
         std.log.info("azure-sdk: {d} {s}", .{ response.status_code, request.url });
         return response;
     }
 
-    fn prepareImpl(_: *HttpPolicy, request: *Request) !void {
+    fn prepareImpl(_: *HttpPolicy, request: *Request, _: HttpRuntime) !void {
         std.log.info("azure-sdk: {s} {s}", .{ @tagName(request.method), request.url });
     }
 };
@@ -221,15 +237,15 @@ pub const RetryPolicy = struct {
             status == 502 or status == 503 or status == 504;
     }
 
-    fn prepareImpl(_: *HttpPolicy, _: *Request) !void {}
+    fn prepareImpl(_: *HttpPolicy, _: *Request, _: HttpRuntime) !void {}
 
     fn processImpl(
         policy: *HttpPolicy,
         request: *Request,
         next: []*HttpPolicy,
-        final_transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) !Response {
-        if (!request.retryable) return callNext(request, next, final_transport);
+        if (!request.retryable) return callNext(request, next, runtime);
         const self: *RetryPolicy = @alignCast(@fieldParentPtr("policy", policy));
         const deadline_ns: ?i128 = if (request.operation_timeout_ms) |timeout_ms|
             std.math.add(
@@ -244,7 +260,7 @@ pub const RetryPolicy = struct {
         while (true) {
             if (deadlineExpired(deadline_ns)) return error.OperationTimedOut;
 
-            const result = callNext(request, next, final_transport);
+            const result = callNext(request, next, runtime);
             if (result) |resp| {
                 if (!isRetryable(resp.status_code) or attempt >= self.max_retries) return resp;
 
@@ -289,10 +305,10 @@ pub const RetryPolicy = struct {
         request: *Request,
         options: OpenOptions,
         next: []*HttpPolicy,
-        final_transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) !*HttpOperation {
         if (!request.retryable or !options.isReplayable())
-            return callNextOpen(request, options, next, final_transport);
+            return callNextOpen(request, options, next, runtime);
 
         const self: *RetryPolicy = @alignCast(@fieldParentPtr("policy", policy));
         const deadline_ns: ?i128 = if (request.operation_timeout_ms) |timeout_ms|
@@ -315,7 +331,7 @@ pub const RetryPolicy = struct {
                 if (current_options.body) |*body| try body.rewind();
             }
 
-            const result = callNextOpen(request, current_options, next, final_transport);
+            const result = callNextOpen(request, current_options, next, runtime);
             if (result) |operation| {
                 if (!isRetryable(operation.status_code) or attempt >= self.max_retries)
                     return operation;
@@ -445,13 +461,13 @@ pub const BearerTokenAuthPolicy = struct {
         policy: *HttpPolicy,
         request: *Request,
         next: []*HttpPolicy,
-        final_transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) !Response {
-        try prepareImpl(policy, request);
-        return callNext(request, next, final_transport);
+        try prepareImpl(policy, request, runtime);
+        return callNext(request, next, runtime);
     }
 
-    fn prepareImpl(policy: *HttpPolicy, request: *Request) !void {
+    fn prepareImpl(policy: *HttpPolicy, request: *Request, runtime: HttpRuntime) !void {
         const self: *BearerTokenAuthPolicy = @alignCast(@fieldParentPtr("policy", policy));
         const now = unixTimestampSeconds();
         const refresh_buffer: i64 = 300; // 5 minutes before expiry
@@ -463,6 +479,7 @@ pub const BearerTokenAuthPolicy = struct {
             var fresh = try self.credential.getToken(
                 .{ .scopes = self.scopes },
                 ctx,
+                runtime,
             );
             defer fresh.deinit();
             const replacement = try self.allocator.dupe(u8, fresh.token);
@@ -489,12 +506,10 @@ pub const BearerTokenAuthPolicy = struct {
 };
 
 /// Ensures a request has a caller-preserving unique client request ID.
-pub fn ensureRequestId(request: *Request) !void {
+pub fn ensureRequestId(request: *Request, runtime: HttpRuntime) !void {
     if (request.getHeader("x-ms-client-request-id") != null) return;
     const uuid_mod = @import("../uuid.zig");
-    const seed: u64 = @truncate(@as(u128, @bitCast(nanoTimestamp())));
-    var prng = std.Random.DefaultPrng.init(seed);
-    const id = uuid_mod.Uuid.init(prng.random());
+    const id = try uuid_mod.Uuid.init(runtime.crypto);
     const id_str = id.toString();
     try request.setHeader("x-ms-client-request-id", &id_str);
 }
@@ -515,14 +530,14 @@ pub const RequestIdPolicy = struct {
         policy: *HttpPolicy,
         request: *Request,
         next: []*HttpPolicy,
-        final_transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) !Response {
-        try prepareImpl(policy, request);
-        return callNext(request, next, final_transport);
+        try prepareImpl(policy, request, runtime);
+        return callNext(request, next, runtime);
     }
 
-    fn prepareImpl(_: *HttpPolicy, request: *Request) !void {
-        try ensureRequestId(request);
+    fn prepareImpl(_: *HttpPolicy, request: *Request, runtime: HttpRuntime) !void {
+        try ensureRequestId(request, runtime);
     }
 };
 
@@ -555,12 +570,12 @@ pub const TracingPolicy = struct {
         policy: *HttpPolicy,
         request: *Request,
         next: []*HttpPolicy,
-        final_transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) !Response {
         const self: *TracingPolicy = @alignCast(@fieldParentPtr("policy", policy));
 
         const span = self.tracer.startSpan("HTTP", .client) catch {
-            return callNext(request, next, final_transport);
+            return callNext(request, next, runtime);
         };
 
         // Set standard Azure SDK span attributes.
@@ -573,7 +588,7 @@ pub const TracingPolicy = struct {
         }
 
         // Execute the rest of the pipeline.
-        const response = callNext(request, next, final_transport) catch |err| {
+        const response = callNext(request, next, runtime) catch |err| {
             span.setStatus(.@"error");
             span.end();
             return err;
@@ -595,15 +610,15 @@ pub const TracingPolicy = struct {
         request: *Request,
         options: OpenOptions,
         next: []*HttpPolicy,
-        final_transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) !*HttpOperation {
         const self: *TracingPolicy = @alignCast(@fieldParentPtr("policy", policy));
         const span = self.tracer.startSpan("HTTP", .client) catch
-            return callNextOpen(request, options, next, final_transport);
+            return callNextOpen(request, options, next, runtime);
         span.setAttribute("http.method", @tagName(request.method)) catch {};
         span.setAttribute("url.full", request.url) catch {};
         span.setAttribute("az.namespace", self.az_namespace) catch {};
-        const operation = callNextOpen(request, options, next, final_transport) catch |err| {
+        const operation = callNextOpen(request, options, next, runtime) catch |err| {
             span.setStatus(.@"error");
             span.end();
             return err;
@@ -620,10 +635,7 @@ test "pipeline with telemetry and mock transport" {
     defer mock.deinit();
     var telemetry = TelemetryPolicy.init("azsdk-zig-test/0.1.0");
     var policy_ptrs = [_]*HttpPolicy{telemetry.asPolicy()};
-    var pipeline_inst = HttpPipeline{
-        .policies = &policy_ptrs,
-        .transport_impl = mock.asTransport(),
-    };
+    var pipeline_inst = HttpPipeline.init(testingRuntime(mock.asTransport()), &policy_ptrs);
     var req = Request.init(allocator, .GET, "https://example.com");
     defer req.deinit();
     var resp = try pipeline_inst.send(&req);
@@ -644,10 +656,7 @@ test "pipeline prepares streaming policies without retrying" {
         request_id.asPolicy(),
         retry.asPolicy(),
     };
-    var pipeline_inst = HttpPipeline{
-        .policies = &policy_ptrs,
-        .transport_impl = mock.asTransport(),
-    };
+    var pipeline_inst = HttpPipeline.init(testingRuntime(mock.asTransport()), &policy_ptrs);
     var request = Request.init(allocator, .GET, "https://example.com");
     defer request.deinit();
     var operation = try pipeline_inst.open(&request, .{});
@@ -679,10 +688,10 @@ test "RetryPolicy replays only explicitly rewindable streaming bodies" {
         .{ .status = 503, .body = "retry" },
         .{ .status = 200, .body = "ok" },
     });
-    var replay_pipeline = HttpPipeline{
-        .policies = &policies,
-        .transport_impl = replay_sequence.asTransport(),
-    };
+    var replay_pipeline = HttpPipeline.init(
+        testingRuntime(replay_sequence.asTransport()),
+        &policies,
+    );
     var replay_request = Request.init(allocator, .POST, "https://example.com/upload");
     defer replay_request.deinit();
     var replay = transport.ReplayableBytes.init("replayable");
@@ -698,10 +707,10 @@ test "RetryPolicy replays only explicitly rewindable streaming bodies" {
         .{ .status = 503, .body = "retry" },
         .{ .status = 200, .body = "unexpected" },
     });
-    var one_shot_pipeline = HttpPipeline{
-        .policies = &policies,
-        .transport_impl = one_shot_sequence.asTransport(),
-    };
+    var one_shot_pipeline = HttpPipeline.init(
+        testingRuntime(one_shot_sequence.asTransport()),
+        &policies,
+    );
     var one_shot_request = Request.init(allocator, .POST, "https://example.com/upload");
     defer one_shot_request.deinit();
     var source = std.Io.Reader.fixed("one-shot");
@@ -733,19 +742,27 @@ test "RetryPolicy propagates streaming cancellation without retry or rewind" {
     };
 
     const CancellingTransport = struct {
-        transport: HttpTransport = .{ .sendFn = &send, .openFn = &open },
         call_count: usize = 0,
 
-        fn send(_: *HttpTransport, _: *Request) anyerror!Response {
+        const vtable: HttpTransport.VTable = .{
+            .send = &send,
+            .open = &open,
+        };
+
+        fn asTransport(self: *@This()) HttpTransport {
+            return .{ .context = self, .vtable = &vtable };
+        }
+
+        fn send(_: *anyopaque, _: *Request) anyerror!Response {
             return error.UnexpectedBufferedSend;
         }
 
         fn open(
-            transport_impl: *HttpTransport,
+            context: *anyopaque,
             _: *Request,
             options: OpenOptions,
         ) anyerror!*HttpOperation {
-            const self: *@This() = @alignCast(@fieldParentPtr("transport", transport_impl));
+            const self: *@This() = @ptrCast(@alignCast(context));
             self.call_count += 1;
             if (options.body) |body| {
                 var byte: [1]u8 = undefined;
@@ -761,10 +778,7 @@ test "RetryPolicy propagates streaming cancellation without retry or rewind" {
     var retry = RetryPolicy.init();
     retry.initial_delay_ms = 0;
     var policies = [_]*HttpPolicy{retry.asPolicy()};
-    var pipeline_inst = HttpPipeline{
-        .policies = &policies,
-        .transport_impl = &cancelling.transport,
-    };
+    var pipeline_inst = HttpPipeline.init(testingRuntime(cancelling.asTransport()), &policies);
     var request = Request.init(allocator, .POST, "https://example.com/upload");
     defer request.deinit();
     var token = transport.CancellationToken{};
@@ -788,7 +802,7 @@ test "pipeline rejects policies without streaming preparation" {
             _: *HttpPolicy,
             _: *Request,
             _: []*HttpPolicy,
-            _: *HttpTransport,
+            _: HttpRuntime,
         ) anyerror!Response {
             return error.UnexpectedPolicyCall;
         }
@@ -799,10 +813,7 @@ test "pipeline rejects policies without streaming preparation" {
     defer mock.deinit();
     var unsupported = HttpPolicy{ .processFn = &UnsupportedPolicy.process };
     var policies = [_]*HttpPolicy{&unsupported};
-    var pipeline_inst = HttpPipeline{
-        .policies = &policies,
-        .transport_impl = mock.asTransport(),
-    };
+    var pipeline_inst = HttpPipeline.init(testingRuntime(mock.asTransport()), &policies);
     var request = Request.init(allocator, .GET, "https://example.com");
     defer request.deinit();
     try std.testing.expectError(
@@ -817,10 +828,7 @@ test "pipeline with no policies" {
     var mock = transport.MockTransport.init(allocator, 404, "not found");
     defer mock.deinit();
     var empty = [_]*HttpPolicy{};
-    var pipeline_inst = HttpPipeline{
-        .policies = &empty,
-        .transport_impl = mock.asTransport(),
-    };
+    var pipeline_inst = HttpPipeline.init(testingRuntime(mock.asTransport()), &empty);
     var req = Request.init(allocator, .GET, "https://example.com/missing");
     defer req.deinit();
     var resp = try pipeline_inst.send(&req);
@@ -835,10 +843,7 @@ test "pipeline with multiple policies" {
     var telemetry = TelemetryPolicy.init("azsdk-zig-test/0.1.0");
     var logging = LoggingPolicy.init();
     var policy_ptrs = [_]*HttpPolicy{ telemetry.asPolicy(), logging.asPolicy() };
-    var pipeline_inst = HttpPipeline{
-        .policies = &policy_ptrs,
-        .transport_impl = mock.asTransport(),
-    };
+    var pipeline_inst = HttpPipeline.init(testingRuntime(mock.asTransport()), &policy_ptrs);
     var req = Request.init(allocator, .GET, "https://example.com");
     defer req.deinit();
     var resp = try pipeline_inst.send(&req);
@@ -852,10 +857,7 @@ test "RequestIdPolicy injects x-ms-client-request-id" {
     defer mock.deinit();
     var rid = RequestIdPolicy.init();
     var policy_ptrs = [_]*HttpPolicy{rid.asPolicy()};
-    var pipeline_inst = HttpPipeline{
-        .policies = &policy_ptrs,
-        .transport_impl = mock.asTransport(),
-    };
+    var pipeline_inst = HttpPipeline.init(testingRuntime(mock.asTransport()), &policy_ptrs);
     var req = Request.init(allocator, .GET, "https://example.com");
     defer req.deinit();
     var resp = try pipeline_inst.send(&req);
@@ -872,10 +874,7 @@ test "RequestIdPolicy preserves caller-provided request ID" {
     defer mock.deinit();
     var rid = RequestIdPolicy.init();
     var policy_ptrs = [_]*HttpPolicy{rid.asPolicy()};
-    var pipeline_inst = HttpPipeline{
-        .policies = &policy_ptrs,
-        .transport_impl = mock.asTransport(),
-    };
+    var pipeline_inst = HttpPipeline.init(testingRuntime(mock.asTransport()), &policy_ptrs);
     var req = Request.init(allocator, .GET, "https://example.com");
     defer req.deinit();
     try req.setHeader("X-MS-Client-Request-Id", "caller-request-id");
@@ -887,6 +886,23 @@ test "RequestIdPolicy preserves caller-provided request ID" {
     );
 }
 
+test "RequestIdPolicy provider failure occurs before transport dispatch" {
+    const allocator = std.testing.allocator;
+    var mock = transport.MockTransport.init(allocator, 200, "unexpected");
+    defer mock.deinit();
+    var failing_crypto = crypto_mod.StdCryptoProvider.init(std.Io.failing);
+    const runtime = HttpRuntime.init(mock.asTransport(), failing_crypto.asProvider());
+    var request_id = RequestIdPolicy.init();
+    var policies = [_]*HttpPolicy{request_id.asPolicy()};
+    var pipeline_inst = HttpPipeline.init(runtime, &policies);
+    var request = Request.init(allocator, .GET, "https://example.com");
+    defer request.deinit();
+
+    try std.testing.expectError(error.EntropyUnavailable, pipeline_inst.send(&request));
+    try std.testing.expect(!request.transport_started);
+    try std.testing.expectEqual(@as(usize, 0), mock.call_count);
+}
+
 test "BearerTokenAuthPolicy injects Authorization header" {
     const allocator = std.testing.allocator;
     const creds = @import("../credentials/token.zig");
@@ -896,6 +912,7 @@ test "BearerTokenAuthPolicy injects Authorization header" {
             _: *creds.TokenCredential,
             _: creds.TokenRequestContext,
             _: @import("../context.zig").Context,
+            _: HttpRuntime,
         ) anyerror!creds.AccessToken {
             const token = try allocator.dupe(u8, "stub-token");
             return .{
@@ -916,10 +933,7 @@ test "BearerTokenAuthPolicy injects Authorization header" {
     );
     defer auth.deinit();
     var policy_ptrs = [_]*HttpPolicy{auth.asPolicy()};
-    var pipeline_inst = HttpPipeline{
-        .policies = &policy_ptrs,
-        .transport_impl = mock.asTransport(),
-    };
+    var pipeline_inst = HttpPipeline.init(testingRuntime(mock.asTransport()), &policy_ptrs);
     var req = Request.init(allocator, .GET, "https://example.com");
     defer req.deinit();
     var resp = try pipeline_inst.send(&req);
@@ -933,7 +947,7 @@ test "RetryPolicy passes through 200 without retry" {
     defer mock.deinit();
     var retry = RetryPolicy.init();
     var policy_ptrs = [_]*HttpPolicy{retry.asPolicy()};
-    var pip = HttpPipeline{ .policies = &policy_ptrs, .transport_impl = mock.asTransport() };
+    var pip = HttpPipeline.init(testingRuntime(mock.asTransport()), &policy_ptrs);
     var req = Request.init(allocator, .GET, "https://example.com");
     defer req.deinit();
     var resp = try pip.send(&req);
@@ -971,7 +985,7 @@ test "RetryPolicy passes through 404 without retry" {
     defer mock.deinit();
     var retry = RetryPolicy.init();
     var policy_ptrs = [_]*HttpPolicy{retry.asPolicy()};
-    var pip = HttpPipeline{ .policies = &policy_ptrs, .transport_impl = mock.asTransport() };
+    var pip = HttpPipeline.init(testingRuntime(mock.asTransport()), &policy_ptrs);
     var req = Request.init(allocator, .GET, "https://example.com");
     defer req.deinit();
     var resp = try pip.send(&req);
@@ -989,7 +1003,7 @@ test "RetryPolicy retries 500 then succeeds" {
     var retry = RetryPolicy.init();
     retry.initial_delay_ms = 0;
     var policy_ptrs = [_]*HttpPolicy{retry.asPolicy()};
-    var pip = HttpPipeline{ .policies = &policy_ptrs, .transport_impl = seq.asTransport() };
+    var pip = HttpPipeline.init(testingRuntime(seq.asTransport()), &policy_ptrs);
     var req = Request.init(allocator, .GET, "https://example.com");
     defer req.deinit();
     var resp = try pip.send(&req);
@@ -1007,7 +1021,7 @@ test "RetryPolicy retries 429 then succeeds" {
     var retry = RetryPolicy.init();
     retry.initial_delay_ms = 0;
     var policy_ptrs = [_]*HttpPolicy{retry.asPolicy()};
-    var pip = HttpPipeline{ .policies = &policy_ptrs, .transport_impl = seq.asTransport() };
+    var pip = HttpPipeline.init(testingRuntime(seq.asTransport()), &policy_ptrs);
     var req = Request.init(allocator, .GET, "https://example.com");
     defer req.deinit();
     var resp = try pip.send(&req);
@@ -1025,7 +1039,7 @@ test "RetryPolicy bypasses retries for non-retryable requests" {
     var retry = RetryPolicy.init();
     retry.initial_delay_ms = 0;
     var policy_ptrs = [_]*HttpPolicy{retry.asPolicy()};
-    var pip = HttpPipeline{ .policies = &policy_ptrs, .transport_impl = seq.asTransport() };
+    var pip = HttpPipeline.init(testingRuntime(seq.asTransport()), &policy_ptrs);
     var req = Request.init(allocator, .POST, "https://example.com/create");
     defer req.deinit();
     req.retryable = false;
@@ -1043,7 +1057,7 @@ test "RetryPolicy zero timeout prevents a retryable send" {
     });
     var retry = RetryPolicy.init();
     var policy_ptrs = [_]*HttpPolicy{retry.asPolicy()};
-    var pip = HttpPipeline{ .policies = &policy_ptrs, .transport_impl = seq.asTransport() };
+    var pip = HttpPipeline.init(testingRuntime(seq.asTransport()), &policy_ptrs);
     var req = Request.init(allocator, .GET, "https://example.com");
     defer req.deinit();
     req.operation_timeout_ms = 0;
@@ -1061,7 +1075,7 @@ test "RetryPolicy timeout prevents a second attempt" {
     var retry = RetryPolicy.init();
     retry.initial_delay_ms = 100;
     var policy_ptrs = [_]*HttpPolicy{retry.asPolicy()};
-    var pip = HttpPipeline{ .policies = &policy_ptrs, .transport_impl = seq.asTransport() };
+    var pip = HttpPipeline.init(testingRuntime(seq.asTransport()), &policy_ptrs);
     var req = Request.init(allocator, .GET, "https://example.com");
     defer req.deinit();
     req.operation_timeout_ms = 1;
@@ -1079,7 +1093,7 @@ test "RetryPolicy gives up after max retries" {
     retry.initial_delay_ms = 0;
     retry.max_retries = 2;
     var policy_ptrs = [_]*HttpPolicy{retry.asPolicy()};
-    var pip = HttpPipeline{ .policies = &policy_ptrs, .transport_impl = seq.asTransport() };
+    var pip = HttpPipeline.init(testingRuntime(seq.asTransport()), &policy_ptrs);
     var req = Request.init(allocator, .GET, "https://example.com");
     defer req.deinit();
     var resp = try pip.send(&req);
@@ -1113,7 +1127,7 @@ test "TracingPolicy creates span with attributes" {
 
     var tracing_policy = TracingPolicy.init(rec_tracer.asTracer(), "KeyVault");
     var policy_ptrs = [_]*HttpPolicy{tracing_policy.asPolicy()};
-    var pip = HttpPipeline{ .policies = &policy_ptrs, .transport_impl = mock.asTransport() };
+    var pip = HttpPipeline.init(testingRuntime(mock.asTransport()), &policy_ptrs);
 
     var req = Request.init(allocator, .GET, "https://vault.azure.net/secrets/mysecret");
     defer req.deinit();
@@ -1141,7 +1155,7 @@ test "TracingPolicy sets error status on failure" {
 
     var tracing_policy = TracingPolicy.init(rec_tracer.asTracer(), "Storage");
     var policy_ptrs = [_]*HttpPolicy{tracing_policy.asPolicy()};
-    var pip = HttpPipeline{ .policies = &policy_ptrs, .transport_impl = mock.asTransport() };
+    var pip = HttpPipeline.init(testingRuntime(mock.asTransport()), &policy_ptrs);
 
     var req = Request.init(allocator, .GET, "https://storage.blob.core.windows.net");
     defer req.deinit();

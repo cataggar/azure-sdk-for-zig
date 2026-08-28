@@ -7,6 +7,14 @@ const std = @import("std");
 const serde = @import("serde");
 const http = @import("http/transport.zig");
 const pipeline_mod = @import("http/pipeline.zig");
+const crypto_mod = @import("crypto.zig");
+const HttpRuntime = @import("http/runtime.zig").HttpRuntime;
+
+var testing_crypto_provider = crypto_mod.StdCryptoProvider.init(std.testing.io);
+
+fn testingRuntime(http_transport: http.HttpTransport) HttpRuntime {
+    return .init(http_transport, testing_crypto_provider.asProvider());
+}
 
 fn sleepMs(ms: u64) void {
     var threaded: std.Io.Threaded = .init_single_threaded;
@@ -446,7 +454,7 @@ test "pollUntilDone succeeds after polling" {
         .{ .status = 200, .body = "{\"status\":\"Succeeded\",\"result\":\"done\"}" },
     });
     var empty = [_]*pipeline_mod.HttpPolicy{};
-    var pip = pipeline_mod.HttpPipeline{ .policies = &empty, .transport_impl = seq.asTransport() };
+    var pip = pipeline_mod.HttpPipeline.init(testingRuntime(seq.asTransport()), &empty);
 
     var result = try pollUntilDone(allocator, &pip, "https://vault.azure.net/operations/op1", 0, 10);
     defer result.deinit();
@@ -461,7 +469,7 @@ test "pollUntilDone times out" {
         .{ .status = 200, .body = "{\"status\":\"InProgress\"}" },
     });
     var empty = [_]*pipeline_mod.HttpPolicy{};
-    var pip = pipeline_mod.HttpPipeline{ .policies = &empty, .transport_impl = seq.asTransport() };
+    var pip = pipeline_mod.HttpPipeline.init(testingRuntime(seq.asTransport()), &empty);
 
     const result = pollUntilDone(allocator, &pip, "https://vault.azure.net/operations/op1", 0, 2);
     try std.testing.expectError(error.PollTimeout, result);
@@ -495,7 +503,7 @@ test "Poller operation-location strategy" {
 
     var poller = try Poller.init(
         allocator,
-        .{ .policies = &empty, .transport_impl = seq.asTransport() },
+        pipeline_mod.HttpPipeline.init(testingRuntime(seq.asTransport()), &empty),
         initial_resp,
         "https://vault.azure.net/keys/mykey",
         .{ .poll_interval_ms = 0 },
@@ -538,7 +546,7 @@ test "Poller location strategy" {
 
     var poller = try Poller.init(
         allocator,
-        .{ .policies = &empty, .transport_impl = seq.asTransport() },
+        pipeline_mod.HttpPipeline.init(testingRuntime(seq.asTransport()), &empty),
         initial_resp,
         "https://example.com/resources/1",
         .{ .poll_interval_ms = 0 },
@@ -576,7 +584,7 @@ test "Poller provisioning-state strategy" {
 
     var poller = try Poller.init(
         allocator,
-        .{ .policies = &empty, .transport_impl = seq.asTransport() },
+        pipeline_mod.HttpPipeline.init(testingRuntime(seq.asTransport()), &empty),
         initial_resp,
         "https://management.azure.com/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Compute/virtualMachines/vm1",
         .{ .poll_interval_ms = 0, .strategy = .provisioning_state },
@@ -619,7 +627,7 @@ test "Poller azure-async-operation with final GET" {
 
     var poller = try Poller.init(
         allocator,
-        .{ .policies = &empty, .transport_impl = seq.asTransport() },
+        pipeline_mod.HttpPipeline.init(testingRuntime(seq.asTransport()), &empty),
         initial_resp,
         "https://example.com/resources/1",
         .{ .poll_interval_ms = 0 },
@@ -664,7 +672,7 @@ test "Poller single poll" {
 
     var poller = try Poller.init(
         allocator,
-        .{ .policies = &empty, .transport_impl = seq.asTransport() },
+        pipeline_mod.HttpPipeline.init(testingRuntime(seq.asTransport()), &empty),
         initial_resp,
         null,
         .{ .poll_interval_ms = 0 },
@@ -700,7 +708,7 @@ test "Poller auto-detect fails without headers" {
 
     const result = Poller.init(
         allocator,
-        .{ .policies = &empty, .transport_impl = mock.asTransport() },
+        pipeline_mod.HttpPipeline.init(testingRuntime(mock.asTransport()), &empty),
         initial_resp,
         null,
         .{},

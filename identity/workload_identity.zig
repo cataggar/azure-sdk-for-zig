@@ -6,13 +6,18 @@ const TokenCredential = core.credentials.TokenCredential;
 const TokenRequestContext = core.credentials.TokenRequestContext;
 const Context = core.context.Context;
 
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+fn testingRuntime(http_transport: core.http.HttpTransport) core.http.HttpRuntime {
+    return .init(http_transport, testing_crypto_provider.asProvider());
+}
+
 /// Authenticates using Kubernetes workload identity (OIDC federation).
 ///
 /// Reads the projected service-account token from a file, then exchanges it
 /// for an AAD token via the client-assertion flow.
 pub const WorkloadIdentityCredential = struct {
     allocator: std.mem.Allocator,
-    transport: *core.http.HttpTransport,
     credential: TokenCredential,
 
     tenant_id: []u8,
@@ -22,7 +27,6 @@ pub const WorkloadIdentityCredential = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        transport: *core.http.HttpTransport,
         tenant_id: []const u8,
         client_id: []const u8,
         token_file_path: []const u8,
@@ -37,7 +41,6 @@ pub const WorkloadIdentityCredential = struct {
         errdefer allocator.free(authority_host);
         return .{
             .allocator = allocator,
-            .transport = transport,
             .credential = .{ .getTokenFn = &getTokenImpl },
             .tenant_id = owned_tenant_id,
             .client_id = owned_client_id,
@@ -71,6 +74,7 @@ pub const WorkloadIdentityCredential = struct {
         cred: *TokenCredential,
         request_context: TokenRequestContext,
         _: Context,
+        runtime: core.http.HttpRuntime,
     ) anyerror!AccessToken {
         const self: *WorkloadIdentityCredential = @fieldParentPtr("credential", cred);
         const allocator = self.allocator;
@@ -83,6 +87,17 @@ pub const WorkloadIdentityCredential = struct {
             request_context.scopes[0]
         else
             return error.NoScopesProvided;
+
+        return self.exchangeAssertion(assertion, scope, runtime);
+    }
+
+    fn exchangeAssertion(
+        self: *WorkloadIdentityCredential,
+        assertion: []const u8,
+        scope: []const u8,
+        runtime: core.http.HttpRuntime,
+    ) !AccessToken {
+        const allocator = self.allocator;
 
         // POST client_assertion to the token endpoint.
         const url = try std.fmt.allocPrint(allocator, "{s}/{s}/oauth2/v2.0/token", .{
@@ -111,10 +126,11 @@ pub const WorkloadIdentityCredential = struct {
 
         var req = core.http.Request.init(allocator, .POST, url);
         defer req.deinit();
+        req.redirect_policy = .not_allowed;
         try req.setHeader("Content-Type", "application/x-www-form-urlencoded");
         req.body = body;
 
-        var resp = try self.transport.send(&req);
+        var resp = try runtime.transport.send(&req);
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
@@ -148,10 +164,8 @@ fn readTokenFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
 
 test "WorkloadIdentityCredential fields" {
     const allocator = std.testing.allocator;
-    var mock = core.http.MockTransport.init(allocator, 200, "{}");
     var cred = try WorkloadIdentityCredential.init(
         allocator,
-        mock.asTransport(),
         "tenant",
         "client",
         "/var/run/secrets/azure/tokens/azure-identity-token",
@@ -159,4 +173,44 @@ test "WorkloadIdentityCredential fields" {
     defer cred.deinit();
     try std.testing.expectEqualStrings("tenant", cred.tenant_id);
     try std.testing.expectEqualStrings("client", cred.client_id);
+}
+
+test "WorkloadIdentityCredential does not replay assertion across 308 redirect" {
+    const allocator = std.testing.allocator;
+    var sequence = core.http.SequenceMockTransport.init(allocator, &.{
+        .{
+            .status = 308,
+            .body = "",
+            .headers = &.{.{
+                .name = "Location",
+                .value = "https://attacker.example/token",
+            }},
+        },
+        .{
+            .status = 200,
+            .body = "{\"access_token\":\"stolen\",\"expires_in\":3600}",
+        },
+    });
+    var credential = try WorkloadIdentityCredential.init(
+        allocator,
+        "tenant",
+        "client",
+        "/unused",
+    );
+    defer credential.deinit();
+
+    try std.testing.expectError(
+        error.AuthenticationFailed,
+        credential.exchangeAssertion(
+            "federated-assertion",
+            "https://vault.azure.net/.default",
+            testingRuntime(sequence.asTransport()),
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 1), sequence.call_count);
+    try std.testing.expect(std.mem.find(
+        u8,
+        sequence.capturedBody(0),
+        "client_assertion=federated-assertion",
+    ) != null);
 }

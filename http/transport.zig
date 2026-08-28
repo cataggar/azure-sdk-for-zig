@@ -424,26 +424,33 @@ pub const HttpOperation = struct {
     }
 };
 
-/// Pluggable HTTP transport interface.
+/// Copyable borrowed descriptor for a pluggable HTTP transport.
 ///
-/// Default implementation uses `std.http.Client` (TLS via `std.crypto.tls`).
-/// Users may supply their own for testing or custom networking.
-/// Custom implementations must honor `.not_allowed`; this is a security
-/// contract for bootstrap calls.
+/// The descriptor borrows `context`, which must outlive all descriptor copies
+/// and open operations. Implementations must honor `.not_allowed`; this is a
+/// security contract for bootstrap calls. Redirect handling remains
+/// centralized in this descriptor rather than in concrete transports.
+/// Contexts must be concurrent-safe or caller-serialized;
+/// `StdHttpTransport` is caller-serialized.
 pub const HttpTransport = struct {
-    sendFn: *const fn (self: *HttpTransport, request: *Request) anyerror!Response,
-    openFn: ?*const fn (
-        self: *HttpTransport,
-        request: *Request,
-        options: OpenOptions,
-    ) anyerror!*HttpOperation = null,
+    context: *anyopaque,
+    vtable: *const VTable,
 
-    pub fn send(self: *HttpTransport, request: *Request) !Response {
+    pub const VTable = struct {
+        send: *const fn (context: *anyopaque, request: *Request) anyerror!Response,
+        open: ?*const fn (
+            context: *anyopaque,
+            request: *Request,
+            options: OpenOptions,
+        ) anyerror!*HttpOperation = null,
+    };
+
+    pub fn send(self: HttpTransport, request: *Request) !Response {
         return sendFollowingRedirects(self, request);
     }
 
     pub fn open(
-        self: *HttpTransport,
+        self: HttpTransport,
         request: *Request,
         options: OpenOptions,
     ) !*HttpOperation {
@@ -453,7 +460,7 @@ pub const HttpTransport = struct {
 
 const max_redirects = 10;
 
-fn sendFollowingRedirects(transport: *HttpTransport, request: *Request) !Response {
+fn sendFollowingRedirects(transport: HttpTransport, request: *Request) !Response {
     var current = request;
     var owned: ?*OwnedRedirectRequest = null;
     defer if (owned) |value| value.destroy();
@@ -461,7 +468,7 @@ fn sendFollowingRedirects(transport: *HttpTransport, request: *Request) !Respons
     var redirect_count: usize = 0;
     while (true) {
         current.transport_started = true;
-        var response = try transport.sendFn(transport, current);
+        var response = try transport.vtable.send(transport.context, current);
         const action = redirectAction(
             response.status_code,
             current.method,
@@ -498,7 +505,7 @@ fn sendFollowingRedirects(transport: *HttpTransport, request: *Request) !Respons
 }
 
 fn openFollowingRedirects(
-    transport: *HttpTransport,
+    transport: HttpTransport,
     request: *Request,
     options: OpenOptions,
 ) !*HttpOperation {
@@ -566,14 +573,14 @@ fn openFollowingRedirects(
 }
 
 fn rawOpen(
-    transport: *HttpTransport,
+    transport: HttpTransport,
     request: *Request,
     options: OpenOptions,
 ) !*HttpOperation {
     try checkCancelled(options.cancellation);
-    if (transport.openFn) |openFn| {
+    if (transport.vtable.open) |openFn| {
         request.transport_started = true;
-        return openFn(transport, request, options);
+        return openFn(transport.context, request, options);
     }
     if (options.body != null) return error.StreamingRequestUnsupported;
     request.transport_started = true;
@@ -689,8 +696,8 @@ const BufferedOperation = struct {
     response: Response,
     reader_impl: std.Io.Reader,
 
-    fn openRaw(transport: *HttpTransport, request: *Request) !*HttpOperation {
-        return fromResponse(try transport.sendFn(transport, request));
+    fn openRaw(transport: HttpTransport, request: *Request) !*HttpOperation {
+        return fromResponse(try transport.vtable.send(transport.context, request));
     }
 
     fn fromResponse(response_value: Response) !*HttpOperation {
@@ -752,11 +759,14 @@ pub const StdHttpTransport = struct {
     /// in one response, or set `.unlimited` to remove the ceiling. Only
     /// applies to `send`; a streaming operation reads at the caller's pace.
     max_response_body: std.Io.Limit = .limited(default_max_response_body),
-    transport: HttpTransport,
-
     /// Chosen to hold the largest responses seen in practice while still
     /// failing fast on a stream that never ends.
     pub const default_max_response_body = 64 * 1024 * 1024;
+
+    const vtable: HttpTransport.VTable = .{
+        .send = &sendImpl,
+        .open = &openImpl,
+    };
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) StdHttpTransport {
         return initWithClient(allocator, .{ .allocator = allocator, .io = io });
@@ -771,12 +781,11 @@ pub const StdHttpTransport = struct {
         return .{
             .allocator = allocator,
             .client = client,
-            .transport = .{ .sendFn = &sendImpl, .openFn = &openImpl },
         };
     }
 
-    pub fn asTransport(self: *StdHttpTransport) *HttpTransport {
-        return &self.transport;
+    pub fn asTransport(self: *StdHttpTransport) HttpTransport {
+        return .{ .context = self, .vtable = &vtable };
     }
 
     pub fn deinit(self: *StdHttpTransport) void {
@@ -799,8 +808,8 @@ pub const StdHttpTransport = struct {
         return shared;
     }
 
-    fn sendImpl(transport: *HttpTransport, request: *Request) !Response {
-        const self: *StdHttpTransport = @alignCast(@fieldParentPtr("transport", transport));
+    fn sendImpl(context: *anyopaque, request: *Request) !Response {
+        const self: *StdHttpTransport = @ptrCast(@alignCast(context));
         const allocator = self.allocator;
 
         var operation = try StdStreamingOperation.open(
@@ -837,11 +846,11 @@ pub const StdHttpTransport = struct {
     }
 
     fn openImpl(
-        transport: *HttpTransport,
+        context: *anyopaque,
         request: *Request,
         options: OpenOptions,
     ) !*HttpOperation {
-        const self: *StdHttpTransport = @alignCast(@fieldParentPtr("transport", transport));
+        const self: *StdHttpTransport = @ptrCast(@alignCast(context));
         return StdStreamingOperation.open(try self.sharedClient(), request, options);
     }
 };
@@ -1245,7 +1254,6 @@ pub const MockTransport = struct {
     response_status: u16,
     response_body: []const u8,
     allocator: std.mem.Allocator,
-    transport: HttpTransport,
     last_method: ?Method = null,
     last_url: ?[]u8 = null,
     last_headers: std.StringHashMap([]const u8),
@@ -1264,12 +1272,16 @@ pub const MockTransport = struct {
     stream_cancel_count: usize = 0,
     stream_deinit_count: usize = 0,
 
+    const vtable: HttpTransport.VTable = .{
+        .send = &sendImpl,
+        .open = &openImpl,
+    };
+
     pub fn init(allocator: std.mem.Allocator, status: u16, body: []const u8) MockTransport {
         return .{
             .response_status = status,
             .response_body = body,
             .allocator = allocator,
-            .transport = .{ .sendFn = &sendImpl, .openFn = &openImpl },
             .last_method = null,
             .last_url = null,
             .last_headers = std.StringHashMap([]const u8).init(allocator),
@@ -1278,8 +1290,8 @@ pub const MockTransport = struct {
         };
     }
 
-    pub fn asTransport(self: *MockTransport) *HttpTransport {
-        return &self.transport;
+    pub fn asTransport(self: *MockTransport) HttpTransport {
+        return .{ .context = self, .vtable = &vtable };
     }
 
     pub fn deinit(self: *MockTransport) void {
@@ -1288,8 +1300,8 @@ pub const MockTransport = struct {
         deinitOwnedHeaders(self.allocator, &self.last_headers);
     }
 
-    fn sendImpl(transport: *HttpTransport, request: *Request) !Response {
-        const self: *MockTransport = @alignCast(@fieldParentPtr("transport", transport));
+    fn sendImpl(context: *anyopaque, request: *Request) !Response {
+        const self: *MockTransport = @ptrCast(@alignCast(context));
         try self.captureRequest(request, request.body);
 
         const response_body_copy = try self.allocator.dupe(u8, self.response_body);
@@ -1306,11 +1318,11 @@ pub const MockTransport = struct {
     }
 
     fn openImpl(
-        transport: *HttpTransport,
+        context: *anyopaque,
         request: *Request,
         options: OpenOptions,
     ) !*HttpOperation {
-        const self: *MockTransport = @alignCast(@fieldParentPtr("transport", transport));
+        const self: *MockTransport = @ptrCast(@alignCast(context));
         if (options.body != null and request.body != null) return error.MultipleRequestBodies;
         try checkCancelled(options.cancellation);
         const framing = requestBodyFraming(request, options);
@@ -1611,7 +1623,6 @@ pub const SequenceMockTransport = struct {
     responses: []const CannedResponse,
     call_count: usize = 0,
     allocator: std.mem.Allocator,
-    transport: HttpTransport,
     captured_methods: [16]?Method = .{null} ** 16,
     captured_authorization: [16]bool = .{false} ** 16,
     captured_cookie: [16]bool = .{false} ** 16,
@@ -1627,30 +1638,34 @@ pub const SequenceMockTransport = struct {
     captured_bodies: [16][512]u8 = undefined,
     cancel_after_open: ?*CancellationToken = null,
 
+    const vtable: HttpTransport.VTable = .{
+        .send = &sendImpl,
+        .open = &openImpl,
+    };
+
     pub fn init(allocator: std.mem.Allocator, responses: []const CannedResponse) SequenceMockTransport {
         return .{
             .responses = responses,
             .allocator = allocator,
-            .transport = .{ .sendFn = &sendImpl, .openFn = &openImpl },
         };
     }
 
-    pub fn asTransport(self: *SequenceMockTransport) *HttpTransport {
-        return &self.transport;
+    pub fn asTransport(self: *SequenceMockTransport) HttpTransport {
+        return .{ .context = self, .vtable = &vtable };
     }
 
-    fn sendImpl(transport: *HttpTransport, request: *Request) !Response {
-        const self: *SequenceMockTransport = @alignCast(@fieldParentPtr("transport", transport));
+    fn sendImpl(context: *anyopaque, request: *Request) !Response {
+        const self: *SequenceMockTransport = @ptrCast(@alignCast(context));
         const idx = try self.capture(request, request.body);
         return self.response(idx);
     }
 
     fn openImpl(
-        transport: *HttpTransport,
+        context: *anyopaque,
         request: *Request,
         options: OpenOptions,
     ) !*HttpOperation {
-        const self: *SequenceMockTransport = @alignCast(@fieldParentPtr("transport", transport));
+        const self: *SequenceMockTransport = @ptrCast(@alignCast(context));
         if (options.body != null and request.body != null) return error.MultipleRequestBodies;
         try checkCancelled(options.cancellation);
         const framing = requestBodyFraming(request, options);
@@ -1785,14 +1800,15 @@ test "streaming preflight failures do not mark transport as started" {
     const allocator = std.testing.allocator;
     var mock = MockTransport.init(allocator, 200, "ok");
     defer mock.deinit();
-    mock.transport.openFn = null;
+    const send_only_vtable: HttpTransport.VTable = .{ .send = &MockTransport.sendImpl };
+    const send_only = HttpTransport{ .context = &mock, .vtable = &send_only_vtable };
 
     var unsupported_request = Request.init(allocator, .POST, "https://example.com/upload");
     defer unsupported_request.deinit();
     var source = std.Io.Reader.fixed("body");
     try std.testing.expectError(
         error.StreamingRequestUnsupported,
-        mock.asTransport().open(&unsupported_request, .{
+        send_only.open(&unsupported_request, .{
             .body = StreamingRequestBody.knownLength(&source, 4),
         }),
     );
@@ -1808,6 +1824,26 @@ test "streaming preflight failures do not mark transport as started" {
     );
     try std.testing.expect(!cancelled_request.transport_started);
     try std.testing.expectEqual(@as(usize, 0), mock.call_count);
+}
+
+test "HttpTransport descriptors copy and retain centralized redirects" {
+    const allocator = std.testing.allocator;
+    var sequence = SequenceMockTransport.init(allocator, &.{
+        .{
+            .status = 307,
+            .body = "",
+            .headers = &.{.{ .name = "Location", .value = "/next" }},
+        },
+        .{ .status = 200, .body = "ok" },
+    });
+    const first = sequence.asTransport();
+    const copied = first;
+    var request = Request.init(allocator, .GET, "https://example.com/start");
+    defer request.deinit();
+    var response = try copied.send(&request);
+    defer response.deinit();
+    try std.testing.expectEqual(@as(usize, 2), sequence.call_count);
+    try std.testing.expectEqualStrings("https://example.com/next", sequence.capturedUrl(1));
 }
 
 test "response isSuccess" {

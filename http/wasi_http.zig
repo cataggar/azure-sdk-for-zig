@@ -14,7 +14,7 @@
 //! wired up and returns `error.RequestBodyUnsupported`.
 //!
 //! Compiles only on `wasm32-wasi`. Callers should reach this through the
-//! target-guarded `azure_sdk_core.wasi_http` re-export in `root.zig`.
+//! target-guarded `azure_sdk_core.http.wasi` re-export.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -22,7 +22,7 @@ const transport = @import("transport.zig");
 
 comptime {
     if (!(builtin.target.cpu.arch == .wasm32 and builtin.target.os.tag == .wasi))
-        @compileError("azure_sdk_core.wasi_http is only supported on wasm32-wasi");
+        @compileError("azure_sdk_core.http.wasi is only supported on wasm32-wasi");
 }
 
 // ── Canonical-ABI lowered host imports ─────────────────────────────────
@@ -108,14 +108,15 @@ inline fn retClear() void {
 
 pub const WasiHttpTransport = struct {
     allocator: std.mem.Allocator,
-    transport: transport.HttpTransport,
+
+    const vtable: transport.HttpTransport.VTable = .{ .send = &sendImpl };
 
     pub fn init(allocator: std.mem.Allocator) WasiHttpTransport {
-        return .{ .allocator = allocator, .transport = .{ .sendFn = &sendImpl } };
+        return .{ .allocator = allocator };
     }
 
-    pub fn asTransport(self: *WasiHttpTransport) *transport.HttpTransport {
-        return &self.transport;
+    pub fn asTransport(self: *WasiHttpTransport) transport.HttpTransport {
+        return .{ .context = self, .vtable = &vtable };
     }
 
     fn methodDisc(m: transport.Method) i32 {
@@ -130,8 +131,8 @@ pub const WasiHttpTransport = struct {
         };
     }
 
-    fn sendImpl(t: *transport.HttpTransport, request: *transport.Request) anyerror!transport.Response {
-        const self: *WasiHttpTransport = @fieldParentPtr("transport", t);
+    fn sendImpl(context: *anyopaque, request: *transport.Request) anyerror!transport.Response {
+        const self: *WasiHttpTransport = @ptrCast(@alignCast(context));
         const allocator = self.allocator;
 
         if (request.body != null) return error.RequestBodyUnsupported;

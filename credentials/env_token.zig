@@ -40,6 +40,7 @@ pub const EnvTokenCredential = struct {
         cred: *token.TokenCredential,
         _: token.TokenRequestContext,
         _: context_mod.Context,
+        _: @import("../http/runtime.zig").HttpRuntime,
     ) anyerror!token.AccessToken {
         const self: *EnvTokenCredential = @alignCast(@fieldParentPtr("credential", cred));
         // Return an explicitly owned copy; AccessToken carries its allocator.
