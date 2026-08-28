@@ -403,7 +403,22 @@ test "Container Registry golden preserves protocol fidelity" {
     const clients = try emitter.renderClients(allocator, parsed.value);
     defer allocator.free(clients);
     try expectValidZig(allocator, clients);
-    try testing.expect(std.mem.indexOf(u8, clients, "pub fn initWithPipeline(") != null);
+    try testing.expect(std.mem.indexOf(u8, clients, "pipeline: core.http.HttpPipeline") != null);
+    try testing.expect(std.mem.indexOf(
+        u8,
+        clients,
+        "pub fn init(\n        pipeline: core.http.HttpPipeline,\n        options: InitOptions,",
+    ) != null);
+    try testing.expect(std.mem.indexOf(u8, clients, "pub fn initWithPipeline(") == null);
+    try testing.expect(std.mem.indexOf(u8, clients, "PipelineOptions") == null);
+    try testing.expect(std.mem.indexOf(u8, clients, "auth_scopes") == null);
+    try testing.expect(std.mem.indexOf(
+        u8,
+        clients,
+        "credential: *core.credentials.TokenCredential",
+    ) == null);
+    try testing.expect(std.mem.indexOf(u8, clients, "core.pipeline") == null);
+    try testing.expect(std.mem.indexOf(u8, clients, "core.wasi_http") == null);
     try testing.expect(std.mem.indexOf(u8, clients, "core.url.encodeRepositoryName(alloc, name)") != null);
     try testing.expect(std.mem.indexOf(u8, clients, "core.url.expandGreedyPathValue(alloc, next_blob_uuid_link)") != null);
     try testing.expect(std.mem.indexOf(u8, clients, "core.url.resolveAndValidateUrl(") != null);
