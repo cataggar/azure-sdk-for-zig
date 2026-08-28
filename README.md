@@ -20,10 +20,11 @@ unions. It does not add challenge authentication, safe continuation
 validation, digest verification, transfer replay, or domain ownership
 helpers. Use `azure_sdk_container_registry` for those behaviors.
 
-The generated `initWithPipeline` constructor is the protocol escape
-hatch for callers that need custom policies or operations not surfaced
-by the hand-written package. The supplied pipeline and transport are
-borrowed and must outlive every generated client and active operation.
+The generated `init` constructor accepts the caller's
+`core.http.HttpPipeline`. Construct that pipeline from a
+`core.http.HttpRuntime` and the policy chain required by the application.
+The runtime descriptors and their backend contexts are borrowed and must
+outlive every generated client and active operation.
 Generated result fields follow their declared allocator ownership; free
 or deinitialize every owned body/header/model value shown by the type.
 
@@ -39,12 +40,13 @@ responses.
 
 ```bash
 zig build test --summary all
-(cd ../../codegen/cli && zig build generate-container-registry-package)
-../../scripts/verify-container-registry-regeneration.sh
+gh workflow run generated-package-pr.yml \
+  -f target_branch=rest/container_registry \
+  -f generator_commit=<main-commit>
 ```
 
-Local development depends directly on the repository's
-`azure_sdk_core` package. Release staging replaces that local path with
-an immutable commit/hash pin. See the
-[package branch model](../../doc/package-branch-model.md) and
-[Container Registry release staging](../../eng/container_registry_release/README.md).
+The package manifest pins `azure_sdk_core` by immutable commit and Zig
+package hash. See the
+[package branch model](https://github.com/cataggar/azure-sdk-for-zig/blob/main/doc/package-branch-model.md)
+and
+[Container Registry release staging](https://github.com/cataggar/azure-sdk-for-zig/blob/main/eng/container_registry_release/README.md).
