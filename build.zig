@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 /// Single source of truth for the package version: the manifest.
 const package_version = @import("build.zig.zon").version;
@@ -127,7 +128,11 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    const package_archive = b.addSystemCommand(&.{ "tar", "-czf" });
+    const package_archive = b.addSystemCommand(&.{"tar"});
+    if (builtin.target.os.tag == .windows) {
+        package_archive.addArg("--force-local");
+    }
+    package_archive.addArg("-czf");
     package_archive.has_side_effects = true;
     const archive = package_archive.addOutputFileArg(
         "azure_sdk_core-manifest-filtered.tar.gz",

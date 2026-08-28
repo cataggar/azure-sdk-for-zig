@@ -126,10 +126,14 @@ pub const ScriptedHttpServer = struct {
         const active_stream = self.active_stream;
         self.mutex.unlock(self.io);
 
-        const listener_stream = std.Io.net.Stream{ .socket = self.listener.socket };
-        listener_stream.shutdown(self.io, .both) catch {};
         if (active_stream) |stream| {
             stream.shutdown(self.io, .both) catch {};
+        } else {
+            const wake_stream = self.listener.socket.address.connect(
+                self.io,
+                .{ .mode = .stream },
+            ) catch return;
+            wake_stream.close(self.io);
         }
     }
 
