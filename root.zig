@@ -56,29 +56,90 @@ const CanonicalHeader = struct {
     value: []const u8,
 };
 
-fn canonicalHeaderLessThan(_: void, lhs: CanonicalHeader, rhs: CanonicalHeader) bool {
-    // Azure SDKs use invariant header collation, where punctuation is
-    // ignorable at the primary comparison level.
+fn primaryHeaderWeight(byte: u8) u16 {
+    const lower = std.ascii.toLower(byte);
+    return switch (lower) {
+        '!' => 0x071c,
+        '#' => 0x071f,
+        '$' => 0x0721,
+        '%' => 0x0723,
+        '&' => 0x0725,
+        '\'' => 0,
+        '*' => 0x072d,
+        '+' => 0x0803,
+        '-' => 0,
+        '.' => 0x0733,
+        '0'...'9' => ([_]u16{
+            0x0d03, 0x0d1a, 0x0d1c, 0x0d1e, 0x0d20,
+            0x0d22, 0x0d24, 0x0d26, 0x0d28, 0x0d2a,
+        })[lower - '0'],
+        '^' => 0x0743,
+        '_' => 0x0744,
+        '`' => 0x0748,
+        'a'...'z' => ([_]u16{
+            0x0e02, 0x0e09, 0x0e0a, 0x0e1a, 0x0e21, 0x0e23, 0x0e25,
+            0x0e2c, 0x0e32, 0x0e35, 0x0e36, 0x0e48, 0x0e51, 0x0e70,
+            0x0e7c, 0x0e7e, 0x0e89, 0x0e8a, 0x0e91, 0x0e99, 0x0e9f,
+            0x0ea2, 0x0ea4, 0x0ea6, 0x0ea7, 0x0ea9,
+        })[lower - 'a'],
+        '|' => 0x074c,
+        '~' => 0x0750,
+        else => unreachable,
+    };
+}
+
+fn headerWeight(level: usize, byte: u8) u16 {
+    return switch (level) {
+        0 => primaryHeaderWeight(byte),
+        1 => 0,
+        2 => switch (byte) {
+            '\'' => 0x8012,
+            '-' => 0x8212,
+            else => 0,
+        },
+        else => unreachable,
+    };
+}
+
+fn compareCanonicalHeaderNames(lhs: []const u8, rhs: []const u8) i32 {
+    var level: usize = 0;
     var lhs_index: usize = 0;
     var rhs_index: usize = 0;
-    while (true) {
-        while (lhs_index < lhs.name.len and
-            !std.ascii.isAlphanumeric(lhs.name[lhs_index])) : (lhs_index += 1)
-        {}
-        while (rhs_index < rhs.name.len and
-            !std.ascii.isAlphanumeric(rhs.name[rhs_index])) : (rhs_index += 1)
-        {}
-        if (lhs_index == lhs.name.len or rhs_index == rhs.name.len) break;
 
-        const lhs_lower = std.ascii.toLower(lhs.name[lhs_index]);
-        const rhs_lower = std.ascii.toLower(rhs.name[rhs_index]);
-        if (lhs_lower != rhs_lower) return lhs_lower < rhs_lower;
-        lhs_index += 1;
-        rhs_index += 1;
+    while (level < 3) {
+        if (level == 2 and lhs_index != rhs_index) {
+            return @as(i32, @intCast(rhs_index)) - @as(i32, @intCast(lhs_index));
+        }
+
+        const lhs_weight = if (lhs_index < lhs.len)
+            headerWeight(level, std.ascii.toLower(lhs[lhs_index]))
+        else
+            1;
+        const rhs_weight = if (rhs_index < rhs.len)
+            headerWeight(level, std.ascii.toLower(rhs[rhs_index]))
+        else
+            1;
+
+        if (lhs_weight == 1 and rhs_weight == 1) {
+            lhs_index = 0;
+            rhs_index = 0;
+            level += 1;
+        } else if (lhs_weight == rhs_weight) {
+            lhs_index += 1;
+            rhs_index += 1;
+        } else if (lhs_weight == 0) {
+            lhs_index += 1;
+        } else if (rhs_weight == 0) {
+            rhs_index += 1;
+        } else {
+            return @as(i32, lhs_weight) - @as(i32, rhs_weight);
+        }
     }
-    if (lhs_index == lhs.name.len and rhs_index != rhs.name.len) return true;
-    if (rhs_index == rhs.name.len and lhs_index != lhs.name.len) return false;
-    return std.ascii.orderIgnoreCase(lhs.name, rhs.name) == .lt;
+    return 0;
+}
+
+fn canonicalHeaderLessThan(_: void, lhs: CanonicalHeader, rhs: CanonicalHeader) bool {
+    return compareCanonicalHeaderNames(lhs.name, rhs.name) < 0;
 }
 
 fn appendCanonicalHeaderValue(
@@ -802,6 +863,81 @@ test "Shared Key matches Azure SDK arbitrary x-ms header vector" {
         "SharedKey accountName:+//+paWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaU=",
         request.getHeader("Authorization").?,
     );
+}
+
+test "Shared Key matches authoritative punctuation header ordering vector" {
+    // Expected order and signature were generated independently from Azure
+    // Storage's HeaderStringComparer weight tables.
+    const allocator = std.testing.allocator;
+    var provider_impl = crypto.StdCryptoProvider.init(std.testing.io);
+    var credential = try StorageSharedKeyCredential.init(
+        allocator,
+        "devstoreaccount1",
+        azurite_account_key,
+    );
+    defer credential.deinit();
+    var request = core.http.Request.init(
+        allocator,
+        .GET,
+        "https://devstoreaccount1.blob.core.windows.net/",
+    );
+    defer request.deinit();
+    try request.setHeader("Date", "Fri, 26 Jun 2015 23:39:12 GMT");
+    try request.setHeader("x-ms-meta-a!z", "bang");
+    try request.setHeader("x-ms-meta-a#z", "hash");
+    try request.setHeader("x-ms-meta-a$z", "dollar");
+    try request.setHeader("x-ms-meta-a%z", "percent");
+    try request.setHeader("x-ms-meta-a&z", "ampersand");
+    try request.setHeader("x-ms-meta-a'z", "apostrophe");
+    try request.setHeader("x-ms-meta-a*z", "asterisk");
+    try request.setHeader("x-ms-meta-a+z", "plus");
+    try request.setHeader("x-ms-meta-a-z", "hyphen");
+    try request.setHeader("x-ms-meta-a.z", "dot");
+    try request.setHeader("x-ms-meta-a^z", "caret");
+    try request.setHeader("X-MS-META-A_Z", "underscore");
+    try request.setHeader("x-ms-meta-a`z", "backtick");
+    try request.setHeader("x-ms-meta-a|z", "pipe");
+    try request.setHeader("x-ms-meta-a~z", "tilde");
+    try request.setHeader("x-ms-meta-ab", "letters");
+
+    const expected_string =
+        "GET\n" ++
+        "\n" ** 5 ++
+        "Fri, 26 Jun 2015 23:39:12 GMT\n" ++
+        "\n" ** 5 ++
+        "x-ms-meta-a!z:bang\n" ++
+        "x-ms-meta-a#z:hash\n" ++
+        "x-ms-meta-a$z:dollar\n" ++
+        "x-ms-meta-a%z:percent\n" ++
+        "x-ms-meta-a&z:ampersand\n" ++
+        "x-ms-meta-a*z:asterisk\n" ++
+        "x-ms-meta-a.z:dot\n" ++
+        "x-ms-meta-a^z:caret\n" ++
+        "x-ms-meta-a_z:underscore\n" ++
+        "x-ms-meta-a`z:backtick\n" ++
+        "x-ms-meta-a|z:pipe\n" ++
+        "x-ms-meta-a~z:tilde\n" ++
+        "x-ms-meta-a+z:plus\n" ++
+        "x-ms-meta-ab:letters\n" ++
+        "x-ms-meta-a'z:apostrophe\n" ++
+        "x-ms-meta-a-z:hyphen\n" ++
+        "/devstoreaccount1/";
+
+    try std.testing.expect(
+        compareCanonicalHeaderNames("x-ms-meta-a_z", "x-ms-meta-ab") < 0,
+    );
+    try std.testing.expect(
+        compareCanonicalHeaderNames("x-ms-meta-a'z", "x-ms-meta-a-z") < 0,
+    );
+    try credential.signRequest(&request, provider_impl.asProvider());
+    try std.testing.expectEqualStrings(
+        "SharedKey devstoreaccount1:nB1SHSCO6trrvw6+dhfCrhlYC/4SfYfkFy4vzueeyEs=",
+        request.getHeader("Authorization").?,
+    );
+
+    var spy = TestCryptoProvider{};
+    try credential.signRequest(&request, spy.provider());
+    try std.testing.expectEqualStrings(expected_string, spy.message[0..spy.message_len]);
 }
 
 test "Shared Key canonicalizes Date Content-MD5 whitespace and repeated encoded queries" {
