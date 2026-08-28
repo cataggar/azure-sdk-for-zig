@@ -883,6 +883,8 @@ const StdStreamingOperation = struct {
     request_active: bool,
     response: std.http.Client.Response,
     transfer_reader: *std.Io.Reader,
+    content_length_reader: CheckedContentLengthReader,
+    content_length_checked: bool,
     transfer_buffer: [64]u8,
     // Owned empty reader handed back for responses that carry no body (HEAD,
     // TRACE). It must be a per-operation instance rather than the shared
@@ -921,6 +923,8 @@ const StdStreamingOperation = struct {
             .request_active = false,
             .response = undefined,
             .transfer_reader = undefined,
+            .content_length_reader = undefined,
+            .content_length_checked = false,
             .transfer_buffer = undefined,
             .empty_reader = undefined,
             .upload_read_buffer = undefined,
@@ -967,7 +971,10 @@ const StdStreamingOperation = struct {
         var header_set = try copyResponseHeaders(allocator, &self.response.head);
         errdefer header_set.deinit(allocator);
 
-        self.decompress_buffer = switch (self.response.head.content_encoding) {
+        const transfer_encoding = self.response.head.transfer_encoding;
+        const content_length = self.response.head.content_length;
+        const content_encoding = self.response.head.content_encoding;
+        self.decompress_buffer = switch (content_encoding) {
             .identity => &.{},
             .zstd => try allocator.alloc(
                 u8,
@@ -984,21 +991,28 @@ const StdStreamingOperation = struct {
         // `finishImpl`'s `discardRemaining` writes to owned, writable memory.
         const no_response_body = !self.request.method.responseHasBody();
         if (no_response_body) self.empty_reader = std.Io.Reader.fixed("");
-        self.transfer_reader =
-            if (no_response_body)
-                &self.empty_reader
-            else if (self.response.head.transfer_encoding != .none or
-            self.response.head.content_length != null)
-                &self.request.reader.interface
-            else
-                self.request.reader.in;
+        if (no_response_body) {
+            self.transfer_reader = &self.empty_reader;
+        } else {
+            const std_transfer_reader = self.response.reader(&self.transfer_buffer);
+            if (transfer_encoding == .none and content_length != null) {
+                self.content_length_reader.init(
+                    std_transfer_reader,
+                    content_length.?,
+                );
+                self.content_length_checked = true;
+                self.transfer_reader = &self.content_length_reader.interface;
+            } else {
+                self.transfer_reader = std_transfer_reader;
+            }
+        }
         const body_reader = if (no_response_body)
             &self.empty_reader
         else
-            self.response.readerDecompressing(
-                &self.transfer_buffer,
-                &self.decompress,
+            self.decompress.init(
+                self.transfer_reader,
                 self.decompress_buffer,
+                content_encoding,
             );
         self.operation = .{
             .status_code = status_code,
@@ -1091,13 +1105,13 @@ const StdStreamingOperation = struct {
     fn finishImpl(operation: *HttpOperation) !void {
         const self: *StdStreamingOperation = @alignCast(@fieldParentPtr("operation", operation));
         _ = self.operation.body_reader.discardRemaining() catch |err| {
-            const body_error = self.response.bodyErr();
+            const body_error = self.responseBodyError();
             self.releaseRequest(true);
             return body_error orelse err;
         };
         if (self.transfer_reader != self.operation.body_reader) {
             _ = self.transfer_reader.discardRemaining() catch |err| {
-                const body_error = self.response.bodyErr();
+                const body_error = self.responseBodyError();
                 self.releaseRequest(true);
                 return body_error orelse err;
             };
@@ -1112,6 +1126,13 @@ const StdStreamingOperation = struct {
 
     fn bodyErrorImpl(operation: *const HttpOperation) ?anyerror {
         const self: *const StdStreamingOperation = @alignCast(@fieldParentPtr("operation", operation));
+        return self.responseBodyError();
+    }
+
+    fn responseBodyError(self: *const StdStreamingOperation) ?anyerror {
+        if (self.content_length_checked) {
+            if (self.content_length_reader.failure) |failure| return failure;
+        }
         return self.response.bodyErr();
     }
 
@@ -1139,6 +1160,86 @@ const StdStreamingOperation = struct {
         if (self.extra_headers.len > 0) self.allocator.free(self.extra_headers);
         deinitOwnedHeaders(self.allocator, &self.request_headers);
         self.shared_client.release();
+    }
+};
+
+const CheckedContentLengthReader = struct {
+    interface: std.Io.Reader,
+    source: *std.Io.Reader,
+    remaining: u64,
+    failure: ?anyerror = null,
+    buffer: [64]u8,
+
+    fn init(
+        self: *CheckedContentLengthReader,
+        source: *std.Io.Reader,
+        content_length: u64,
+    ) void {
+        self.* = .{
+            .interface = .{
+                .vtable = &.{
+                    .stream = &stream,
+                    .discard = &discard,
+                },
+                .buffer = &self.buffer,
+                .seek = 0,
+                .end = 0,
+            },
+            .source = source,
+            .remaining = content_length,
+            .buffer = undefined,
+        };
+    }
+
+    fn stream(
+        interface: *std.Io.Reader,
+        writer: *std.Io.Writer,
+        limit: std.Io.Limit,
+    ) std.Io.Reader.StreamError!usize {
+        const self: *CheckedContentLengthReader = @alignCast(
+            @fieldParentPtr("interface", interface),
+        );
+        if (self.remaining == 0) return error.EndOfStream;
+        const count = self.source.stream(
+            writer,
+            limit.min(.limited64(self.remaining)),
+        ) catch |err| switch (err) {
+            error.EndOfStream => {
+                self.failure = error.HttpContentLengthTruncated;
+                return error.ReadFailed;
+            },
+            error.ReadFailed => {
+                self.failure = error.ReadFailed;
+                return error.ReadFailed;
+            },
+            error.WriteFailed => return error.WriteFailed,
+        };
+        self.remaining -= count;
+        return count;
+    }
+
+    fn discard(
+        interface: *std.Io.Reader,
+        limit: std.Io.Limit,
+    ) std.Io.Reader.Error!usize {
+        const self: *CheckedContentLengthReader = @alignCast(
+            @fieldParentPtr("interface", interface),
+        );
+        if (self.remaining == 0) return error.EndOfStream;
+        const count = self.source.discard(
+            limit.min(.limited64(self.remaining)),
+        ) catch |err| switch (err) {
+            error.EndOfStream => {
+                self.failure = error.HttpContentLengthTruncated;
+                return error.ReadFailed;
+            },
+            error.ReadFailed => {
+                self.failure = error.ReadFailed;
+                return error.ReadFailed;
+            },
+        };
+        self.remaining -= count;
+        return count;
     }
 };
 

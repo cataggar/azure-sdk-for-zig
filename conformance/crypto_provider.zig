@@ -248,10 +248,20 @@ fn runConcurrencyContract(provider: core.crypto.CryptoProvider) !void {
                     self.failed.store(true, .release);
                     return;
                 }
-                _ = self.provider.hmacSha256("key", "message") catch {
+                const mac = self.provider.hmacSha256("key", "message") catch {
                     self.failed.store(true, .release);
                     return;
                 };
+                var expected_mac: core.crypto.HmacSha256Digest = undefined;
+                std.crypto.auth.hmac.sha2.HmacSha256.create(
+                    &expected_mac,
+                    "message",
+                    "key",
+                );
+                if (!std.mem.eql(u8, &mac, &expected_mac)) {
+                    self.failed.store(true, .release);
+                    return;
+                }
             }
         }
     };

@@ -410,23 +410,57 @@ fn runResponseFramingContract(
     io: std.Io,
     factory: BackendFactory,
 ) !void {
-    var backend = try factory.create(allocator, io, .{
-        .response = .{
-            .body = "short",
-            .advertised_content_length = 12,
-        },
-    });
-    defer backend.deinit();
-    var request = core.http.Request.init(allocator, .GET, backend.url);
-    defer request.deinit();
-    var operation = try backend.transport.open(&request, .{});
-    if (operation.finish()) |_| {
-        operation.deinit();
-        return error.ExpectedResponseFramingFailure;
-    } else |_| {}
-    try std.testing.expectEqual(core.http.OperationState.aborted, operation.state);
-    operation.deinit();
-    try backend.finish();
+    {
+        var backend = try factory.create(allocator, io, .{
+            .response = .{
+                .body = "short",
+                .advertised_content_length = 12,
+            },
+        });
+        defer backend.deinit();
+        var request = core.http.Request.init(allocator, .GET, backend.url);
+        defer request.deinit();
+        var operation = try backend.transport.open(&request, .{});
+        defer operation.deinit();
+        try std.testing.expectError(
+            error.HttpContentLengthTruncated,
+            operation.finish(),
+        );
+        try std.testing.expectEqual(core.http.OperationState.aborted, operation.state);
+        try backend.finish();
+    }
+    {
+        var backend = try factory.create(allocator, io, .{
+            .response = .{
+                .body = "short",
+                .advertised_content_length = 12,
+            },
+        });
+        defer backend.deinit();
+        var request = core.http.Request.init(allocator, .GET, backend.url);
+        defer request.deinit();
+        try std.testing.expectError(
+            error.HttpContentLengthTruncated,
+            backend.transport.send(&request),
+        );
+        try backend.finish();
+    }
+    {
+        const malformed_headers = [_]scripted.Header{
+            .{ .name = "Content-Length", .value = "not-a-number" },
+        };
+        var backend = try factory.create(allocator, io, .{
+            .response = .{ .headers = &malformed_headers },
+        });
+        defer backend.deinit();
+        var request = core.http.Request.init(allocator, .GET, backend.url);
+        defer request.deinit();
+        try std.testing.expectError(
+            error.HttpHeadersInvalid,
+            backend.transport.open(&request, .{}),
+        );
+        try backend.finish();
+    }
 }
 
 fn runResponseLimitContract(
@@ -780,7 +814,6 @@ const StdBackendState = struct {
     fn destroy(context: *anyopaque) void {
         const self: *StdBackendState = @ptrCast(@alignCast(context));
         if (self.server_started) {
-            if (!self.server_joined) self.server.join() catch {};
             self.server.deinit();
         }
         self.transport.deinit();
@@ -834,6 +867,7 @@ pub fn standardBackendFactory() BackendFactory {
     return .{
         .name = "std.http.Client",
         .capabilities = .{
+            .response_framing_validation = true,
             .response_body_limit = true,
             .decompression = true,
             .cancellation = .cooperative_upload,

@@ -91,7 +91,10 @@ Core CI runs the raw transport suite against `StdHttpTransport` and
 `MockTransport`, the pipeline and allocation-failure suites against reusable
 fakes, and the crypto suite against `StdCryptoProvider`. The standard
 transport is caller-serialized; the standard SDK crypto provider supports
-concurrent hash/HMAC calls.
+concurrent hash/HMAC calls. CI also archives exactly the manifest `.paths`,
+fetches that archive into a separate consumer package, and resolves all three
+modules through `b.dependency`; omitted package files therefore fail the
+package test.
 
 The WASI HTTP implementation separates target-neutral request adaptation from
 the `wasi:http@0.2.6` host externs. Native tests use an injectable fake host for
@@ -187,6 +190,8 @@ give each iteration enough work to dominate it.
 
 ```bash
 zig build test --summary all
+zig build package-consumer-check --summary all
+zig build wasi-check --summary all
 ```
 
 The package depends on `serde`. See the

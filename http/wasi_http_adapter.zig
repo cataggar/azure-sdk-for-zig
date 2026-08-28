@@ -58,24 +58,28 @@ pub fn HttpTransportAdapter(comptime Host: type) type {
             const self: *Self = @ptrCast(@alignCast(context));
             if (request.body != null) return error.RequestBodyUnsupported;
 
-            const sep = std.mem.indexOf(u8, request.url, "://") orelse
-                return error.InvalidUrl;
-            const scheme_text = request.url[0..sep];
-            const scheme: Scheme = if (std.ascii.eqlIgnoreCase(scheme_text, "http"))
+            const uri = std.Uri.parse(request.url) catch return error.InvalidUrl;
+            const scheme: Scheme = if (std.ascii.eqlIgnoreCase(uri.scheme, "http"))
                 .http
-            else if (std.ascii.eqlIgnoreCase(scheme_text, "https"))
+            else if (std.ascii.eqlIgnoreCase(uri.scheme, "https"))
                 .https
             else
                 return error.InvalidUrl;
-            const after_scheme = request.url[sep + 3 ..];
-            const slash = std.mem.indexOfScalar(u8, after_scheme, '/') orelse
-                after_scheme.len;
-            const authority = after_scheme[0..slash];
-            if (authority.len == 0) return error.InvalidUrl;
-            const path_with_query = if (slash < after_scheme.len)
-                after_scheme[slash..]
-            else
-                "/";
+            if (uri.host == null or uri.user != null or uri.password != null)
+                return error.InvalidUrl;
+
+            const authority = try std.fmt.allocPrint(self.allocator, "{f}", .{
+                std.Uri.fmt(&uri, .{ .authority = true, .port = true }),
+            });
+            defer self.allocator.free(authority);
+            const path_with_query = try std.fmt.allocPrint(self.allocator, "{f}", .{
+                std.Uri.fmt(&uri, .{
+                    .path = true,
+                    .query = true,
+                    .fragment = false,
+                }),
+            });
+            defer self.allocator.free(path_with_query);
 
             const host_response = try self.host.send(self.allocator, .{
                 .method = request.method,
@@ -129,44 +133,61 @@ fn deinitHeaders(
     headers.deinit();
 }
 
-test "native fake host exercises target-neutral WASI adaptation" {
-    const FakeHost = struct {
-        calls: usize = 0,
-        method: ?transport.Method = null,
-        scheme: ?Scheme = null,
-        authority: []const u8 = "",
-        path: []const u8 = "",
-        saw_host: bool = false,
+const RecordingHost = struct {
+    calls: usize = 0,
+    method: ?transport.Method = null,
+    scheme: ?Scheme = null,
+    authority: [256]u8 = undefined,
+    authority_len: usize = 0,
+    path: [512]u8 = undefined,
+    path_len: usize = 0,
+    saw_host: bool = false,
 
-        fn send(
-            self: *@This(),
-            allocator: std.mem.Allocator,
-            request: HostRequest,
-        ) !HostResponse {
-            self.calls += 1;
-            self.method = request.method;
-            self.scheme = request.scheme;
-            self.authority = request.authority;
-            self.path = request.path_with_query;
-            var headers = request.headers.iterator();
-            while (headers.next()) |header| {
-                if (std.ascii.eqlIgnoreCase(header.key_ptr.*, "host")) {
-                    self.saw_host = true;
-                }
-            }
-            return .{
-                .status_code = 202,
-                .headers = &.{
-                    .{ .name = "X-Test", .value = "first" },
-                    .{ .name = "x-test", .value = "second" },
-                },
-                .body = try allocator.dupe(u8, "fake-host"),
-            };
+    fn authorityValue(self: *const RecordingHost) []const u8 {
+        return self.authority[0..self.authority_len];
+    }
+
+    fn pathValue(self: *const RecordingHost) []const u8 {
+        return self.path[0..self.path_len];
+    }
+
+    fn send(
+        self: *RecordingHost,
+        allocator: std.mem.Allocator,
+        request: HostRequest,
+    ) !HostResponse {
+        self.calls += 1;
+        self.method = request.method;
+        self.scheme = request.scheme;
+        if (request.authority.len > self.authority.len or
+            request.path_with_query.len > self.path.len)
+        {
+            return error.FakeHostCaptureTooLong;
         }
-    };
+        @memcpy(self.authority[0..request.authority.len], request.authority);
+        self.authority_len = request.authority.len;
+        @memcpy(self.path[0..request.path_with_query.len], request.path_with_query);
+        self.path_len = request.path_with_query.len;
+        var headers = request.headers.iterator();
+        while (headers.next()) |header| {
+            if (std.ascii.eqlIgnoreCase(header.key_ptr.*, "host")) {
+                self.saw_host = true;
+            }
+        }
+        return .{
+            .status_code = 202,
+            .headers = &.{
+                .{ .name = "X-Test", .value = "first" },
+                .{ .name = "x-test", .value = "second" },
+            },
+            .body = try allocator.dupe(u8, "fake-host"),
+        };
+    }
+};
 
-    var fake = FakeHost{};
-    var adapter = HttpTransportAdapter(*FakeHost).init(
+test "native fake host exercises target-neutral WASI adaptation" {
+    var fake = RecordingHost{};
+    var adapter = HttpTransportAdapter(*RecordingHost).init(
         std.testing.allocator,
         &fake,
     );
@@ -183,8 +204,8 @@ test "native fake host exercises target-neutral WASI adaptation" {
     try std.testing.expectEqual(@as(usize, 1), fake.calls);
     try std.testing.expectEqual(transport.Method.GET, fake.method.?);
     try std.testing.expectEqual(Scheme.https, fake.scheme.?);
-    try std.testing.expectEqualStrings("example.com:8443", fake.authority);
-    try std.testing.expectEqualStrings("/path?query=yes", fake.path);
+    try std.testing.expectEqualStrings("example.com:8443", fake.authorityValue());
+    try std.testing.expectEqualStrings("/path?query=yes", fake.pathValue());
     try std.testing.expect(fake.saw_host);
     try std.testing.expectEqualStrings("fake-host", response.body);
     const values = try response.getHeaderValues(std.testing.allocator, "x-test");
@@ -205,4 +226,77 @@ test "native fake host exercises target-neutral WASI adaptation" {
         adapter.asTransport().send(&body_request),
     );
     try std.testing.expectEqual(@as(usize, 1), fake.calls);
+}
+
+test "WASI adapter constructs a root path before a root query" {
+    var fake = RecordingHost{};
+    var adapter = HttpTransportAdapter(*RecordingHost).init(
+        std.testing.allocator,
+        &fake,
+    );
+    var request = transport.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://example.com?api-version=1",
+    );
+    defer request.deinit();
+    var response = try adapter.asTransport().send(&request);
+    defer response.deinit();
+    try std.testing.expectEqualStrings("example.com", fake.authorityValue());
+    try std.testing.expectEqualStrings("/?api-version=1", fake.pathValue());
+}
+
+test "WASI adapter preserves an explicit authority port" {
+    var fake = RecordingHost{};
+    var adapter = HttpTransportAdapter(*RecordingHost).init(
+        std.testing.allocator,
+        &fake,
+    );
+    var request = transport.Request.init(
+        std.testing.allocator,
+        .GET,
+        "http://example.com:8080/path",
+    );
+    defer request.deinit();
+    var response = try adapter.asTransport().send(&request);
+    defer response.deinit();
+    try std.testing.expectEqual(Scheme.http, fake.scheme.?);
+    try std.testing.expectEqualStrings("example.com:8080", fake.authorityValue());
+    try std.testing.expectEqualStrings("/path", fake.pathValue());
+}
+
+test "WASI adapter omits URI fragments from the host request" {
+    var fake = RecordingHost{};
+    var adapter = HttpTransportAdapter(*RecordingHost).init(
+        std.testing.allocator,
+        &fake,
+    );
+    var request = transport.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://example.com/path?query=yes#client-only",
+    );
+    defer request.deinit();
+    var response = try adapter.asTransport().send(&request);
+    defer response.deinit();
+    try std.testing.expectEqualStrings("/path?query=yes", fake.pathValue());
+}
+
+test "WASI adapter rejects URI userinfo" {
+    var fake = RecordingHost{};
+    var adapter = HttpTransportAdapter(*RecordingHost).init(
+        std.testing.allocator,
+        &fake,
+    );
+    var request = transport.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://username@example.com/path",
+    );
+    defer request.deinit();
+    try std.testing.expectError(
+        error.InvalidUrl,
+        adapter.asTransport().send(&request),
+    );
+    try std.testing.expectEqual(@as(usize, 0), fake.calls);
 }

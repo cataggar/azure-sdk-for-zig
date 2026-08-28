@@ -27,6 +27,10 @@ pub const ScriptedHttpServer = struct {
     response: Response,
     thread: ?std.Thread = null,
     joined: bool = false,
+    stopping: bool = false,
+    mutex: std.Io.Mutex = .init,
+    active_stream: ?std.Io.net.Stream = null,
+    done: std.Io.Event = .unset,
     allow_peer_failure: bool = false,
     failure: ?anyerror = null,
     request_line: []u8 = &.{},
@@ -50,6 +54,7 @@ pub const ScriptedHttpServer = struct {
     }
 
     pub fn start(self: *ScriptedHttpServer) !void {
+        if (self.thread != null) return error.ServerAlreadyStarted;
         self.thread = try std.Thread.spawn(.{}, run, .{self});
     }
 
@@ -67,8 +72,15 @@ pub const ScriptedHttpServer = struct {
 
     pub fn join(self: *ScriptedHttpServer) !void {
         if (!self.joined) {
-            if (self.thread) |thread| thread.join();
-            self.joined = true;
+            self.waitForDone() catch |err| switch (err) {
+                error.Timeout, error.Canceled => {
+                    self.requestStop();
+                    try self.waitForDone();
+                    self.joinThread();
+                    return error.ServerJoinTimedOut;
+                },
+            };
+            self.joinThread();
         }
         if (self.failure) |failure| {
             if (!self.allow_peer_failure) return failure;
@@ -76,13 +88,55 @@ pub const ScriptedHttpServer = struct {
     }
 
     pub fn deinit(self: *ScriptedHttpServer) void {
-        if (!self.joined) {
-            if (self.thread) |thread| thread.join();
-        }
+        self.stopAndJoin() catch @panic("scripted HTTP server failed to stop");
         self.listener.deinit(self.io);
         if (self.request_line.len > 0) self.allocator.free(self.request_line);
         for (self.header_lines.items) |line| self.allocator.free(line);
         self.header_lines.deinit(self.allocator);
+    }
+
+    fn stopAndJoin(self: *ScriptedHttpServer) !void {
+        if (self.joined or self.thread == null) return;
+        self.requestStop();
+        try self.waitForDone();
+        self.joinThread();
+    }
+
+    fn waitForDone(self: *ScriptedHttpServer) !void {
+        return self.done.waitTimeout(
+            self.io,
+            .{
+                .duration = .{
+                    .raw = .fromSeconds(2),
+                    .clock = .awake,
+                },
+            },
+        );
+    }
+
+    fn joinThread(self: *ScriptedHttpServer) void {
+        if (self.joined) return;
+        if (self.thread) |thread| thread.join();
+        self.joined = true;
+    }
+
+    fn requestStop(self: *ScriptedHttpServer) void {
+        self.mutex.lockUncancelable(self.io);
+        self.stopping = true;
+        const active_stream = self.active_stream;
+        self.mutex.unlock(self.io);
+
+        const listener_stream = std.Io.net.Stream{ .socket = self.listener.socket };
+        listener_stream.shutdown(self.io, .both) catch {};
+        if (active_stream) |stream| {
+            stream.shutdown(self.io, .both) catch {};
+        }
+    }
+
+    fn isStopping(self: *ScriptedHttpServer) bool {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        return self.stopping;
     }
 
     pub fn body(self: *const ScriptedHttpServer) []const u8 {
@@ -118,14 +172,31 @@ pub const ScriptedHttpServer = struct {
     }
 
     fn run(self: *ScriptedHttpServer) void {
+        defer self.done.set(self.io);
         self.serve() catch |err| {
-            self.failure = err;
+            if (!self.isStopping()) self.failure = err;
         };
     }
 
     fn serve(self: *ScriptedHttpServer) !void {
-        const stream = try self.listener.accept(self.io);
-        defer stream.close(self.io);
+        const stream = self.listener.accept(self.io) catch |err| {
+            if (self.isStopping()) return;
+            return err;
+        };
+        self.mutex.lockUncancelable(self.io);
+        if (self.stopping) {
+            self.mutex.unlock(self.io);
+            stream.close(self.io);
+            return;
+        }
+        self.active_stream = stream;
+        self.mutex.unlock(self.io);
+        defer {
+            self.mutex.lockUncancelable(self.io);
+            self.active_stream = null;
+            self.mutex.unlock(self.io);
+            stream.close(self.io);
+        }
 
         var read_buffer: [16 * 1024]u8 = undefined;
         var reader = std.Io.net.Stream.Reader.init(stream, self.io, &read_buffer);
@@ -260,3 +331,54 @@ pub const ScriptedHttpServer = struct {
         }
     }
 };
+
+fn elapsedNanoseconds(io: std.Io, start: std.Io.Timestamp) i128 {
+    return std.Io.Timestamp.now(io, .awake).toNanoseconds() -
+        start.toNanoseconds();
+}
+
+test "scripted server teardown completes without a client" {
+    const io = std.testing.io;
+    var server = try ScriptedHttpServer.init(
+        std.testing.allocator,
+        io,
+        .{},
+    );
+    try server.start();
+    const start = std.Io.Timestamp.now(io, .awake);
+    server.deinit();
+    try std.testing.expect(
+        elapsedNanoseconds(io, start) < 5 * std.time.ns_per_s,
+    );
+}
+
+test "scripted server teardown interrupts a stalled request body" {
+    const io = std.testing.io;
+    var server = try ScriptedHttpServer.init(
+        std.testing.allocator,
+        io,
+        .{},
+    );
+    try server.start();
+
+    const stream = try server.listener.socket.address.connect(
+        io,
+        .{ .mode = .stream },
+    );
+    defer stream.close(io);
+    var write_buffer: [1024]u8 = undefined;
+    var writer = std.Io.net.Stream.Writer.init(stream, io, &write_buffer);
+    try writer.interface.writeAll(
+        "POST /stalled HTTP/1.1\r\n" ++
+            "Host: 127.0.0.1\r\n" ++
+            "Content-Length: 1024\r\n\r\n" ++
+            "x",
+    );
+    try writer.interface.flush();
+
+    const start = std.Io.Timestamp.now(io, .awake);
+    server.deinit();
+    try std.testing.expect(
+        elapsedNanoseconds(io, start) < 5 * std.time.ns_per_s,
+    );
+}

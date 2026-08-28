@@ -127,6 +127,50 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const package_archive = b.addSystemCommand(&.{ "tar", "-czf" });
+    package_archive.has_side_effects = true;
+    const archive = package_archive.addOutputFileArg(
+        "azure_sdk_core-manifest-filtered.tar.gz",
+    );
+    package_archive.addArg("-C");
+    package_archive.addArg(b.pathFromRoot("."));
+    inline for (@import("build.zig.zon").paths) |included_path| {
+        package_archive.addArg(included_path);
+    }
+
+    const package_consumer_files = b.addWriteFiles();
+    _ = package_consumer_files.addCopyFile(
+        b.path("conformance/package_consumer/build.zig"),
+        "build.zig",
+    );
+    _ = package_consumer_files.addCopyFile(
+        b.path("conformance/package_consumer/build.zig.zon"),
+        "build.zig.zon",
+    );
+    _ = package_consumer_files.addCopyFile(
+        b.path("conformance/package_consumer/consumer.zig"),
+        "consumer.zig",
+    );
+    const package_consumer_dir = package_consumer_files.getDirectory();
+
+    const package_fetch = b.addSystemCommand(&.{
+        b.graph.zig_exe,
+        "fetch",
+        "--save=core",
+    });
+    package_fetch.setCwd(package_consumer_dir);
+    package_fetch.addFileArg(archive);
+
+    const package_consumer_test = b.addSystemCommand(&.{
+        b.graph.zig_exe,
+        "build",
+        "test",
+        "--summary",
+        "all",
+    });
+    package_consumer_test.setCwd(package_consumer_dir);
+    package_consumer_test.step.dependOn(&package_fetch.step);
+
     const wasi_target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
         .os_tag = .wasi,
@@ -162,6 +206,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(crypto_conformance_tests).step);
     test_step.dependOn(&b.addRunArtifact(wasi_adapter_tests).step);
     test_step.dependOn(&consumer_check.step);
+    test_step.dependOn(&package_consumer_test.step);
     test_step.dependOn(&wasi_check.step);
 
     const conformance_consumer_step = b.step(
@@ -169,6 +214,12 @@ pub fn build(b: *std.Build) void {
         "Compile a consumer of the exported conformance modules",
     );
     conformance_consumer_step.dependOn(&consumer_check.step);
+
+    const package_consumer_step = b.step(
+        "package-consumer-check",
+        "Test conformance modules from the manifest-filtered package archive",
+    );
+    package_consumer_step.dependOn(&package_consumer_test.step);
 
     const wasi_step = b.step(
         "wasi-check",
