@@ -1,8 +1,8 @@
-generator_commit=5ec3759d9bf33e1047fcbd884e8ad66519f60156
+generator_commit=c83a1cbef5f728d7530fdec4a724cc453233cfa4
 source_repository=https://github.com/cataggar/vsts-rest-api-specs
 source_commit=30b2105a165ce0f057e6adafe5f5e5b9b71502b7
 source_branch=typespec
 source_path=typespec/specs
 selected_api_version=7.2
 api_areas=44
-command=(node codegen/devops/build-devops-models.mjs <specs-dir> <model-dir> && cd codegen/cli && zig build -Ddevops-models=<model-dir> -Ddevops-output=<package-output> -Dazure-sdk-core-commit=3acfe9d5779b98d2ffcbddbf4112348e11de7122 -Dazure-sdk-core-hash=azure_sdk_core-0.2.0-eFY0Eq5jBgD71A09kDRyNUP1rUohQrm6KUpENFnYWQzY generate-devops-package)
+command=(node codegen/devops/build-devops-models.mjs <specs-dir> <model-dir> && cd codegen/cli && zig build -Ddevops-models=<model-dir> -Ddevops-output=<package-output> -Dazure-sdk-core-commit=763ff49c6e424750508c06886ecb7ef61f3e7000 -Dazure-sdk-core-hash=azure_sdk_core-0.2.0-eFY0EiXXBgATS3gwrSMyZSpIDyYi2SWWTJ6NsfZ9-lGf generate-devops-package)

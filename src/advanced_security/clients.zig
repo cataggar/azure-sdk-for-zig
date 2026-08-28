@@ -21,74 +21,26 @@ fn responseStatusExpected(status: u16, expected: []const u16) bool {
 }
 const default_endpoint = "https://advsec.dev.azure.com";
 const default_api_version = "7.2-preview";
-const auth_scopes: []const []const u8 = &.{"{endpoint}/.default"};
 
 pub const AdvancedSecurityClient = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
-    allocator: std.mem.Allocator,
-    auth_policy: ?*core.pipeline.BearerTokenAuthPolicy,
-    policy_ptrs: []*core.pipeline.HttpPolicy,
+    pipeline: core.http.HttpPipeline,
 
     pub const InitOptions = struct {
-        credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
         endpoint: []const u8 = default_endpoint,
         api_version: []const u8 = default_api_version,
     };
 
-    pub const PipelineOptions = struct {
-        endpoint: []const u8 = default_endpoint,
-        api_version: []const u8 = default_api_version,
-    };
-
-    pub fn init(allocator: std.mem.Allocator, options: InitOptions) !AdvancedSecurityClient {
-        const auth_policy = try allocator.create(core.pipeline.BearerTokenAuthPolicy);
-        errdefer allocator.destroy(auth_policy);
-        auth_policy.* = core.pipeline.BearerTokenAuthPolicy.init(
-            allocator,
-            options.credential,
-            auth_scopes,
-        );
-
-        const policy_ptrs = try allocator.alloc(*core.pipeline.HttpPolicy, 1);
-        errdefer allocator.free(policy_ptrs);
-        policy_ptrs[0] = auth_policy.asPolicy();
-
-        return .{
-            .allocator = allocator,
-            .endpoint = options.endpoint,
-            .api_version = options.api_version,
-            .auth_policy = auth_policy,
-            .policy_ptrs = policy_ptrs,
-            .pipeline = .{
-                .policies = policy_ptrs,
-                .transport_impl = options.transport,
-            },
-        };
-    }
-    pub fn initWithPipeline(
-        allocator: std.mem.Allocator,
-        pipeline: core.pipeline.HttpPipeline,
-        options: PipelineOptions,
+    pub fn init(
+        pipeline: core.http.HttpPipeline,
+        options: InitOptions,
     ) AdvancedSecurityClient {
         return .{
-            .allocator = allocator,
             .endpoint = options.endpoint,
             .api_version = options.api_version,
-            .auth_policy = null,
-            .policy_ptrs = &.{},
             .pipeline = pipeline,
         };
-    }
-
-    pub fn deinit(self: *@This()) void {
-        if (self.auth_policy) |auth_policy| {
-            auth_policy.deinit();
-            self.allocator.destroy(auth_policy);
-            self.allocator.free(self.policy_ptrs);
-        }
     }
 
     pub fn filtersSettings(self: *@This()) FiltersSettings {
@@ -231,7 +183,7 @@ pub const AdvancedSecurityClient = struct {
 pub const FiltersSettings = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets all advanced filters for the organization.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, include_deleted: ?bool, keywords: ?[]const u8) !models.AdvancedFilterList {
         @setEvalBranchQuota(100_000);
@@ -411,7 +363,7 @@ pub const FiltersSettings = struct {
 pub const SummaryDashboard = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const ListResult = union(enum) {
         status_200: struct {
@@ -867,7 +819,7 @@ pub const SummaryDashboard = struct {
 pub const Alerts = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const ListResult = union(enum) {
         status_200: struct {
@@ -1242,7 +1194,7 @@ pub const Alerts = struct {
 pub const Instances = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get instances of an alert on a branch specified with @ref. If @ref is not provided, return instances of an alert on default branch(if the alert exist in default branch) or latest affected branch.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, alert_id: i64, repository: []const u8, ref: ?[]const u8) !models.AlertAnalysisInstanceList {
         @setEvalBranchQuota(100_000);
@@ -1291,7 +1243,7 @@ pub const Instances = struct {
 pub const Metadata2 = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get an alert metadata.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, alert_id: i64, repository: []const u8) !models.AlertMetadata {
         @setEvalBranchQuota(100_000);
@@ -1333,7 +1285,7 @@ pub const Metadata2 = struct {
 pub const MetadataBatch = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get alerts metadata.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository: []const u8, body: models.AlertMetadataBatchRequest) !models.AlertMetadataList {
         @setEvalBranchQuota(100_000);
@@ -1377,7 +1329,7 @@ pub const MetadataBatch = struct {
 pub const AlertsBatch = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get alerts by alert IDs Currently supports fetching secret alerts only.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository: []const u8, body: models.AlertBatchRequest) !models.AlertList {
         @setEvalBranchQuota(100_000);
@@ -1421,7 +1373,7 @@ pub const AlertsBatch = struct {
 pub const Analysis = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const ListResult = union(enum) {
         status_200: struct {
@@ -1515,7 +1467,7 @@ pub const Analysis = struct {
 pub const PipelineAnalyses = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Soft-deletes analysis data for all pipelines in a repository, cleaning up the associated Advanced Security alerts.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository: []const u8) !void {
         @setEvalBranchQuota(100_000);
@@ -1554,7 +1506,7 @@ pub const PipelineAnalyses = struct {
 pub const PipelineAnalysis = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Soft-deletes analysis data for a specific pipeline, cleaning up the associated Advanced Security alerts.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository: []const u8, ado_pipeline_id: i32) !void {
         @setEvalBranchQuota(100_000);
@@ -1595,7 +1547,7 @@ pub const PipelineAnalysis = struct {
 pub const OrgEnablement = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get the current status of Advanced Security for the organization
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, include_all_properties: ?bool) !models.OrgEnablementSettings {
         @setEvalBranchQuota(100_000);
@@ -1669,7 +1621,7 @@ pub const OrgEnablement = struct {
 pub const MeterUsageOperations = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get commiters used when calculating billing information.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, plan: enums.GetRequestPlan, billing_date: ?[]const u8) !models.MeterUsageForPlan {
         @setEvalBranchQuota(100_000);
@@ -1716,7 +1668,7 @@ pub const MeterUsageOperations = struct {
 pub const OrgMeterUsageEstimate = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Estimate the pushers that would be added to the customer's usage if Advanced Security was enabled for this organization.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, plan: ?enums.GetRequestPlan1) !models.MeterUsageEstimate {
         @setEvalBranchQuota(100_000);
@@ -1759,7 +1711,7 @@ pub const OrgMeterUsageEstimate = struct {
 pub const ProjectEnablement = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get the current status of Advanced Security for a project
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, include_all_properties: ?bool) !models.ProjectEnablementSettings {
         @setEvalBranchQuota(100_000);
@@ -1837,7 +1789,7 @@ pub const ProjectEnablement = struct {
 pub const ProjectMeterUsageEstimate = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Estimate the pushers that would be added to the customer's usage if Advanced Security was enabled for this project.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, plan: ?enums.GetRequestPlan2) !models.MeterUsageEstimate {
         @setEvalBranchQuota(100_000);
@@ -1882,7 +1834,7 @@ pub const ProjectMeterUsageEstimate = struct {
 pub const RepoEnablement = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Determines if Code Security, Secret Protection, and their features are enabled for the repository.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository: []const u8, include_all_properties: ?bool) !models.RepoEnablementSettings {
         @setEvalBranchQuota(100_000);
@@ -1964,7 +1916,7 @@ pub const RepoEnablement = struct {
 pub const RepoMeterUsageEstimate = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Estimate the pushers that would be added to the customer's usage if Advanced Security was enabled for this repository.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository: []const u8, plan: ?enums.GetRequestPlan3) !models.MeterUsageEstimate {
         @setEvalBranchQuota(100_000);

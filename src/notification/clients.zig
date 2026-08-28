@@ -20,74 +20,26 @@ fn responseStatusExpected(status: u16, expected: []const u16) bool {
     return false;
 }
 const default_api_version = "7.2-preview";
-const auth_scopes: []const []const u8 = &.{"{endpoint}/.default"};
 
 pub const NotificationClient = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
-    allocator: std.mem.Allocator,
-    auth_policy: ?*core.pipeline.BearerTokenAuthPolicy,
-    policy_ptrs: []*core.pipeline.HttpPolicy,
+    pipeline: core.http.HttpPipeline,
 
     pub const InitOptions = struct {
-        credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
         endpoint: []const u8,
         api_version: []const u8 = default_api_version,
     };
 
-    pub const PipelineOptions = struct {
-        endpoint: []const u8,
-        api_version: []const u8 = default_api_version,
-    };
-
-    pub fn init(allocator: std.mem.Allocator, options: InitOptions) !NotificationClient {
-        const auth_policy = try allocator.create(core.pipeline.BearerTokenAuthPolicy);
-        errdefer allocator.destroy(auth_policy);
-        auth_policy.* = core.pipeline.BearerTokenAuthPolicy.init(
-            allocator,
-            options.credential,
-            auth_scopes,
-        );
-
-        const policy_ptrs = try allocator.alloc(*core.pipeline.HttpPolicy, 1);
-        errdefer allocator.free(policy_ptrs);
-        policy_ptrs[0] = auth_policy.asPolicy();
-
-        return .{
-            .allocator = allocator,
-            .endpoint = options.endpoint,
-            .api_version = options.api_version,
-            .auth_policy = auth_policy,
-            .policy_ptrs = policy_ptrs,
-            .pipeline = .{
-                .policies = policy_ptrs,
-                .transport_impl = options.transport,
-            },
-        };
-    }
-    pub fn initWithPipeline(
-        allocator: std.mem.Allocator,
-        pipeline: core.pipeline.HttpPipeline,
-        options: PipelineOptions,
+    pub fn init(
+        pipeline: core.http.HttpPipeline,
+        options: InitOptions,
     ) NotificationClient {
         return .{
-            .allocator = allocator,
             .endpoint = options.endpoint,
             .api_version = options.api_version,
-            .auth_policy = null,
-            .policy_ptrs = &.{},
             .pipeline = pipeline,
         };
-    }
-
-    pub fn deinit(self: *@This()) void {
-        if (self.auth_policy) |auth_policy| {
-            auth_policy.deinit();
-            self.allocator.destroy(auth_policy);
-            self.allocator.free(self.policy_ptrs);
-        }
     }
 
     pub fn diagnosticLogs(self: *@This()) DiagnosticLogs {
@@ -142,7 +94,7 @@ pub const NotificationClient = struct {
 pub const DiagnosticLogs = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get a list of diagnostic logs for this service.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, source: []const u8, organization: []const u8, entry_id: []const u8, start_time: ?[]const u8, end_time: ?[]const u8) !models.INotificationDiagnosticLogList {
         @setEvalBranchQuota(100_000);
@@ -196,7 +148,7 @@ pub const DiagnosticLogs = struct {
 pub const EventTypes = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// List available event types for this service. Optionally filter by only event types for the specified publisher.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, publisher_id: ?[]const u8) !models.NotificationEventTypeList {
         @setEvalBranchQuota(100_000);
@@ -271,7 +223,7 @@ pub const EventTypes = struct {
 pub const Settings = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !models.NotificationAdminSettings {
         @setEvalBranchQuota(100_000);
@@ -341,7 +293,7 @@ pub const Settings = struct {
 pub const Subscribers = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get delivery preferences of a notifications subscriber.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, subscriber_id: []const u8, organization: []const u8) !models.NotificationSubscriber {
         @setEvalBranchQuota(100_000);
@@ -415,7 +367,7 @@ pub const Subscribers = struct {
 pub const Subscriptions = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Query for subscriptions. A subscription is returned if it matches one or more of the specified conditions.
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.SubscriptionQuery) !models.NotificationSubscriptionList {
         @setEvalBranchQuota(100_000);
@@ -714,7 +666,7 @@ pub const Subscriptions = struct {
 pub const Diagnostics = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get the diagnostics settings for a subscription.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, subscription_id: []const u8, organization: []const u8) !models.SubscriptionDiagnostics {
         @setEvalBranchQuota(100_000);

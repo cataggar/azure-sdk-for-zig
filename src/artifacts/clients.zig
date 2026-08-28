@@ -21,74 +21,26 @@ fn responseStatusExpected(status: u16, expected: []const u16) bool {
 }
 const default_endpoint = "https://feeds.dev.azure.com";
 const default_api_version = "7.2-preview";
-const auth_scopes: []const []const u8 = &.{"{endpoint}/.default"};
 
 pub const ArtifactsClient = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
-    allocator: std.mem.Allocator,
-    auth_policy: ?*core.pipeline.BearerTokenAuthPolicy,
-    policy_ptrs: []*core.pipeline.HttpPolicy,
+    pipeline: core.http.HttpPipeline,
 
     pub const InitOptions = struct {
-        credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
         endpoint: []const u8 = default_endpoint,
         api_version: []const u8 = default_api_version,
     };
 
-    pub const PipelineOptions = struct {
-        endpoint: []const u8 = default_endpoint,
-        api_version: []const u8 = default_api_version,
-    };
-
-    pub fn init(allocator: std.mem.Allocator, options: InitOptions) !ArtifactsClient {
-        const auth_policy = try allocator.create(core.pipeline.BearerTokenAuthPolicy);
-        errdefer allocator.destroy(auth_policy);
-        auth_policy.* = core.pipeline.BearerTokenAuthPolicy.init(
-            allocator,
-            options.credential,
-            auth_scopes,
-        );
-
-        const policy_ptrs = try allocator.alloc(*core.pipeline.HttpPolicy, 1);
-        errdefer allocator.free(policy_ptrs);
-        policy_ptrs[0] = auth_policy.asPolicy();
-
-        return .{
-            .allocator = allocator,
-            .endpoint = options.endpoint,
-            .api_version = options.api_version,
-            .auth_policy = auth_policy,
-            .policy_ptrs = policy_ptrs,
-            .pipeline = .{
-                .policies = policy_ptrs,
-                .transport_impl = options.transport,
-            },
-        };
-    }
-    pub fn initWithPipeline(
-        allocator: std.mem.Allocator,
-        pipeline: core.pipeline.HttpPipeline,
-        options: PipelineOptions,
+    pub fn init(
+        pipeline: core.http.HttpPipeline,
+        options: InitOptions,
     ) ArtifactsClient {
         return .{
-            .allocator = allocator,
             .endpoint = options.endpoint,
             .api_version = options.api_version,
-            .auth_policy = null,
-            .policy_ptrs = &.{},
             .pipeline = pipeline,
         };
-    }
-
-    pub fn deinit(self: *@This()) void {
-        if (self.auth_policy) |auth_policy| {
-            auth_policy.deinit();
-            self.allocator.destroy(auth_policy);
-            self.allocator.free(self.policy_ptrs);
-        }
     }
 
     pub fn serviceSettings(self: *@This()) ServiceSettings {
@@ -159,7 +111,7 @@ pub const ArtifactsClient = struct {
 pub const ServiceSettings = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get all service-wide feed creation and administration permissions.
     pub fn getGlobalPermissions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, include_ids: ?bool) !models.GlobalPermissionList {
         @setEvalBranchQuota(100_000);
@@ -234,7 +186,7 @@ pub const ServiceSettings = struct {
 pub const ChangeTracking = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Query to determine which feeds have changed since the last call, tracked through the provided continuationToken. Only changes to a feed itself are returned and impact the continuationToken, not additions or alterations to packages within the feeds. If the project parameter is present, gets all feed changes in the given project. If omitted, gets all feed changes in the organization.
     pub fn getFeedChanges(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, include_deleted: ?bool, continuation_token: ?i64, batch_size: ?i32) !models.FeedChangesResponse {
         @setEvalBranchQuota(100_000);
@@ -365,7 +317,7 @@ pub const ChangeTracking = struct {
 pub const FeedRecycleBin = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Query for feeds within the recycle bin. If the project parameter is present, gets all feeds in recycle bin in the given project. If omitted, gets all feeds in recycle bin in the organization.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.FeedList {
         @setEvalBranchQuota(100_000);
@@ -473,7 +425,7 @@ pub const FeedRecycleBin = struct {
 pub const FeedManagement = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get all feeds in an account where you have the provided role access. If the project parameter is present, gets all feeds in the given project. If omitted, gets all feeds in the organization.
     pub fn getFeeds(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, feed_role: ?enums.GetFeedsRequestFeedRole, include_deleted_upstreams: ?bool, include_urls: ?bool) !models.FeedList {
         @setEvalBranchQuota(100_000);
@@ -951,7 +903,7 @@ pub const FeedManagement = struct {
 pub const ArtifactDetails = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const GetBadgeResult = union(enum) {
         status_200: struct {
@@ -1417,7 +1369,7 @@ pub const ArtifactDetails = struct {
 pub const RecycleBin = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Queues a job to remove all package versions from a feed's recycle bin
     pub fn emptyRecycleBin(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8) !models.OperationReference {
         @setEvalBranchQuota(100_000);
@@ -1650,7 +1602,7 @@ pub const RecycleBin = struct {
 pub const RetentionPolicies = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Delete the retention policy for a feed. The project parameter must be supplied if the feed was created in a project. If the feed is not associated with any project, omit the project parameter from the request.
     pub fn deleteRetentionPolicy(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, feed_id: []const u8, project: []const u8) !void {
         @setEvalBranchQuota(100_000);
@@ -1761,7 +1713,7 @@ pub const RetentionPolicies = struct {
 pub const Provenance = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Creates a session, a wrapper around a feed that can store additional metadata on the packages published to it.
     pub fn createSession(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, protocol: []const u8, project: []const u8, body: models.SessionRequest) !models.SessionResponse {
         @setEvalBranchQuota(100_000);

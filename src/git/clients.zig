@@ -21,74 +21,26 @@ fn responseStatusExpected(status: u16, expected: []const u16) bool {
 }
 const default_endpoint = "https://dev.azure.com";
 const default_api_version = "7.2-preview";
-const auth_scopes: []const []const u8 = &.{"{endpoint}/.default"};
 
 pub const GitClient = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
-    allocator: std.mem.Allocator,
-    auth_policy: ?*core.pipeline.BearerTokenAuthPolicy,
-    policy_ptrs: []*core.pipeline.HttpPolicy,
+    pipeline: core.http.HttpPipeline,
 
     pub const InitOptions = struct {
-        credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
         endpoint: []const u8 = default_endpoint,
         api_version: []const u8 = default_api_version,
     };
 
-    pub const PipelineOptions = struct {
-        endpoint: []const u8 = default_endpoint,
-        api_version: []const u8 = default_api_version,
-    };
-
-    pub fn init(allocator: std.mem.Allocator, options: InitOptions) !GitClient {
-        const auth_policy = try allocator.create(core.pipeline.BearerTokenAuthPolicy);
-        errdefer allocator.destroy(auth_policy);
-        auth_policy.* = core.pipeline.BearerTokenAuthPolicy.init(
-            allocator,
-            options.credential,
-            auth_scopes,
-        );
-
-        const policy_ptrs = try allocator.alloc(*core.pipeline.HttpPolicy, 1);
-        errdefer allocator.free(policy_ptrs);
-        policy_ptrs[0] = auth_policy.asPolicy();
-
-        return .{
-            .allocator = allocator,
-            .endpoint = options.endpoint,
-            .api_version = options.api_version,
-            .auth_policy = auth_policy,
-            .policy_ptrs = policy_ptrs,
-            .pipeline = .{
-                .policies = policy_ptrs,
-                .transport_impl = options.transport,
-            },
-        };
-    }
-    pub fn initWithPipeline(
-        allocator: std.mem.Allocator,
-        pipeline: core.pipeline.HttpPipeline,
-        options: PipelineOptions,
+    pub fn init(
+        pipeline: core.http.HttpPipeline,
+        options: InitOptions,
     ) GitClient {
         return .{
-            .allocator = allocator,
             .endpoint = options.endpoint,
             .api_version = options.api_version,
-            .auth_policy = null,
-            .policy_ptrs = &.{},
             .pipeline = pipeline,
         };
-    }
-
-    pub fn deinit(self: *@This()) void {
-        if (self.auth_policy) |auth_policy| {
-            auth_policy.deinit();
-            self.allocator.destroy(auth_policy);
-            self.allocator.free(self.policy_ptrs);
-        }
     }
 
     pub fn repositories(self: *@This()) Repositories {
@@ -391,7 +343,7 @@ pub const GitClient = struct {
 pub const Repositories = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Retrieve deleted git repositories.
     pub fn getDeletedRepositories(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.GitDeletedRepositoryList {
         @setEvalBranchQuota(100_000);
@@ -727,7 +679,7 @@ pub const Repositories = struct {
 pub const RefsFavorites = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets the refs favorites for a repo and an identity.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: ?[]const u8, identity_id: ?[]const u8) !models.GitRefFavoriteList {
         @setEvalBranchQuota(100_000);
@@ -882,7 +834,7 @@ pub const RefsFavorites = struct {
 pub const RefsFavoritesForProject = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, identity_id: ?[]const u8) !models.GitRefFavoriteList {
         @setEvalBranchQuota(100_000);
@@ -927,7 +879,7 @@ pub const RefsFavoritesForProject = struct {
 pub const PolicyConfigurations = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const GetResult = union(enum) {
         status_200: struct {
@@ -1024,7 +976,7 @@ pub const PolicyConfigurations = struct {
 pub const PullRequests = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Retrieve all pull requests matching a specified criteria. Please note that description field will be truncated up to 400 symbols in the result.
     pub fn getPullRequestsByProject(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, search_criteria_creator_id: ?[]const u8, search_criteria_include_links: ?bool, search_criteria_labels: ?[]const []const u8, search_criteria_max_time: ?[]const u8, search_criteria_min_time: ?[]const u8, @"search_criteria.query_time_range_type": ?enums.GetPullRequestsByProjectRequestSearchCriteriaQueryTimeRangeType, search_criteria_repository_id: ?[]const u8, search_criteria_reviewer_id: ?[]const u8, search_criteria_source_ref_name: ?[]const u8, search_criteria_source_repository_id: ?[]const u8, @"search_criteria.status": ?enums.GetPullRequestsByProjectRequestSearchCriteriaStatus, @"search_criteria.tags_filter_operator": ?enums.GetPullRequestsByProjectRequestSearchCriteriaTagsFilterOperator, search_criteria_target_ref_name: ?[]const u8, search_criteria_title: ?[]const u8, max_comment_length: ?i32, @"$skip": ?i32, @"$top": ?i32) !models.GitPullRequestList {
         @setEvalBranchQuota(100_000);
@@ -1512,7 +1464,7 @@ pub const PullRequests = struct {
 pub const AnnotatedTags = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Create an annotated tag. Repositories have both a name and an identifier. Identifiers are globally unique, but several projects may contain a repository of the same name. You don't need to include the project if you specify a repository by ID. However, if you specify a repository by name, you must also specify the project (by name or ID).
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: []const u8, body: models.GitAnnotatedTag) !models.GitAnnotatedTag {
         @setEvalBranchQuota(100_000);
@@ -1592,7 +1544,7 @@ pub const AnnotatedTags = struct {
 pub const Blobs = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const GetBlobsZipResult = union(enum) {
         status_200: struct {
@@ -1756,7 +1708,7 @@ pub const Blobs = struct {
 pub const CherryPicks = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Retrieve information about a cherry pick operation for a specific branch. This operation is expensive due to the underlying object structure, so this API only looks at the 1000 most recent cherry pick operations.
     pub fn getCherryPickForRefName(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: []const u8, ref_name: []const u8) !models.GitCherryPick {
         @setEvalBranchQuota(100_000);
@@ -1874,7 +1826,7 @@ pub const CherryPicks = struct {
 pub const Commits = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Retrieve a list of commits associated with a particular push.
     pub fn getPushCommits(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, push_id: i32, project: []const u8, top: ?i32, skip: ?i32, include_links: ?bool) !models.GitCommitRefList {
         @setEvalBranchQuota(100_000);
@@ -2071,7 +2023,7 @@ pub const Commits = struct {
 pub const Statuses = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get statuses associated with the Git commit.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, commit_id: []const u8, repository_id: []const u8, project: []const u8, top: ?i32, skip: ?i32, latest_only: ?bool) !models.GitStatusList {
         @setEvalBranchQuota(100_000);
@@ -2168,7 +2120,7 @@ pub const Statuses = struct {
 pub const Diffs = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Find the closest common commit (the merge base) between base and target commits, and get the diff between either the base and target commits or common and target commits.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, diff_common_commit: ?bool, @"$top": ?i32, @"$skip": ?i32, base_version: ?[]const u8, base_version_options: ?enums.GetRequestBaseVersionOptions, base_version_type: ?enums.GetRequestBaseVersionType, target_version: ?[]const u8, target_version_options: ?enums.GetRequestTargetVersionOptions, target_version_type: ?enums.GetRequestTargetVersionType) !models.GitCommitDiffs {
         @setEvalBranchQuota(100_000);
@@ -2265,7 +2217,7 @@ pub const Diffs = struct {
 pub const ImportRequests = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Retrieve import requests for a repository.
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: []const u8, include_abandoned: ?bool) !models.GitImportRequestList {
         @setEvalBranchQuota(100_000);
@@ -2424,7 +2376,7 @@ pub const ImportRequests = struct {
 pub const Items = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get Item Metadata and/or Content for a collection of items. The download parameter is to indicate whether the content should be available as a download or just sent as a stream in the response. Doesn't apply to zipped content which is always returned as a download.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, scope_path: ?[]const u8, recursion_level: ?enums.ListRequestRecursionLevel, include_content_metadata: ?bool, latest_processed_change: ?bool, download: ?bool, include_links: ?bool, @"$format": ?[]const u8, version_descriptor_version: ?[]const u8, @"version_descriptor.version_options": ?enums.ListRequestVersionDescriptorVersionOptions, @"version_descriptor.version_type": ?enums.ListRequestVersionDescriptorVersionType, zip_for_unix: ?bool) !models.GitItemList {
         @setEvalBranchQuota(100_000);
@@ -2569,7 +2521,7 @@ pub const Items = struct {
 pub const PullRequestQuery = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// This API is used to find what pull requests are related to a given commit. It can be used to either find the pull request that created a particular merge commit or it can be used to find all pull requests that have ever merged a particular commit. The input is a list of queries which each contain a list of commits. For each commit that you search against, you will get back a dictionary of commit -> pull requests.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, body: models.GitPullRequestQuery) !models.GitPullRequestQuery {
         @setEvalBranchQuota(100_000);
@@ -2613,7 +2565,7 @@ pub const PullRequestQuery = struct {
 pub const PullRequestAttachments = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const GetResult = union(enum) {
         status_200: struct {
@@ -2797,7 +2749,7 @@ pub const PullRequestAttachments = struct {
 pub const PullRequestCommits = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const GetPullRequestCommitsResult = union(enum) {
         status_200: struct {
@@ -2925,7 +2877,7 @@ pub const PullRequestCommits = struct {
 pub const PullRequestIterations = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get the list of iterations for the specified pull request.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, include_commits: ?bool) !models.GitPullRequestIterationList {
         @setEvalBranchQuota(100_000);
@@ -3010,7 +2962,7 @@ pub const PullRequestIterations = struct {
 pub const PullRequestIterationChanges = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Retrieve the changes made in a pull request between two iterations.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, iteration_id: i32, project: []const u8, @"$top": ?i32, @"$skip": ?i32, @"$compare_to": ?i32) !models.GitPullRequestIterationChanges {
         @setEvalBranchQuota(100_000);
@@ -3069,7 +3021,7 @@ pub const PullRequestIterationChanges = struct {
 pub const PullRequestIterationStatuses = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get all the statuses associated with a pull request iteration.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, iteration_id: i32, project: []const u8) !models.GitPullRequestStatusList {
         @setEvalBranchQuota(100_000);
@@ -3275,7 +3227,7 @@ pub const PullRequestIterationStatuses = struct {
 pub const PullRequestLabels = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get all the labels (tags) assigned to a pull request.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, project_id: ?[]const u8) !models.WebApiTagDefinitionList {
         @setEvalBranchQuota(100_000);
@@ -3460,7 +3412,7 @@ pub const PullRequestLabels = struct {
 pub const PullRequestProperties = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get external properties of the pull request.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8) !models.PropertiesCollection {
         @setEvalBranchQuota(100_000);
@@ -3542,7 +3494,7 @@ pub const PullRequestProperties = struct {
 pub const PullRequestReviewers = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Retrieve the reviewers for a pull request
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8) !models.IdentityRefWithVoteList {
         @setEvalBranchQuota(100_000);
@@ -3862,7 +3814,7 @@ pub const PullRequestReviewers = struct {
 pub const PullRequestShare = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Sends an e-mail notification about a specific pull request to a set of recipients
     pub fn sharePullRequest(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, body: models.ShareNotificationContext) !void {
         @setEvalBranchQuota(100_000);
@@ -3907,7 +3859,7 @@ pub const PullRequestShare = struct {
 pub const PullRequestStatuses = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get all the statuses associated with a pull request.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8) !models.GitPullRequestStatusList {
         @setEvalBranchQuota(100_000);
@@ -4103,7 +4055,7 @@ pub const PullRequestStatuses = struct {
 pub const PullRequestThreads = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Retrieve all threads in a pull request.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8, @"$iteration": ?i32, @"$base_iteration": ?i32) !models.GitPullRequestCommentThreadList {
         @setEvalBranchQuota(100_000);
@@ -4285,7 +4237,7 @@ pub const PullRequestThreads = struct {
 pub const PullRequestThreadComments = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Retrieve all comments associated with a specific thread in a pull request.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, thread_id: i32, project: []const u8) !models.CommentList {
         @setEvalBranchQuota(100_000);
@@ -4494,7 +4446,7 @@ pub const PullRequestThreadComments = struct {
 pub const PullRequestCommentLikes = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Delete a like on a comment.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, thread_id: i32, comment_id: i32, project: []const u8) !void {
         @setEvalBranchQuota(100_000);
@@ -4618,7 +4570,7 @@ pub const PullRequestCommentLikes = struct {
 pub const PullRequestWorkItems = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Retrieve a list of work items associated with a pull request.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, pull_request_id: i32, project: []const u8) !models.ResourceRefList {
         @setEvalBranchQuota(100_000);
@@ -4660,7 +4612,7 @@ pub const PullRequestWorkItems = struct {
 pub const Pushes = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Retrieves pushes associated with the specified repository.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, @"$skip": ?i32, @"$top": ?i32, search_criteria_from_date: ?[]const u8, search_criteria_include_links: ?bool, search_criteria_include_ref_updates: ?bool, search_criteria_pusher_id: ?[]const u8, search_criteria_ref_name: ?[]const u8, search_criteria_to_date: ?[]const u8) !models.GitPushList {
         @setEvalBranchQuota(100_000);
@@ -4832,7 +4784,7 @@ pub const Pushes = struct {
 pub const Refs = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const ListResult = union(enum) {
         status_200: struct {
@@ -5048,7 +5000,7 @@ pub const Refs = struct {
 pub const Reverts = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Retrieve information about a revert operation for a specific branch.
     pub fn getRevertForRefName(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_id: []const u8, ref_name: []const u8) !models.GitRevert {
         @setEvalBranchQuota(100_000);
@@ -5166,7 +5118,7 @@ pub const Reverts = struct {
 pub const Stats = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Retrieve statistics about all branches within a repository.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, base_version_descriptor_version: ?[]const u8, @"base_version_descriptor.version_options": ?enums.ListRequestBaseVersionDescriptorVersionOptions, @"base_version_descriptor.version_type": ?enums.ListRequestBaseVersionDescriptorVersionType) !models.GitBranchStatsList {
         @setEvalBranchQuota(100_000);
@@ -5227,7 +5179,7 @@ pub const Stats = struct {
 pub const Suggestions = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Retrieve a pull request suggestion for a particular repository or team project.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_id: []const u8, project: []const u8, prefer_compare_branch: ?bool) !models.GitSuggestionList {
         @setEvalBranchQuota(100_000);
@@ -5272,7 +5224,7 @@ pub const Suggestions = struct {
 pub const Trees = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const GetResult = union(enum) {
         status_200: struct {
@@ -5366,7 +5318,7 @@ pub const Trees = struct {
 pub const MergeBases = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Find the merge bases of two commits, optionally across forks. If otherRepositoryId is not specified, the merge bases will only be calculated within the context of the local repositoryNameOrId.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_name_or_id: []const u8, commit_id: []const u8, other_commit_id: []const u8, project: []const u8, other_collection_id: ?[]const u8, other_repository_id: ?[]const u8) !models.GitCommitRefList {
         @setEvalBranchQuota(100_000);
@@ -5426,7 +5378,7 @@ pub const MergeBases = struct {
 pub const Forks = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Retrieve all forks of a repository in the collection.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, repository_name_or_id: []const u8, collection_id: []const u8, project: []const u8, include_links: ?bool) !models.GitRepositoryRefList {
         @setEvalBranchQuota(100_000);
@@ -5601,7 +5553,7 @@ pub const Forks = struct {
 pub const Merges = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Request a git merge operation. Currently we support merging only 2 commits.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, repository_name_or_id: []const u8, include_links: ?bool, body: models.GitMergeParameters) !models.GitMerge {
         @setEvalBranchQuota(100_000);
