@@ -51,7 +51,7 @@ the credential, the transport at the connection — so a copy would dangle.
 
 Nothing dials until the first operation runs, and `Options` carries the
 `ConnectionOptions` described below along with the container id, link id,
-consumer instance id, per-operation deadline, and retry jitter seed.
+consumer instance id, per-operation timeout, and retry jitter seed.
 
 `CbsAuthorizer` is the piece that satisfies `recovery.Authorizer`: before any
 link attaches on a connection generation, it opens `$cbs`, puts the client's
@@ -113,12 +113,15 @@ AMQP message. The service splits it back apart. Go and Rust produce the same
 shape.
 
 ```zig
-var pool = SenderPool.init(allocator, &session, .{ .deadline_ms = deadline });
+const operation_timeout_ms = 60_000;
+var pool = SenderPool.init(allocator, &session, .{
+    .deadline_ms = operation_timeout_ms,
+});
 defer pool.deinit();
 
 var transport = LinkTransport.init(management_client, .{
     .senders = &pool,
-    .deadline_ms = deadline,
+    .deadline_ms = operation_timeout_ms,
 });
 
 var batch = try producer.createBatch(allocator, .{ .partition_key = "orders" });
@@ -195,9 +198,10 @@ A partition is read through one receiver link held open for the life of a
 without advancing it replays events that were already handed to the caller.
 
 ```zig
+const receive_timeout_ms = 60_000;
 var pool = ReceiverPool.init(allocator, &session, .{
     .instance_id = "reader-1",
-    .deadline_ms = deadline,
+    .deadline_ms = receive_timeout_ms,
 });
 defer pool.deinit();
 
@@ -207,7 +211,7 @@ var transport = LinkTransport.init(management_client, .{
 });
 
 var partition: PartitionClient = undefined;
-try consumer.newPartitionClient(&partition, allocator, &session, "0", deadline, .{
+try consumer.newPartitionClient(&partition, allocator, &session, "0", receive_timeout_ms, .{
     .start_position = EventPosition.earliest(),
     .owner_level = 1,
 });
@@ -228,13 +232,21 @@ first call for an address.
 `owner_level` attaches as an exclusive consumer via `com.microsoft:epoch`. A
 higher level detaches every lower one, which reports as `ownership_lost`.
 
-`prefetch` defaults to 300 credits, as Go and Rust do. A negative value
-disables prefetch and issues exactly the credit each receive needs, for a
-caller that wants to bound its own memory use. Neither prefetch nor a single
-receive may exceed 5000, the session's incoming window.
+`prefetch` defaults to a request for 300 credits, as Go and Rust do. Event Hubs
+receivers accept messages up to 32 MiB and retain at most 256 MiB of aggregate
+payload, so the link grants and replenishes at most eight credits at a time.
+A negative value disables prefetch and requests exactly the credit each receive
+needs; requests larger than eight are issued in bounded windows as deliveries
+release buffer space. Neither the requested prefetch nor a single receive may
+exceed 5000, the session's incoming window. The receiver also bounds unsettled
+delivery-id bookkeeping at 5000, allowing the largest public batch to remain
+unsettled until its result and selector are ready for one atomic settlement;
+the eight-credit and byte windows continue to bound live payload retention.
 
 A receive that asks for more events than arrive returns the ones that did
-rather than failing: a quiet partition is not an error.
+rather than failing: a quiet partition is not an error. Its timeout is a
+duration renewed from the current AMQP clock for each `receiveEvents` call,
+not an absolute deadline captured when the link attached.
 
 ## Metadata
 
@@ -249,9 +261,10 @@ one, because the connection, its CBS authorisation, and its session outlive any
 single operation.
 
 ```zig
+const operation_timeout_ms = 60_000;
 var transport = LinkTransport.init(management_client, .{
     .security_token = token.token,
-    .deadline_ms = deadline,
+    .deadline_ms = operation_timeout_ms,
     .retry = .{ .sleeper = &sleeper, .random = prng.random() },
 });
 var props = try producer.getEventHubProperties(allocator);
@@ -271,6 +284,10 @@ Failures carry the broker's status and description, which a Zig error cannot,
 on `Management.last_error`. Both operations optionally run under the Event Hubs
 retry schedule, which classifies a management status into the AMQP condition it
 corresponds to — a 404 is fatal and is not retried, a 503 is not.
+On a recoverable transport, each attempt refetches the generation's management
+client. Read, write, remote-close, or settlement failure rebuilds the
+connection and session before retrying instead of repeatedly using the cached
+failed `$management` links.
 
 ## Event models
 
@@ -436,9 +453,21 @@ rebuild would discard the first's healthy connection.
 Reattached receivers resume where they left off. The pool remembers each
 partition's selector when it drops a client, so a reattach continues past
 the last sequence number handed to the caller instead of replaying from the
-configured start position. For the same reason, a receive that fails partway
-through a batch returns the events that did arrive rather than discarding
-them; the next call finds the link dead and recovers it.
+configured start position. Its position slot is allocated before the link
+attaches; generation teardown swaps the current selector into that slot and
+removes every old wrapper without allocating, so allocator failure cannot
+leave a client pointing at a destroyed session.
+
+For the same reason, a receive that fails partway through a batch returns the
+events that did arrive rather than discarding them when the wire fails. A
+settlement write failure also returns the completed batch, but marks the link
+terminal so the next processor cycle replaces the failed connection. A local
+decode or allocation failure cannot return a valid batch, so it terminally
+detaches without advancing the selector; the next processor cycle reopens from
+the unchanged checkpoint and replays those sequences. If the service rejects
+a stored integer offset with `com.microsoft:georeplication:invalid-offset`,
+the replacement starts at earliest, inclusive, instead of retrying the
+unreadable offset.
 
 ## Distributed consumption
 
@@ -465,12 +494,28 @@ while (running) {
     }
     std.Thread.sleep(@intCast(processor.nextIntervalMs() * std.time.ns_per_ms));
 }
+try processor.close();
 ```
 
 `runOnce` is one balancing cycle rather than a thread, so the caller owns
-the loop and its shutdown. `nextIntervalMs` applies Go's 0.8–1.3 jitter to
-the update interval, which keeps a fleet that started together from
-rebalancing in lockstep.
+the loop and its shutdown. Keep the processor at a stable address after its
+first cycle because partition readers refer back to it. `close` is fallible and retryable: a detach timeout
+keeps the reader registered until its acknowledgement arrives, and every retry
+gets a fresh timeout duration on the current AMQP clock. Call it while the
+connection is alive; `deinit` then releases local allocations. If the
+connection must be terminated after an ambiguous close, `deinit` does not
+dereference the native receivers the connection already destroyed. Processor
+readers also carry the recoverable connection generation, so a rebuild between
+cycles invalidates stale native pointers before receive or close and reopens
+the partition from its unchanged checkpoint.
+Each cycle releases terminal readers before partition discovery, allowing a
+receiver that failed the shared connection to rebuild it before metadata uses
+that generation's cached management client.
+Closing one `ProcessorPartitionClient` removes it from `ownedPartitions`
+immediately after a confirmed detach; if storage still assigns the partition
+to this processor, the next balancing cycle opens a fresh reader.
+`nextIntervalMs` applies Go's 0.8–1.3 jitter to the update interval, which
+keeps a fleet that started together from rebalancing in lockstep.
 
 Two strategies decide how fast a processor grows:
 

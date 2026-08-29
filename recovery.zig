@@ -33,11 +33,11 @@ pub const Plumbing = struct {
 /// against a scripted peer, and because #207 will add custom endpoints and
 /// WebSockets without this file needing to know.
 pub const ConnectionFactory = struct {
-    openFn: *const fn (self: *ConnectionFactory, deadline_ms: i64) anyerror!Plumbing,
+    openFn: *const fn (self: *ConnectionFactory, timeout_ms: i64) anyerror!Plumbing,
     closeFn: *const fn (self: *ConnectionFactory, plumbing: Plumbing) void,
 
-    pub fn open(self: *ConnectionFactory, deadline_ms: i64) !Plumbing {
-        return self.openFn(self, deadline_ms);
+    pub fn open(self: *ConnectionFactory, timeout_ms: i64) !Plumbing {
+        return self.openFn(self, timeout_ms);
     }
 
     pub fn close(self: *ConnectionFactory, plumbing: Plumbing) void {
@@ -81,7 +81,7 @@ pub const RecoverableConnection = struct {
     /// Null skips re-authorisation, which is what a test peer or an emulator
     /// with authentication disabled wants.
     authorizer: ?*Authorizer,
-    deadline_ms: i64,
+    timeout_ms: i64,
     sender_options: SenderPool.Options,
     receiver_options: ReceiverPool.Options,
 
@@ -120,6 +120,8 @@ pub const RecoverableConnection = struct {
     pub const Options = struct {
         factory: *ConnectionFactory,
         authorizer: ?*Authorizer = null,
+        /// Per-operation timeout duration in milliseconds. The legacy field
+        /// name is retained for source compatibility.
         deadline_ms: i64,
         /// Identifies this reader to the broker on receiver links.
         instance_id: []const u8 = "eventhubs",
@@ -136,7 +138,7 @@ pub const RecoverableConnection = struct {
             .allocator = allocator,
             .factory = options.factory,
             .authorizer = options.authorizer,
-            .deadline_ms = options.deadline_ms,
+            .timeout_ms = options.deadline_ms,
             .sender_options = .{
                 .deadline_ms = options.deadline_ms,
                 .link_id = options.link_id,
@@ -168,14 +170,17 @@ pub const RecoverableConnection = struct {
         if (self.closed) return RecoveryError.ConnectionClosedPermanently;
         if (self.plumbing != null) return self.generation;
 
-        const plumbing = try self.factory.open(self.deadline_ms);
+        const plumbing = try self.factory.open(self.timeout_ms);
         errdefer self.factory.close(plumbing);
 
         // Before the pools, not after: a link that attaches without a claim is
         // refused with a condition classified fatal, so the recovery would
         // report as unrecoverable.
         if (self.authorizer) |authorizer| {
-            try authorizer.authorize(plumbing.session, self.deadline_ms);
+            try authorizer.authorize(
+                plumbing.session,
+                receiving.deadlineAfter(plumbing.session, self.timeout_ms),
+            );
             self.authorizations += 1;
         }
 
@@ -199,6 +204,11 @@ pub const RecoverableConnection = struct {
         return self.plumbing.?.session;
     }
 
+    /// Whether a wrapper still belongs to the live native session.
+    pub fn isGenerationCurrent(self: *const RecoverableConnection, generation: u64) bool {
+        return !self.closed and self.plumbing != null and self.generation == generation;
+    }
+
     /// The `$management` client, attached on first use.
     ///
     /// Lazily, as Go does: a producer that only ever sends never needs the
@@ -210,7 +220,7 @@ pub const RecoverableConnection = struct {
         const client = try amqp.Management.open(
             self.plumbing.?.session,
             .{ .link_id = self.management_link_id },
-            self.deadline_ms,
+            receiving.deadlineAfter(self.plumbing.?.session, self.timeout_ms),
         );
         self.management = client;
         return client;
@@ -247,11 +257,20 @@ pub const RecoverableConnection = struct {
         if (self.closed) return RecoveryError.ConnectionClosedPermanently;
         if (their_generation != self.generation) return;
 
+        self.invalidateGeneration(their_generation);
+
+        _ = try self.ensureOpen();
+    }
+
+    /// Destroy one native generation without opening its replacement.
+    ///
+    /// Used when cleanup after an attached-but-untracked link cannot confirm a
+    /// detach. The next operation lazily opens a new generation.
+    pub fn invalidateGeneration(self: *RecoverableConnection, their_generation: u64) void {
+        if (self.closed or their_generation != self.generation) return;
         self.teardown();
         self.generation += 1;
         self.recoveries += 1;
-
-        _ = try self.ensureOpen();
     }
 
     /// Whether the connection currently has plumbing behind it.
@@ -433,7 +452,7 @@ const ScriptedFactory = struct {
         self.live.deinit(self.allocator);
     }
 
-    fn open(f: *ConnectionFactory, deadline_ms: i64) anyerror!Plumbing {
+    fn open(f: *ConnectionFactory, timeout_ms: i64) anyerror!Plumbing {
         const self: *ScriptedFactory = @fieldParentPtr("factory", f);
         if (self.opened >= self.scripts.len) return error.NoMoreConnections;
 
@@ -450,6 +469,7 @@ const ScriptedFactory = struct {
 
         const conn = try self.allocator.create(driver.Driver);
         conn.* = try driver.Driver.init(self.allocator, mem.transport(), clock.clock(), harness.driver_options);
+        const deadline_ms = conn.clock.nowMillis() +| @max(timeout_ms, 0);
         try conn.open(deadline_ms);
 
         const session = try self.allocator.create(amqp.Session);
@@ -775,6 +795,16 @@ fn scriptReceiverAttach(peer: Peer, handle: u32) !void {
     } });
 }
 
+fn scriptReceiverOnly(_: Allocator, peer: Peer) anyerror!void {
+    try harness.scriptHandshake(peer, 512);
+    try scriptReceiverAttach(peer, 0);
+}
+
+fn scriptReceiverOneEvent(allocator: Allocator, peer: Peer) anyerror!void {
+    try scriptReceiverOnly(allocator, peer);
+    try pushEvent(allocator, peer, 0, 0, 50, "before recovery");
+}
+
 fn pushEvent(allocator: Allocator, peer: Peer, handle: u32, id: u32, sequence_number: i64, body: []const u8) !void {
     var annotations = [_]amqp.MapEntry{.{
         .key = .{ .symbol = event_data.sequence_number_annotation },
@@ -947,6 +977,45 @@ test "a reattached receiver resumes from the last sequence number" {
     // Reattaching with the original filter would replay event 40, which the
     // caller has already been given.
     try testing.expectEqualStrings("amqp.annotation.x-opt-sequence-number > '40'", filters[1]);
+}
+
+test "connection invalidation drops receiver wrappers without allocation" {
+    const allocator = testing.allocator;
+    var factory = ScriptedFactory{
+        .allocator = allocator,
+        .scripts = &.{ &scriptReceiverOneEvent, &scriptReceiverOnly },
+    };
+    defer factory.deinit();
+
+    var connection = RecoverableConnection.init(allocator, .{
+        .factory = &factory.factory,
+        .deadline_ms = 10_000,
+    });
+    defer connection.deinit();
+
+    const generation = try connection.ensureOpen();
+    const first_pool = try connection.receiverPool();
+    const first = try first_pool.receive(allocator, test_source, null, 1);
+    defer event_data.freeReceivedEvents(allocator, first);
+    try testing.expectEqual(@as(i64, 50), first[0].sequence_number);
+    try testing.expectEqual(@as(usize, 1), first_pool.clients.count());
+
+    var failing = testing.FailingAllocator.init(allocator, .{ .fail_index = 0 });
+    connection.receivers.allocator = failing.allocator();
+    connection.invalidateGeneration(generation);
+    try testing.expectEqual(@as(usize, 0), connection.receivers.clients.count());
+
+    connection.receivers.allocator = allocator;
+    _ = try connection.ensureOpen();
+    const rebound = try connection.receiverPool();
+    try testing.expect(rebound.session == factory.current().session);
+    _ = try rebound.clientFor(test_source, null);
+    try testing.expectEqual(@as(usize, 1), rebound.clients.count());
+
+    const filters = try attachedFilters(allocator, factory.current().mem);
+    defer freeFilters(allocator, filters);
+    try testing.expectEqual(@as(usize, 1), filters.len);
+    try testing.expectEqualStrings("amqp.annotation.x-opt-sequence-number > '50'", filters[0]);
 }
 
 test "the client's window reaches the sender links it is meant to size" {

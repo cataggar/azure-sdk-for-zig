@@ -82,7 +82,7 @@ pub const SenderPool = struct {
     /// and 1.68us at N=1024, against a flat 4.8ns hashed at every N. The
     /// hash never loses, including at N=4. The pool owns the keys.
     entries: std.StringHashMapUnmanaged(*amqp.Sender) = .empty,
-    deadline_ms: i64,
+    timeout_ms: i64,
     /// Distinguishes these links from any others on the connection.
     link_id: []const u8,
     /// Why the broker refused the most recent delivery. An error cannot carry
@@ -93,6 +93,8 @@ pub const SenderPool = struct {
     max_in_flight: u32 = 1,
 
     pub const Options = struct {
+        /// Per-operation timeout duration in milliseconds. The legacy field
+        /// name is retained for source compatibility.
         deadline_ms: i64,
         link_id: []const u8 = "eventhubs",
         /// How many batches a link may have on the wire unconfirmed.
@@ -112,7 +114,7 @@ pub const SenderPool = struct {
         return .{
             .allocator = allocator,
             .session = session,
-            .deadline_ms = options.deadline_ms,
+            .timeout_ms = options.deadline_ms,
             .link_id = options.link_id,
             .max_in_flight = @max(options.max_in_flight, 1),
         };
@@ -129,6 +131,14 @@ pub const SenderPool = struct {
 
     /// The sender attached to `address`, attaching one if there is none.
     pub fn senderFor(self: *SenderPool, address: []const u8) !*amqp.Sender {
+        return self.senderForDeadline(address, deadlineAfter(self.session, self.timeout_ms));
+    }
+
+    fn senderForDeadline(
+        self: *SenderPool,
+        address: []const u8,
+        deadline_ms: i64,
+    ) !*amqp.Sender {
         if (self.entries.get(address)) |sender| return sender;
 
         const name = try std.fmt.allocPrint(
@@ -150,7 +160,7 @@ pub const SenderPool = struct {
             .target_address = address,
             .desired_capabilities = &.{amqp.georeplication_capability},
             .max_in_flight = self.max_in_flight,
-        }, self.deadline_ms);
+        }, deadline_ms);
 
         self.entries.putAssumeCapacityNoClobber(owned, sender);
         return sender;
@@ -164,16 +174,25 @@ pub const SenderPool = struct {
     /// regardless.
     pub fn drop(self: *SenderPool, address: []const u8, detach: bool) void {
         const removed = self.entries.fetchRemove(address) orelse return;
-        if (detach) self.session.closeSender(removed.value, self.deadline_ms);
+        if (detach) {
+            self.session.closeSender(
+                removed.value,
+                deadlineAfter(self.session, self.timeout_ms),
+            );
+        }
         self.allocator.free(removed.key);
         self.last_rejection = null;
     }
 
     /// Forget every sender.
     pub fn dropAll(self: *SenderPool, detach: bool) void {
+        const deadline_ms = if (detach)
+            deadlineAfter(self.session, self.timeout_ms)
+        else
+            0;
         var it = self.entries.iterator();
         while (it.next()) |entry| {
-            if (detach) self.session.closeSender(entry.value_ptr.*, self.deadline_ms);
+            if (detach) self.session.closeSender(entry.value_ptr.*, deadline_ms);
             self.allocator.free(entry.key_ptr.*);
         }
         self.entries.clearRetainingCapacity();
@@ -192,7 +211,8 @@ pub const SenderPool = struct {
     /// The largest transfer the broker will take on `address`, or null when it
     /// advertised no limit.
     pub fn maxMessageSize(self: *SenderPool, address: []const u8) !?u64 {
-        const sender = try self.senderFor(address);
+        const deadline_ms = deadlineAfter(self.session, self.timeout_ms);
+        const sender = try self.senderForDeadline(address, deadline_ms);
         return sender.maxMessageSize();
     }
 
@@ -205,7 +225,8 @@ pub const SenderPool = struct {
     ) !void {
         if (batch.count() == 0) return SendError.EmptyBatch;
 
-        const sender = try self.senderFor(address);
+        const deadline_ms = deadlineAfter(self.session, self.timeout_ms);
+        const sender = try self.senderForDeadline(address, deadline_ms);
         const payload = try encodeBatchTransfer(allocator, batch);
         defer allocator.free(payload);
 
@@ -213,7 +234,7 @@ pub const SenderPool = struct {
         sender.sendBytesWithOptions(
             payload,
             .{ .message_format = batch_message_format },
-            self.deadline_ms,
+            deadline_ms,
         ) catch |err| {
             self.last_rejection = sender.rejection;
             return err;
@@ -239,14 +260,15 @@ pub const SenderPool = struct {
     ) !amqp.DeliveryToken {
         if (batch.count() == 0) return SendError.EmptyBatch;
 
-        const sender = try self.senderFor(address);
+        const deadline_ms = deadlineAfter(self.session, self.timeout_ms);
+        const sender = try self.senderForDeadline(address, deadline_ms);
         const payload = try encodeBatchTransfer(allocator, batch);
         defer allocator.free(payload);
 
         return sender.sendBytesAsync(
             payload,
             .{ .message_format = batch_message_format },
-            self.deadline_ms,
+            deadline_ms,
         );
     }
 
@@ -258,8 +280,9 @@ pub const SenderPool = struct {
     /// `lastError` describes it until the next `confirm` on the same address.
     /// An error here means the link itself failed.
     pub fn confirm(self: *SenderPool, address: []const u8) !amqp.Settlement {
-        const sender = try self.senderFor(address);
-        const settlement = try sender.awaitSettlement(self.deadline_ms);
+        const deadline_ms = deadlineAfter(self.session, self.timeout_ms);
+        const sender = try self.senderForDeadline(address, deadline_ms);
+        const settlement = try sender.awaitSettlement(deadline_ms);
         self.last_rejection = settlement.rejection;
         return settlement;
     }
@@ -283,6 +306,10 @@ pub const SenderPool = struct {
         /// given a verdict.
         err: ?anyerror = null,
     };
+
+    fn deadlineAfter(session: *const amqp.Session, timeout_ms: i64) i64 {
+        return session.driver.clock.nowMillis() +| @max(timeout_ms, 0);
+    }
 
     /// Send every batch to `address`, keeping up to `max_in_flight` of them on
     /// the wire at once.
@@ -1089,6 +1116,8 @@ test "a link is attached once and reused for the same address" {
 
     mem.clearWritten();
     try scripted.pool.send(allocator, "my-hub", first);
+    // Pool options are a duration, not an attach-time absolute deadline.
+    clock.advance(20_000);
     try scripted.pool.send(allocator, "my-hub", second);
 
     var frames = try EmittedFrames.parse(allocator, mem.written());

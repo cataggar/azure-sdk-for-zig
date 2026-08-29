@@ -22,7 +22,7 @@ const recovery = @import("recovery.zig");
 const Allocator = std.mem.Allocator;
 
 /// Version reported to the service in the `open` properties.
-pub const sdk_version = "0.1.0";
+pub const sdk_version: []const u8 = @import("build_options").version;
 
 /// The product half of the user agent, matching the other SDKs' shape.
 pub const user_agent_product = "azsdk-zig-eventhubs";
@@ -215,7 +215,7 @@ pub const AmqpConnectionFactory = struct {
     sasl: amqp.connection_driver.SaslMode = .anonymous,
     factory: recovery.ConnectionFactory = .{ .openFn = open, .closeFn = close },
 
-    fn open(f: *recovery.ConnectionFactory, deadline_ms: i64) anyerror!recovery.Plumbing {
+    fn open(f: *recovery.ConnectionFactory, timeout_ms: i64) anyerror!recovery.Plumbing {
         const self: *AmqpConnectionFactory = @fieldParentPtr("factory", f);
         const allocator = self.allocator;
 
@@ -276,6 +276,7 @@ pub const AmqpConnectionFactory = struct {
             .sasl = self.sasl,
         });
         errdefer driver.deinit();
+        const deadline_ms = driver.clock.nowMillis() +| @max(timeout_ms, 0);
         try driver.open(deadline_ms);
 
         const session = try allocator.create(amqp.Session);
@@ -344,14 +345,21 @@ test "the emulator is reached over plaintext on the AMQP port" {
 
 test "the application id leads the user agent" {
     const allocator = testing.allocator;
+    try testing.expectEqualStrings("0.6.0", sdk_version);
 
     const with_id = try (ConnectionOptions{ .application_id = "my-app/2.1" }).userAgent(allocator);
     defer allocator.free(with_id);
-    try testing.expect(std.mem.startsWith(u8, with_id, "my-app/2.1 azsdk-zig-eventhubs/"));
+    try testing.expectEqualStrings(
+        "my-app/2.1 azsdk-zig-eventhubs/0.6.0 (" ++ @tagName(builtin.os.tag) ++ ")",
+        with_id,
+    );
 
     const without = try (ConnectionOptions{}).userAgent(allocator);
     defer allocator.free(without);
-    try testing.expect(std.mem.startsWith(u8, without, "azsdk-zig-eventhubs/"));
+    try testing.expectEqualStrings(
+        "azsdk-zig-eventhubs/0.6.0 (" ++ @tagName(builtin.os.tag) ++ ")",
+        without,
+    );
 }
 
 test "the WebSocket URL names the namespace and the service bus path" {
@@ -455,8 +463,12 @@ test "a WebSocket hook is given the namespace URL and its stream opens the conne
     try testing.expectEqualStrings("container-1", open.container_id);
 
     const user_agent = propertyValue(open.properties.?, "user-agent").?;
-    try testing.expect(std.mem.startsWith(u8, user_agent, "my-app azsdk-zig-eventhubs/"));
+    try testing.expectEqualStrings(
+        "my-app azsdk-zig-eventhubs/0.6.0 (" ++ @tagName(builtin.os.tag) ++ ")",
+        user_agent,
+    );
     try testing.expectEqualStrings("azure-sdk-for-zig", propertyValue(open.properties.?, "product").?);
+    try testing.expectEqualStrings("0.6.0", propertyValue(open.properties.?, "version").?);
 
     // Geo-replication is only reported to a connection that asked for it.
     const capabilities = open.desired_capabilities.?;

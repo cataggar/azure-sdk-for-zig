@@ -398,4 +398,5 @@ test "live: a lone processor claims every partition" {
         defer eh.freeReceivedEvents(allocator, events);
     }
     try testing.expectEqual(properties.partition_ids.len, handed_out);
+    try processor.close();
 }
