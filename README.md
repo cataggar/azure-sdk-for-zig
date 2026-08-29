@@ -209,6 +209,13 @@ and remains valid until the next successful `receive`; it is still bounded by
 set it explicitly, which permits proportionally more of the requested prefetch
 window under the aggregate ceiling.
 
+`max_unsettled_deliveries` independently bounds delivery-id bookkeeping, with
+a default of 1024. Credit reserves both payload bytes and unsettled slots, so a
+mode-second peer withholding settlement acknowledgments cannot make the
+session maps or per-link scans grow without bound after payloads leave the
+ready queue. Acknowledgments and mode-first local settlement release slots and
+replenish withheld credit.
+
 Credit and delivery count are charged on the initial transfer, exactly once.
 A continuation may omit `delivery-id` or repeat the initial value without
 being charged again. Settlement is cumulative across the transfer sequence:
@@ -230,11 +237,13 @@ after any inbound frame header byte is consumed closes the connection; an
 unread body can no longer be parsed from a known boundary.
 
 An acknowledgement timeout after a successfully emitted SASL or AMQP protocol
-header, Begin, or End is terminal at the corresponding connection/session
-scope. A retry cannot emit a duplicate control onto a stream where the peer may
-already have advanced. Attach uses the same invariant: if its response does not
-arrive, the session and transport are invalidated before the half-attached
-object is destroyed, so a delayed response cannot bind a same-name replacement.
+header, Open, Begin, or End is terminal at the corresponding connection/session
+scope. Open encoding/allocation failure after the AMQP header exchange is
+terminal too: the peer is already waiting for Open, so returning to the start
+would duplicate the header. Attach uses the same invariant: if its response
+does not arrive, the session and transport are invalidated before the
+half-attached object is destroyed, so a delayed response cannot bind a
+same-name replacement.
 
 Every initial transfer, including aborted and pre-settled transfers, is checked
 against unsettled delivery ids active across every receiver on the session. An
@@ -258,13 +267,21 @@ without emission. Remote Detach is acknowledged with `closed = true` and
 terminally poisons only the named link, even when the peer requested suspension
 with `closed = false`; resumable link state is not retained.
 
-Receiver settlement follows the mode negotiated on Attach. In
-receiver-settle-mode `first`, the receiver disposition carries `settled = true`
-and releases the delivery ids immediately. In mode `second`, it carries
-`settled = false`; the ids remain active until a sender-role disposition
-acknowledges the range with `settled = true`. Timeout leaves that pending state
-intact, while terminal emission failure, detach, or deinitialization releases
-it safely.
+Receiver settlement preserves the mode selected by the local receiver's
+Attach; the remote sender's Attach preference does not replace it. An initial
+Transfer may override a mode-second link to `first` for that delivery.
+`settleRange` records each effective mode and splits a mixed range into
+correctly settled runs. Mode first carries `settled = true` and releases ids
+immediately. Mode second carries `settled = false`; ids remain active until a
+sender-role disposition acknowledges only previously dispositioned ids with
+`settled = true`.
+
+On the outbound side, the remote receiver's Attach selects the sender's actual
+receiver-settle-mode. When mode second returns a receiver-role disposition with
+`settled = false`, the sender emits the corresponding sender-role
+`settled = true` acknowledgment before the delivery can be retired. Duplicate
+dispositions do not duplicate acknowledgments, and acknowledgment emission
+failure terminalizes the consumed-frame session.
 
 Settling one delivery at a time costs a frame per message, which at a 300-deep
 prefetch is 300 frames of bookkeeping. A disposition can name a `first`..`last`

@@ -47,6 +47,8 @@ pub const LinkError = connection.ConnectionError || error{
     InvalidReceiverOptions,
     /// An unsettled delivery id was reused before its terminal disposition.
     DuplicateDeliveryId,
+    /// Unsettled deliveries reached `ReceiverOptions.max_unsettled_deliveries`.
+    SettlementLimitExceeded,
 };
 
 /// Set on a receiver so Event Hubs can name the owner in its error text.
@@ -283,9 +285,21 @@ pub const Session = struct {
         self.invalidateLinks();
     }
 
-    fn reserveIncomingDelivery(self: *Session, receiver: *Receiver, id: u32) LinkError!void {
+    fn reserveIncomingDelivery(
+        self: *Session,
+        receiver: *Receiver,
+        id: u32,
+        settle_mode: perf.ReceiverSettleMode,
+    ) LinkError!void {
         if (self.incoming_deliveries.contains(id)) return error.DuplicateDeliveryId;
-        try receiver.unsettled_ids.append(self.allocator, id);
+        try receiver.unsettled_ids.ensureTotalCapacityPrecise(
+            self.allocator,
+            receiver.unsettled_ids.items.len + 1,
+        );
+        receiver.unsettled_ids.appendAssumeCapacity(.{
+            .id = id,
+            .settle_mode = settle_mode,
+        });
         errdefer _ = receiver.unsettled_ids.pop();
         try self.incoming_deliveries.put(self.allocator, id, receiver);
     }
@@ -293,22 +307,20 @@ pub const Session = struct {
     fn releaseIncomingDelivery(self: *Session, receiver: *Receiver, id: u32) void {
         if (self.incoming_deliveries.get(id) != receiver) return;
         _ = self.incoming_deliveries.remove(id);
-        receiver.removePendingSettlement(id);
         for (receiver.unsettled_ids.items, 0..) |active, i| {
-            if (active != id) continue;
+            if (active.id != id) continue;
             _ = receiver.unsettled_ids.swapRemove(i);
             return;
         }
     }
 
     fn releaseReceiverDeliveries(self: *Session, receiver: *Receiver) void {
-        for (receiver.unsettled_ids.items) |id| {
-            if (self.incoming_deliveries.get(id) == receiver) {
-                _ = self.incoming_deliveries.remove(id);
+        for (receiver.unsettled_ids.items) |active| {
+            if (self.incoming_deliveries.get(active.id) == receiver) {
+                _ = self.incoming_deliveries.remove(active.id);
             }
         }
         receiver.unsettled_ids.clearRetainingCapacity();
-        receiver.pending_settlement_ids.clearRetainingCapacity();
     }
 
     fn releaseIncomingRange(self: *Session, receiver: *Receiver, first: u32, last: u32) void {
@@ -317,10 +329,9 @@ pub const Session = struct {
         var i = receiver.unsettled_ids.items.len;
         while (i > 0) {
             i -= 1;
-            const id = receiver.unsettled_ids.items[i];
+            const id = receiver.unsettled_ids.items[i].id;
             if (id -% first > span) continue;
             _ = self.incoming_deliveries.remove(id);
-            receiver.removePendingSettlement(id);
             _ = receiver.unsettled_ids.swapRemove(i);
         }
     }
@@ -425,6 +436,7 @@ pub const Session = struct {
         const last = d.last orelse d.first;
         if (d.role == .receiver) {
             // A disposition from the receiving side settles what we sent.
+            try self.acknowledgeReceiverDisposition(d.first, last, d.settled, d.state);
             for (self.senders.items) |s| {
                 s.applyDisposition(d.first, last, d.state) catch |err| {
                     // The disposition frame is consumed and cannot be replayed.
@@ -446,7 +458,84 @@ pub const Session = struct {
         if (!d.settled) return;
         for (self.receivers.items) |receiver| {
             if (receiver.rcv_settle_mode == .second) {
-                receiver.acknowledgeSettlementRange(d.first, last);
+                try receiver.acknowledgeSettlementRange(d.first, last);
+            }
+        }
+    }
+
+    fn acknowledgeReceiverDisposition(
+        self: *Session,
+        first: u32,
+        last: u32,
+        settled: bool,
+        state: ?perf.DeliveryState,
+    ) LinkError!void {
+        if (settled) return;
+        const span = last -% first;
+        if (span >= 1 << 31) return;
+
+        var cursor: ?u32 = null;
+        var run_first: u32 = 0;
+        var run_last: u32 = 0;
+        var have_run = false;
+        while (true) {
+            var next_id: ?u32 = null;
+            var next_offset: u32 = 0;
+            for (self.senders.items) |sender| {
+                if (sender.rcv_settle_mode != .second) continue;
+                for (0..sender.in_flight_len) |i| {
+                    const entry = sender.entryAt(i);
+                    if (entry.second_ack_sent) continue;
+                    const offset = entry.id -% first;
+                    if (offset > span) continue;
+                    if (cursor) |after| {
+                        if (offset <= after) continue;
+                    }
+                    if (next_id == null or offset < next_offset) {
+                        next_id = entry.id;
+                        next_offset = offset;
+                    }
+                }
+            }
+
+            const id = next_id orelse {
+                if (have_run) try self.emitSenderSettlementAck(run_first, run_last, state);
+                return;
+            };
+            if (!have_run) {
+                run_first = id;
+                run_last = id;
+                have_run = true;
+            } else if (next_offset == cursor.? + 1) {
+                run_last = id;
+            } else {
+                try self.emitSenderSettlementAck(run_first, run_last, state);
+                run_first = id;
+                run_last = id;
+            }
+            cursor = next_offset;
+        }
+    }
+
+    fn emitSenderSettlementAck(
+        self: *Session,
+        first: u32,
+        last: u32,
+        state: ?perf.DeliveryState,
+    ) LinkError!void {
+        try self.driver.sendPerformative(.amqp, self.channel, .{ .disposition = .{
+            .role = .sender,
+            .first = first,
+            .last = last,
+            .settled = true,
+            .state = state,
+        } });
+        const span = last -% first;
+        for (self.senders.items) |sender| {
+            if (sender.rcv_settle_mode != .second) continue;
+            for (0..sender.in_flight_len) |i| {
+                const entry = sender.entryAt(i);
+                if (entry.id -% first <= span) entry.second_ack_sent = true;
             }
         }
     }
@@ -457,6 +546,7 @@ pub const Session = struct {
             if (s.awaiting_attach and !s.poisoned and std.mem.eql(u8, s.name, a.name)) {
                 s.remote_handle = a.handle;
                 s.max_message_size = a.max_message_size;
+                s.rcv_settle_mode = a.rcv_settle_mode;
                 if (a.initial_delivery_count) |c| s.delivery_count = c;
                 s.attached = true;
                 s.awaiting_attach = false;
@@ -467,7 +557,6 @@ pub const Session = struct {
             if (r.awaiting_attach and !r.poisoned and std.mem.eql(u8, r.name, a.name)) {
                 r.remote_handle = a.handle;
                 r.peer_max_message_size = a.max_message_size;
-                r.rcv_settle_mode = a.rcv_settle_mode;
                 r.attached = true;
                 r.awaiting_attach = false;
                 return;
@@ -670,6 +759,7 @@ const InFlight = struct {
     id: u32,
     outcome: ?Outcome = null,
     rejection: ?Rejection = null,
+    second_ack_sent: bool = false,
 };
 
 pub const Sender = struct {
@@ -686,6 +776,8 @@ pub const Sender = struct {
     credit: u32 = 0,
     drain: bool = false,
     delivery_count: u32 = 0,
+    /// Receiver settlement mode selected by the remote receiver's Attach.
+    rcv_settle_mode: perf.ReceiverSettleMode = .first,
     /// Peer's `max-message-size`; null or 0 means unlimited.
     max_message_size: ?u64 = null,
 
@@ -1249,6 +1341,7 @@ pub fn openSender(
         .name = name,
         .handle = session.allocateHandle(),
         .in_flight = in_flight,
+        .rcv_settle_mode = options.rcv_settle_mode,
     };
 
     try session.senders.append(session.allocator, sender);
@@ -1335,6 +1428,14 @@ pub const ReceiverOptions = struct {
     /// retention above this layer.
     /// A zero-byte finite budget is invalid.
     max_buffered_bytes: ?u64 = default_max_buffered_bytes,
+    /// Maximum unsettled delivery ids retained while the application decides
+    /// an outcome or mode second waits for the sender's acknowledgment.
+    ///
+    /// This is independent of payload bytes: handing a delivery to the caller
+    /// releases its aggregate-byte reservation, but its id remains live until
+    /// settlement. Credit never authorizes more unsettled deliveries than the
+    /// remaining slots.
+    max_unsettled_deliveries: u32 = default_max_unsettled_deliveries,
 };
 
 /// The floor for a derived `max_overrun`, so a receiver driving credit by
@@ -1359,6 +1460,9 @@ pub const default_max_message_size: u64 = 128 * 1024 * 1024;
 /// deeper delivery window by setting both receiver limits explicitly.
 pub const default_max_buffered_bytes: u64 = 256 * 1024 * 1024;
 
+/// Default bound on unsettled delivery-id bookkeeping per receiver.
+pub const default_max_unsettled_deliveries: u32 = 1024;
+
 /// §2.7.3: an absent *or zero* `max-message-size` means no limit.
 fn normalizeMaxMessageSize(size: ?u64) ?u64 {
     const n = size orelse return null;
@@ -1380,6 +1484,12 @@ pub const Delivery = struct {
     tag: []const u8,
     payload: []const u8,
     settled: bool,
+};
+
+const IncomingUnsettled = struct {
+    id: u32,
+    settle_mode: perf.ReceiverSettleMode,
+    disposition_sent: bool = false,
 };
 
 pub const Receiver = struct {
@@ -1409,7 +1519,7 @@ pub const Receiver = struct {
     /// actually enforced, and `ReceiverOptions.max_message_size` for what null
     /// means.
     max_message_size: ?u64 = null,
-    /// Receiver settlement mode negotiated in the attach exchange.
+    /// Receiver settlement mode selected by this local receiver's Attach.
     rcv_settle_mode: perf.ReceiverSettleMode = .first,
     /// What the peer declared in its own `attach`, recorded but not enforced;
     /// `maxMessageSize` says why. It is the largest message the *peer*
@@ -1426,12 +1536,12 @@ pub const Receiver = struct {
     partial_id: ?u32 = null,
     partial_tag: std.ArrayList(u8) = .empty,
     partial_settled: bool = false,
+    partial_rcv_settle_mode: perf.ReceiverSettleMode = .first,
     /// Unsettled ids owned by this link, mirrored in the session-wide map so
     /// reuse is rejected across every receiver on the channel.
-    unsettled_ids: std.ArrayList(u32) = .empty,
-    /// Delivery ids for which mode second has emitted its first, unsettled
-    /// disposition and is awaiting the sender-role settled acknowledgment.
-    pending_settlement_ids: std.ArrayList(u32) = .empty,
+    unsettled_ids: std.ArrayList(IncomingUnsettled) = .empty,
+    /// Maximum unsettled ids retained independently of payload bytes.
+    max_unsettled_deliveries: u32 = default_max_unsettled_deliveries,
     /// Completed deliveries not yet handed to the caller.
     ///
     /// Drained with a head cursor rather than by removing the front element:
@@ -1453,7 +1563,6 @@ pub const Receiver = struct {
         self.partial.deinit(self.allocator);
         self.partial_tag.deinit(self.allocator);
         self.unsettled_ids.deinit(self.allocator);
-        self.pending_settlement_ids.deinit(self.allocator);
         // Everything before `ready_head` was already handed out, so its
         // buffers belong to `current` and are freed by `releaseCurrent`.
         for (self.ready.items[self.ready_head..]) |d| {
@@ -1475,51 +1584,19 @@ pub const Receiver = struct {
         self.buffered_bytes -|= @intCast(bytes);
     }
 
-    fn removePendingSettlement(self: *Receiver, id: u32) void {
-        for (self.pending_settlement_ids.items, 0..) |pending, i| {
-            if (pending != id) continue;
-            _ = self.pending_settlement_ids.swapRemove(i);
-            return;
-        }
-    }
-
-    fn markPendingSettlementRange(
-        self: *Receiver,
-        first: u32,
-        last: u32,
-    ) Allocator.Error!usize {
-        const old_len = self.pending_settlement_ids.items.len;
-        const span = last -% first;
-        if (span >= 1 << 31) return old_len;
-
-        var additional: usize = 0;
-        for (self.unsettled_ids.items) |id| {
-            if (id -% first > span) continue;
-            if (std.mem.indexOfScalar(u32, self.pending_settlement_ids.items, id) == null) {
-                additional += 1;
-            }
-        }
-        try self.pending_settlement_ids.ensureUnusedCapacity(self.allocator, additional);
-        for (self.unsettled_ids.items) |id| {
-            if (id -% first > span) continue;
-            if (std.mem.indexOfScalar(u32, self.pending_settlement_ids.items, id) == null) {
-                self.pending_settlement_ids.appendAssumeCapacity(id);
-            }
-        }
-        return old_len;
-    }
-
-    fn acknowledgeSettlementRange(self: *Receiver, first: u32, last: u32) void {
+    fn acknowledgeSettlementRange(self: *Receiver, first: u32, last: u32) LinkError!void {
         const span = last -% first;
         if (span >= 1 << 31) return;
-        var i = self.pending_settlement_ids.items.len;
+        const before = self.unsettled_ids.items.len;
+        var i = self.unsettled_ids.items.len;
         while (i > 0) {
             i -= 1;
-            const id = self.pending_settlement_ids.items[i];
-            if (id -% first > span) continue;
-            _ = self.pending_settlement_ids.swapRemove(i);
-            self.session.releaseIncomingDelivery(self, id);
+            const active = self.unsettled_ids.items[i];
+            if (!active.disposition_sent or active.settle_mode != .second) continue;
+            if (active.id -% first > span) continue;
+            self.session.releaseIncomingDelivery(self, active.id);
         }
+        if (self.unsettled_ids.items.len != before) try self.replenish();
     }
 
     fn bufferWouldOverflow(self: *const Receiver, bytes: usize) bool {
@@ -1537,6 +1614,7 @@ pub const Receiver = struct {
         self.partial_tag.clearRetainingCapacity();
         self.partial_id = null;
         self.partial_settled = false;
+        self.partial_rcv_settle_mode = self.rcv_settle_mode;
     }
 
     fn clearPartialAndFree(self: *Receiver) void {
@@ -1548,6 +1626,7 @@ pub const Receiver = struct {
         self.partial_tag.clearAndFree(self.allocator);
         self.partial_id = null;
         self.partial_settled = false;
+        self.partial_rcv_settle_mode = self.rcv_settle_mode;
     }
 
     /// A consumed transfer cannot be replayed. Any failure incorporating it
@@ -1671,6 +1750,12 @@ pub const Receiver = struct {
                     return error.MalformedFrame;
                 }
             }
+            if (t.rcv_settle_mode) |mode| {
+                if (mode != self.partial_rcv_settle_mode) {
+                    self.poisonAfterConsumedTransfer();
+                    return error.MalformedFrame;
+                }
+            }
             // Settlement may be asserted on any transfer in the delivery.
             // Once true it is terminal and remains true when later frames
             // omit the field.
@@ -1699,11 +1784,18 @@ pub const Receiver = struct {
                 self.refuseDuplicateDelivery();
                 return error.DuplicateDeliveryId;
             }
+            const settle_mode = self.effectiveReceiverSettleMode(t.rcv_settle_mode) catch |err| {
+                self.poisonAfterConsumedTransfer();
+                return err;
+            };
             if (t.aborted) return;
 
             const settled = t.settled orelse false;
             if (!settled) {
-                self.session.reserveIncomingDelivery(self, id) catch |err| {
+                if (self.unsettled_ids.items.len >= self.max_unsettled_deliveries) {
+                    try self.refuseSettlementLimit();
+                }
+                self.session.reserveIncomingDelivery(self, id, settle_mode) catch |err| {
                     if (err == error.DuplicateDeliveryId) {
                         self.refuseDuplicateDelivery();
                     }
@@ -1737,6 +1829,7 @@ pub const Receiver = struct {
 
             self.partial_id = t.delivery_id.?;
             self.partial_settled = settled;
+            self.partial_rcv_settle_mode = settle_mode;
             if (!self.partialReservationFits()) try self.refuseBufferLimit();
             if (t.delivery_tag) |tag| {
                 self.partial_tag.appendSlice(self.allocator, tag) catch |err| {
@@ -1806,15 +1899,39 @@ pub const Receiver = struct {
         return normalizeMaxMessageSize(self.max_message_size);
     }
 
+    fn effectiveReceiverSettleMode(
+        self: *const Receiver,
+        transfer_mode: ?perf.ReceiverSettleMode,
+    ) LinkError!perf.ReceiverSettleMode {
+        const mode = transfer_mode orelse self.rcv_settle_mode;
+        // A sender may ask a mode-second receiver to settle a particular
+        // delivery on first disposition. It cannot make a mode-first receiver
+        // retain state for a second phase the receiver never negotiated.
+        if (self.rcv_settle_mode == .first and mode == .second) {
+            return error.MalformedFrame;
+        }
+        return mode;
+    }
+
     /// Aggregate payload bytes currently waiting in this receiver.
     pub fn bufferedBytes(self: *const Receiver) u64 {
         return self.buffered_bytes;
     }
 
+    fn pendingSettlementCount(self: *const Receiver) usize {
+        var count: usize = 0;
+        for (self.unsettled_ids.items) |active| {
+            if (active.disposition_sent) count += 1;
+        }
+        return count;
+    }
+
     /// Maximum credit that can be outstanding without letting a conforming
     /// sender exceed the aggregate payload budget.
     fn byteCreditCapacity(self: *const Receiver) u32 {
-        const limit = self.max_buffered_bytes orelse return std.math.maxInt(u32);
+        const slots = self.max_unsettled_deliveries -|
+            @as(u32, @intCast(self.unsettled_ids.items.len));
+        const limit = self.max_buffered_bytes orelse return slots;
         // With no per-message bound, one delivery may consume the whole
         // aggregate budget. If the configured message limit is larger than
         // the aggregate budget, the aggregate limit remains authoritative.
@@ -1823,7 +1940,8 @@ pub const Receiver = struct {
         const reserved = self.reservedBufferedBytes(reservation);
         if (reserved >= limit) return 0;
         const free = limit - reserved;
-        return @intCast(@min(free / reservation, std.math.maxInt(u32)));
+        const bytes: u32 = @intCast(@min(free / reservation, std.math.maxInt(u32)));
+        return @min(bytes, slots);
     }
 
     /// Ready deliveries consume their actual size. An in-progress delivery
@@ -1857,11 +1975,11 @@ pub const Receiver = struct {
     }
 
     fn reserveIncomingCapacity(self: *Receiver, count: u32) Allocator.Error!void {
-        // Keep the common 300-credit window allocation-free per delivery
-        // without letting one caller-requested maxInt credit force a huge
-        // eager allocation.
-        const reserve_count = @min(count, 4096);
-        try self.unsettled_ids.ensureUnusedCapacity(self.allocator, @intCast(reserve_count));
+        const remaining = self.max_unsettled_deliveries -|
+            @as(u32, @intCast(self.unsettled_ids.items.len));
+        const reserve_count = @min(count, remaining);
+        const total = self.unsettled_ids.items.len + @as(usize, reserve_count);
+        try self.unsettled_ids.ensureTotalCapacityPrecise(self.allocator, total);
         try self.session.incoming_deliveries.ensureUnusedCapacity(self.allocator, reserve_count);
     }
 
@@ -1986,6 +2104,25 @@ pub const Receiver = struct {
         return error.BufferLimitExceeded;
     }
 
+    fn refuseSettlementLimit(self: *Receiver) LinkError!void {
+        self.attached = false;
+        self.awaiting_attach = false;
+        self.poisoned = true;
+        self.clearPartialAndFree();
+        self.session.releaseReceiverDeliveries(self);
+        try self.session.driver.sendPerformative(.amqp, self.session.channel, .{
+            .detach = .{
+                .handle = self.handle,
+                .closed = true,
+                .err = .{
+                    .condition = "amqp:resource-limit-exceeded",
+                    .description = "receiver unsettled delivery limit exhausted",
+                },
+            },
+        });
+        return error.SettlementLimitExceeded;
+    }
+
     fn refuseDuplicateDelivery(self: *Receiver) void {
         self.attached = false;
         self.awaiting_attach = false;
@@ -2100,28 +2237,131 @@ pub const Receiver = struct {
     ) LinkError!void {
         if (self.session.ended or self.poisoned or !self.attached or self.detach_sent)
             return error.LinkDetached;
-        const pending_len = if (self.rcv_settle_mode == .second)
-            try self.markPendingSettlementRange(first, last)
-        else
-            0;
+
+        const span = last -% first;
+        if (span >= 1 << 31) return error.InvalidState;
+        var has_active = false;
+        for (self.unsettled_ids.items) |active| {
+            if (active.id -% first <= span) {
+                has_active = true;
+                break;
+            }
+        }
+
+        var emitted = false;
+        var cursor: ?u32 = null;
+        var run_first: u32 = 0;
+        var run_last: u32 = 0;
+        var run_mode: perf.ReceiverSettleMode = .first;
+        var have_run = false;
+
+        while (true) {
+            var next: ?IncomingUnsettled = null;
+            var next_offset: u32 = 0;
+            for (self.unsettled_ids.items) |active| {
+                const offset = active.id -% first;
+                if (offset > span) continue;
+                if (active.settle_mode == .second and active.disposition_sent) continue;
+                if (cursor) |after| {
+                    if (offset <= after) continue;
+                }
+                if (next == null or offset < next_offset) {
+                    next = active;
+                    next_offset = offset;
+                }
+            }
+
+            const active = next orelse {
+                if (have_run) {
+                    try self.emitSettlementRun(
+                        run_first,
+                        run_last,
+                        run_mode,
+                        state,
+                        emitted,
+                    );
+                } else if (!has_active) {
+                    // Preserve the API's historical ability to disposition an
+                    // explicit range even when those ids were pre-settled or
+                    // are no longer retained locally.
+                    try self.emitSettlementRun(
+                        first,
+                        last,
+                        self.rcv_settle_mode,
+                        state,
+                        false,
+                    );
+                }
+                return;
+            };
+
+            if (!have_run) {
+                run_first = active.id;
+                run_last = active.id;
+                run_mode = active.settle_mode;
+                have_run = true;
+            } else if (next_offset == cursor.? + 1 and active.settle_mode == run_mode) {
+                run_last = active.id;
+            } else {
+                try self.emitSettlementRun(
+                    run_first,
+                    run_last,
+                    run_mode,
+                    state,
+                    emitted,
+                );
+                emitted = true;
+                run_first = active.id;
+                run_last = active.id;
+                run_mode = active.settle_mode;
+            }
+            cursor = next_offset;
+        }
+    }
+
+    fn emitSettlementRun(
+        self: *Receiver,
+        first: u32,
+        last: u32,
+        mode: perf.ReceiverSettleMode,
+        state: perf.DeliveryState,
+        emitted_before: bool,
+    ) LinkError!void {
+        if (mode == .second) self.setDispositionSent(first, last, true);
         self.session.driver.sendPerformative(.amqp, self.session.channel, .{
             .disposition = .{
                 .role = .receiver,
                 .first = first,
                 .last = last,
-                .settled = self.rcv_settle_mode == .first,
+                .settled = mode == .first,
                 .state = state,
             },
         }) catch |err| {
-            if (self.session.driver.state == .err) {
+            if (mode == .second and !emitted_before and self.session.driver.state != .err) {
+                self.setDispositionSent(first, last, false);
+            }
+            if (emitted_before or self.session.driver.state == .err) {
+                if (self.session.driver.state != .err) self.session.driver.invalidate();
                 self.session.terminate();
-            } else if (self.rcv_settle_mode == .second) {
-                self.pending_settlement_ids.shrinkRetainingCapacity(pending_len);
             }
             return err;
         };
-        if (self.rcv_settle_mode == .first) {
+
+        if (mode == .first) {
             self.session.releaseIncomingRange(self, first, last);
+            self.replenish() catch |err| {
+                self.session.driver.invalidate();
+                self.session.terminate();
+                return err;
+            };
+        }
+    }
+
+    fn setDispositionSent(self: *Receiver, first: u32, last: u32, sent: bool) void {
+        const span = last -% first;
+        for (self.unsettled_ids.items) |*active| {
+            if (active.settle_mode != .second or active.id -% first > span) continue;
+            active.disposition_sent = sent;
         }
     }
 
@@ -2244,6 +2484,7 @@ pub fn openReceiver(
         options.max_message_size,
         options.max_buffered_bytes,
     );
+    if (options.max_unsettled_deliveries == 0) return error.InvalidReceiverOptions;
 
     const receiver = try session.allocator.create(Receiver);
     errdefer session.allocator.destroy(receiver);
@@ -2262,9 +2503,9 @@ pub fn openReceiver(
         .max_message_size = max_message_size,
         .max_buffered_bytes = options.max_buffered_bytes,
         .rcv_settle_mode = options.rcv_settle_mode,
+        .max_unsettled_deliveries = options.max_unsettled_deliveries,
     };
     errdefer receiver.unsettled_ids.deinit(session.allocator);
-    errdefer receiver.pending_settlement_ids.deinit(session.allocator);
 
     try session.receivers.append(session.allocator, receiver);
     errdefer _ = session.receivers.pop();
@@ -2330,6 +2571,11 @@ fn expectReceiverAccounting(receiver: *const Receiver) !void {
             @as(u128, receiver.credit) * @as(u128, message_size);
         try testing.expect(authorised <= budget);
     }
+    try testing.expect(
+        receiver.unsettled_ids.items.len + @as(usize, receiver.credit) <=
+            receiver.max_unsettled_deliveries,
+    );
+    try testing.expect(receiver.unsettled_ids.capacity <= receiver.max_unsettled_deliveries);
 }
 
 test "a sender attaches and reports the peer's max-message-size" {
@@ -4054,6 +4300,156 @@ test "one disposition settles every delivery a pipelining sender put on the wire
     try testing.expectEqual(@as(usize, 0), sender.inFlight());
 }
 
+test "sender acknowledges mode-second receiver dispositions exactly once" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "producer",
+        .handle = 0,
+        .role = .receiver,
+        .rcv_settle_mode = .second,
+        .initial_delivery_count = 0,
+    } });
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 1000,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+        .handle = 0,
+        .delivery_count = 0,
+        .link_credit = 2,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "entity",
+        .max_in_flight = 2,
+    }, 10_000);
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(perf.ReceiverSettleMode.second, sender.rcv_settle_mode);
+
+    _ = try sender.sendBytesAsync("a", .{}, 10_000);
+    _ = try sender.sendBytesAsync("b", .{}, 10_000);
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 0,
+        .last = 1,
+        .settled = false,
+        .state = .accepted,
+    } });
+
+    mem.clearWritten();
+    _ = try fixture.session.pump(10_000);
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const dispositions = try frames.of(allocator, perf.descriptor.disposition);
+    defer allocator.free(dispositions);
+    try testing.expectEqual(@as(usize, 1), dispositions.len);
+    var decoded = try perf.decode(allocator, dispositions[0]);
+    defer decoded.deinit();
+    const ack = decoded.performative.disposition;
+    try testing.expectEqual(perf.Role.sender, ack.role);
+    try testing.expectEqual(@as(u32, 0), ack.first);
+    try testing.expectEqual(@as(?u32, 1), ack.last);
+    try testing.expect(ack.settled);
+
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 0,
+        .last = 1,
+        .settled = false,
+        .state = .accepted,
+    } });
+    mem.clearWritten();
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(usize, 0), mem.written().len);
+
+    _ = try sender.awaitSettlement(10_000);
+    _ = try sender.awaitSettlement(10_000);
+
+    // A mode-second receiver may also settle its disposition itself; that
+    // terminal form needs no sender-side second phase.
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 2,
+        .incoming_window = 1000,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+        .handle = 0,
+        .delivery_count = 2,
+        .link_credit = 1,
+    } });
+    _ = try fixture.session.pump(10_000);
+    _ = try sender.sendBytesAsync("c", .{}, 10_000);
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 2,
+        .settled = true,
+        .state = .accepted,
+    } });
+    mem.clearWritten();
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(usize, 0), mem.written().len);
+    _ = try sender.awaitSettlement(10_000);
+}
+
+test "failed sender second-phase acknowledgment terminalizes the session" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "producer",
+        .handle = 0,
+        .role = .receiver,
+        .rcv_settle_mode = .second,
+        .initial_delivery_count = 0,
+    } });
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 1000,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+        .handle = 0,
+        .delivery_count = 0,
+        .link_credit = 1,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "entity",
+    }, 10_000);
+    _ = try fixture.session.pump(10_000);
+    _ = try sender.sendBytesAsync("a", .{}, 10_000);
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 0,
+        .settled = false,
+        .state = .accepted,
+    } });
+
+    mem.fail_write = true;
+    try testing.expectError(error.WriteFailed, fixture.session.pump(10_000));
+    try testing.expect(fixture.session.ended);
+    try testing.expect(sender.poisoned);
+    try testing.expectEqual(connection.State.err, driver.state);
+}
+
 test "a pipelining sender attributes a rejection to the delivery it names" {
     // The middle delivery is refused and the two around it are accepted. A
     // sender holding one outcome for the whole link cannot say which of the
@@ -5415,13 +5811,17 @@ test "receiver settle mode second retains ids through timeout until sender ackno
     const peer = Peer{ .allocator = allocator, .mem = &mem };
 
     try scriptHandshake(peer, 65536);
-    try peer.push(0, .{ .attach = .{
-        .name = "consumer",
-        .handle = 0,
-        .role = .sender,
-        .rcv_settle_mode = .second,
-        .initial_delivery_count = 0,
-    } });
+    try peer.push(0, .{
+        .attach = .{
+            .name = "consumer",
+            .handle = 0,
+            .role = .sender,
+            // The remote sender's preference does not override the mode selected
+            // by the local receiver in its Attach.
+            .rcv_settle_mode = .first,
+            .initial_delivery_count = 0,
+        },
+    });
     for (10..12) |id| {
         try peer.pushTransfer(0, .{
             .handle = 0,
@@ -5468,7 +5868,7 @@ test "receiver settle mode second retains ids through timeout until sender ackno
     try receiver.settleRange(10, 11, .accepted);
     try testing.expect(fixture.session.incoming_deliveries.contains(10));
     try testing.expect(fixture.session.incoming_deliveries.contains(11));
-    try testing.expectEqual(@as(usize, 2), receiver.pending_settlement_ids.items.len);
+    try testing.expectEqual(@as(usize, 2), receiver.pendingSettlementCount());
 
     var frames = try EmittedFrames.parse(allocator, mem.written());
     defer frames.deinit();
@@ -5494,7 +5894,7 @@ test "receiver settle mode second retains ids through timeout until sender ackno
     _ = try fixture.session.pump(clock.millis + 10);
     try testing.expect(fixture.session.incoming_deliveries.contains(10));
     try testing.expect(fixture.session.incoming_deliveries.contains(11));
-    try testing.expectEqual(@as(usize, 2), receiver.pending_settlement_ids.items.len);
+    try testing.expectEqual(@as(usize, 2), receiver.pendingSettlementCount());
 
     try peer.push(0, .{ .disposition = .{
         .role = .sender,
@@ -5505,7 +5905,124 @@ test "receiver settle mode second retains ids through timeout until sender ackno
     } });
     _ = try fixture.session.pump(clock.millis + 10);
     try testing.expectEqual(@as(usize, 0), fixture.session.incoming_deliveries.count());
-    try testing.expectEqual(@as(usize, 0), receiver.pending_settlement_ids.items.len);
+    try testing.expectEqual(@as(usize, 0), receiver.pendingSettlementCount());
+}
+
+test "mixed per-transfer receiver settlement modes split disposition ranges" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .rcv_settle_mode = .first,
+        .initial_delivery_count = 0,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 40,
+        .delivery_tag = "a",
+    }, "a");
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 41,
+        .delivery_tag = "b",
+        .rcv_settle_mode = .first,
+    }, "b");
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 42,
+        .delivery_tag = "c",
+    }, "c");
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "entity",
+        .rcv_settle_mode = .second,
+        .prefetch = 3,
+        .max_message_size = 8,
+        .max_buffered_bytes = 24,
+    }, 10_000);
+
+    for (0..3) |_| _ = try receiver.receive(10_000);
+    mem.clearWritten();
+    try receiver.settleRange(40, 42, .accepted);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const dispositions = try frames.of(allocator, perf.descriptor.disposition);
+    defer allocator.free(dispositions);
+    try testing.expectEqual(@as(usize, 3), dispositions.len);
+    for (dispositions, 0..) |body, i| {
+        var decoded = try perf.decode(allocator, body);
+        defer decoded.deinit();
+        const d = decoded.performative.disposition;
+        try testing.expectEqual(@as(u32, 40 + @as(u32, @intCast(i))), d.first);
+        try testing.expectEqual(d.first, d.last.?);
+        try testing.expectEqual(i == 1, d.settled);
+    }
+    try testing.expect(fixture.session.incoming_deliveries.contains(40));
+    try testing.expect(!fixture.session.incoming_deliveries.contains(41));
+    try testing.expect(fixture.session.incoming_deliveries.contains(42));
+    try testing.expectEqual(@as(usize, 2), receiver.pendingSettlementCount());
+
+    try peer.push(0, .{ .disposition = .{
+        .role = .sender,
+        .first = 40,
+        .last = 42,
+        .settled = true,
+        .state = .accepted,
+    } });
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(usize, 0), fixture.session.incoming_deliveries.count());
+}
+
+test "a transfer cannot upgrade a mode-first receiver to mode second" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 50,
+        .delivery_tag = "t",
+        .rcv_settle_mode = .second,
+    }, "event");
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "entity",
+        .rcv_settle_mode = .first,
+        .prefetch = 1,
+        .max_message_size = 8,
+        .max_buffered_bytes = 8,
+    }, 10_000);
+
+    try testing.expectError(error.MalformedFrame, fixture.session.pump(10_000));
+    try testing.expect(receiver.poisoned);
+    try testing.expectEqual(@as(usize, 0), fixture.session.incoming_deliveries.count());
 }
 
 test "failed second-mode disposition terminalizes and releases active ids" {
@@ -5549,7 +6066,7 @@ test "failed second-mode disposition terminalizes and releases active ids" {
     try testing.expect(fixture.session.ended);
     try testing.expect(receiver.poisoned);
     try testing.expectEqual(@as(usize, 0), fixture.session.incoming_deliveries.count());
-    try testing.expectEqual(@as(usize, 0), receiver.pending_settlement_ids.items.len);
+    try testing.expectEqual(@as(usize, 0), receiver.pendingSettlementCount());
 }
 
 test "deinit releases ids awaiting second-mode settlement acknowledgment" {
@@ -5592,6 +6109,100 @@ test "deinit releases ids awaiting second-mode settlement acknowledgment" {
     try testing.expect(fixture.session.incoming_deliveries.contains(30));
     fixture.session.closeReceiver(receiver, clock.millis + 5);
     try testing.expectEqual(@as(usize, 0), fixture.session.receivers.items.len);
+    try testing.expectEqual(@as(usize, 0), fixture.session.incoming_deliveries.count());
+}
+
+test "settlement slots bound withheld mode-second acknowledgments and replenish on release" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    for (0..4) |id| {
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = @intCast(id),
+            .delivery_tag = "t",
+        }, "event");
+    }
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "entity",
+        .rcv_settle_mode = .second,
+        .prefetch = 0,
+        .max_message_size = 8,
+        .max_buffered_bytes = 32,
+        .max_unsettled_deliveries = 4,
+    }, 10_000);
+    try receiver.issueCredit(100);
+    try testing.expectEqual(@as(u32, 4), receiver.credit);
+
+    for (0..4) |_| {
+        const delivery = try receiver.receive(10_000);
+        try receiver.accept(delivery);
+    }
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    try testing.expectEqual(@as(u64, 0), receiver.bufferedBytes());
+    try testing.expectEqual(@as(usize, 4), receiver.unsettled_ids.items.len);
+    try testing.expectEqual(@as(usize, 4), receiver.pendingSettlementCount());
+
+    for (0..20) |cycle| {
+        const released: u32 = @intCast(cycle * 2);
+        try peer.push(0, .{ .disposition = .{
+            .role = .sender,
+            .first = released,
+            .last = released + 1,
+            .settled = true,
+            .state = .accepted,
+        } });
+        _ = try fixture.session.pump(10_000);
+        try testing.expectEqual(@as(u32, 2), receiver.credit);
+        try testing.expectEqual(@as(usize, 2), receiver.unsettled_ids.items.len);
+
+        const next: u32 = @intCast(4 + cycle * 2);
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = next,
+            .delivery_tag = "t",
+        }, "event");
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = next + 1,
+            .delivery_tag = "t",
+        }, "event");
+        for (0..2) |_| {
+            const delivery = try receiver.receive(10_000);
+            try receiver.accept(delivery);
+        }
+        try testing.expectEqual(@as(u32, 0), receiver.credit);
+        try testing.expectEqual(@as(u64, 0), receiver.bufferedBytes());
+        try testing.expectEqual(@as(usize, 4), receiver.unsettled_ids.items.len);
+        try testing.expectEqual(@as(usize, 4), receiver.pendingSettlementCount());
+        try testing.expect(receiver.unsettled_ids.capacity <= 4);
+    }
+
+    // A peer that ignores the withheld credit cannot grow the bounded id set.
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 44,
+        .delivery_tag = "t",
+    }, "event");
+    try testing.expectError(error.SettlementLimitExceeded, fixture.session.pump(10_000));
+    try testing.expect(receiver.poisoned);
+    try testing.expectEqual(@as(usize, 0), receiver.unsettled_ids.items.len);
     try testing.expectEqual(@as(usize, 0), fixture.session.incoming_deliveries.count());
 }
 
@@ -7716,6 +8327,12 @@ test "a finite aggregate budget is also the advertised per-message ceiling" {
     defer driver.deinit();
     var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
     defer fixture.deinit();
+
+    try testing.expectError(error.InvalidReceiverOptions, openReceiver(&fixture.session, .{
+        .name = "invalid",
+        .source_address = "partition/0",
+        .max_unsettled_deliveries = 0,
+    }, 10_000));
 
     mem.clearWritten();
     const receiver = try openReceiver(&fixture.session, .{

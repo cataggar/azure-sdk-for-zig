@@ -340,6 +340,8 @@ pub const Driver = struct {
 
         try self.exchangeHeader(&frame.amqp_header, deadline_ms);
         self.state = .header_exchanged;
+        var completed = false;
+        defer if (!completed) self.invalidate();
 
         try self.sendOpen();
         self.state = .open_sent;
@@ -355,10 +357,12 @@ pub const Driver = struct {
                 try self.applyRemoteOpen(remote);
                 self.state = .opened;
                 processed = true;
+                completed = true;
             },
             .close => |c| {
                 try self.respondToRemoteClose(c.err);
                 processed = true;
+                completed = true;
                 return error.RemoteClosed;
             },
             else => return error.UnexpectedPerformative,
@@ -1133,6 +1137,82 @@ test "a zero-byte protocol-header timeout terminalizes without duplicate emissio
         try testing.expectError(error.InvalidState, driver.open(20));
         try testing.expectEqual(written, mem.written().len);
     }
+}
+
+test "a zero-byte Open timeout terminalizes without duplicate emission" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: ManualClock = .{ .auto_advance_ms = 1 };
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try peer.pushHeader(&frame.amqp_header);
+    mem.starve = true;
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+
+    try testing.expectError(error.Timeout, driver.open(10));
+    try testing.expectEqual(State.err, driver.state);
+    try testing.expect(mem.closed);
+    const written = mem.written().len;
+    try testing.expect(written > frame.amqp_header.len);
+
+    try testing.expectError(error.InvalidState, driver.open(20));
+    try testing.expectEqual(written, mem.written().len);
+}
+
+test "Open allocation failure after header exchange terminalizes the stream" {
+    var mem = MemoryTransport.init(testing.allocator);
+    defer mem.deinit();
+    var clock: ManualClock = .{};
+    const peer = Peer{ .allocator = testing.allocator, .mem = &mem };
+    try peer.pushHeader(&frame.amqp_header);
+
+    var backing: [Driver.in_buf_len]u8 = undefined;
+    var fixed = std.heap.FixedBufferAllocator.init(&backing);
+    var driver = try Driver.init(
+        fixed.allocator(),
+        mem.transport(),
+        clock.clock(),
+        test_options,
+    );
+    defer driver.deinit();
+
+    try testing.expectError(error.OutOfMemory, driver.open(10_000));
+    try testing.expectEqual(State.err, driver.state);
+    try testing.expect(mem.closed);
+    try testing.expectEqual(@as(usize, frame.amqp_header.len), mem.written().len);
+    try testing.expectError(error.InvalidState, driver.open(10_000));
+    try testing.expectEqual(@as(usize, frame.amqp_header.len), mem.written().len);
+}
+
+test "Open encode failure after header exchange terminalizes the stream" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+    try peer.pushHeader(&frame.amqp_header);
+
+    var mixed = [_]uamqp.AmqpValue{
+        .{ .uint = 1 },
+        .{ .string = "not-a-uint" },
+    };
+    const properties = [_]uamqp.MapEntry{.{
+        .key = .{ .symbol = "invalid-array" },
+        .value = .{ .array = &mixed },
+    }};
+    var options = test_options;
+    options.properties = &properties;
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), options);
+    defer driver.deinit();
+    try testing.expectError(error.MixedArrayElements, driver.open(10_000));
+    try testing.expectEqual(State.err, driver.state);
+    try testing.expect(mem.closed);
+    try testing.expectEqual(@as(usize, frame.amqp_header.len), mem.written().len);
+    try testing.expectError(error.InvalidState, driver.open(10_000));
+    try testing.expectEqual(@as(usize, frame.amqp_header.len), mem.written().len);
 }
 
 test "zero-byte Begin and End timeouts cannot re-emit controls" {
