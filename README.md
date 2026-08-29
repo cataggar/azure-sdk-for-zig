@@ -25,9 +25,11 @@ Every slice borrows from the connection string, which must outlive the result.
 SharedAccessSignature sr={encoded resource}&sig={encoded HMAC}&se={expiry}&skn={key name}
 ```
 
-The string-to-sign is `encoded_resource + "\n" + expiry`, and the HMAC-SHA256
-is taken over the raw `SharedAccessKey` bytes — the key is not base64-decoded
-first, even though it looks like base64. Encoding follows Go's
+The string-to-sign is `encoded_resource + "\n" + expiry`. HMAC-SHA256 uses the
+exact UTF-8 bytes of `SharedAccessKey`; the value is not Base64-decoded. Raw
+and Base64-encoded temporary MAC material is wiped on every success and failure
+path. Signing uses an explicit `azure_sdk_core.crypto.CryptoProvider`; there is
+no fallback to the standard provider. Encoding follows Go's
 `url.QueryEscape`: everything outside `A-Za-z0-9-_.~` is escaped and a space
 becomes `+`. The resource is lowercased after encoding, so its escapes read
 `%3a`/`%2f`; the signature is not lowercased, so its escapes read `%2B`/`%3D`.
@@ -41,6 +43,14 @@ pre-formed signature and reports that signature's own `se` expiry. A pre-formed
 signature cannot be re-signed, so `isRefreshable` is false and a request made
 after it expires fails with `error.SignatureExpired` instead of handing back a
 token the broker will reject.
+
+A shared-key credential signs with the provider in the `HttpRuntime` supplied
+to each `TokenCredential.getToken` call, so provider selection follows the
+client runtime and no provider is retained by the credential. A pre-formed
+token remains independent of the runtime provider.
+
+The `azure_sdk_core` dependency is pinned to the
+`azure_sdk_core/v0.3.0` release commit and package hash.
 
 Use `sas.audienceFor` to build the `amqps://{namespace}/{entity}` resource. An
 entity-scoped token authorizes every partition and consumer group beneath it,

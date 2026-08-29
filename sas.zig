@@ -9,9 +9,8 @@
 //! SharedAccessSignature sr={encoded resource}&sig={encoded HMAC}&se={expiry}&skn={key name}
 //! ```
 //!
-//! The string-to-sign is `encoded_resource + "\n" + expiry`, and the HMAC-SHA256
-//! is taken over the **raw** key bytes; the `SharedAccessKey` is not
-//! base64-decoded first even though it looks like base64.
+//! The string-to-sign is `encoded_resource + "\n" + expiry`. HMAC-SHA256 uses
+//! the exact UTF-8 bytes of `SharedAccessKey`; the value is not Base64-decoded.
 
 const std = @import("std");
 const core = @import("azure_sdk_core");
@@ -42,6 +41,16 @@ pub const SasError = error{
 };
 
 const signature_prefix = "SharedAccessSignature ";
+
+fn wipe(bytes: []u8) void {
+    const volatile_bytes: []volatile u8 = bytes;
+    for (volatile_bytes) |*byte| byte.* = 0;
+}
+
+fn wipeAndFree(allocator: std.mem.Allocator, bytes: []u8) void {
+    wipe(bytes);
+    allocator.free(bytes);
+}
 
 /// Percent-encode `input` the way Go's `url.QueryEscape` does, since the broker
 /// recomputes the HMAC over the `sr` field exactly as it was sent.
@@ -86,11 +95,13 @@ pub fn audienceFor(
     return std.fmt.allocPrint(allocator, "amqps://{s}/", .{fully_qualified_namespace});
 }
 
-/// Sign `audience` with `key`, producing a token valid until `expiry_secs`.
+/// Sign `audience` with the exact shared-key bytes through `crypto_provider`,
+/// producing a token valid until `expiry_secs`.
 ///
 /// `expiry_secs` is a Unix timestamp in seconds. Caller owns the result.
 pub fn sign(
     allocator: std.mem.Allocator,
+    crypto_provider: core.crypto.CryptoProvider,
     audience: []const u8,
     key_name: []const u8,
     key: []const u8,
@@ -107,16 +118,16 @@ pub fn sign(
     const string_to_sign = try std.fmt.allocPrint(allocator, "{s}\n{d}", .{ resource, expiry_secs });
     defer allocator.free(string_to_sign);
 
-    const Hmac = std.crypto.auth.hmac.sha2.HmacSha256;
-    var mac: [Hmac.mac_length]u8 = undefined;
-    Hmac.create(&mac, string_to_sign, key);
+    var mac = try crypto_provider.hmacSha256(key, string_to_sign);
+    defer wipe(&mac);
 
-    const Base64 = std.base64.standard.Encoder;
-    var encoded_mac: [Base64.calcSize(Hmac.mac_length)]u8 = undefined;
-    const base64_mac = Base64.encode(&encoded_mac, &mac);
+    const encoder = std.base64.standard.Encoder;
+    var encoded_mac: [encoder.calcSize(@sizeOf(core.crypto.HmacSha256Digest))]u8 = undefined;
+    defer wipe(&encoded_mac);
+    const base64_mac = encoder.encode(&encoded_mac, &mac);
 
     const signature = try percentEncode(allocator, base64_mac);
-    defer allocator.free(signature);
+    defer wipeAndFree(allocator, signature);
 
     return std.fmt.allocPrint(
         allocator,
@@ -151,7 +162,8 @@ pub fn currentTimestamp() i64 {
 /// A `TokenCredential` that produces SAS tokens, so downstream clients only
 /// ever see a credential regardless of how the caller authenticated.
 ///
-/// Every slice is borrowed and must outlive the credential.
+/// Every slice is borrowed and must outlive the credential. Shared-key token
+/// acquisition uses the crypto provider from that call's `HttpRuntime`.
 pub const SasCredential = struct {
     allocator: std.mem.Allocator,
     kind: Kind,
@@ -183,7 +195,11 @@ pub const SasCredential = struct {
     ) SasCredential {
         return .{
             .allocator = allocator,
-            .kind = .{ .shared_key = .{ .audience = audience, .key_name = key_name, .key = key } },
+            .kind = .{ .shared_key = .{
+                .audience = audience,
+                .key_name = key_name,
+                .key = key,
+            } },
             .credential = .{ .getTokenFn = &getTokenImpl },
         };
     }
@@ -200,7 +216,8 @@ pub const SasCredential = struct {
 
     /// Build the right credential for a parsed connection string.
     ///
-    /// `audience` is borrowed; see `audienceFor`.
+    /// `audience` is borrowed; see `audienceFor`. Shared-key credentials defer
+    /// provider selection until `getToken`, using that call's runtime.
     pub fn initFromConnectionString(
         allocator: std.mem.Allocator,
         properties: connection_string.ConnectionStringProperties,
@@ -233,6 +250,7 @@ pub const SasCredential = struct {
         credential: *core.credentials.TokenCredential,
         request_context: core.credentials.TokenRequestContext,
         ctx: core.context.Context,
+        runtime: core.http.HttpRuntime,
     ) anyerror!core.credentials.AccessToken {
         _ = request_context;
         _ = ctx;
@@ -243,6 +261,7 @@ pub const SasCredential = struct {
                 const expires_on = self.now_fn() + shared_key.validity_secs;
                 const token = try sign(
                     self.allocator,
+                    runtime.crypto,
                     shared_key.audience,
                     shared_key.key_name,
                     shared_key.key,
@@ -261,6 +280,70 @@ pub const SasCredential = struct {
 };
 
 // ─────────────────────── Tests ───────────────────────
+
+const TestCryptoProvider = struct {
+    calls: usize = 0,
+    fail: bool = false,
+    captured_key: [64]u8 = undefined,
+    captured_key_len: usize = 0,
+    captured_message: [256]u8 = undefined,
+    captured_message_len: usize = 0,
+
+    const vtable: core.crypto.CryptoProvider.VTable = .{
+        .random_bytes = &randomBytes,
+        .md5 = &md5,
+        .sha256 = &sha256,
+        .hmac_sha256 = &hmacSha256,
+        .sha256_init = &sha256Init,
+    };
+
+    fn provider(self: *@This()) core.crypto.CryptoProvider {
+        return .{ .context = self, .vtable = &vtable };
+    }
+
+    fn randomBytes(_: *anyopaque, _: []u8) !void {
+        return error.Unused;
+    }
+
+    fn md5(_: *anyopaque, _: []const u8, _: *core.crypto.Md5Digest) !void {
+        return error.Unused;
+    }
+
+    fn sha256(_: *anyopaque, _: []const u8, _: *core.crypto.Sha256Digest) !void {
+        return error.Unused;
+    }
+
+    fn hmacSha256(
+        context: *anyopaque,
+        key: []const u8,
+        message: []const u8,
+        out: *core.crypto.HmacSha256Digest,
+    ) !void {
+        const self: *@This() = @ptrCast(@alignCast(context));
+        self.calls += 1;
+        self.captured_key_len = key.len;
+        @memcpy(self.captured_key[0..key.len], key);
+        self.captured_message_len = message.len;
+        @memcpy(self.captured_message[0..message.len], message);
+        @memset(out, 0xa5);
+        if (self.fail) return error.ProviderFailure;
+    }
+
+    fn sha256Init(
+        _: *anyopaque,
+        _: std.mem.Allocator,
+    ) !core.crypto.Sha256Operation {
+        return error.Unused;
+    }
+
+    fn capturedKey(self: *@This()) []const u8 {
+        return self.captured_key[0..self.captured_key_len];
+    }
+
+    fn capturedMessage(self: *@This()) []const u8 {
+        return self.captured_message[0..self.captured_message_len];
+    }
+};
 
 test "percentEncode matches Go's url.QueryEscape" {
     const allocator = std.testing.allocator;
@@ -286,20 +369,40 @@ test "percentEncode matches Go's url.QueryEscape" {
     try std.testing.expectEqualStrings("aB%2B%2F9%3D", base64_chars);
 }
 
-test "sign matches the cross-SDK reference vector" {
+test "sign matches canonical raw-key vectors" {
     const allocator = std.testing.allocator;
+    var provider_impl = core.crypto.StdCryptoProvider.init(std.testing.io);
 
-    // Generated independently and cross-checked against the vector checked into
-    // azure-sdk-for-rust. Pins the raw-key HMAC, the encoding, the field order,
-    // and the casing asymmetry between `sr` and `sig`.
-    const token = try sign(
+    // The base64-looking key is deliberately used as exact UTF-8 bytes rather
+    // than decoded first.
+    const encoded_looking_key = try sign(
         allocator,
+        provider_impl.asProvider(),
+        "amqps://example.servicebus.windows.net/myhub",
+        "RootManageSharedAccessKey",
+        "bXlrZXk=",
+        1_700_000_000,
+    );
+    defer allocator.free(encoded_looking_key);
+
+    try std.testing.expectEqualStrings(
+        "SharedAccessSignature " ++
+            "sr=amqps%3a%2f%2fexample.servicebus.windows.net%2fmyhub" ++
+            "&sig=1PYdB2VsshSCd4xQRSMLy%2B%2BuQ%2B0wso84BviJEPkQhU0%3D" ++
+            "&se=1700000000" ++
+            "&skn=RootManageSharedAccessKey",
+        encoded_looking_key,
+    );
+
+    const plain_key = try sign(
+        allocator,
+        provider_impl.asProvider(),
         "amqps://example.servicebus.windows.net/myhub",
         "RootManageSharedAccessKey",
         "mykey",
         1_700_000_000,
     );
-    defer allocator.free(token);
+    defer allocator.free(plain_key);
 
     try std.testing.expectEqualStrings(
         "SharedAccessSignature " ++
@@ -307,21 +410,50 @@ test "sign matches the cross-SDK reference vector" {
             "&sig=SgJoMn7K6nWDCF6e1%2BfsxrmJLsorqPeZ3B8N1uQ31dc%3D" ++
             "&se=1700000000" ++
             "&skn=RootManageSharedAccessKey",
-        token,
+        plain_key,
     );
 }
 
-test "sign uses the key as raw bytes" {
+test "sign forwards the exact shared access key bytes to the provider" {
     const allocator = std.testing.allocator;
+    var spy = TestCryptoProvider{};
 
-    // "bXlrZXk=" is the base64 of "mykey". Signing with one must not equal
-    // signing with the other, or the key is being decoded when it should not be.
-    const raw = try sign(allocator, "amqps://ns/hub", "policy", "mykey", 100);
-    defer allocator.free(raw);
-    const encoded = try sign(allocator, "amqps://ns/hub", "policy", "bXlrZXk=", 100);
-    defer allocator.free(encoded);
+    const token = try sign(
+        allocator,
+        spy.provider(),
+        "amqps://ns/hub",
+        "policy",
+        "bXlrZXk=",
+        100,
+    );
+    defer allocator.free(token);
 
-    try std.testing.expect(!std.mem.eql(u8, raw, encoded));
+    try std.testing.expectEqual(@as(usize, 1), spy.calls);
+    try std.testing.expectEqualStrings("bXlrZXk=", spy.capturedKey());
+    try std.testing.expectEqualStrings("amqps%3a%2f%2fns%2fhub\n100", spy.capturedMessage());
+    try std.testing.expect(std.mem.indexOf(u8, token, "&sig=paWlpaWl") != null);
+}
+
+test "sign propagates provider failure without returning a partial token" {
+    var fault = TestCryptoProvider{ .fail = true };
+    try std.testing.expectError(
+        error.ProviderFailure,
+        sign(
+            std.testing.allocator,
+            fault.provider(),
+            "amqps://ns/hub",
+            "policy",
+            "bXlrZXk=",
+            100,
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 1), fault.calls);
+}
+
+test "wipe overwrites temporary secret material" {
+    var secret = [_]u8{ 1, 2, 3, 4, 5, 6, 7 };
+    wipe(&secret);
+    try std.testing.expectEqualSlices(u8, &.{ 0, 0, 0, 0, 0, 0, 0 }, &secret);
 }
 
 test "audienceFor scopes to an entity or a namespace" {
@@ -371,17 +503,21 @@ fn fixedNow() i64 {
 
 test "a shared key credential signs a fresh token per request" {
     const allocator = std.testing.allocator;
+    var provider_impl = core.crypto.StdCryptoProvider.init(std.testing.io);
+    var mock = core.http.MockTransport.init(allocator, 200, "unused");
+    defer mock.deinit();
+    const runtime = core.http.HttpRuntime.init(mock.asTransport(), provider_impl.asProvider());
 
     var credential = SasCredential.initSharedKey(
         allocator,
         "amqps://example.servicebus.windows.net/myhub",
         "RootManageSharedAccessKey",
-        "mykey",
+        "bXlrZXk=",
     );
     credential.now_fn = fixedNow;
     try std.testing.expect(credential.isRefreshable());
 
-    var token = try credential.asCredential().getToken(.{ .scopes = &.{} }, .none);
+    var token = try credential.asCredential().getToken(.{ .scopes = &.{} }, .none, runtime);
     defer token.deinit();
 
     try std.testing.expectEqual(fixed_now + default_validity_secs, token.expires_on);
@@ -394,19 +530,28 @@ test "a shared key credential signs a fresh token per request" {
 test "validity defaults to one hour" {
     try std.testing.expectEqual(@as(i64, 3600), default_validity_secs);
 
-    const credential = SasCredential.initSharedKey(std.testing.allocator, "amqps://ns/hub", "policy", "key");
+    const credential = SasCredential.initSharedKey(
+        std.testing.allocator,
+        "amqps://ns/hub",
+        "policy",
+        "a2V5",
+    );
     try std.testing.expectEqual(default_validity_secs, credential.kind.shared_key.validity_secs);
 }
 
 test "a pre-formed signature passes through unmodified and reports its own expiry" {
     const allocator = std.testing.allocator;
     const supplied = "SharedAccessSignature sr=amqps%3a%2f%2fns&sig=abc%3D&se=1700003600&skn=policy";
+    var provider_impl = core.crypto.StdCryptoProvider.init(std.testing.io);
+    var mock = core.http.MockTransport.init(allocator, 200, "unused");
+    defer mock.deinit();
+    const runtime = core.http.HttpRuntime.init(mock.asTransport(), provider_impl.asProvider());
 
     var credential = try SasCredential.initPreformed(allocator, supplied);
     credential.now_fn = fixedNow;
     try std.testing.expect(!credential.isRefreshable());
 
-    var token = try credential.asCredential().getToken(.{ .scopes = &.{} }, .none);
+    var token = try credential.asCredential().getToken(.{ .scopes = &.{} }, .none, runtime);
     defer token.deinit();
 
     try std.testing.expectEqualStrings(supplied, token.token);
@@ -417,6 +562,10 @@ test "a pre-formed signature passes through unmodified and reports its own expir
 
 test "an expired pre-formed signature is refused rather than re-presented" {
     const allocator = std.testing.allocator;
+    var provider_impl = core.crypto.StdCryptoProvider.init(std.testing.io);
+    var mock = core.http.MockTransport.init(allocator, 200, "unused");
+    defer mock.deinit();
+    const runtime = core.http.HttpRuntime.init(mock.asTransport(), provider_impl.asProvider());
 
     var credential = try SasCredential.initPreformed(
         allocator,
@@ -426,7 +575,7 @@ test "an expired pre-formed signature is refused rather than re-presented" {
 
     try std.testing.expectError(
         error.SignatureExpired,
-        credential.asCredential().getToken(.{ .scopes = &.{} }, .none),
+        credential.asCredential().getToken(.{ .scopes = &.{} }, .none, runtime),
     );
 }
 
@@ -448,17 +597,41 @@ test "a connection string credential prefers a supplied signature" {
     credential.now_fn = fixedNow;
     try std.testing.expect(!credential.isRefreshable());
 
-    var token = try credential.asCredential().getToken(.{ .scopes = &.{} }, .none);
+    var provider_impl = core.crypto.StdCryptoProvider.init(std.testing.io);
+    var mock = core.http.MockTransport.init(allocator, 200, "unused");
+    defer mock.deinit();
+    const runtime = core.http.HttpRuntime.init(mock.asTransport(), provider_impl.asProvider());
+    var token = try credential.asCredential().getToken(.{ .scopes = &.{} }, .none, runtime);
     defer token.deinit();
     try std.testing.expectEqual(@as(i64, 1700003600), token.expires_on);
 }
 
-test "a connection string credential falls back to the shared key" {
+test "a preformed connection string does not require or invoke a provider" {
+    const allocator = std.testing.allocator;
+    const properties = try connection_string.ConnectionStringProperties.parse(
+        "Endpoint=sb://ns.servicebus.windows.net/;" ++
+            "SharedAccessSignature=SharedAccessSignature sr=x&sig=y&se=1700003600&skn=z",
+    );
+    var credential = try SasCredential.initFromConnectionString(allocator, properties, "unused");
+    credential.now_fn = fixedNow;
+
+    var fault = TestCryptoProvider{ .fail = true };
+    var mock = core.http.MockTransport.init(allocator, 200, "unused");
+    defer mock.deinit();
+    const runtime = core.http.HttpRuntime.init(mock.asTransport(), fault.provider());
+    var token = try credential.asCredential().getToken(.{ .scopes = &.{} }, .none, runtime);
+    defer token.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), fault.calls);
+}
+
+test "a connection string credential uses the runtime provider" {
     const allocator = std.testing.allocator;
     const properties = try connection_string.ConnectionStringProperties.parse(
         "Endpoint=sb://example.servicebus.windows.net/;" ++
-            "SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=mykey;EntityPath=myhub",
+            "SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=bXlrZXk=;EntityPath=myhub",
     );
+    var provider_impl = core.crypto.StdCryptoProvider.init(std.testing.io);
 
     const audience = try audienceFor(
         allocator,
@@ -471,24 +644,92 @@ test "a connection string credential falls back to the shared key" {
     credential.now_fn = fixedNow;
     try std.testing.expect(credential.isRefreshable());
 
-    var token = try credential.asCredential().getToken(.{ .scopes = &.{} }, .none);
+    var mock = core.http.MockTransport.init(allocator, 200, "unused");
+    defer mock.deinit();
+    const runtime = core.http.HttpRuntime.init(mock.asTransport(), provider_impl.asProvider());
+    var token = try credential.asCredential().getToken(.{ .scopes = &.{} }, .none, runtime);
     defer token.deinit();
 
     const expected = try sign(
         allocator,
+        provider_impl.asProvider(),
         "amqps://example.servicebus.windows.net/myhub",
         "RootManageSharedAccessKey",
-        "mykey",
+        "bXlrZXk=",
         fixed_now + default_validity_secs,
     );
     defer allocator.free(expected);
     try std.testing.expectEqualStrings(expected, token.token);
 }
 
-test "signing is failure atomic" {
+test "a shared-key credential dispatches through each call's runtime provider" {
+    const allocator = std.testing.allocator;
+    var credential = SasCredential.initSharedKey(
+        allocator,
+        "amqps://ns/hub",
+        "policy",
+        "bXlrZXk=",
+    );
+    credential.now_fn = fixedNow;
+
+    var first = TestCryptoProvider{};
+    var second = TestCryptoProvider{};
+    var mock = core.http.MockTransport.init(allocator, 200, "unused");
+    defer mock.deinit();
+
+    var first_token = try credential.asCredential().getToken(
+        .{ .scopes = &.{} },
+        .none,
+        core.http.HttpRuntime.init(mock.asTransport(), first.provider()),
+    );
+    defer first_token.deinit();
+    var second_token = try credential.asCredential().getToken(
+        .{ .scopes = &.{} },
+        .none,
+        core.http.HttpRuntime.init(mock.asTransport(), second.provider()),
+    );
+    defer second_token.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), first.calls);
+    try std.testing.expectEqual(@as(usize, 1), second.calls);
+    try std.testing.expectEqualStrings("bXlrZXk=", first.capturedKey());
+    try std.testing.expectEqualStrings("bXlrZXk=", second.capturedKey());
+}
+
+test "a shared-key credential propagates runtime provider failure" {
+    const allocator = std.testing.allocator;
+    var fault = TestCryptoProvider{ .fail = true };
+    var credential = SasCredential.initSharedKey(
+        allocator,
+        "amqps://ns/hub",
+        "policy",
+        "bXlrZXk=",
+    );
+    credential.now_fn = fixedNow;
+
+    var mock = core.http.MockTransport.init(allocator, 200, "unused");
+    defer mock.deinit();
+    const runtime = core.http.HttpRuntime.init(mock.asTransport(), fault.provider());
+
+    try std.testing.expectError(
+        error.ProviderFailure,
+        credential.asCredential().getToken(.{ .scopes = &.{} }, .none, runtime),
+    );
+    try std.testing.expectEqual(@as(usize, 1), fault.calls);
+}
+
+test "signing releases every allocation failure path" {
     const Case = struct {
         fn run(allocator: std.mem.Allocator) !void {
-            const token = try sign(allocator, "amqps://ns.example.com/hub", "policy", "key", 1);
+            var provider_impl = core.crypto.StdCryptoProvider.init(std.testing.io);
+            const token = try sign(
+                allocator,
+                provider_impl.asProvider(),
+                "amqps://ns.example.com/hub",
+                "policy",
+                "a2V5",
+                1,
+            );
             defer allocator.free(token);
             try std.testing.expect(std.mem.startsWith(u8, token, "SharedAccessSignature "));
         }
