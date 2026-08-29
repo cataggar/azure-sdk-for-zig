@@ -78,9 +78,20 @@ pub fn consumerPathFor(
 
 /// Reads events from one partition over a receiver link it keeps attached.
 pub const PartitionClient = struct {
+    pub const GenerationGuard = struct {
+        context: *anyopaque,
+        generation: u64,
+        isCurrentFn: *const fn (context: *anyopaque, generation: u64) bool,
+
+        fn isCurrent(self: GenerationGuard) bool {
+            return self.isCurrentFn(self.context, self.generation);
+        }
+    };
+
     allocator: Allocator,
     session: ?*amqp.Session = null,
     receiver: ?*amqp.Receiver = null,
+    generation_guard: ?GenerationGuard = null,
     /// No more deliveries may be consumed after a batch has failed locally.
     /// The unchanged selector is then safe to use on a replacement link.
     terminal: bool = false,
@@ -136,6 +147,9 @@ pub const PartitionClient = struct {
         /// `options.start_position`. Used to resume from a position that was
         /// already reduced to an expression.
         filter_expression: ?[]const u8 = null,
+        /// Invalidates the native pointers when a recoverable connection moves
+        /// to another session generation.
+        generation_guard: ?GenerationGuard = null,
     };
 
     /// Attach the receiver link and start reading.
@@ -200,6 +214,7 @@ pub const PartitionClient = struct {
             .allocator = allocator,
             .session = session,
             .receiver = receiver,
+            .generation_guard = args.generation_guard,
             .filter_expression = filter,
             .prefetch = options.prefetch,
             .owner_level = options.owner_level,
@@ -215,6 +230,7 @@ pub const PartitionClient = struct {
         if (self.deinitialized) return;
         self.session = null;
         self.receiver = null;
+        self.generation_guard = null;
         self.allocator.free(self.filter_expression);
         self.filter_expression = &.{};
         if (self.decode_arena) |*a| a.deinit();
@@ -229,8 +245,45 @@ pub const PartitionClient = struct {
     /// later call continues waiting for the acknowledgement.
     pub fn close(self: *PartitionClient, deadline_ms: i64) !void {
         if (self.deinitialized) return;
+        if (!self.refreshGeneration()) {
+            self.deinit();
+            return;
+        }
         try self.detachReceiver(deadline_ms);
         self.deinit();
+    }
+
+    /// Close with a fresh absolute deadline on this receiver's AMQP clock.
+    pub fn closeAfter(self: *PartitionClient, timeout_ms: i64) !void {
+        if (self.deinitialized) return;
+        if (!self.refreshGeneration()) {
+            self.deinit();
+            return;
+        }
+        const session = self.session orelse {
+            self.deinit();
+            return;
+        };
+        try self.close(deadlineAfter(session, timeout_ms));
+    }
+
+    /// Reconcile a wrapper with the recoverable connection that created it.
+    ///
+    /// A stale generation has already destroyed the old session and receiver,
+    /// so invalidation must be allocation-only and must not inspect either.
+    pub fn refreshGeneration(self: *PartitionClient) bool {
+        const guard = self.generation_guard orelse return true;
+        if (guard.isCurrent()) return true;
+        self.session = null;
+        self.receiver = null;
+        self.generation_guard = null;
+        self.detach_started = false;
+        self.terminal = true;
+        return false;
+    }
+
+    pub fn generation(self: *const PartitionClient) ?u64 {
+        return if (self.generation_guard) |guard| guard.generation else null;
     }
 
     /// The selector the next attach would use. Advances as events arrive.
@@ -250,6 +303,7 @@ pub const PartitionClient = struct {
         count: u32,
     ) ![]ReceivedEventData {
         if (count == 0 or count > max_credit) return ReceiveError.InvalidCount;
+        if (!self.refreshGeneration()) return error.LinkDetached;
         if (self.terminal or self.session == null) return error.LinkDetached;
         const receiver = self.receiver orelse return error.LinkDetached;
 
@@ -279,6 +333,7 @@ pub const PartitionClient = struct {
         while (events.items.len < count) {
             const delivery = receiver.receive(self.deadline_ms) catch |err| {
                 self.recordDetach();
+                self.observeTerminal(receiver, err);
                 // Events already in hand arrived, so dropping them here would
                 // lose them outright. Hand back the short batch and let the
                 // next call surface the failure: the link is dead, so that
@@ -338,6 +393,18 @@ pub const PartitionClient = struct {
         self.captureDetachError(receiver);
     }
 
+    fn observeTerminal(self: *PartitionClient, receiver: *const amqp.Receiver, err: anyerror) void {
+        const session_ended = if (self.session) |session| session.ended else true;
+        if (session_ended or receiver.poisoned or !receiver.attached or receiver.detach_sent) {
+            self.terminal = true;
+            return;
+        }
+        self.terminal = switch (err) {
+            error.LinkDetached, error.ConnectionClosed, error.RemoteClosed => true,
+            else => self.terminal,
+        };
+    }
+
     fn captureDetachError(self: *PartitionClient, receiver: *const amqp.Receiver) void {
         const remote = receiver.detach_error orelse return;
         self.condition_len = copyInto(&self.condition_buf, remote.condition);
@@ -372,6 +439,7 @@ pub const PartitionClient = struct {
     /// as belonging to the closing link rather than poisoning the session as
     /// an unknown handle.
     fn detachReceiver(self: *PartitionClient, deadline_ms: i64) !void {
+        if (!self.refreshGeneration()) return;
         const session = self.session orelse return;
         const receiver = self.receiver orelse return;
 
@@ -416,6 +484,10 @@ pub const PartitionClient = struct {
         session.closeReceiver(receiver, deadline_ms);
     }
 };
+
+pub fn deadlineAfter(session: *const amqp.Session, timeout_ms: i64) i64 {
+    return session.driver.clock.nowMillis() +| @max(timeout_ms, 0);
+}
 
 fn copyInto(buffer: []u8, bytes: []const u8) usize {
     const len = @min(buffer.len, bytes.len);
@@ -980,7 +1052,7 @@ test "close timeout retains the receiver through late transfer and acknowledgeme
 
     mem.starve = true;
     clock.auto_advance_ms = 1_000;
-    try testing.expectError(error.Timeout, closing.close(10_000));
+    try testing.expectError(error.Timeout, closing.closeAfter(10_000));
     try testing.expectEqual(@as(usize, 2), fixture.session.receivers.items.len);
     try testing.expect(closing.session != null);
     try testing.expect(closing.detach_started);
@@ -994,8 +1066,8 @@ test "close timeout retains the receiver through late transfer and acknowledgeme
     try peer.push(0, .{ .detach = .{ .handle = 0, .closed = true } });
     try pushEventOn(allocator, peer, 1, 1, 50, "unrelated");
 
-    try closing.close(20_000);
-    try closing.close(20_000);
+    try closing.closeAfter(10_000);
+    try closing.closeAfter(10_000);
     try testing.expectEqual(@as(usize, 1), fixture.session.receivers.items.len);
 
     const survived = try unrelated.receiveEvents(allocator, 1);

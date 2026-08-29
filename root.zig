@@ -1058,13 +1058,14 @@ pub const ConsumerClient = struct {
     ///
     /// This is what a `Processor` reads through: it knows partition ids and
     /// how to attach a reader, which is everything the balancing loop needs
-    /// from a connection.
+    /// from a connection. `timeout_ms` is a duration renewed against the
+    /// current AMQP clock for every open and close attempt.
     pub fn partitionOpener(
         self: *ConsumerClient,
         connection: *recovery.RecoverableConnection,
-        deadline_ms: i64,
+        timeout_ms: i64,
     ) ConsumerPartitionOpener {
-        return .{ .client = self, .connection = connection, .deadline_ms = deadline_ms };
+        return .{ .client = self, .connection = connection, .timeout_ms = timeout_ms };
     }
 
     /// Build a processor that reads this hub through `opener`.
@@ -1132,11 +1133,14 @@ pub const ConsumerPartitionOpener = struct {
     /// connection has a new one, and a link attached to the old session would
     /// be attached to nothing.
     connection: *recovery.RecoverableConnection,
-    deadline_ms: i64,
+    /// Per-attempt duration. Each open and close converts it to a fresh
+    /// absolute deadline on the current AMQP generation's clock.
+    timeout_ms: i64,
     opener: PartitionOpener = .{
         .partitionIdsFn = partitionIds,
         .openFn = openPartition,
         .closeFn = closePartition,
+        .abortFn = abortPartition,
     },
 
     pub fn asOpener(self: *ConsumerPartitionOpener) *PartitionOpener {
@@ -1171,21 +1175,29 @@ pub const ConsumerPartitionOpener = struct {
         const client = try allocator.create(PartitionClient);
         errdefer allocator.destroy(client);
 
+        const generation = try self.connection.ensureOpen();
         const session = try self.connection.session();
+        const source = try self.client.consumerPath(allocator, partition_id);
+        defer allocator.free(source);
         var with_position = options;
         with_position.start_position = position;
-        self.client.newPartitionClient(
-            client,
-            allocator,
-            session,
-            partition_id,
-            self.deadline_ms,
-            with_position,
-        ) catch |err| {
+        client.open(allocator, session, .{
+            .source_address = source,
+            .instance_id = self.client.instanceId(),
+            .deadline_ms = receiving.deadlineAfter(session, self.timeout_ms),
+            .generation_guard = .{
+                .context = self.connection,
+                .generation = generation,
+                .isCurrentFn = generationIsCurrent,
+            },
+        }, with_position) catch |err| {
             // A replicated namespace refuses an offset carried over from
             // before a failover. Say so in the error so the processor can
             // restart the partition rather than abandon it.
-            if (err == error.LinkDetached and sawGeoReplicationRejection(session)) {
+            const geo_rejected =
+                err == error.LinkDetached and sawGeoReplicationRejection(session);
+            self.connection.invalidateGeneration(generation);
+            if (geo_rejected) {
                 return error.GeoReplicationOffsetRejected;
             }
             return err;
@@ -1206,8 +1218,28 @@ pub const ConsumerPartitionOpener = struct {
 
     fn closePartition(o: *PartitionOpener, client: *PartitionClient) anyerror!void {
         const self: *ConsumerPartitionOpener = @fieldParentPtr("opener", o);
-        try client.close(self.deadline_ms);
+        const generation = client.generation();
+        client.closeAfter(self.timeout_ms) catch |err| {
+            if (err != error.DetachUnconfirmed) return err;
+            if (generation) |value| self.connection.invalidateGeneration(value);
+            client.deinit();
+        };
         client.allocator.destroy(client);
+    }
+
+    fn abortPartition(o: *PartitionOpener, client: *PartitionClient) void {
+        const self: *ConsumerPartitionOpener = @fieldParentPtr("opener", o);
+        const generation = client.generation();
+        client.closeAfter(self.timeout_ms) catch {
+            if (generation) |value| self.connection.invalidateGeneration(value);
+            client.deinit();
+        };
+        client.allocator.destroy(client);
+    }
+
+    fn generationIsCurrent(context: *anyopaque, generation: u64) bool {
+        const connection: *recovery.RecoverableConnection = @ptrCast(@alignCast(context));
+        return connection.isGenerationCurrent(generation);
     }
 };
 

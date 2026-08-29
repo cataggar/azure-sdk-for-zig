@@ -199,6 +199,11 @@ pub const RecoverableConnection = struct {
         return self.plumbing.?.session;
     }
 
+    /// Whether a wrapper still belongs to the live native session.
+    pub fn isGenerationCurrent(self: *const RecoverableConnection, generation: u64) bool {
+        return !self.closed and self.plumbing != null and self.generation == generation;
+    }
+
     /// The `$management` client, attached on first use.
     ///
     /// Lazily, as Go does: a producer that only ever sends never needs the
@@ -247,11 +252,20 @@ pub const RecoverableConnection = struct {
         if (self.closed) return RecoveryError.ConnectionClosedPermanently;
         if (their_generation != self.generation) return;
 
+        self.invalidateGeneration(their_generation);
+
+        _ = try self.ensureOpen();
+    }
+
+    /// Destroy one native generation without opening its replacement.
+    ///
+    /// Used when cleanup after an attached-but-untracked link cannot confirm a
+    /// detach. The next operation lazily opens a new generation.
+    pub fn invalidateGeneration(self: *RecoverableConnection, their_generation: u64) void {
+        if (self.closed or their_generation != self.generation) return;
         self.teardown();
         self.generation += 1;
         self.recoveries += 1;
-
-        _ = try self.ensureOpen();
     }
 
     /// Whether the connection currently has plumbing behind it.

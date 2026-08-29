@@ -479,10 +479,14 @@ try processor.close();
 
 `runOnce` is one balancing cycle rather than a thread, so the caller owns
 the loop and its shutdown. `close` is fallible and retryable: a detach timeout
-keeps the reader registered until its acknowledgement arrives. Call it while
-the connection is alive; `deinit` then releases local allocations. If the
+keeps the reader registered until its acknowledgement arrives, and every retry
+gets a fresh timeout duration on the current AMQP clock. Call it while the
+connection is alive; `deinit` then releases local allocations. If the
 connection must be terminated after an ambiguous close, `deinit` does not
-dereference the native receivers the connection already destroyed.
+dereference the native receivers the connection already destroyed. Processor
+readers also carry the recoverable connection generation, so a rebuild between
+cycles invalidates stale native pointers before receive or close and reopens
+the partition from its unchanged checkpoint.
 `nextIntervalMs` applies Go's 0.8–1.3 jitter to the update interval, which
 keeps a fleet that started together from rebalancing in lockstep.
 
