@@ -1,9 +1,17 @@
+//! Data Lake clients borrow their pipeline dependencies.
+//!
+//! `HttpPipeline`, `HttpRuntime`, and transport/crypto descriptors are copied
+//! by value. Their policy objects and backend contexts remain borrowed and
+//! must outlive every client and in-flight operation derived from them.
+
 const std = @import("std");
 const core = @import("azure_sdk_core");
 
 // ──────────────── DataLakeFileSystemClient ────────────────────
 
 pub const DataLakeFileSystemClientOptions = struct {
+    endpoint: []const u8,
+    filesystem_name: []const u8,
     api_version: []const u8 = "2024-11-04",
 };
 
@@ -11,21 +19,22 @@ pub const DataLakeFileSystemClient = struct {
     endpoint: []const u8,
     filesystem_name: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
+    /// Creates a filesystem client from the caller-owned canonical pipeline.
+    ///
+    /// The pipeline is copied by value. Its policies and the transport and
+    /// crypto provider contexts in its runtime are borrowed for this client's
+    /// lifetime and for the lifetime of every open operation.
     pub fn init(
-        endpoint: []const u8,
-        filesystem_name: []const u8,
-        credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
+        pipeline: core.http.HttpPipeline,
         options: DataLakeFileSystemClientOptions,
     ) DataLakeFileSystemClient {
-        _ = credential;
         return .{
-            .endpoint = endpoint,
-            .filesystem_name = filesystem_name,
+            .endpoint = options.endpoint,
+            .filesystem_name = options.filesystem_name,
             .api_version = options.api_version,
-            .pipeline = .{ .policies = &.{}, .transport_impl = transport },
+            .pipeline = pipeline,
         };
     }
 
@@ -85,6 +94,8 @@ pub const DataLakeFileSystemClient = struct {
         return error.AzureRequestFailed;
     }
 
+    /// Derives a file client while preserving the complete pipeline runtime,
+    /// including independently selected HTTP transport and crypto providers.
     pub fn getFileClient(self: *DataLakeFileSystemClient, file_path: []const u8) DataLakeFileClient {
         return .{
             .endpoint = self.endpoint,
@@ -103,7 +114,7 @@ pub const DataLakeFileClient = struct {
     filesystem_name: []const u8,
     file_path: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     /// PUT /filesystem/path?resource=file
     pub fn create(self: *DataLakeFileClient, allocator: std.mem.Allocator) !void {
@@ -255,22 +266,22 @@ pub const DataLakeFileClient = struct {
 
 test "DataLakeFileClient create append flush and read" {
     const allocator = std.testing.allocator;
+    var crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
     var mock_create = core.http.MockTransport.init(allocator, 201, "");
     defer mock_create.deinit();
-
-    const identity = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
+    const create_runtime = core.http.HttpRuntime.init(
+        mock_create.asTransport(),
+        crypto_provider.asProvider(),
     );
-    defer cred_mock.deinit();
-    var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
+    const create_pipeline = core.http.HttpPipeline.init(create_runtime, &.{});
 
     var fs_client = DataLakeFileSystemClient.init(
-        "https://myaccount.dfs.core.windows.net",
-        "myfilesystem",
-        cred.asCredential(),
-        mock_create.asTransport(),
-        .{},
+        create_pipeline,
+        .{
+            .endpoint = "https://myaccount.dfs.core.windows.net",
+            .filesystem_name = "myfilesystem",
+        },
     );
 
     try fs_client.create(allocator);
@@ -281,23 +292,67 @@ test "DataLakeFileClient create append flush and read" {
     // Create file
     var mock_file = core.http.MockTransport.init(allocator, 201, "");
     defer mock_file.deinit();
-    file.pipeline = .{ .policies = &.{}, .transport_impl = mock_file.asTransport() };
+    file.pipeline = core.http.HttpPipeline.init(
+        core.http.HttpRuntime.init(mock_file.asTransport(), crypto_provider.asProvider()),
+        &.{},
+    );
     try file.create(allocator);
     try std.testing.expect(std.mem.find(u8, mock_file.last_url.?, "data/myfile.csv?resource=file") != null);
 
     // Append data
     var mock_append = core.http.MockTransport.init(allocator, 202, "");
     defer mock_append.deinit();
-    file.pipeline = .{ .policies = &.{}, .transport_impl = mock_append.asTransport() };
+    file.pipeline = core.http.HttpPipeline.init(
+        core.http.HttpRuntime.init(mock_append.asTransport(), crypto_provider.asProvider()),
+        &.{},
+    );
     try file.append(allocator, "col1,col2\na,b\n", 0);
     try std.testing.expect(std.mem.find(u8, mock_append.last_url.?, "action=append&position=0") != null);
 
     // Read
     var mock_read = core.http.MockTransport.init(allocator, 200, "col1,col2\na,b\n");
     defer mock_read.deinit();
-    file.pipeline = .{ .policies = &.{}, .transport_impl = mock_read.asTransport() };
+    file.pipeline = core.http.HttpPipeline.init(
+        core.http.HttpRuntime.init(mock_read.asTransport(), crypto_provider.asProvider()),
+        &.{},
+    );
 
     const content = try file.read(allocator);
     defer allocator.free(content);
     try std.testing.expectEqualStrings("col1,col2\na,b\n", content);
+}
+
+test "derived file client preserves runtime providers" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 200, "");
+    defer transport.deinit();
+    var crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+    const runtime = core.http.HttpRuntime.init(
+        transport.asTransport(),
+        crypto_provider.asProvider(),
+    );
+    const pipeline = core.http.HttpPipeline.init(runtime, &.{});
+    var filesystem = DataLakeFileSystemClient.init(pipeline, .{
+        .endpoint = "https://myaccount.dfs.core.windows.net",
+        .filesystem_name = "myfilesystem",
+    });
+    const file = filesystem.getFileClient("data/myfile.csv");
+
+    try std.testing.expectEqual(
+        pipeline.runtime.transport.context,
+        file.pipeline.runtime.transport.context,
+    );
+    try std.testing.expectEqual(
+        pipeline.runtime.transport.vtable,
+        file.pipeline.runtime.transport.vtable,
+    );
+    try std.testing.expectEqual(
+        pipeline.runtime.crypto.context,
+        file.pipeline.runtime.crypto.context,
+    );
+    try std.testing.expectEqual(
+        pipeline.runtime.crypto.vtable,
+        file.pipeline.runtime.crypto.vtable,
+    );
 }
