@@ -4,8 +4,9 @@ Release commands depend on source ownership in `eng/packages.zig`.
 
 ## Core-family releases
 
-`azure_sdk_core`, `azure_sdk_amqp`, and `azure_sdk_testing` are branch-owned
-and release through the branch-owned flow below, like every other package.
+`azure_sdk_core`, `azure_sdk_core_symcrypt`, `azure_sdk_amqp`, and
+`azure_sdk_testing` are branch-owned and release through the branch-owned flow
+below, like every other package.
 
 The staged release workflow in `scripts/package-release.sh` applies only to
 Main-owned packages. No package is currently Main-owned, so the staged engine

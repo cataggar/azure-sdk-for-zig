@@ -30,6 +30,11 @@ pub const all = [_]PackageHistory{
         .mappings = current_only.mappings("sdk/core"),
     },
     .{
+        .package = "azure_sdk_core_symcrypt",
+        .branch = "sdk/core_symcrypt",
+        .mappings = current_only.mappings("sdk/core_symcrypt"),
+    },
+    .{
         .package = "azure_sdk_amqp",
         .branch = "sdk/amqp",
         .mappings = current_only.mappings("sdk/core/amqp"),
@@ -281,7 +286,7 @@ fn validatePath(path: []const u8, allow_empty: bool) !void {
 
 test "history map covers every branch-owned package" {
     try validate(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 24), all.len);
+    try std.testing.expectEqual(@as(usize, 25), all.len);
     try std.testing.expectEqual(@as(usize, 5), rejected_paths.len);
     try std.testing.expect(find("azure_sdk_storage_blobs") != null);
     try std.testing.expect(find("azure_sdk_core") != null);
