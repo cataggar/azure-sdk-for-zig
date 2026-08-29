@@ -407,10 +407,11 @@ pub const Driver = struct {
     }
 
     fn exchangeHeader(self: *Driver, header: *const [8]u8, deadline_ms: i64) ConnectionError!void {
-        try self.writeBytes(header);
-        self.transport.flush() catch |e| return mapTransportError(e);
+        try self.emitRaw(header);
+        var consumed = false;
+        errdefer if (consumed) self.invalidate();
         var received: [8]u8 = undefined;
-        try self.readExact(&received, deadline_ms);
+        try self.readExactTracked(&received, deadline_ms, &consumed);
         if (!std.mem.eql(u8, &received, header)) return error.ProtocolMismatch;
     }
 
@@ -589,16 +590,7 @@ pub const Driver = struct {
 
     /// Write an empty frame, the AMQP heartbeat.
     pub fn sendEmptyFrame(self: *Driver) ConnectionError!void {
-        const header = FrameHeader{
-            .size = @intCast(frame.frame_header_size),
-            .doff = 2,
-            .frame_type = .amqp,
-            .channel = 0,
-        };
-        const bytes = header.serialize();
-        try self.writeBytes(&bytes);
-        self.transport.flush() catch |e| return mapTransportError(e);
-        self.last_sent_ms = self.clock.nowMillis();
+        try self.sendFrame(.amqp, 0, &.{});
     }
 
     // ── Frame IO ──
@@ -610,6 +602,7 @@ pub const Driver = struct {
         channel: u16,
         performative: perf.Performative,
     ) ConnectionError!void {
+        if (self.state == .err or self.state == .closed) return error.ConnectionClosed;
         var buf = uamqp.encoder.Buffer.initDynamic(self.allocator);
         defer buf.deinit();
         try perf.encode(self.allocator, performative, &buf);
@@ -623,6 +616,7 @@ pub const Driver = struct {
         channel: u16,
         body: []const u8,
     ) ConnectionError!void {
+        if (self.state == .err or self.state == .closed) return error.ConnectionClosed;
         const total = frame.frame_header_size + body.len;
         // Before `open` the peer has only guaranteed the spec minimum.
         const limit: usize = if (self.state == .opened or self.state == .close_sent)
@@ -639,26 +633,43 @@ pub const Driver = struct {
         };
         const header_bytes = header.serialize();
         self.writeBytes(&header_bytes) catch |err| {
-            self.abortEmission();
+            self.invalidate();
             return err;
         };
-        self.writeBytes(body) catch |err| {
-            self.abortEmission();
-            return err;
-        };
+        if (body.len != 0) {
+            self.writeBytes(body) catch |err| {
+                self.invalidate();
+                return err;
+            };
+        }
         self.transport.flush() catch |err| {
-            self.abortEmission();
+            self.invalidate();
             return mapTransportError(err);
         };
         self.last_sent_ms = self.clock.nowMillis();
     }
 
-    /// Once any part of a frame emission fails, the byte stream cannot be
-    /// resumed at a frame boundary. Close it immediately so buffered header or
-    /// body bytes cannot be flushed by a later operation.
-    fn abortEmission(self: *Driver) void {
+    /// Make the byte stream terminal after a partial emission or consumed
+    /// frame error. A later operation must never retry on a stream whose frame
+    /// boundary is unknown.
+    pub fn invalidate(self: *Driver) void {
         self.state = .err;
         self.transport.close();
+    }
+
+    /// Emit bytes that form one indivisible protocol unit, such as the
+    /// eight-byte SASL or AMQP protocol header.
+    fn emitRaw(self: *Driver, bytes: []const u8) ConnectionError!void {
+        if (self.state == .err or self.state == .closed) return error.ConnectionClosed;
+        self.writeBytes(bytes) catch |err| {
+            self.invalidate();
+            return err;
+        };
+        self.transport.flush() catch |err| {
+            self.invalidate();
+            return mapTransportError(err);
+        };
+        self.last_sent_ms = self.clock.nowMillis();
     }
 
     /// Read the next non-empty frame.
@@ -671,9 +682,13 @@ pub const Driver = struct {
     /// handed, which cannot work across the protocol-header exchange that
     /// separates the SASL layer from the AMQP layer.
     pub fn receiveFrame(self: *Driver, deadline_ms: i64) ConnectionError!InboundFrame {
+        if (self.state == .err or self.state == .closed) return error.ConnectionClosed;
         while (true) {
+            var consumed = false;
+            errdefer if (consumed) self.invalidate();
+
             var header_bytes: [frame.frame_header_size]u8 = undefined;
-            try self.readExact(&header_bytes, deadline_ms);
+            try self.readExactTracked(&header_bytes, deadline_ms, &consumed);
             const header = FrameHeader.parse(&header_bytes) catch return error.MalformedFrame;
             if (header.size > self.acceptMaxFrameSize()) return error.FrameTooLarge;
 
@@ -683,7 +698,7 @@ pub const Driver = struct {
             while (skip > 0) {
                 var scratch: [64]u8 = undefined;
                 const n = @min(skip, scratch.len);
-                try self.readExact(scratch[0..n], deadline_ms);
+                try self.readExactTracked(scratch[0..n], deadline_ms, &consumed);
                 skip -= @intCast(n);
             }
 
@@ -774,6 +789,16 @@ pub const Driver = struct {
     }
 
     fn readExact(self: *Driver, dst: []u8, deadline_ms: i64) ConnectionError!void {
+        var consumed = false;
+        return self.readExactTracked(dst, deadline_ms, &consumed);
+    }
+
+    fn readExactTracked(
+        self: *Driver,
+        dst: []u8,
+        deadline_ms: i64,
+        consumed: *bool,
+    ) ConnectionError!void {
         var filled: usize = 0;
         while (filled < dst.len) {
             const available = self.buffered();
@@ -782,6 +807,7 @@ pub const Driver = struct {
                 @memcpy(dst[filled..][0..n], available[0..n]);
                 self.in_start += n;
                 filled += n;
+                consumed.* = true;
                 continue;
             }
             try self.fillMore(deadline_ms);
@@ -1115,6 +1141,32 @@ test "an outbound frame past the peer's max-frame-size is rejected" {
     try testing.expectError(error.FrameTooLarge, driver.sendFrame(.amqp, 0, body));
 }
 
+test "protocol-header write and flush failures make the driver terminal" {
+    const Failure = enum { write, flush };
+    inline for (std.meta.tags(Failure)) |failure| {
+        const allocator = testing.allocator;
+        var mem = MemoryTransport.init(allocator);
+        defer mem.deinit();
+        var clock: ManualClock = .{};
+
+        var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+        defer driver.deinit();
+        switch (failure) {
+            .write => mem.fail_write = true,
+            .flush => mem.fail_flush = true,
+        }
+        try testing.expectError(error.WriteFailed, driver.open(10_000));
+        try testing.expectEqual(State.err, driver.state);
+        try testing.expect(mem.closed);
+        try testing.expectEqual(@as(usize, 0), mem.pending.items.len);
+        try testing.expectEqual(@as(usize, 0), mem.written().len);
+
+        mem.fail_write = false;
+        mem.fail_flush = false;
+        try testing.expectError(error.InvalidState, driver.open(10_000));
+    }
+}
+
 test "a keepalive is emitted before the negotiated idle deadline" {
     const allocator = testing.allocator;
     var mem = MemoryTransport.init(allocator);
@@ -1146,6 +1198,43 @@ test "a keepalive is emitted before the negotiated idle deadline" {
         &.{ 0x00, 0x00, 0x00, 0x08, 0x02, 0x00, 0x00, 0x00 },
         mem.written(),
     );
+}
+
+test "heartbeat write and flush failures close the dirty byte stream" {
+    const Failure = enum { write, flush };
+    inline for (std.meta.tags(Failure)) |failure| {
+        const allocator = testing.allocator;
+        var mem = MemoryTransport.init(allocator);
+        defer mem.deinit();
+        var clock: ManualClock = .{};
+        const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+        try peer.pushHeader(&frame.amqp_header);
+        try peer.push(.amqp, 0, .{ .open = .{
+            .container_id = "service-bus",
+            .idle_time_out = 30_000,
+        } });
+
+        var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+        defer driver.deinit();
+        try driver.open(10_000);
+
+        mem.clearWritten();
+        switch (failure) {
+            .write => mem.fail_write = true,
+            .flush => mem.fail_flush = true,
+        }
+        try testing.expectError(error.WriteFailed, driver.sendEmptyFrame());
+        try testing.expectEqual(State.err, driver.state);
+        try testing.expect(mem.closed);
+        try testing.expectEqual(@as(usize, 0), mem.pending.items.len);
+        try testing.expectEqual(@as(usize, 0), mem.written().len);
+
+        mem.fail_write = false;
+        mem.fail_flush = false;
+        try testing.expectError(error.ConnectionClosed, driver.sendEmptyFrame());
+        try testing.expectEqual(@as(usize, 0), mem.written().len);
+    }
 }
 
 test "a peer that goes quiet past the advertised idle timeout fails" {

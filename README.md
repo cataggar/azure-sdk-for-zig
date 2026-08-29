@@ -188,15 +188,18 @@ message this receiver would have to reject.
 
 `max_buffered_bytes` separately bounds the aggregate payload retained in the
 ready queue and the delivery currently being reassembled. It defaults to
-256 MiB. Initial credit and every top-up are capped conservatively by the
-remaining byte budget divided by `max_message_size`, so the default 128 MiB
-message limit advertises at most two credits even though `prefetch` defaults to
-300. While a multi-frame delivery is in progress, its full legal size remains
-reserved: ready bytes plus that reservation plus all outstanding credit can
-never exceed the aggregate budget. As deliveries leave the queue their bytes
-are released and credit is replenished. A sender that ignores credit is
-detached with `amqp:resource-limit-exceeded` before the chunk that would cross
-the budget is retained.
+256 MiB. The default limits preserve the existing 300-credit wire window used
+by Event Hubs and Service Bus; the byte limit is still hard, and a sender is
+detached with `amqp:resource-limit-exceeded` before a chunk that would cross it
+is retained. Custom message or aggregate limits additionally cap credit
+conservatively. While a multi-frame delivery is in progress, its full legal
+size remains reserved: ready bytes plus that reservation plus all outstanding
+credit can never exceed the custom aggregate budget.
+
+`issueCredit` also preserves one-shot manual receive requests. If a custom byte
+budget cannot safely put the whole request on the wire, the remainder is held
+and issued automatically as queued deliveries leave, so callers need not loop
+just to restate the same requested count.
 
 The delivery already returned to the caller is outside the aggregate budget
 and remains valid until the next successful `receive`; it is still bounded by
@@ -220,6 +223,17 @@ surface truncated data.
 Any write or flush failure while emitting a frame terminally closes the
 connection transport. A header or body may already be buffered, so allowing a
 later send to reuse that byte stream could flush a corrupt partial frame.
+Protocol-header and heartbeat writes follow the same rule. Likewise, an error
+after any inbound frame header byte is consumed closes the connection; an
+unread body can no longer be parsed from a known boundary.
+
+Unsettled inbound delivery ids are unique across every receiver on a session.
+An id remains active through completion and is released only by terminal
+settlement, abort, detach, error, or deinitialization. Repeating it while its
+multi-frame delivery is still in progress remains a valid continuation.
+If a consumed disposition range cannot allocate rejection detail, every
+matching outbound delivery is still marked terminal before the connection is
+invalidated, so none can remain silently reusable or wait forever.
 
 Settling one delivery at a time costs a frame per message, which at a 300-deep
 prefetch is 300 frames of bookkeeping. A disposition can name a `first`..`last`
