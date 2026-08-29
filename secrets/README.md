@@ -10,4 +10,5 @@ package.
 
 Construction requires a caller-selected `core.http.HttpRuntime`. Its backend
 contexts and the credential are borrowed and must outlive the client and its
-pagers.
+pagers. Callers must serialize all operations sharing the client's pipeline
+state. Continuation URLs are restricted to the original HTTPS vault origin.

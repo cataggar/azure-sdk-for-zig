@@ -44,7 +44,16 @@ contexts are borrowed. Credentials and policy contexts are borrowed too. They
 must outlive every client, derived cryptography client, pager, and in-flight
 operation that uses them. Keep a parent `KeyClient` alive until clients
 returned by `getCryptographyClient` and all of its pagers are deinitialized.
-The package installs no fallback crypto provider.
+Core's bearer-token cache is mutable and unsynchronized, so callers must
+serialize every operation sharing a client's pipeline state, including pager
+operations and calls through derived cryptography clients, even when the
+selected transport and crypto backends are independently synchronized. The
+package installs no fallback crypto provider.
+
+Authenticated pagers accept continuation URLs only when they are absolute
+HTTPS URLs on the original vault's effective host and port. Cross-origin,
+userinfo-bearing, fragmented, malformed, and non-HTTPS continuations fail
+before the URL can be retained for another authenticated request.
 
 `keys.CryptographyClient` performs Key Vault service-side cryptography: its
 `sign` operation sends a caller-provided digest as a REST payload. It does not

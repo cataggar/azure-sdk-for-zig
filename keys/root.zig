@@ -251,7 +251,9 @@ pub const Signature = struct {
 /// Runtime descriptors are copied by value. Their borrowed transport and
 /// crypto contexts and the credential must outlive this client, all derived
 /// cryptography clients and pagers, and every in-flight call. Derived clients
-/// and pagers must be deinitialized before this client.
+/// and pagers must be deinitialized before this client. The caller must
+/// serialize every operation sharing this client's pipeline state, including
+/// operations from derived clients and pagers.
 pub const KeyClient = struct {
     vault_url: []u8,
     pipeline_state: *pipeline_mod.PipelineState,
@@ -538,7 +540,8 @@ pub const KeyClient = struct {
 /// runtime crypto provider remains available to pipeline policies and
 /// credentials. A directly initialized client owns its pipeline state; a
 /// client returned by `KeyClient.getCryptographyClient` borrows that state and
-/// must be deinitialized before its parent.
+/// must be deinitialized before its parent. The caller must serialize its
+/// operations with every other operation sharing the same pipeline state.
 pub const CryptographyClient = struct {
     key_id: []u8,
     pipeline_state: *pipeline_mod.PipelineState,
@@ -1030,27 +1033,7 @@ fn validateVaultUrl(vault_url: []const u8) !void {
 }
 
 fn validateContinuationUrl(vault_url: []const u8, next_url: []const u8) !void {
-    const expected = std.Uri.parse(vault_url) catch return error.InvalidContinuationUrl;
-    const candidate = std.Uri.parse(next_url) catch return error.InvalidContinuationUrl;
-    if (!std.ascii.eqlIgnoreCase(candidate.scheme, "https") or
-        candidate.host == null or
-        candidate.user != null or
-        candidate.password != null or
-        candidate.fragment != null)
-    {
-        return error.InvalidContinuationUrl;
-    }
-
-    var expected_host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
-    var candidate_host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
-    const expected_host = expected.getHost(&expected_host_buffer) catch
-        return error.InvalidContinuationUrl;
-    const candidate_host = candidate.getHost(&candidate_host_buffer) catch
-        return error.InvalidContinuationUrl;
-    if (!std.ascii.eqlIgnoreCase(expected_host.bytes, candidate_host.bytes))
-        return error.InvalidContinuationUrl;
-    if ((expected.port orelse 443) != (candidate.port orelse 443))
-        return error.InvalidContinuationUrl;
+    return pipeline_mod.validateHttpsOrigin(vault_url, next_url);
 }
 
 fn validatePathSegment(value: []const u8) !void {

@@ -8,7 +8,7 @@ else
     struct {};
 
 /// Pager type returned by `listSecrets`.
-pub const SecretNamePager = core.pager.PipelinePager([]const u8);
+pub const SecretNamePager = pipeline_mod.ValidatedPipelinePager([]const u8);
 
 // ─────────────────────────── Models ───────────────────────────
 
@@ -60,7 +60,8 @@ pub const SecretClientOptions = struct {
 /// Runtime descriptors are copied by value. Their borrowed transport and
 /// crypto contexts and the credential must outlive this client and every
 /// pager returned by it. Keep the client alive until its pagers are
-/// deinitialized.
+/// deinitialized. The caller must serialize all operations sharing this
+/// client's pipeline state, including pager operations.
 pub const SecretClient = struct {
     vault_url: []const u8,
     api_version: []const u8,
@@ -168,6 +169,7 @@ pub const SecretClient = struct {
 
         var req = core.http.Request.init(allocator, .PUT, url);
         defer req.deinit();
+        req.retryable = false;
         try req.setHeader("Content-Type", "application/json");
         try req.setHeader("Accept", "application/json");
         req.body = body;
@@ -344,8 +346,10 @@ pub const SecretClient = struct {
         return SecretNamePager.init(
             self.pipeline_state.pipeline,
             url,
+            self.vault_url,
             allocator,
             &parseSecretListPage,
+            &deinitSecretNames,
             "application/json",
         );
     }
@@ -402,7 +406,11 @@ const SecretListSchema = struct {
 
 /// Parse a JSON list-secrets response into a PageResult.
 /// Format: {"value":[{"id":"https://.../secrets/name1"}, ...], "nextLink":"https://..."}
-fn parseSecretListPage(allocator: std.mem.Allocator, body: []const u8) !core.pager.PageResult([]const u8) {
+fn parseSecretListPage(
+    allocator: std.mem.Allocator,
+    body: []const u8,
+    origin: []const u8,
+) !core.pager.PageResult([]const u8) {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
@@ -411,7 +419,10 @@ fn parseSecretListPage(allocator: std.mem.Allocator, body: []const u8) !core.pag
 
     var next_link: ?[]u8 = null;
     if (parsed.nextLink) |nl| {
-        if (nl.len > 0) next_link = try allocator.dupe(u8, nl);
+        if (nl.len > 0) {
+            try pipeline_mod.validateHttpsOrigin(origin, nl);
+            next_link = try allocator.dupe(u8, nl);
+        }
     }
 
     const entries = parsed.value orelse
@@ -429,6 +440,11 @@ fn parseSecretListPage(allocator: std.mem.Allocator, body: []const u8) !core.pag
     }
 
     return .{ .items = names, .next_link = next_link };
+}
+
+fn deinitSecretNames(allocator: std.mem.Allocator, names: [][]const u8) void {
+    for (names) |name| allocator.free(name);
+    allocator.free(names);
 }
 
 test "SecretClient getSecretResult: ok path" {
@@ -567,6 +583,7 @@ test "SecretClient setSecret" {
 
     try std.testing.expectEqualStrings("new-val", secret.value.?);
     try std.testing.expectEqual(core.http.Method.PUT, mock.last_method.?);
+    try std.testing.expect(!mock.last_retryable.?);
 }
 
 test "SecretClient getSecret 404" {
@@ -614,6 +631,34 @@ test "SecretClient setSecret failure" {
     try std.testing.expectError(error.SetSecretFailed, result);
 }
 
+test "SecretClient setSecret does not retry ambiguous transient failure" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.SequenceMockTransport.init(allocator, &.{
+        .{
+            .status = 500,
+            .body = "{\"error\":{\"code\":\"InternalServerError\"}}",
+        },
+        .{
+            .status = 200,
+            .body = "{\"value\":\"duplicate\",\"id\":\"https://v.vault.azure.net/secrets/s/v2\"}",
+        },
+    });
+    var credential = test_support.StaticCredential{};
+    var client = try SecretClient.init(
+        allocator,
+        "https://v.vault.azure.net",
+        credential.asCredential(),
+        test_support.runtime(mock.asTransport()),
+        .{ .retry = .{ .initial_delay_ms = 0 } },
+    );
+    defer client.deinit();
+
+    var result = try client.setSecretResult(allocator, "s", "value");
+    defer result.deinit(allocator);
+    try std.testing.expect(!result.isOk());
+    try std.testing.expectEqual(@as(usize, 1), mock.call_count);
+}
+
 test "SecretClient listSecrets" {
     const allocator = std.testing.allocator;
     const body =
@@ -649,4 +694,32 @@ test "SecretClient listSecrets" {
     // Pager should have a next_url set from nextLink (but we'd need a
     // SequenceMockTransport to actually fetch the second page).
     try std.testing.expect(pager.next_url != null);
+}
+
+test "SecretClient pager rejects cross-origin continuation before dispatch" {
+    const allocator = std.testing.allocator;
+    const body =
+        \\{"value":[{"id":"https://v.vault.azure.net/secrets/secret1"}],"nextLink":"https://attacker.example/steal"}
+    ;
+    var mock = core.http.MockTransport.init(allocator, 200, body);
+    defer mock.deinit();
+    var credential = test_support.StaticCredential{};
+    var client = try SecretClient.init(
+        allocator,
+        "https://v.vault.azure.net",
+        credential.asCredential(),
+        test_support.runtime(mock.asTransport()),
+        .{ .retry = .{ .max_retries = 0 } },
+    );
+    defer client.deinit();
+
+    var pager = try client.listSecrets(allocator);
+    defer pager.deinit();
+    try std.testing.expectError(error.InvalidContinuationUrl, pager.next());
+    try std.testing.expect(pager.next_url == null);
+    try std.testing.expectEqual(@as(usize, 1), mock.call_count);
+    try std.testing.expectEqualStrings(
+        "https://v.vault.azure.net/secrets?api-version=7.6-preview.2",
+        mock.last_url.?,
+    );
 }

@@ -25,7 +25,8 @@ pub const BackupClientOptions = struct {
 
 /// Runtime descriptors are copied by value. Their borrowed transport and
 /// crypto contexts and the credential must outlive this client and every
-/// in-flight operation.
+/// in-flight operation. The caller must serialize every operation sharing
+/// this client's pipeline state.
 pub const BackupClient = struct {
     vault_url: []const u8,
     api_version: []const u8,
@@ -199,7 +200,8 @@ pub const SettingsClientOptions = struct {
 
 /// Runtime descriptors are copied by value. Their borrowed transport and
 /// crypto contexts and the credential must outlive this client and every
-/// pager returned by it.
+/// pager returned by it. The caller must serialize every operation sharing
+/// this client's pipeline state, including pager operations.
 pub const SettingsClient = struct {
     vault_url: []const u8,
     api_version: []const u8,

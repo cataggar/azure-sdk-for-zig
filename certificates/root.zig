@@ -10,7 +10,7 @@ else
 // ─────────────────────────── Models ───────────────────────────
 
 /// Pager type returned by `listCertificates`.
-pub const CertificatePager = core.pager.PipelinePager(KeyVaultCertificate);
+pub const CertificatePager = pipeline_mod.ValidatedPipelinePager(KeyVaultCertificate);
 
 pub const CertificateProperties = struct {
     enabled: ?bool = null,
@@ -40,7 +40,8 @@ pub const CertificateClientOptions = struct {
 
 /// Runtime descriptors are copied by value. Their borrowed transport and
 /// crypto contexts and the credential must outlive this client and every
-/// pager returned by it.
+/// pager returned by it. The caller must serialize all operations sharing
+/// this client's pipeline state, including pager operations.
 pub const CertificateClient = struct {
     vault_url: []const u8,
     api_version: []const u8,
@@ -199,8 +200,10 @@ pub const CertificateClient = struct {
         return CertificatePager.init(
             self.pipeline_state.pipeline,
             url,
+            self.vault_url,
             allocator,
             &parseCertificateListPage,
+            &deinitCertificates,
             "application/json",
         );
     }
@@ -272,7 +275,11 @@ const CertListSchema = struct {
     nextLink: ?[]const u8 = null,
 };
 
-fn parseCertificateListPage(allocator: std.mem.Allocator, body: []const u8) !core.pager.PageResult(KeyVaultCertificate) {
+fn parseCertificateListPage(
+    allocator: std.mem.Allocator,
+    body: []const u8,
+    origin: []const u8,
+) !core.pager.PageResult(KeyVaultCertificate) {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
@@ -281,7 +288,10 @@ fn parseCertificateListPage(allocator: std.mem.Allocator, body: []const u8) !cor
 
     var next_link: ?[]u8 = null;
     if (parsed.nextLink) |nl| {
-        if (nl.len > 0) next_link = try allocator.dupe(u8, nl);
+        if (nl.len > 0) {
+            try pipeline_mod.validateHttpsOrigin(origin, nl);
+            next_link = try allocator.dupe(u8, nl);
+        }
     }
 
     const entries = parsed.value orelse
@@ -294,6 +304,14 @@ fn parseCertificateListPage(allocator: std.mem.Allocator, body: []const u8) !cor
         result[i] = cert;
     }
     return .{ .items = result, .next_link = next_link };
+}
+
+fn deinitCertificates(
+    allocator: std.mem.Allocator,
+    certificates: []KeyVaultCertificate,
+) void {
+    for (certificates) |certificate| certificate.deinit(allocator);
+    allocator.free(certificates);
 }
 
 // ─────────────────────────── Tests ────────────────────────────
@@ -323,4 +341,32 @@ test "CertificateClient getCertificate" {
     try std.testing.expectEqual(true, cert.properties.enabled.?);
     try std.testing.expectEqual(@as(i64, 1800000000), cert.properties.expires_on.?);
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "certificates/mycert?api-version=") != null);
+}
+
+test "CertificateClient pager rejects cross-origin continuation before dispatch" {
+    const allocator = std.testing.allocator;
+    const body =
+        \\{"value":[{"id":"https://vault.azure.net/certificates/mycert/v1"}],"nextLink":"https://attacker.example/steal"}
+    ;
+    var mock = core.http.MockTransport.init(allocator, 200, body);
+    defer mock.deinit();
+    var credential = test_support.StaticCredential{};
+    var client = try CertificateClient.init(
+        allocator,
+        "https://vault.azure.net",
+        credential.asCredential(),
+        test_support.runtime(mock.asTransport()),
+        .{ .retry = .{ .max_retries = 0 } },
+    );
+    defer client.deinit();
+
+    var pager = try client.listCertificates(allocator);
+    defer pager.deinit();
+    try std.testing.expectError(error.InvalidContinuationUrl, pager.next());
+    try std.testing.expect(pager.next_url == null);
+    try std.testing.expectEqual(@as(usize, 1), mock.call_count);
+    try std.testing.expectEqualStrings(
+        "https://vault.azure.net/certificates?api-version=7.6-preview.2",
+        mock.last_url.?,
+    );
 }
