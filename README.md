@@ -187,14 +187,15 @@ budget, that budget is advertised and enforced as the effective
 message this receiver would have to reject.
 
 `max_buffered_bytes` separately bounds the aggregate payload retained in the
-ready queue and the delivery currently being reassembled. It defaults to
-256 MiB. The default limits preserve the existing 300-credit wire window used
-by Event Hubs and Service Bus; the byte limit is still hard, and a sender is
-detached with `amqp:resource-limit-exceeded` before a chunk that would cross it
-is retained. Custom message or aggregate limits additionally cap credit
-conservatively. While a multi-frame delivery is in progress, its full legal
-size remains reserved: ready bytes plus that reservation plus all outstanding
-credit can never exceed the custom aggregate budget.
+ready queue and the delivery currently being reassembled. It is unbounded by
+default so the existing 300-credit Event Hubs and Service Bus window never
+promises traffic the receiver would later reject. Set it explicitly to opt in
+to an aggregate ceiling; `default_max_buffered_bytes` provides a recommended
+256 MiB value. With a finite budget, credit is capped conservatively and a
+multi-frame delivery reserves its full legal size: ready bytes plus that
+reservation plus all outstanding credit can never exceed the aggregate
+budget. A sender that ignores the capped credit is detached with
+`amqp:resource-limit-exceeded` before the crossing chunk is retained.
 
 `issueCredit` also preserves one-shot manual receive requests. If a custom byte
 budget cannot safely put the whole request on the wire, the remainder is held
@@ -203,12 +204,10 @@ just to restate the same requested count.
 
 The delivery already returned to the caller is outside the aggregate budget
 and remains valid until the next successful `receive`; it is still bounded by
-`max_message_size`. Thus the default worst case is 256 MiB buffered plus one
-128 MiB caller-held delivery, not roughly 75 GiB. Set
-`max_buffered_bytes = null` only to opt out explicitly. Callers that know a
-service's smaller message limit should set `max_message_size` accordingly:
-that both advertises the real limit and permits proportionally more of the
-requested prefetch window.
+`max_message_size`. Callers that require an aggregate memory ceiling must set
+`max_buffered_bytes`; callers that know a service's smaller message limit
+should set `max_message_size` too, which permits proportionally more of the
+requested prefetch window under that ceiling.
 
 Credit and delivery count are charged on the initial transfer, exactly once.
 A continuation may omit `delivery-id` or repeat the initial value without
@@ -227,13 +226,22 @@ Protocol-header and heartbeat writes follow the same rule. Likewise, an error
 after any inbound frame header byte is consumed closes the connection; an
 unread body can no longer be parsed from a known boundary.
 
-Unsettled inbound delivery ids are unique across every receiver on a session.
-An id remains active through completion and is released only by terminal
+Every initial transfer, including aborted and pre-settled transfers, is checked
+against unsettled delivery ids active across every receiver on the session. An
+unsettled id remains active through completion and is released only by terminal
 settlement, abort, detach, error, or deinitialization. Repeating it while its
-multi-frame delivery is still in progress remains a valid continuation.
+own multi-frame delivery is still in progress remains a valid continuation.
 If a consumed disposition range cannot allocate rejection detail, every
 matching outbound delivery is still marked terminal before the connection is
 invalidated, so none can remain silently reusable or wait forever.
+
+Consumed SASL, Open, Begin, End, Close, and connection-pump controls are guarded
+the same way: decode or apply failure invalidates the driver and closes the
+transport before retry is possible. A valid remote End terminalizes its session
+and links and emits the End response; a valid remote Close responds, then
+terminalizes the connection and transport. Later sender and receiver operations
+fail without emission. Remote Detach is acknowledged and terminally poisons
+only the named link.
 
 Settling one delivery at a time costs a frame per message, which at a 300-deep
 prefetch is 300 frames of bookkeeping. A disposition can name a `first`..`last`

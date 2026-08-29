@@ -345,22 +345,24 @@ pub const Driver = struct {
         self.state = .open_sent;
 
         const inbound = try self.receiveFrame(deadline_ms);
+        var processed = false;
+        defer if (!processed) self.invalidate();
         var decoded = try self.decodeBody(inbound.body);
         defer decoded.deinit();
 
         switch (decoded.performative) {
-            .open => |remote| try self.applyRemoteOpen(remote),
+            .open => |remote| {
+                try self.applyRemoteOpen(remote);
+                self.state = .opened;
+                processed = true;
+            },
             .close => |c| {
-                try self.recordRemoteError(c.err);
-                self.state = .closed;
+                try self.respondToRemoteClose(c.err);
+                processed = true;
                 return error.RemoteClosed;
             },
-            else => {
-                self.state = .err;
-                return error.UnexpectedPerformative;
-            },
+            else => return error.UnexpectedPerformative,
         }
-        self.state = .opened;
     }
 
     fn applyRemoteOpen(self: *Driver, remote: perf.Open) ConnectionError!void {
@@ -377,6 +379,8 @@ pub const Driver = struct {
 
         {
             const inbound = try self.receiveFrame(deadline_ms);
+            var processed = false;
+            defer if (!processed) self.invalidate();
             var decoded = try self.decodeBody(inbound.body);
             defer decoded.deinit();
             const mechanisms = switch (decoded.performative) {
@@ -388,6 +392,7 @@ pub const Driver = struct {
                 if (std.mem.eql(u8, name, sasl_anonymous)) supported = true;
             }
             if (!supported) return error.SaslMechanismUnsupported;
+            processed = true;
         }
 
         try self.sendPerformative(.sasl, 0, .{ .sasl_init = .{
@@ -397,6 +402,8 @@ pub const Driver = struct {
         } });
 
         const inbound = try self.receiveFrame(deadline_ms);
+        var processed = false;
+        defer if (!processed) self.invalidate();
         var decoded = try self.decodeBody(inbound.body);
         defer decoded.deinit();
         const outcome = switch (decoded.performative) {
@@ -404,6 +411,7 @@ pub const Driver = struct {
             else => return error.UnexpectedPerformative,
         };
         if (outcome.code != .ok) return error.SaslFailed;
+        processed = true;
     }
 
     fn exchangeHeader(self: *Driver, header: *const [8]u8, deadline_ms: i64) ConnectionError!void {
@@ -465,21 +473,29 @@ pub const Driver = struct {
         } });
 
         const inbound = try self.receiveFrame(deadline_ms);
+        var processed = false;
+        defer if (!processed) self.invalidate();
         var decoded = try self.decodeBody(inbound.body);
         defer decoded.deinit();
         switch (decoded.performative) {
-            .begin => |b| return .{
-                .channel = inbound.header.channel,
-                .next_outgoing_id = b.next_outgoing_id,
-                .incoming_window = b.incoming_window,
+            .begin => |b| {
+                const remote = RemoteSession{
+                    .channel = inbound.header.channel,
+                    .next_outgoing_id = b.next_outgoing_id,
+                    .incoming_window = b.incoming_window,
+                };
+                processed = true;
+                return remote;
             },
             .close => |c| {
-                try self.recordRemoteError(c.err);
-                self.state = .closed;
+                try self.respondToRemoteClose(c.err);
+                processed = true;
                 return error.RemoteClosed;
             },
             .end => |e| {
                 try self.recordRemoteError(e.err);
+                try self.sendPerformative(.amqp, inbound.header.channel, .{ .end = .{} });
+                processed = true;
                 return error.RemoteClosed;
             },
             else => return error.UnexpectedPerformative,
@@ -490,13 +506,18 @@ pub const Driver = struct {
     pub fn endSession(self: *Driver, channel: u16, deadline_ms: i64) ConnectionError!void {
         try self.sendPerformative(.amqp, channel, .{ .end = .{} });
         const inbound = try self.receiveFrame(deadline_ms);
+        var processed = false;
+        defer if (!processed) self.invalidate();
         var decoded = try self.decodeBody(inbound.body);
         defer decoded.deinit();
         switch (decoded.performative) {
-            .end => |e| try self.recordRemoteError(e.err),
+            .end => |e| {
+                try self.recordRemoteError(e.err);
+                processed = true;
+            },
             .close => |c| {
-                try self.recordRemoteError(c.err);
-                self.state = .closed;
+                try self.respondToRemoteClose(c.err);
+                processed = true;
                 return error.RemoteClosed;
             },
             else => return error.UnexpectedPerformative,
@@ -513,18 +534,23 @@ pub const Driver = struct {
 
         const inbound = self.receiveFrame(deadline_ms) catch |e| switch (e) {
             error.ConnectionClosed => {
-                self.state = .closed;
+                self.terminate();
                 return;
             },
             else => return e,
         };
+        var processed = false;
+        defer if (!processed) self.invalidate();
         var decoded = try self.decodeBody(inbound.body);
         defer decoded.deinit();
         switch (decoded.performative) {
-            .close => |c| try self.recordRemoteError(c.err),
+            .close => |c| {
+                try self.recordRemoteError(c.err);
+                self.terminate();
+                processed = true;
+            },
             else => return error.UnexpectedPerformative,
         }
-        self.state = .closed;
     }
 
     pub fn recordRemoteError(self: *Driver, err: ?perf.AmqpError) ConnectionError!void {
@@ -532,6 +558,12 @@ pub const Driver = struct {
         const copy = try RemoteError.dupe(self.allocator, e);
         if (self.remote_error) |old| old.deinit(self.allocator);
         self.remote_error = copy;
+    }
+
+    fn respondToRemoteClose(self: *Driver, err: ?perf.AmqpError) ConnectionError!void {
+        try self.recordRemoteError(err);
+        try self.sendPerformative(.amqp, 0, .{ .close = .{} });
+        self.terminate();
     }
 
     // ── Channel routing ──
@@ -561,10 +593,12 @@ pub const Driver = struct {
             return null;
         }
         if (inbound.header.channel == 0 and isClose(inbound.body)) {
+            var processed = false;
+            defer if (!processed) self.invalidate();
             var decoded = try self.decodeBody(inbound.body);
             defer decoded.deinit();
-            try self.recordRemoteError(decoded.performative.close.err);
-            self.state = .closed;
+            try self.respondToRemoteClose(decoded.performative.close.err);
+            processed = true;
             return error.RemoteClosed;
         }
         return inbound;
@@ -654,6 +688,12 @@ pub const Driver = struct {
     /// boundary is unknown.
     pub fn invalidate(self: *Driver) void {
         self.state = .err;
+        self.transport.close();
+    }
+
+    /// Enter the clean terminal state after a valid remote or local close.
+    pub fn terminate(self: *Driver) void {
+        self.state = .closed;
         self.transport.close();
     }
 
@@ -1165,6 +1205,120 @@ test "protocol-header write and flush failures make the driver terminal" {
         mem.fail_flush = false;
         try testing.expectError(error.InvalidState, driver.open(10_000));
     }
+}
+
+test "malformed consumed SASL and Open controls make handshake retry impossible" {
+    const Phase = enum { sasl, open };
+    inline for (std.meta.tags(Phase)) |phase| {
+        const allocator = testing.allocator;
+        var mem = MemoryTransport.init(allocator);
+        defer mem.deinit();
+        var clock: ManualClock = .{};
+        const peer = Peer{ .allocator = allocator, .mem = &mem };
+        var options = test_options;
+
+        switch (phase) {
+            .sasl => {
+                options.sasl = .anonymous;
+                try peer.pushHeader(&frame.sasl_header);
+                try peer.pushRaw(.sasl, 0, &.{ 0x00, 0x53, 0x40 });
+            },
+            .open => {
+                try peer.pushHeader(&frame.amqp_header);
+                try peer.pushRaw(.amqp, 0, &.{ 0x00, 0x53, 0x10 });
+            },
+        }
+
+        var driver = try Driver.init(allocator, mem.transport(), clock.clock(), options);
+        defer driver.deinit();
+        try testing.expectError(error.MalformedFrame, driver.open(10_000));
+        try testing.expectEqual(State.err, driver.state);
+        try testing.expect(mem.closed);
+
+        const writes = mem.write_count;
+        try testing.expectError(error.InvalidState, driver.open(10_000));
+        try testing.expectEqual(writes, mem.write_count);
+    }
+}
+
+test "malformed consumed Begin End and Close controls make the driver terminal" {
+    const Phase = enum { begin, end, close };
+    inline for (std.meta.tags(Phase)) |phase| {
+        const allocator = testing.allocator;
+        var mem = MemoryTransport.init(allocator);
+        defer mem.deinit();
+        var clock: ManualClock = .{};
+        const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+        try peer.pushHeader(&frame.amqp_header);
+        try peer.push(.amqp, 0, .{ .open = .{ .container_id = "service-bus" } });
+        if (phase == .end) {
+            try peer.push(.amqp, 0, .{ .begin = .{
+                .remote_channel = 0,
+                .next_outgoing_id = 1,
+                .incoming_window = 100,
+                .outgoing_window = 100,
+            } });
+        }
+        const descriptor: u8 = switch (phase) {
+            .begin => 0x11,
+            .end => 0x17,
+            .close => 0x18,
+        };
+        try peer.pushRaw(.amqp, 0, &.{ 0x00, 0x53, descriptor });
+
+        var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+        defer driver.deinit();
+        try driver.open(10_000);
+
+        switch (phase) {
+            .begin => try testing.expectError(
+                error.MalformedFrame,
+                driver.beginSession(0, .{}, 10_000),
+            ),
+            .end => {
+                _ = try driver.beginSession(0, .{}, 10_000);
+                try testing.expectError(error.MalformedFrame, driver.endSession(0, 10_000));
+            },
+            .close => try testing.expectError(error.MalformedFrame, driver.close(null, 10_000)),
+        }
+        try testing.expectEqual(State.err, driver.state);
+        try testing.expect(mem.closed);
+
+        const writes = mem.write_count;
+        switch (phase) {
+            .begin => try testing.expectError(
+                error.InvalidState,
+                driver.beginSession(0, .{}, 10_000),
+            ),
+            .end => try testing.expectError(error.ConnectionClosed, driver.endSession(0, 10_000)),
+            .close => try testing.expectError(error.ConnectionClosed, driver.close(null, 10_000)),
+        }
+        try testing.expectEqual(writes, mem.write_count);
+    }
+}
+
+test "a malformed consumed Close in connection pump closes retry state" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try peer.pushHeader(&frame.amqp_header);
+    try peer.push(.amqp, 0, .{ .open = .{ .container_id = "service-bus" } });
+    try peer.pushRaw(.amqp, 0, &.{ 0x00, 0x53, 0x18 });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    try driver.open(10_000);
+    try testing.expectError(error.MalformedFrame, driver.pump(10_000));
+    try testing.expectEqual(State.err, driver.state);
+    try testing.expect(mem.closed);
+
+    const writes = mem.write_count;
+    try testing.expectError(error.ConnectionClosed, driver.pump(10_000));
+    try testing.expectEqual(writes, mem.write_count);
 }
 
 test "a keepalive is emitted before the negotiated idle deadline" {
