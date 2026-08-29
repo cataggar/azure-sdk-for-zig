@@ -378,20 +378,26 @@ sender reusable; in mode second the sender terminally detaches before
 discarding an undecided id, because a late first-phase disposition would
 otherwise require an acknowledgment the sender could no longer correlate.
 
-`SenderOptions.snd_settle_mode` is negotiated through Attach and honored on
-Transfer. In sender-settled mode every transfer carries `settled = true`;
-synchronous and asynchronous sends complete after emission without retaining
-an in-flight entry or waiting for a disposition.
+`SenderOptions.snd_settle_mode` is the sender's authoritative settlement mode
+and is honored on Attach and Transfer. The remote receiver's Attach field is a
+desired preference: omission or `mixed` accepts the selected local mode, while
+an opposite fixed `settled`/`unsettled` preference rejects the attach instead
+of silently changing transfer settlement. In sender-settled mode every
+transfer carries `settled = true`; synchronous and asynchronous sends complete
+after emission without retaining an in-flight entry or waiting for a
+disposition.
 
 Deliveries settle in the order they were sent, and the ring holding them is
 allocated once at attach, so a silent peer costs a fixed amount of memory rather
 than a growing one.
 
 If a multi-frame send fails after its opening transfer reached the wire, the
-link is poisoned and detached best-effort. The peer is already holding an
-unterminated delivery, so starting another delivery on that link would instead
-continue the failed bytes and corrupt the protocol stream. Recovery must open a
-new sender. The poisoned object is terminal and must first be removed with
+link is poisoned and detached best-effort. Cleanup is idempotent and
+scope-aware: a remote Detach is answered once, and a remote End is never
+followed by a link-level Detach. The peer is already holding an unterminated
+delivery, so starting another delivery on that link would instead continue the
+failed bytes and corrupt the protocol stream. Recovery must open a new sender.
+The poisoned object is terminal and must first be removed with
 `Session.closeSender`; late attach or flow frames cannot reactivate it or bind
 to a replacement with the same name. Link credit and delivery count are
 consumed when the first frame succeeds, while no settlement entry is created

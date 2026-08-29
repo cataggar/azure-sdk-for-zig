@@ -97,6 +97,13 @@ fn remainingToDeliveryLimit(limit: u32, count: u32) u32 {
     return if (remaining > 0) @intCast(remaining) else 0;
 }
 
+fn senderSettleModesCompatible(
+    actual: perf.SenderSettleMode,
+    desired: perf.SenderSettleMode,
+) bool {
+    return actual == .mixed or desired == .mixed or actual == desired;
+}
+
 pub const Session = struct {
     allocator: Allocator,
     driver: *Driver,
@@ -557,9 +564,14 @@ pub const Session = struct {
         // Match by link name: the peer echoes it and picks its own handle.
         for (self.senders.items) |s| {
             if (s.awaiting_attach and !s.poisoned and std.mem.eql(u8, s.name, a.name)) {
+                // The sender declares the actual mode. A receiver's field is
+                // only its desired preference; omission decodes as mixed and
+                // must not silently rewrite settled into unsettled or vice
+                // versa.
+                if (!senderSettleModesCompatible(s.snd_settle_mode, a.snd_settle_mode))
+                    return error.MalformedFrame;
                 s.remote_handle = a.handle;
                 s.max_message_size = a.max_message_size;
-                s.snd_settle_mode = a.snd_settle_mode;
                 s.rcv_settle_mode = a.rcv_settle_mode;
                 if (a.initial_delivery_count) |c| s.delivery_count = c;
                 s.attached = true;
@@ -589,6 +601,7 @@ pub const Session = struct {
                 try self.driver.sendPerformative(.amqp, self.channel, .{
                     .detach = .{ .handle = s.handle, .closed = true },
                 });
+                s.detach_sent = true;
             }
             return;
         }
@@ -606,6 +619,7 @@ pub const Session = struct {
                 try self.driver.sendPerformative(.amqp, self.channel, .{
                     .detach = .{ .handle = r.handle, .closed = true },
                 });
+                r.detach_sent = true;
             }
         }
     }
@@ -716,9 +730,9 @@ pub const SenderOptions = struct {
     /// The entity the messages go to, such as `eh` or `eh/Partitions/3`.
     target_address: []const u8,
     source_address: ?[]const u8 = null,
-    /// Desired sender settlement mode. The receiver's Attach selects the
-    /// actual mode: settled deliveries complete once emitted and retain no
-    /// in-flight entry; mixed and unsettled deliveries await disposition.
+    /// Actual sender settlement mode. The receiver's Attach carries only its
+    /// desired preference: mixed/omitted accepts this selection, while a
+    /// conflicting fixed preference rejects the Attach.
     snd_settle_mode: perf.SenderSettleMode = .mixed,
     rcv_settle_mode: perf.ReceiverSettleMode = .first,
     desired_capabilities: ?[]const []const u8 = null,
@@ -819,7 +833,7 @@ pub const Sender = struct {
     credit: u32 = 0,
     drain: bool = false,
     delivery_count: u32 = 0,
-    /// Sender settlement mode selected by the remote receiver's Attach.
+    /// Authoritative sender settlement mode selected locally.
     snd_settle_mode: perf.SenderSettleMode = .mixed,
     /// Receiver settlement mode selected by the remote receiver's Attach.
     rcv_settle_mode: perf.ReceiverSettleMode = .first,
@@ -1297,6 +1311,8 @@ pub const Sender = struct {
         self.attached = false;
         self.awaiting_attach = false;
         self.poisoned = true;
+        if (self.detach_sent or self.session.ended) return;
+        self.detach_sent = true;
         self.session.driver.sendPerformative(.amqp, self.session.channel, .{
             .detach = .{
                 .handle = self.handle,
@@ -1306,7 +1322,10 @@ pub const Sender = struct {
                     .description = "outbound delivery did not reach its final transfer",
                 },
             },
-        }) catch {};
+        }) catch {
+            self.session.driver.invalidate();
+            self.session.terminate();
+        };
     }
 
     /// Wait for the oldest delivery still in flight to settle and retire it.
@@ -2981,6 +3000,112 @@ test "a session-window timeout after the first frame poisons the sender" {
     try testing.expectEqual(before, mem.written().len);
 }
 
+test "partial send does not duplicate terminal Detach or emit after End" {
+    const Terminal = enum { detach, end };
+    inline for (std.meta.tags(Terminal)) |terminal| {
+        const allocator = testing.allocator;
+        var mem = MemoryTransport.init(allocator);
+        defer mem.deinit();
+        var clock: connection.ManualClock = .{};
+        const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+        try peer.pushHeader(&frame.amqp_header);
+        try peer.push(0, .{ .open = .{
+            .container_id = "service-bus",
+            .max_frame_size = 512,
+            .channel_max = 255,
+        } });
+        try peer.push(0, .{ .begin = .{
+            .remote_channel = 0,
+            .next_outgoing_id = 1,
+            .incoming_window = 1,
+            .outgoing_window = 1000,
+        } });
+        try peer.push(0, .{ .attach = .{
+            .name = "producer",
+            .handle = 0,
+            .role = .receiver,
+            .initial_delivery_count = 0,
+        } });
+        try peer.push(0, .{ .flow = .{
+            .next_incoming_id = 0,
+            .incoming_window = 1,
+            .next_outgoing_id = 1,
+            .outgoing_window = 1000,
+            .handle = 0,
+            .delivery_count = 0,
+            .link_credit = 5,
+        } });
+        switch (terminal) {
+            .detach => try peer.push(0, .{ .detach = .{
+                .handle = 0,
+                .closed = true,
+            } }),
+            .end => try peer.push(0, .{ .end = .{} }),
+        }
+
+        var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+        defer driver.deinit();
+        var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+        defer fixture.deinit();
+        const sender = try openSender(&fixture.session, .{
+            .name = "producer",
+            .target_address = "eh",
+        }, 10_000);
+
+        const big = try allocator.alloc(u8, 1500);
+        defer allocator.free(big);
+        @memset(big, 'x');
+
+        mem.clearWritten();
+        const result = sender.sendBytesAsync(big, .{}, 10_000);
+        switch (terminal) {
+            .detach => try testing.expectError(error.LinkDetached, result),
+            .end => try testing.expectError(error.RemoteClosed, result),
+        }
+        try testing.expect(sender.poisoned);
+        try testing.expectEqual(@as(usize, 0), sender.inFlight());
+        switch (terminal) {
+            .detach => {
+                try testing.expect(sender.detach_sent);
+                try testing.expect(!fixture.session.ended);
+            },
+            .end => try testing.expect(fixture.session.ended),
+        }
+
+        var frames = try EmittedFrames.parse(allocator, mem.written());
+        defer frames.deinit();
+        try testing.expectEqual(@as(usize, 2), frames.bodies.items.len);
+        try testing.expectEqual(
+            perf.descriptor.transfer,
+            perf.peekDescriptor(frames.bodies.items[0]).?,
+        );
+        var transfer = try perf.decode(allocator, frames.bodies.items[0]);
+        defer transfer.deinit();
+        try testing.expect(transfer.performative.transfer.more);
+        try testing.expectEqual(
+            if (terminal == .detach) perf.descriptor.detach else perf.descriptor.end,
+            perf.peekDescriptor(frames.bodies.items[1]).?,
+        );
+        const detaches = try frames.of(allocator, perf.descriptor.detach);
+        defer allocator.free(detaches);
+        const ends = try frames.of(allocator, perf.descriptor.end);
+        defer allocator.free(ends);
+        try testing.expectEqual(
+            @as(usize, if (terminal == .detach) 1 else 0),
+            detaches.len,
+        );
+        try testing.expectEqual(
+            @as(usize, if (terminal == .end) 1 else 0),
+            ends.len,
+        );
+
+        const written = mem.written().len;
+        try testing.expectError(error.LinkDetached, sender.sendBytesAsync("reuse", .{}, 10_000));
+        try testing.expectEqual(written, mem.written().len);
+    }
+}
+
 test "a socket failure after the first frame poisons the sender" {
     const allocator = testing.allocator;
     var mem = MemoryTransport.init(allocator);
@@ -3898,15 +4023,15 @@ test "negotiated settled sender completes sync and async sends on emission" {
     }
 }
 
-test "remote receiver Attach selects the actual sender settlement mode" {
+test "an omitted receiver preference preserves local settled mode" {
     const allocator = testing.allocator;
     var mem = MemoryTransport.init(allocator);
     defer mem.deinit();
     var clock: connection.ManualClock = .{};
     const peer = Peer{ .allocator = allocator, .mem = &mem };
 
-    // The local sender requests settled, but the receiver answers with the
-    // default mixed mode. Transfers must follow the negotiated response.
+    // The receiver omits its preference, which decodes as mixed. That accepts
+    // rather than overwrites the sender's authoritative settled mode.
     try scriptSenderAttach(peer, 1);
     var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
     defer driver.deinit();
@@ -3919,10 +4044,62 @@ test "remote receiver Attach selects the actual sender settlement mode" {
         .snd_settle_mode = .settled,
     }, 10_000);
     _ = try fixture.session.pump(10_000);
-    try testing.expectEqual(perf.SenderSettleMode.mixed, sender.snd_settle_mode);
+    try testing.expectEqual(perf.SenderSettleMode.settled, sender.snd_settle_mode);
 
     mem.clearWritten();
     const token = try sender.sendBytesAsync("mixed", .{}, 10_000);
+    try testing.expectEqual(@as(u32, 0), token.id);
+    try testing.expectEqual(@as(usize, 0), sender.inFlight());
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const transfers = try frames.of(allocator, perf.descriptor.transfer);
+    defer allocator.free(transfers);
+    try testing.expectEqual(@as(usize, 1), transfers.len);
+    var decoded = try perf.decode(allocator, transfers[0]);
+    defer decoded.deinit();
+    try testing.expect(decoded.performative.transfer.settled orelse false);
+    try testing.expectError(error.NoDeliveryInFlight, sender.awaitSettlement(10_000));
+}
+
+test "an omitted receiver preference does not pre-settle an unsettled sender" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "producer",
+        .handle = 0,
+        .role = .receiver,
+        .initial_delivery_count = 0,
+    } });
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 1000,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+        .handle = 0,
+        .delivery_count = 0,
+        .link_credit = 1,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "entity",
+        .snd_settle_mode = .unsettled,
+    }, 10_000);
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(perf.SenderSettleMode.unsettled, sender.snd_settle_mode);
+
+    mem.clearWritten();
+    _ = try sender.sendBytesAsync("unsettled", .{}, 10_000);
     try testing.expectEqual(@as(usize, 1), sender.inFlight());
 
     var frames = try EmittedFrames.parse(allocator, mem.written());
@@ -3933,15 +4110,52 @@ test "remote receiver Attach selects the actual sender settlement mode" {
     var decoded = try perf.decode(allocator, transfers[0]);
     defer decoded.deinit();
     try testing.expect(!(decoded.performative.transfer.settled orelse false));
+}
 
-    try peer.push(0, .{ .disposition = .{
-        .role = .receiver,
-        .first = token.id,
-        .settled = true,
-        .state = .accepted,
-    } });
-    const settlement = try sender.awaitSettlement(10_000);
-    try testing.expectEqual(Outcome.accepted, settlement.outcome);
+test "a conflicting fixed receiver settlement preference rejects Attach" {
+    const Case = struct {
+        local: perf.SenderSettleMode,
+        remote: perf.SenderSettleMode,
+    };
+    const cases = [_]Case{
+        .{ .local = .settled, .remote = .unsettled },
+        .{ .local = .unsettled, .remote = .settled },
+    };
+    for (cases) |case| {
+        const allocator = testing.allocator;
+        var mem = MemoryTransport.init(allocator);
+        defer mem.deinit();
+        var clock: connection.ManualClock = .{};
+        const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+        try scriptHandshake(peer, 65536);
+        try peer.push(0, .{ .attach = .{
+            .name = "producer",
+            .handle = 0,
+            .role = .receiver,
+            .snd_settle_mode = case.remote,
+            .initial_delivery_count = 0,
+        } });
+
+        var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+        defer driver.deinit();
+        var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+        defer fixture.deinit();
+
+        try testing.expectError(error.MalformedFrame, openSender(&fixture.session, .{
+            .name = "producer",
+            .target_address = "entity",
+            .snd_settle_mode = case.local,
+        }, 10_000));
+        try testing.expectEqual(connection.State.err, driver.state);
+        try testing.expect(fixture.session.ended);
+
+        var frames = try EmittedFrames.parse(allocator, mem.written());
+        defer frames.deinit();
+        const transfers = try frames.of(allocator, perf.descriptor.transfer);
+        defer allocator.free(transfers);
+        try testing.expectEqual(@as(usize, 0), transfers.len);
+    }
 }
 
 test "settled sender emission failure poisons without retaining in-flight state" {
