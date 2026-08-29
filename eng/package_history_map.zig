@@ -9,7 +9,13 @@ pub const PathMapping = struct {
 pub const PackageHistory = struct {
     package: []const u8,
     branch: []const u8,
-    mappings: []const PathMapping,
+    origin: Origin = .reconstructed,
+    mappings: []const PathMapping = &.{},
+};
+
+pub const Origin = enum {
+    reconstructed,
+    branch_native,
 };
 
 pub const RejectedPath = struct {
@@ -28,6 +34,11 @@ pub const all = [_]PackageHistory{
         .package = "azure_sdk_core",
         .branch = "sdk/core",
         .mappings = current_only.mappings("sdk/core"),
+    },
+    .{
+        .package = "azure_sdk_core_symcrypt",
+        .branch = "sdk/core_symcrypt",
+        .origin = .branch_native,
     },
     .{
         .package = "azure_sdk_amqp",
@@ -234,17 +245,21 @@ pub fn validate(allocator: std.mem.Allocator) !void {
         if (!std.mem.eql(u8, package.branch, entry.branch)) {
             return error.HistoryBranchMismatch;
         }
-        if (entry.mappings.len == 0) return error.MissingHistoryMapping;
-        const expected_current = try std.fmt.allocPrint(
-            allocator,
-            "{s}/",
-            .{package.historical_source_path},
-        );
-        defer allocator.free(expected_current);
-        if (!std.mem.eql(u8, entry.mappings[0].source, expected_current) or
-            entry.mappings[0].destination.len != 0)
-        {
-            return error.MissingCurrentRootMapping;
+        if (entry.origin == .branch_native) {
+            if (entry.mappings.len != 0) return error.BranchNativeHistoryMapping;
+        } else {
+            if (entry.mappings.len == 0) return error.MissingHistoryMapping;
+            const expected_current = try std.fmt.allocPrint(
+                allocator,
+                "{s}/",
+                .{package.historical_source_path},
+            );
+            defer allocator.free(expected_current);
+            if (!std.mem.eql(u8, entry.mappings[0].source, expected_current) or
+                entry.mappings[0].destination.len != 0)
+            {
+                return error.MissingCurrentRootMapping;
+            }
         }
         for (all[index + 1 ..]) |other| {
             if (std.mem.eql(u8, entry.package, other.package)) {
@@ -281,10 +296,13 @@ fn validatePath(path: []const u8, allow_empty: bool) !void {
 
 test "history map covers every branch-owned package" {
     try validate(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 24), all.len);
+    try std.testing.expectEqual(@as(usize, 25), all.len);
     try std.testing.expectEqual(@as(usize, 5), rejected_paths.len);
     try std.testing.expect(find("azure_sdk_storage_blobs") != null);
     try std.testing.expect(find("azure_sdk_core") != null);
+    const core_symcrypt = find("azure_sdk_core_symcrypt").?;
+    try std.testing.expectEqual(Origin.branch_native, core_symcrypt.origin);
+    try std.testing.expectEqual(@as(usize, 0), core_symcrypt.mappings.len);
     const kusto = find("azure_sdk_kusto").?;
     try std.testing.expectEqual(@as(usize, 2), kusto.mappings.len);
     try std.testing.expectEqualStrings(

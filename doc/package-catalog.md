@@ -6,6 +6,7 @@ its source lives at the root of the named branch.
 | Package | Ownership | Main path | Package branch | Internal dependencies |
 | --- | --- | --- | --- | --- |
 | `azure_sdk_core` | Branch | — | [`sdk/core`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/core) | — |
+| `azure_sdk_core_symcrypt` | Branch | — | [`sdk/core_symcrypt`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/core_symcrypt) | `azure_sdk_core` |
 | `azure_sdk_amqp` | Branch | — | [`sdk/amqp`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/amqp) | — |
 | `azure_sdk_testing` | Branch | — | [`sdk/testing`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/testing) | `azure_sdk_core` |
 | `azure_rest_arm_avs` | Branch | — | [`rest/arm_avs`](https://github.com/cataggar/azure-sdk-for-zig/tree/rest/arm_avs) | `azure_sdk_core` |
@@ -35,4 +36,5 @@ its source lives at the root of the named branch.
 see `codegen/devops/README.md`. It is one package covering all 44 Azure
 DevOps API areas, with a Zig namespace per area.
 
-`azure_sdk_kusto` also pins the external `serde` dependency.
+`azure_sdk_core_symcrypt` pins the external `zig_symcrypt` dependency.
+`azure_sdk_kusto` pins the external `serde` dependency.

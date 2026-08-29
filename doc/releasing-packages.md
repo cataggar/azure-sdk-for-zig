@@ -4,8 +4,9 @@ Release commands depend on source ownership in `eng/packages.zig`.
 
 ## Core-family releases
 
-`azure_sdk_core`, `azure_sdk_amqp`, and `azure_sdk_testing` are branch-owned
-and release through the branch-owned flow below, like every other package.
+`azure_sdk_core`, `azure_sdk_core_symcrypt`, `azure_sdk_amqp`, and
+`azure_sdk_testing` are branch-owned and release through the branch-owned flow
+below, like every other package.
 
 The staged release workflow in `scripts/package-release.sh` applies only to
 Main-owned packages. No package is currently Main-owned, so the staged engine
@@ -32,7 +33,14 @@ scripts/package-branch-release.sh publish azure_sdk_storage_blobs --execute
 - immutable internal and external dependency pins;
 - internal dependency commits protected by package release tags;
 - Zig package hashes by fetching each internal dependency;
-- package tests, examples, and live-test compilation.
+- the package-specific test, example, and live-test commands registered in
+  `eng/packages.zig`.
+
+`azure_sdk_core_symcrypt` uses source-only checks during sealed verification
+because release tooling has no ambient native SymCrypt binaries. Its package
+pull-request CI validates the native dynamic/static tests and examples on
+Linux and Windows, plus the supported Arm64 build matrix. Release review must
+confirm those checks completed successfully before merge.
 
 `publish` additionally requires a release version greater than every existing
 package tag. Without `--execute` it prints the proposed lightweight tag.

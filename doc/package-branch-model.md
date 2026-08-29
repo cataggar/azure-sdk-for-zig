@@ -73,6 +73,10 @@ paths.
 mappings for every branch-owned package. Boilerplate files such as copied
 licenses and manifests are explicitly excluded as ancestry evidence.
 
+Packages created directly on their package branch are marked `branch_native`
+and have no historical path mappings. History reconstruction skips them
+instead of inventing a Main-owned source path.
+
 `scripts/package-history-reset.sh` uses pinned `git-filter-repo` behavior to
 produce candidate repositories, path maps, and commit maps. The completed
 cutover and retained recovery refs are documented in the

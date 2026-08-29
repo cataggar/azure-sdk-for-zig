@@ -7,8 +7,8 @@ test {
     _ = @import("example_history_map.zig");
 }
 
-test "registry contains a valid twenty-four-package dependency graph" {
-    try std.testing.expectEqual(@as(usize, 24), registry.all.len);
+test "registry contains a valid twenty-five-package dependency graph" {
+    try std.testing.expectEqual(@as(usize, 25), registry.all.len);
     try registry.validate(std.testing.allocator, &registry.all);
     var main_owned: usize = 0;
     var branch_owned: usize = 0;
@@ -19,7 +19,7 @@ test "registry contains a valid twenty-four-package dependency graph" {
         }
     }
     try std.testing.expectEqual(@as(usize, 0), main_owned);
-    try std.testing.expectEqual(@as(usize, 24), branch_owned);
+    try std.testing.expectEqual(@as(usize, 25), branch_owned);
 }
 
 test "topological order places dependencies before dependents" {
