@@ -191,10 +191,12 @@ ready queue and the delivery currently being reassembled. It defaults to
 256 MiB. Initial credit and every top-up are capped conservatively by the
 remaining byte budget divided by `max_message_size`, so the default 128 MiB
 message limit advertises at most two credits even though `prefetch` defaults to
-300. As deliveries leave the queue their bytes are released and credit is
-replenished. A sender that ignores credit is detached with
-`amqp:resource-limit-exceeded` before the chunk that would cross the budget is
-retained.
+300. While a multi-frame delivery is in progress, its full legal size remains
+reserved: ready bytes plus that reservation plus all outstanding credit can
+never exceed the aggregate budget. As deliveries leave the queue their bytes
+are released and credit is replenished. A sender that ignores credit is
+detached with `amqp:resource-limit-exceeded` before the chunk that would cross
+the budget is retained.
 
 The delivery already returned to the caller is outside the aggregate budget
 and remains valid until the next successful `receive`; it is still bounded by
@@ -206,12 +208,18 @@ that both advertises the real limit and permits proportionally more of the
 requested prefetch window.
 
 Credit and delivery count are charged on the initial transfer, exactly once.
-An aborted multi-frame delivery releases its partial bytes without entering the
-ready queue, while a new delivery id arriving before the current delivery ends
-is a protocol error that terminally detaches the receiver. Any allocation
+A continuation may omit `delivery-id` or repeat the initial value without
+being charged again. An aborted multi-frame delivery, including one that
+repeats the id, releases its partial bytes without entering the ready queue,
+while a different delivery id arriving before the current delivery ends is a
+protocol error that terminally detaches the receiver. Any allocation
 failure after a transfer has been consumed does the same: the missing frame
 cannot be replayed, so keeping its old prefix for a later continuation would
 surface truncated data.
+
+Any write or flush failure while emitting a frame terminally closes the
+connection transport. A header or body may already be buffered, so allowing a
+later send to reuse that byte stream could flush a corrupt partial frame.
 
 Settling one delivery at a time costs a frame per message, which at a 300-deep
 prefetch is 300 frames of bookkeeping. A disposition can name a `first`..`last`

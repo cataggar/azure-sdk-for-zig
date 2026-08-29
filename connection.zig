@@ -638,10 +638,27 @@ pub const Driver = struct {
             .channel = channel,
         };
         const header_bytes = header.serialize();
-        try self.writeBytes(&header_bytes);
-        try self.writeBytes(body);
-        self.transport.flush() catch |e| return mapTransportError(e);
+        self.writeBytes(&header_bytes) catch |err| {
+            self.abortEmission();
+            return err;
+        };
+        self.writeBytes(body) catch |err| {
+            self.abortEmission();
+            return err;
+        };
+        self.transport.flush() catch |err| {
+            self.abortEmission();
+            return mapTransportError(err);
+        };
         self.last_sent_ms = self.clock.nowMillis();
+    }
+
+    /// Once any part of a frame emission fails, the byte stream cannot be
+    /// resumed at a frame boundary. Close it immediately so buffered header or
+    /// body bytes cannot be flushed by a later operation.
+    fn abortEmission(self: *Driver) void {
+        self.state = .err;
+        self.transport.close();
     }
 
     /// Read the next non-empty frame.

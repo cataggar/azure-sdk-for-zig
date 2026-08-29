@@ -824,9 +824,10 @@ pub const Sender = struct {
     /// already unsettled. Blocking instead would deadlock: only the caller
     /// can retire a delivery, and it cannot do so from inside this call.
     ///
-    /// If a continuation fails after the opening frame was written, the link
-    /// is poisoned and later sends return `error.LinkDetached`; recovery must
-    /// open a new sender.
+    /// If emitting any transfer frame fails, or if a continuation cannot be
+    /// emitted after the opening frame succeeded, the link is poisoned and
+    /// later sends return `error.LinkDetached`; recovery must open a new
+    /// connection or sender as appropriate.
     pub fn sendBytesAsync(
         self: *Sender,
         payload: []const u8,
@@ -857,7 +858,8 @@ pub const Sender = struct {
             first_budget;
         var begun = false;
         var complete = false;
-        errdefer if (begun and !complete) self.poisonPartialDelivery();
+        errdefer if ((begun or self.session.driver.state == .err) and !complete)
+            self.poisonPartialDelivery();
 
         while (first or offset < payload.len) {
             const budget = if (first) first_budget else cont_budget;
@@ -1421,13 +1423,22 @@ pub const Receiver = struct {
     }
 
     fn acceptTransfer(self: *Receiver, t: perf.Transfer, chunk: []const u8) LinkError!void {
-        const starts = t.delivery_id != null;
-        if (starts) {
-            // Deliveries cannot interleave on one link. Silently replacing the
-            // prefix let a peer send repeated `more=true` delivery ids without
-            // consuming credit and made the final continuation name whichever
-            // prefix happened to survive.
-            if (self.partial_id != null) {
+        if (self.partial_id) |partial_id| {
+            // §2.7.5 permits continuations to omit delivery-id or repeat the
+            // original value. Only a different id attempts to interleave a
+            // new delivery and is terminal.
+            if (t.delivery_id) |id| {
+                if (id != partial_id) {
+                    self.poisonAfterConsumedTransfer();
+                    return error.MalformedFrame;
+                }
+            }
+            if (t.aborted) {
+                self.clearPartialAndFree();
+                return;
+            }
+        } else {
+            if (t.delivery_id == null) {
                 self.poisonAfterConsumedTransfer();
                 return error.MalformedFrame;
             }
@@ -1465,20 +1476,12 @@ pub const Receiver = struct {
 
             self.partial_id = t.delivery_id.?;
             self.partial_settled = t.settled orelse false;
+            if (!self.partialReservationFits()) try self.refuseBufferLimit();
             if (t.delivery_tag) |tag| {
                 self.partial_tag.appendSlice(self.allocator, tag) catch |err| {
                     self.poisonAfterConsumedTransfer();
                     return err;
                 };
-            }
-        } else {
-            if (self.partial_id == null) {
-                self.poisonAfterConsumedTransfer();
-                return error.MalformedFrame;
-            }
-            if (t.aborted) {
-                self.clearPartialAndFree();
-                return;
             }
         }
 
@@ -1551,14 +1554,31 @@ pub const Receiver = struct {
     /// sender exceed the aggregate payload budget.
     fn byteCreditCapacity(self: *const Receiver) u32 {
         const limit = self.max_buffered_bytes orelse return std.math.maxInt(u32);
-        if (self.buffered_bytes >= limit) return 0;
-        const free = limit - self.buffered_bytes;
         // With no per-message bound, one delivery may consume the whole
         // aggregate budget. If the configured message limit is larger than
         // the aggregate budget, the aggregate limit remains authoritative.
         const reservation = @min(self.maxMessageSize() orelse limit, limit);
         if (reservation == 0) return 0;
+        const reserved = self.reservedBufferedBytes(reservation);
+        if (reserved >= limit) return 0;
+        const free = limit - reserved;
         return @intCast(@min(free / reservation, std.math.maxInt(u32)));
+    }
+
+    /// Ready deliveries consume their actual size. An in-progress delivery
+    /// reserves its full legal size: its current prefix plus the maximum
+    /// remaining continuation bytes. Consuming one credit and creating this
+    /// reservation are therefore a lossless exchange for a conforming peer.
+    fn reservedBufferedBytes(self: *const Receiver, message_size: u64) u64 {
+        const partial_bytes: u64 = @intCast(self.partial.items.len);
+        const ready_bytes = self.buffered_bytes -| partial_bytes;
+        return ready_bytes +| if (self.partial_id != null) message_size else 0;
+    }
+
+    fn partialReservationFits(self: *const Receiver) bool {
+        const limit = self.max_buffered_bytes orelse return true;
+        const message_size = self.maxMessageSize() orelse limit;
+        return self.reservedBufferedBytes(message_size) <= limit;
     }
 
     /// Grant `count` more credit to the peer.
@@ -1954,6 +1974,17 @@ fn expectReceiverAccounting(receiver: *const Receiver) !void {
     if (receiver.partial_id == null) {
         try testing.expectEqual(@as(usize, 0), receiver.partial.items.len);
     }
+    if (receiver.max_buffered_bytes) |budget| {
+        const message_size = receiver.maxMessageSize().?;
+        const partial_reservation: u128 =
+            if (receiver.partial_id != null) message_size else 0;
+        const ready_bytes = receiver.bufferedBytes() -|
+            @as(u64, @intCast(receiver.partial.items.len));
+        const authorised: u128 = @as(u128, ready_bytes) +
+            partial_reservation +
+            @as(u128, receiver.credit) * @as(u128, message_size);
+        try testing.expect(authorised <= budget);
+    }
 }
 
 test "a sender attaches and reports the peer's max-message-size" {
@@ -2236,6 +2267,59 @@ test "a socket failure after the first frame poisons the sender" {
     const before = mem.written().len;
     try testing.expectError(error.LinkDetached, sender.sendBytesAsync("new", .{}, 10_000));
     try testing.expectEqual(before, mem.written().len);
+}
+
+test "an opening frame emission failure closes the transport and poisons the sender" {
+    const Failure = enum { header, body, flush };
+    inline for (std.meta.tags(Failure)) |failure| {
+        const allocator = testing.allocator;
+        var mem = MemoryTransport.init(allocator);
+        defer mem.deinit();
+        var clock: connection.ManualClock = .{};
+        const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+        try scriptSenderAttach(peer, 5);
+
+        var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+        defer driver.deinit();
+        var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+        defer fixture.deinit();
+
+        const sender = try openSender(&fixture.session, .{
+            .name = "producer",
+            .target_address = "eh",
+        }, 10_000);
+
+        mem.clearWritten();
+        switch (failure) {
+            .header => mem.fail_write_after = mem.write_count,
+            .body => mem.fail_write_after = mem.write_count + 1,
+            .flush => mem.fail_flush = true,
+        }
+        try testing.expectError(
+            error.WriteFailed,
+            sender.sendBytesAsync("opening frame", .{}, 10_000),
+        );
+
+        try testing.expectEqual(connection.State.err, driver.state);
+        try testing.expect(mem.closed);
+        try testing.expectEqual(@as(usize, 0), mem.pending.items.len);
+        try testing.expectEqual(@as(usize, 0), mem.written().len);
+        try testing.expect(sender.poisoned);
+        try testing.expect(!sender.attached);
+        try testing.expectEqual(@as(u32, 0), sender.delivery_count);
+        try testing.expectEqual(@as(u32, 5), sender.credit);
+        try testing.expectEqual(@as(usize, 0), sender.inFlight());
+
+        mem.fail_write_after = null;
+        mem.fail_flush = false;
+        try testing.expectError(
+            error.LinkDetached,
+            sender.sendBytesAsync("must not be reused", .{}, 10_000),
+        );
+        try testing.expectEqual(@as(usize, 0), mem.pending.items.len);
+        try testing.expectEqual(@as(usize, 0), mem.written().len);
+    }
 }
 
 test "a poisoned sender ignores late attach and must be removed before replacement" {
@@ -6729,6 +6813,81 @@ test "aggregate budget caps credit and replenishes as deliveries leave the queue
     try testing.expectEqual(@as(u32, 3), decoded.performative.flow.link_credit.?);
 }
 
+test "an in-progress delivery reserves its remaining maximum before credit top-up" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 0,
+        .delivery_tag = "t",
+        .more = true,
+    }, "1");
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 0,
+        .settled = true,
+    }, "234567890");
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "partition/0",
+        .prefetch = 2,
+        .max_message_size = 10,
+        .max_buffered_bytes = 16,
+    }, 10_000);
+    // Only one maximum-sized delivery initially fits.
+    try testing.expectEqual(@as(u32, 1), receiver.credit);
+
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(u64, 1), receiver.bufferedBytes());
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    try expectReceiverAccounting(receiver);
+
+    // The one-byte prefix still reserves all ten bytes that this delivery may
+    // legally reach, leaving only six bytes: not enough for another credit.
+    mem.clearWritten();
+    try receiver.issueCredit(1);
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    try expectReceiverAccounting(receiver);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const flows = try frames.of(allocator, perf.descriptor.flow);
+    defer allocator.free(flows);
+    try testing.expectEqual(@as(usize, 1), flows.len);
+    var decoded = try perf.decode(allocator, flows[0]);
+    defer decoded.deinit();
+    try testing.expectEqual(@as(u32, 0), decoded.performative.flow.link_credit.?);
+
+    // Continuations consume no additional link credit, so the conforming peer
+    // can complete the already authorised delivery.
+    const delivery = try receiver.receive(10_000);
+    try testing.expectEqualStrings("1234567890", delivery.payload);
+    try testing.expectEqual(@as(u64, 0), receiver.bufferedBytes());
+
+    // Once the completed delivery leaves the queue, its reservation is
+    // released and a new maximum-sized delivery can be authorised.
+    try receiver.issueCredit(1);
+    try testing.expectEqual(@as(u32, 1), receiver.credit);
+    try expectReceiverAccounting(receiver);
+}
+
 test "a credit-ignoring sender cannot cross the aggregate buffered budget" {
     const allocator = testing.allocator;
     var mem = MemoryTransport.init(allocator);
@@ -6789,7 +6948,7 @@ test "a credit-ignoring sender cannot cross the aggregate buffered budget" {
     );
 }
 
-test "aggregate budget releases an in-progress delivery when it is exceeded" {
+test "aggregate budget rejects an unreserved in-progress delivery before retaining it" {
     const allocator = testing.allocator;
     var mem = MemoryTransport.init(allocator);
     defer mem.deinit();
@@ -6831,15 +6990,20 @@ test "aggregate budget releases an in-progress delivery when it is exceeded" {
     }, 10_000);
 
     _ = try fixture.session.pump(10_000);
-    _ = try fixture.session.pump(10_000);
-    try testing.expectEqual(@as(u64, 13), receiver.bufferedBytes());
-    try expectReceiverAccounting(receiver);
     try testing.expectError(error.BufferLimitExceeded, fixture.session.pump(10_000));
     try testing.expectEqual(@as(u64, 8), receiver.bufferedBytes());
     try testing.expectEqual(@as(usize, 1), receiver.ready.items.len);
     try testing.expectEqual(@as(usize, 0), receiver.partial.capacity);
+    try testing.expectEqual(@as(u32, 2), receiver.delivery_count);
+    try testing.expectEqual(@as(u32, 1), receiver.overrun);
     try expectReceiverAccounting(receiver);
     try testing.expect(!receiver.attached);
+
+    // The continuation for the rejected delivery is discarded as a straggler
+    // and cannot change the retained accounting.
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(u64, 8), receiver.bufferedBytes());
+    try expectReceiverAccounting(receiver);
 }
 
 test "an aborted multi-frame delivery consumes credit once and is not queued" {
@@ -6904,6 +7068,112 @@ test "an aborted multi-frame delivery consumes credit once and is not queued" {
     const delivery = try receiver.receive(10_000);
     try testing.expectEqual(@as(u32, 1), delivery.id);
     try testing.expectEqualStrings("good", delivery.payload);
+}
+
+test "continuations may repeat the original delivery id without consuming credit" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 7,
+        .delivery_tag = "tag",
+        .more = true,
+    }, "first-");
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 7,
+        .more = true,
+    }, "second-");
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 7,
+        .settled = true,
+    }, "third");
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "partition/0",
+        .prefetch = 1,
+        .max_message_size = 32,
+        .max_buffered_bytes = 32,
+    }, 10_000);
+
+    _ = try fixture.session.pump(10_000);
+    _ = try fixture.session.pump(10_000);
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(u32, 1), receiver.delivery_count);
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    try expectReceiverAccounting(receiver);
+
+    const delivery = try receiver.receive(10_000);
+    try testing.expectEqual(@as(u32, 7), delivery.id);
+    try testing.expectEqualStrings("first-second-third", delivery.payload);
+    try testing.expectEqualStrings("tag", delivery.tag);
+}
+
+test "an aborted continuation may repeat the original delivery id" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 3,
+        .delivery_tag = "a",
+        .more = true,
+    }, "prefix");
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 3,
+        .aborted = true,
+    }, "ignored");
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "partition/0",
+        .prefetch = 1,
+        .max_message_size = 16,
+        .max_buffered_bytes = 16,
+    }, 10_000);
+
+    _ = try fixture.session.pump(10_000);
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(u32, 1), receiver.delivery_count);
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    try testing.expectEqual(@as(u64, 0), receiver.bufferedBytes());
+    try testing.expectEqual(@as(?u32, null), receiver.partial_id);
+    try testing.expect(receiver.attached);
+    try expectReceiverAccounting(receiver);
 }
 
 test "a new delivery id cannot replace an unfinished delivery or bypass credit" {
