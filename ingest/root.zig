@@ -94,18 +94,21 @@ pub const ManagedIngestClient = managed.ManagedIngestClient;
 // ─────────────────────── Tests ───────────────────────
 
 const TransportFailure = struct {
-    transport: core.http.HttpTransport = .{ .sendFn = &send, .openFn = &open },
+    const vtable: core.http.HttpTransport.VTable = .{
+        .send = &send,
+        .open = &open,
+    };
 
-    fn asTransport(self: *TransportFailure) *core.http.HttpTransport {
-        return &self.transport;
+    fn asTransport(self: *TransportFailure) core.http.HttpTransport {
+        return .{ .context = self, .vtable = &vtable };
     }
 
-    fn send(_: *core.http.HttpTransport, _: *core.http.Request) anyerror!core.http.Response {
+    fn send(_: *anyopaque, _: *core.http.Request) anyerror!core.http.Response {
         return error.ConnectionResetByPeer;
     }
 
     fn open(
-        _: *core.http.HttpTransport,
+        _: *anyopaque,
         _: *core.http.Request,
         _: core.http.OpenOptions,
     ) anyerror!*core.http.HttpOperation {
@@ -113,13 +116,41 @@ const TransportFailure = struct {
     }
 };
 
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+fn testRuntime(transport: core.http.HttpTransport) core.http.HttpRuntime {
+    return core.http.HttpRuntime.init(transport, testing_crypto_provider.asProvider());
+}
+
+var testing_token_credential = core.credentials.TokenCredential{
+    .getTokenFn = &successfulTokenRequest,
+};
+
+fn testConnection(
+    allocator: std.mem.Allocator,
+    cluster_url: []const u8,
+    runtime: core.http.HttpRuntime,
+) !*KustoConnection {
+    return KustoConnection.init(
+        allocator,
+        .{
+            .cluster_url = cluster_url,
+            .credential = &testing_token_credential,
+        },
+        runtime,
+        .{ .metadata_mode = .disabled },
+    );
+}
+
 test "StreamingIngestClient ingestFromSlice" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 200, "{}");
     defer mock.deinit();
 
     const conn = ConnectionProperties{ .cluster_url = "https://mycluster.eastus.kusto.windows.net" };
-    var client = StreamingIngestClient.init(conn, mock.asTransport());
+    const connection = try testConnection(allocator, conn.cluster_url, testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = StreamingIngestClient.init(connection);
 
     var result = try client.ingestFromSlice(allocator, "TestDB", "Logs", "{\"ts\":\"2024-01-01\"}\n", .{
         .format = .json,
@@ -138,7 +169,9 @@ test "StreamingIngestClient with mapping name" {
     defer mock.deinit();
 
     const conn = ConnectionProperties{ .cluster_url = "https://cluster.kusto.windows.net" };
-    var client = StreamingIngestClient.init(conn, mock.asTransport());
+    const connection = try testConnection(allocator, conn.cluster_url, testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = StreamingIngestClient.init(connection);
 
     var result = try client.ingestFromSlice(allocator, "DB", "Table", "data", .{
         .format = .csv,
@@ -151,38 +184,26 @@ test "StreamingIngestClient with mapping name" {
 
 test "shared StreamingIngestClient authenticates through KustoConnection" {
     const allocator = std.testing.allocator;
-    var token_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"shared-token","expires_in":3600}
-    );
-    defer token_mock.deinit();
     var service_mock = core.http.MockTransport.init(allocator, 200, "{}");
     defer service_mock.deinit();
 
-    const identity = core.identity;
-    var credential = identity.ClientSecretCredential.init(
-        allocator,
-        token_mock.asTransport(),
-        "tenant",
-        "client",
-        "secret",
-    );
+    var credential = core.credentials.TokenCredential{ .getTokenFn = &successfulTokenRequest };
     const properties = ConnectionProperties{
         .cluster_url = "https://cluster.kusto.windows.net",
-        .credential = credential.asCredential(),
+        .credential = &credential,
     };
     const connection = try KustoConnection.init(
         allocator,
         properties,
-        service_mock.asTransport(),
+        testRuntime(service_mock.asTransport()),
         .{ .metadata_mode = .disabled },
     );
     defer connection.deinit();
 
-    var client = StreamingIngestClient.initWithConnection(connection);
+    var client = StreamingIngestClient.init(connection);
     var result = try client.ingestFromSlice(allocator, "DB", "Table", "data", .{});
     defer result.deinit(allocator);
     try std.testing.expectEqual(IngestionStatus.success, result.status);
-    try std.testing.expect(token_mock.last_url != null);
     try std.testing.expect(service_mock.last_headers.get("Authorization") != null);
     try std.testing.expectEqual(false, service_mock.last_retryable.?);
 }
@@ -200,7 +221,7 @@ test "shared StreamingIngestClient uses explicit engine endpoint" {
     const connection = try KustoConnection.init(
         allocator,
         properties,
-        service_mock.asTransport(),
+        testRuntime(service_mock.asTransport()),
         .{
             .metadata_mode = .disabled,
             .engine_endpoint = "https://streaming-engine.kusto.windows.net",
@@ -209,7 +230,7 @@ test "shared StreamingIngestClient uses explicit engine endpoint" {
     );
     defer connection.deinit();
 
-    var client = StreamingIngestClient.initWithConnection(connection);
+    var client = StreamingIngestClient.init(connection);
     var result = try client.ingestFromSlice(allocator, "DB", "Table", "data", .{});
     defer result.deinit(allocator);
 
@@ -233,12 +254,12 @@ test "shared StreamingIngestClient can be copied" {
     const connection = try KustoConnection.init(
         allocator,
         properties,
-        service_mock.asTransport(),
+        testRuntime(service_mock.asTransport()),
         .{ .metadata_mode = .disabled },
     );
     defer connection.deinit();
 
-    const original = StreamingIngestClient.initWithConnection(connection);
+    const original = StreamingIngestClient.init(connection);
     var copied = original;
     var result = try copied.ingestFromSlice(allocator, "DB", "Table", "data", .{});
     defer result.deinit(allocator);
@@ -258,12 +279,12 @@ test "ManagedIngestClient shared initialization composes borrowed clients" {
     const connection = try KustoConnection.init(
         allocator,
         properties,
-        service_mock.asTransport(),
+        testRuntime(service_mock.asTransport()),
         .{ .metadata_mode = .disabled },
     );
     defer connection.deinit();
 
-    var client = ManagedIngestClient.initWithConnection(connection);
+    var client = ManagedIngestClient.init(connection, null);
     defer client.deinit(allocator);
     var result = try client.ingestFromSlice(allocator, "DB", "Table", "data", .{});
     defer result.deinit(allocator);
@@ -286,12 +307,12 @@ test "shared connection retries replayable streaming bytes outside generic pipel
     const connection = try KustoConnection.init(
         allocator,
         properties,
-        service_mock.asTransport(),
+        testRuntime(service_mock.asTransport()),
         .{ .metadata_mode = .disabled },
     );
     defer connection.deinit();
 
-    var client = StreamingIngestClient.initWithConnection(connection);
+    var client = StreamingIngestClient.init(connection);
     const result = try client.ingestFromSlice(allocator, "DB", "Table", "data", .{
         .retry = .{ .initial_delay_ms = 0 },
     });
@@ -308,7 +329,9 @@ test "StreamingIngestClient percent-encodes URL components independently" {
     defer mock.deinit();
 
     const conn = ConnectionProperties{ .cluster_url = "https://cluster.kusto.windows.net" };
-    var client = StreamingIngestClient.init(conn, mock.asTransport());
+    const connection = try testConnection(allocator, conn.cluster_url, testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = StreamingIngestClient.init(connection);
 
     var result = try client.ingestFromSlice(allocator, "DB /&?=+", "Table /&?=+", "data", .{
         .mapping_name = "Mapping /&?=+",
@@ -328,7 +351,9 @@ test "StreamingIngestClient failure" {
     defer mock.deinit();
 
     const conn = ConnectionProperties{ .cluster_url = "https://cluster.kusto.windows.net" };
-    var client = StreamingIngestClient.init(conn, mock.asTransport());
+    const connection = try testConnection(allocator, conn.cluster_url, testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = StreamingIngestClient.init(connection);
 
     const result = try client.ingestFromSlice(allocator, "DB", "Table", "bad", .{});
     try std.testing.expectEqual(IngestionStatus.failed, result.status);
@@ -341,10 +366,9 @@ test "streaming non-2xx is known not accepted" {
         \\{"error":{"code":"BadRequest","message":"Invalid data"}}
     );
     defer mock.deinit();
-    var client = StreamingIngestClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        mock.asTransport(),
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = StreamingIngestClient.init(connection);
 
     var result = try client.ingestFromSliceResult(allocator, "DB", "Table", "bad", .{});
     defer result.deinit(allocator);
@@ -361,6 +385,7 @@ fn unexpectedTokenRequest(
     _: *core.credentials.TokenCredential,
     _: core.credentials.TokenRequestContext,
     _: core.context.Context,
+    _: core.http.HttpRuntime,
 ) anyerror!core.credentials.AccessToken {
     return error.UnexpectedTokenRequest;
 }
@@ -369,6 +394,7 @@ fn successfulTokenRequest(
     _: *core.credentials.TokenCredential,
     _: core.credentials.TokenRequestContext,
     _: core.context.Context,
+    _: core.http.HttpRuntime,
 ) anyerror!core.credentials.AccessToken {
     return .{
         .token = "shared-token",
@@ -376,32 +402,12 @@ fn successfulTokenRequest(
     };
 }
 
-test "legacy authenticated StreamingIngestClient requires shared connection" {
-    const allocator = std.testing.allocator;
-    var mock = core.http.MockTransport.init(allocator, 200, "{}");
-    defer mock.deinit();
-
-    var credential = core.credentials.TokenCredential{ .getTokenFn = &unexpectedTokenRequest };
-    const conn = ConnectionProperties{
-        .cluster_url = "https://cluster.kusto.windows.net",
-        .credential = &credential,
-    };
-    var client = StreamingIngestClient.init(conn, mock.asTransport());
-
-    try std.testing.expectError(
-        error.AuthenticatedConnectionRequired,
-        client.ingestFromSliceResult(allocator, "DB", "Table", "data", .{}),
-    );
-    try std.testing.expect(mock.last_url == null);
-}
-
 test "streaming transport failure has unknown outcome after transport entry" {
     const allocator = std.testing.allocator;
     var failing_transport = TransportFailure{};
-    var client = StreamingIngestClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        failing_transport.asTransport(),
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(failing_transport.asTransport()));
+    defer connection.deinit();
+    var client = StreamingIngestClient.init(connection);
 
     var result = try client.ingestFromSliceResult(allocator, "DB", "Table", "data", .{});
     defer result.deinit(allocator);
@@ -420,10 +426,13 @@ test "streaming transport failure has unknown outcome after transport entry" {
 test "managed ingestion does not fall back after an unknown outcome" {
     const allocator = std.testing.allocator;
     var failing_transport = TransportFailure{};
-    var client = ManagedIngestClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        failing_transport.asTransport(),
+    const connection = try testConnection(
+        allocator,
+        "https://cluster.kusto.windows.net",
+        testRuntime(failing_transport.asTransport()),
     );
+    defer connection.deinit();
+    var client = ManagedIngestClient.init(connection, null);
     defer client.deinit(allocator);
 
     var result = try client.ingestFromSliceResult(allocator, "DB", "Table", "data", .{});
@@ -458,8 +467,7 @@ test "QueuedIngestClient requires a resource manager" {
     var mock = core.http.MockTransport.init(allocator, 200, "{}");
     defer mock.deinit();
 
-    const conn = ConnectionProperties{ .cluster_url = "https://mycluster.eastus.kusto.windows.net" };
-    var client = QueuedIngestClient.init(conn, mock.asTransport());
+    var client = QueuedIngestClient.init(testRuntime(mock.asTransport()), .{});
     defer client.deinit(allocator);
 
     const properties = IngestionProperties{
@@ -484,8 +492,13 @@ test "ManagedIngestClient ingestFromSlice success" {
     var mock = core.http.MockTransport.init(allocator, 200, "{}");
     defer mock.deinit();
 
-    const conn = ConnectionProperties{ .cluster_url = "https://cluster.kusto.windows.net" };
-    var client = ManagedIngestClient.init(conn, mock.asTransport());
+    const connection = try testConnection(
+        allocator,
+        "https://cluster.kusto.windows.net",
+        testRuntime(mock.asTransport()),
+    );
+    defer connection.deinit();
+    var client = ManagedIngestClient.init(connection, null);
     defer client.deinit(allocator);
 
     var result = try client.ingestFromSlice(allocator, "DB", "Table", "data", .{});
@@ -500,8 +513,13 @@ test "ManagedIngestClient no longer returns unimplemented fallback" {
     );
     defer mock.deinit();
 
-    const conn = ConnectionProperties{ .cluster_url = "https://cluster.kusto.windows.net" };
-    var client = ManagedIngestClient.init(conn, mock.asTransport());
+    const connection = try testConnection(
+        allocator,
+        "https://cluster.kusto.windows.net",
+        testRuntime(mock.asTransport()),
+    );
+    defer connection.deinit();
+    var client = ManagedIngestClient.init(connection, null);
     defer client.deinit(allocator);
 
     try std.testing.expectError(

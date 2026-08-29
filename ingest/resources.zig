@@ -333,11 +333,11 @@ pub const ResourceCommandExecutor = struct {
 pub const DataManagementCommandExecutor = struct {
     connection: *kusto_common.KustoConnection,
     application_name: []const u8 = "azure-sdk-zig",
-    client_version: []const u8 = "azsdk-zig-kusto/0.1.0",
+    client_version: []const u8 = "azsdk-zig-kusto/0.2.0",
 
     pub const supports_concurrent_use = false;
 
-    pub fn initWithConnection(connection: *kusto_common.KustoConnection) DataManagementCommandExecutor {
+    pub fn init(connection: *kusto_common.KustoConnection) DataManagementCommandExecutor {
         return .{ .connection = connection };
     }
 
@@ -375,7 +375,7 @@ pub const DataManagementCommandExecutor = struct {
         try request.setHeader("x-ms-app", self.application_name);
         try request.setHeader("x-ms-client-version", self.client_version);
         try request.setHeader("x-ms-version", "2024-12-12");
-        try core.pipeline.ensureRequestId(&request);
+        try core.http.ensureRequestId(&request, self.connection.runtime);
         request.operation_timeout_ms = try properties.effectiveClientTimeoutMs(.management);
         request.body = body;
         // Discovery commands are read-only but intentionally non-retryable:
@@ -1629,6 +1629,12 @@ fn expectLease(result: *ResourceSnapshotResult) !*ResourceSnapshotLease {
     };
 }
 
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+fn testRuntime(transport: core.http.HttpTransport) core.http.HttpRuntime {
+    return core.http.HttpRuntime.init(transport, testing_crypto_provider.asProvider());
+}
+
 test "resource manager decodes complete V1 resources by names and redacts secrets" {
     const allocator = std.testing.allocator;
     var clock = TestClock{};
@@ -1673,6 +1679,7 @@ fn resourceTestToken(
     _: *core.credentials.TokenCredential,
     _: core.credentials.TokenRequestContext,
     _: core.context.Context,
+    _: core.http.HttpRuntime,
 ) anyerror!core.credentials.AccessToken {
     return .{ .token = "resource-manager-test-token", .expires_on = std.math.maxInt(i64) };
 }
@@ -1688,14 +1695,14 @@ test "data-management executor authenticates requests at the DM endpoint without
             .cluster_url = "https://cluster.kusto.windows.net",
             .credential = &credential,
         },
-        mock.asTransport(),
+        testRuntime(mock.asTransport()),
         .{
             .metadata_mode = .disabled,
             .data_management_endpoint = "https://ingest-dm.kusto.windows.net",
         },
     );
     defer connection.deinit();
-    var command_executor = DataManagementCommandExecutor.initWithConnection(connection);
+    var command_executor = DataManagementCommandExecutor.init(connection);
     var result = try command_executor.asExecutor().execute(
         allocator,
         "db",

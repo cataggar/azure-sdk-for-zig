@@ -319,17 +319,18 @@ pub const KustoConnectionOptions = struct {
     additional_trusted_hosts: []const []const u8 = &.{},
     /// The connection never changes or inspects the credential's authority;
     /// configure any credential authority when constructing that credential.
-    user_agent: []const u8 = "azsdk-zig-kusto/0.1.0",
+    user_agent: []const u8 = "azsdk-zig-kusto/0.2.0",
     retry: KustoRetryOptions = .{},
 };
 
 /// Allocator-owned, stable HTTP connection shared by Kusto service clients.
 ///
-/// The credential and transport are borrowed and must outlive this connection.
-/// This connection must outlive all derived clients and their in-flight
-/// requests. `HttpTransport` and the authentication cache are not thread-safe,
-/// so callers must externally serialize use of this connection and its derived
-/// clients.
+/// The credential is borrowed and must outlive this connection. This
+/// connection must outlive all derived clients and their in-flight requests.
+/// The runtime is copied by value and borrows its transport and
+/// crypto contexts; both contexts, the credential, and any open operations
+/// must outlive this connection. Callers must externally serialize use when
+/// any borrowed backend context is not concurrent-safe.
 pub const KustoConnection = struct {
     allocator: std.mem.Allocator,
     /// Engine endpoint retained under its #46 field name for source compatibility.
@@ -339,15 +340,15 @@ pub const KustoConnection = struct {
     user_agent: []u8,
     cloud_info: ?KustoCloudInfo,
     credential: *core.credentials.TokenCredential,
-    transport: *core.http.HttpTransport,
+    runtime: core.http.HttpRuntime,
     scopes: [1][]const u8,
-    request_id: core.pipeline.RequestIdPolicy,
-    telemetry: core.pipeline.TelemetryPolicy,
-    retry: core.pipeline.RetryPolicy,
-    auth: core.pipeline.BearerTokenAuthPolicy,
-    decompression: core.decompression.DecompressionPolicy,
-    policies: [5]*core.pipeline.HttpPolicy,
-    pipeline: core.pipeline.HttpPipeline,
+    request_id: core.http.RequestIdPolicy,
+    telemetry: core.http.TelemetryPolicy,
+    retry: core.http.RetryPolicy,
+    auth: core.http.BearerTokenAuthPolicy,
+    decompression: core.http.DecompressionPolicy,
+    policies: [5]*core.http.HttpPolicy,
+    pipeline: core.http.HttpPipeline,
 
     /// This type has mutable policy state and requires external serialization.
     pub const supports_concurrent_use = false;
@@ -355,7 +356,7 @@ pub const KustoConnection = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         properties: ConnectionProperties,
-        transport: *core.http.HttpTransport,
+        runtime: core.http.HttpRuntime,
         options: KustoConnectionOptions,
     ) !*KustoConnection {
         if (properties.application_key != null or
@@ -385,7 +386,7 @@ pub const KustoConnection = struct {
                 }
             }
             if (resolved_cloud_info == null) {
-                var fetched = try discoverCloudInfo(allocator, transport, normalized_engine);
+                var fetched = try discoverCloudInfo(allocator, runtime, normalized_engine);
                 errdefer fetched.deinit(allocator);
                 try validateCloudInfo(&fetched);
                 resolved_cloud_info = fetched;
@@ -447,20 +448,20 @@ pub const KustoConnection = struct {
         self.cloud_info = resolved_cloud_info;
         resolved_cloud_info = null;
         self.credential = credential;
-        self.transport = transport;
+        self.runtime = runtime;
         self.scopes = .{self.token_scope};
-        self.request_id = core.pipeline.RequestIdPolicy.init();
-        self.telemetry = core.pipeline.TelemetryPolicy.init(self.user_agent);
-        self.retry = core.pipeline.RetryPolicy.init();
+        self.request_id = core.http.RequestIdPolicy.init();
+        self.telemetry = core.http.TelemetryPolicy.init(self.user_agent);
+        self.retry = core.http.RetryPolicy.init();
         self.retry.max_retries = options.retry.max_retries;
         self.retry.initial_delay_ms = options.retry.initial_delay_ms;
         self.retry.max_delay_ms = options.retry.max_delay_ms;
-        self.auth = core.pipeline.BearerTokenAuthPolicy.init(
+        self.auth = core.http.BearerTokenAuthPolicy.init(
             allocator,
             credential,
             &self.scopes,
         );
-        self.decompression = core.decompression.DecompressionPolicy.init();
+        self.decompression = core.http.DecompressionPolicy.init();
         self.policies = .{
             self.request_id.asPolicy(),
             self.telemetry.asPolicy(),
@@ -468,10 +469,7 @@ pub const KustoConnection = struct {
             self.auth.asPolicy(),
             self.decompression.asPolicy(),
         };
-        self.pipeline = .{
-            .policies = &self.policies,
-            .transport_impl = transport,
-        };
+        self.pipeline = core.http.HttpPipeline.init(runtime, &self.policies);
         return self;
     }
 
@@ -677,7 +675,11 @@ fn isAdditionalHost(host: []const u8, additional_hosts: []const []const u8) bool
     return false;
 }
 
-fn discoverCloudInfo(allocator: std.mem.Allocator, transport: *core.http.HttpTransport, engine_url: []const u8) !KustoCloudInfo {
+fn discoverCloudInfo(
+    allocator: std.mem.Allocator,
+    runtime: core.http.HttpRuntime,
+    engine_url: []const u8,
+) !KustoCloudInfo {
     const metadata_url = try std.fmt.allocPrint(allocator, "{s}/v1/rest/auth/metadata", .{engine_url});
     defer allocator.free(metadata_url);
     var request = core.http.Request.init(allocator, .GET, metadata_url);
@@ -686,7 +688,8 @@ fn discoverCloudInfo(allocator: std.mem.Allocator, transport: *core.http.HttpTra
     request.redirect_policy = .not_allowed;
     try request.setHeader("Accept", "application/json");
     try request.setHeader("Accept-Encoding", "gzip, deflate");
-    var response = try transport.send(&request);
+    var pipeline = core.http.HttpPipeline.init(runtime, &.{});
+    var response = try pipeline.send(&request);
     defer response.deinit();
 
     const body = std.mem.trim(u8, response.body, " \t\r\n");
@@ -1487,6 +1490,7 @@ const TestTokenCredential = struct {
         credential: *core.credentials.TokenCredential,
         request_context: core.credentials.TokenRequestContext,
         _: core.context.Context,
+        _: core.http.HttpRuntime,
     ) anyerror!core.credentials.AccessToken {
         const self: *TestTokenCredential = @alignCast(@fieldParentPtr("credential", credential));
         self.call_count += 1;
@@ -1500,10 +1504,10 @@ const TestTokenCredential = struct {
 
 const DiscoveryTestTransport = struct {
     const CannedResponse = struct { status: u16, body: []const u8 };
+    const vtable: core.http.HttpTransport.VTable = .{ .send = &send };
 
     allocator: std.mem.Allocator,
     responses: []const CannedResponse,
-    transport: core.http.HttpTransport,
     call_count: usize = 0,
     bootstrap_has_authorization: ?bool = null,
     bootstrap_retryable: ?bool = null,
@@ -1515,16 +1519,15 @@ const DiscoveryTestTransport = struct {
         return .{
             .allocator = allocator,
             .responses = responses,
-            .transport = .{ .sendFn = &send },
         };
     }
 
-    fn asTransport(self: *DiscoveryTestTransport) *core.http.HttpTransport {
-        return &self.transport;
+    fn asTransport(self: *DiscoveryTestTransport) core.http.HttpTransport {
+        return .{ .context = self, .vtable = &vtable };
     }
 
-    fn send(transport: *core.http.HttpTransport, request: *core.http.Request) !core.http.Response {
-        const self: *DiscoveryTestTransport = @alignCast(@fieldParentPtr("transport", transport));
+    fn send(context: *anyopaque, request: *core.http.Request) !core.http.Response {
+        const self: *DiscoveryTestTransport = @ptrCast(@alignCast(context));
         if (self.call_count == 0) {
             self.bootstrap_has_authorization = request.getHeader("Authorization") != null;
             self.bootstrap_retryable = request.retryable;
@@ -1548,6 +1551,12 @@ const public_metadata =
     \\{"AzureAD":{"LoginEndpoint":"https://login.microsoftonline.com","LoginMfaRequired":false,"KustoClientAppId":"app","KustoClientRedirectUri":"https://redirect","KustoServiceResourceId":"https://cluster.kusto.windows.net","FirstPartyAuthorityUrl":"https://authority"}}
 ;
 
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+fn testRuntime(transport: core.http.HttpTransport) core.http.HttpRuntime {
+    return core.http.HttpRuntime.init(transport, testing_crypto_provider.asProvider());
+}
+
 test "KustoConnection discovers metadata and bootstraps without authentication" {
     const allocator = std.testing.allocator;
     var transport = DiscoveryTestTransport.init(allocator, &.{
@@ -1558,7 +1567,7 @@ test "KustoConnection discovers metadata and bootstraps without authentication" 
     const connection = try KustoConnection.init(
         allocator,
         .{ .cluster_url = "https://cluster.kusto.windows.net", .credential = credential.asCredential() },
-        transport.asTransport(),
+        testRuntime(transport.asTransport()),
         .{},
     );
     defer connection.deinit();
@@ -1590,7 +1599,7 @@ test "KustoConnection derives MFA scope from metadata" {
     const connection = try KustoConnection.init(
         allocator,
         .{ .cluster_url = "https://cluster.kusto.windows.net", .credential = credential.asCredential() },
-        transport.asTransport(),
+        testRuntime(transport.asTransport()),
         .{},
     );
     defer connection.deinit();
@@ -1604,7 +1613,7 @@ test "KustoConnection uses public defaults for 404 and empty metadata" {
     const from_404 = try KustoConnection.init(
         allocator,
         .{ .cluster_url = "https://cluster.kusto.windows.net", .credential = credential.asCredential() },
-        missing.asTransport(),
+        testRuntime(missing.asTransport()),
         .{},
     );
     defer from_404.deinit();
@@ -1614,7 +1623,7 @@ test "KustoConnection uses public defaults for 404 and empty metadata" {
     const from_empty = try KustoConnection.init(
         allocator,
         .{ .cluster_url = "https://cluster.kusto.windows.net", .credential = credential.asCredential() },
-        empty.asTransport(),
+        testRuntime(empty.asTransport()),
         .{},
     );
     defer from_empty.deinit();
@@ -1628,28 +1637,28 @@ test "KustoConnection rejects malformed metadata and metadata failures" {
     try std.testing.expectError(error.MalformedKustoMetadata, KustoConnection.init(
         allocator,
         .{ .cluster_url = "https://cluster.kusto.windows.net", .credential = credential.asCredential() },
-        malformed.asTransport(),
+        testRuntime(malformed.asTransport()),
         .{},
     ));
     var empty_object = DiscoveryTestTransport.init(allocator, &.{.{ .status = 200, .body = "{}" }});
     try std.testing.expectError(error.MalformedKustoMetadata, KustoConnection.init(
         allocator,
         .{ .cluster_url = "https://cluster.kusto.windows.net", .credential = credential.asCredential() },
-        empty_object.asTransport(),
+        testRuntime(empty_object.asTransport()),
         .{},
     ));
     var failed = DiscoveryTestTransport.init(allocator, &.{.{ .status = 500, .body = "no" }});
     try std.testing.expectError(error.KustoMetadataRequestFailed, KustoConnection.init(
         allocator,
         .{ .cluster_url = "https://cluster.kusto.windows.net", .credential = credential.asCredential() },
-        failed.asTransport(),
+        testRuntime(failed.asTransport()),
         .{},
     ));
     var redirected = DiscoveryTestTransport.init(allocator, &.{.{ .status = 302, .body = "" }});
     try std.testing.expectError(error.KustoMetadataRequestFailed, KustoConnection.init(
         allocator,
         .{ .cluster_url = "https://cluster.kusto.windows.net", .credential = credential.asCredential() },
-        redirected.asTransport(),
+        testRuntime(redirected.asTransport()),
         .{},
     ));
 }
@@ -1663,7 +1672,7 @@ test "KustoConnection enforces authority keyed and custom endpoint trust" {
     const sovereign_connection = try KustoConnection.init(
         allocator,
         .{ .cluster_url = "https://cluster.kusto.usgovcloudapi.net", .credential = credential.asCredential() },
-        sovereign.asTransport(),
+        testRuntime(sovereign.asTransport()),
         .{},
     );
     defer sovereign_connection.deinit();
@@ -1674,7 +1683,7 @@ test "KustoConnection enforces authority keyed and custom endpoint trust" {
     try std.testing.expectError(error.UntrustedKustoEndpoint, KustoConnection.init(
         allocator,
         .{ .cluster_url = "https://cluster.kusto.windows.net", .credential = credential.asCredential() },
-        mismatch.asTransport(),
+        testRuntime(mismatch.asTransport()),
         .{},
     ));
 
@@ -1684,7 +1693,7 @@ test "KustoConnection enforces authority keyed and custom endpoint trust" {
     const custom_connection = try KustoConnection.init(
         allocator,
         .{ .cluster_url = "https://custom.example", .credential = credential.asCredential() },
-        custom.asTransport(),
+        testRuntime(custom.asTransport()),
         .{ .additional_trusted_hosts = &.{"custom.example"} },
     );
     defer custom_connection.deinit();
@@ -1695,7 +1704,7 @@ test "KustoConnection enforces authority keyed and custom endpoint trust" {
     const explicit_custom_dm = try KustoConnection.init(
         allocator,
         .{ .cluster_url = "https://custom.example", .credential = credential.asCredential() },
-        custom_dm_mock.asTransport(),
+        testRuntime(custom_dm_mock.asTransport()),
         .{
             .metadata_mode = .disabled,
             .data_management_endpoint = "https://custom-ingest.example",
@@ -1714,7 +1723,7 @@ test "KustoConnection honors explicit endpoints and derives ingest endpoint" {
     const explicit = try KustoConnection.init(
         allocator,
         .{ .cluster_url = "https://ignored.kusto.windows.net", .credential = credential.asCredential() },
-        mock.asTransport(),
+        testRuntime(mock.asTransport()),
         .{
             .metadata_mode = .disabled,
             .engine_endpoint = "https://query.kusto.windows.net/",
@@ -1730,7 +1739,7 @@ test "KustoConnection honors explicit endpoints and derives ingest endpoint" {
     const derived = try KustoConnection.init(
         allocator,
         .{ .cluster_url = "https://query.kusto.windows.net", .credential = credential.asCredential() },
-        mock.asTransport(),
+        testRuntime(mock.asTransport()),
         .{ .metadata_mode = .disabled },
     );
     defer derived.deinit();
@@ -1746,14 +1755,14 @@ test "KustoConnection caches successful metadata but retries failed discovery" {
     const first = try KustoConnection.init(
         allocator,
         .{ .cluster_url = "https://cluster.kusto.windows.net", .credential = credential.asCredential() },
-        cached_transport.asTransport(),
+        testRuntime(cached_transport.asTransport()),
         .{ .cloud_info_cache = &cache },
     );
     defer first.deinit();
     const second = try KustoConnection.init(
         allocator,
         .{ .cluster_url = "https://cluster.kusto.windows.net", .credential = credential.asCredential() },
-        cached_transport.asTransport(),
+        testRuntime(cached_transport.asTransport()),
         .{ .cloud_info_cache = &cache },
     );
     defer second.deinit();
@@ -1768,13 +1777,13 @@ test "KustoConnection caches successful metadata but retries failed discovery" {
     try std.testing.expectError(error.KustoMetadataRequestFailed, KustoConnection.init(
         allocator,
         .{ .cluster_url = "https://retry.kusto.windows.net", .credential = credential.asCredential() },
-        retry_transport.asTransport(),
+        testRuntime(retry_transport.asTransport()),
         .{ .cloud_info_cache = &retry_cache },
     ));
     const retried = try KustoConnection.init(
         allocator,
         .{ .cluster_url = "https://retry.kusto.windows.net", .credential = credential.asCredential() },
-        retry_transport.asTransport(),
+        testRuntime(retry_transport.asTransport()),
         .{ .cloud_info_cache = &retry_cache },
     );
     defer retried.deinit();
@@ -1791,13 +1800,13 @@ test "KustoConnection caches successful metadata but retries failed discovery" {
     try std.testing.expectError(error.UntrustedKustoEndpoint, KustoConnection.init(
         allocator,
         .{ .cluster_url = "https://cluster.kusto.windows.net", .credential = credential.asCredential() },
-        untrusted_then_valid.asTransport(),
+        testRuntime(untrusted_then_valid.asTransport()),
         .{ .cloud_info_cache = &trust_cache },
     ));
     const trusted_retry = try KustoConnection.init(
         allocator,
         .{ .cluster_url = "https://cluster.kusto.windows.net", .credential = credential.asCredential() },
-        untrusted_then_valid.asTransport(),
+        testRuntime(untrusted_then_valid.asTransport()),
         .{ .cloud_info_cache = &trust_cache },
     );
     defer trusted_retry.deinit();
@@ -1812,7 +1821,7 @@ test "KustoConnection authenticates only validated service origins" {
     const connection = try KustoConnection.init(
         allocator,
         .{ .cluster_url = "https://cluster.kusto.windows.net", .credential = credential.asCredential() },
-        mock.asTransport(),
+        testRuntime(mock.asTransport()),
         .{ .metadata_mode = .disabled },
     );
     defer connection.deinit();
@@ -1849,7 +1858,7 @@ test "KustoConnection owns normalized configuration" {
             .cluster_url = cluster_url[0..],
             .credential = credential.asCredential(),
         },
-        mock.asTransport(),
+        testRuntime(mock.asTransport()),
         .{
             .token_scope = token_scope[0..],
             .user_agent = user_agent[0..],
@@ -1876,7 +1885,7 @@ test "KustoConnection rejects unsupported and missing authentication" {
         KustoConnection.init(
             allocator,
             .{ .cluster_url = "https://cluster.kusto.windows.net", .application_key = "secret" },
-            mock.asTransport(),
+            testRuntime(mock.asTransport()),
             .{ .metadata_mode = .disabled },
         ),
     );
@@ -1885,7 +1894,7 @@ test "KustoConnection rejects unsupported and missing authentication" {
         KustoConnection.init(
             allocator,
             .{ .cluster_url = "https://cluster.kusto.windows.net", .application_client_id = "client-id" },
-            mock.asTransport(),
+            testRuntime(mock.asTransport()),
             .{ .metadata_mode = .disabled },
         ),
     );
@@ -1894,7 +1903,7 @@ test "KustoConnection rejects unsupported and missing authentication" {
         KustoConnection.init(
             allocator,
             .{ .cluster_url = "https://cluster.kusto.windows.net", .authority_id = "tenant-id" },
-            mock.asTransport(),
+            testRuntime(mock.asTransport()),
             .{},
         ),
     );
@@ -1903,7 +1912,7 @@ test "KustoConnection rejects unsupported and missing authentication" {
         KustoConnection.init(
             allocator,
             .{ .cluster_url = "https://cluster.kusto.windows.net" },
-            mock.asTransport(),
+            testRuntime(mock.asTransport()),
             .{},
         ),
     );
@@ -1930,7 +1939,7 @@ test "Kusto connection formatting omits authentication material" {
     const connection = try KustoConnection.init(
         allocator,
         .{ .cluster_url = properties.cluster_url, .credential = credential.asCredential() },
-        mock.asTransport(),
+        testRuntime(mock.asTransport()),
         .{ .metadata_mode = .disabled },
     );
     defer connection.deinit();
@@ -1949,7 +1958,7 @@ test "KustoConnection sends authenticated request with default and override scop
     const connection = try KustoConnection.init(
         allocator,
         .{ .cluster_url = "https://cluster.kusto.windows.net", .credential = credential.asCredential() },
-        mock.asTransport(),
+        testRuntime(mock.asTransport()),
         .{ .metadata_mode = .disabled },
     );
     defer connection.deinit();
@@ -1962,7 +1971,7 @@ test "KustoConnection sends authenticated request with default and override scop
     try std.testing.expectEqual(@as(u32, 1), credential.call_count);
     try std.testing.expectEqualStrings("https://kusto.kusto.windows.net/.default", credential.last_scope.?);
     try std.testing.expect(std.mem.endsWith(u8, mock.last_headers.get("Authorization").?, "connection-test-token"));
-    try std.testing.expectEqualStrings("azsdk-zig-kusto/0.1.0", mock.last_headers.get("User-Agent").?);
+    try std.testing.expectEqualStrings("azsdk-zig-kusto/0.2.0", mock.last_headers.get("User-Agent").?);
     try std.testing.expectEqualStrings("gzip, deflate", mock.last_headers.get("Accept-Encoding").?);
     const request_id = mock.last_headers.get("x-ms-client-request-id").?;
     try std.testing.expectEqual(@as(usize, 36), request_id.len);
@@ -1974,7 +1983,7 @@ test "KustoConnection sends authenticated request with default and override scop
     const override_connection = try KustoConnection.init(
         allocator,
         .{ .cluster_url = "https://cluster.kusto.windows.net", .credential = credential.asCredential() },
-        override_mock.asTransport(),
+        testRuntime(override_mock.asTransport()),
         .{
             .token_scope = "https://custom.kusto.windows.net/.default",
             .metadata_mode = .disabled,
@@ -2001,7 +2010,7 @@ test "KustoConnection applies retry options" {
     const connection = try KustoConnection.init(
         allocator,
         .{ .cluster_url = "https://cluster.kusto.windows.net", .credential = credential.asCredential() },
-        transport.asTransport(),
+        testRuntime(transport.asTransport()),
         .{
             .metadata_mode = .disabled,
             .retry = .{ .max_retries = 1, .initial_delay_ms = 0 },
@@ -2020,7 +2029,7 @@ test "KustoConnection applies retry options" {
 fn initializeConnection(
     allocator: std.mem.Allocator,
     credential: *core.credentials.TokenCredential,
-    transport: *core.http.HttpTransport,
+    runtime: core.http.HttpRuntime,
 ) !void {
     const connection = try KustoConnection.init(
         allocator,
@@ -2028,7 +2037,7 @@ fn initializeConnection(
             .cluster_url = "https://cluster.kusto.windows.net/",
             .credential = credential,
         },
-        transport,
+        runtime,
         .{ .metadata_mode = .disabled },
     );
     connection.deinit();
@@ -2037,7 +2046,7 @@ fn initializeConnection(
 fn initializeDiscoveredConnection(
     allocator: std.mem.Allocator,
     credential: *core.credentials.TokenCredential,
-    transport: *core.http.HttpTransport,
+    runtime: core.http.HttpRuntime,
 ) !void {
     const connection = try KustoConnection.init(
         allocator,
@@ -2045,7 +2054,7 @@ fn initializeDiscoveredConnection(
             .cluster_url = "https://cluster.kusto.windows.net",
             .credential = credential,
         },
-        transport,
+        runtime,
         .{},
     );
     connection.deinit();
@@ -2060,7 +2069,7 @@ test "KustoConnection handles every initialization allocation failure" {
     try std.testing.checkAllAllocationFailures(
         allocator,
         initializeConnection,
-        .{ credential.asCredential(), mock.asTransport() },
+        .{ credential.asCredential(), testRuntime(mock.asTransport()) },
     );
 }
 
@@ -2072,7 +2081,7 @@ test "KustoConnection cleans up discovery initialization allocation failures" {
     try std.testing.checkAllAllocationFailures(
         allocator,
         initializeDiscoveredConnection,
-        .{ credential.asCredential(), transport.asTransport() },
+        .{ credential.asCredential(), testRuntime(transport.asTransport()) },
     );
 }
 
@@ -2083,7 +2092,7 @@ test "KustoConnectionStringBuilder withTokenCredential" {
         \\{"access_token":"t","expires_in":3600}
     );
     defer cred_mock.deinit();
-    var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
+    var cred = identity.ClientSecretCredential.init(allocator, "t", "c", "s");
 
     var kcsb = KustoConnectionStringBuilder.init("https://cluster.kusto.windows.net");
     _ = kcsb.withTokenCredential(cred.asCredential());

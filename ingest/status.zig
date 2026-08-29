@@ -157,18 +157,18 @@ pub const StatusPollOptions = struct {
 pub const SasStatusTableClient = struct {
     allocator: std.mem.Allocator,
     uri: sas.CompleteSasUri,
-    transport: *core.http.HttpTransport,
+    runtime: core.http.HttpRuntime,
 
     pub fn init(
         allocator: std.mem.Allocator,
         complete_table_sas_uri: []const u8,
-        transport: *core.http.HttpTransport,
+        runtime: core.http.HttpRuntime,
     ) !SasStatusTableClient {
         var uri = try sas.CompleteSasUri.init(allocator, complete_table_sas_uri);
         errdefer uri.deinit();
         if (!uri.hasAzureStorageServiceHost("table"))
             return error.UnexpectedTableSasHost;
-        return .{ .allocator = allocator, .uri = uri, .transport = transport };
+        return .{ .allocator = allocator, .uri = uri, .runtime = runtime };
     }
 
     pub fn deinit(self: *SasStatusTableClient) void {
@@ -211,7 +211,7 @@ pub const SasStatusTableClient = struct {
         try request.setHeader("Prefer", "return-no-content");
         try request.setHeader("x-ms-version", storage_api_version);
         request.body = body;
-        const outcome = try sas.send(self.transport, &request, null);
+        const outcome = try sas.send(self.runtime, &request, null);
         return switch (outcome) {
             .accepted => |value| if (value.status_code == 204)
                 outcome
@@ -237,10 +237,7 @@ pub const SasStatusTableClient = struct {
         request.retryable = false;
         request.redirect_policy = .not_allowed;
 
-        var pipeline = core.pipeline.HttpPipeline{
-            .policies = &.{},
-            .transport_impl = self.transport,
-        };
+        var pipeline = core.http.HttpPipeline.init(self.runtime, &.{});
         const operation = pipeline.open(&request, .{}) catch |err| {
             if (request.transport_started) return .{ .unknown = .{ .cause = err } };
             return err;
@@ -288,8 +285,9 @@ pub const StatusTableReadOutcome = union(enum) {
 
 /// An owned, pollable reference to the entity pre-created for an accepted
 /// queued submission. It borrows only `transport`; the manager and any Kusto
-/// connection need not remain alive after submission, but the transport must.
-/// It is single-owner and not safe for concurrent polling.
+/// connection need not remain alive after submission, but the copied runtime's
+/// borrowed transport and crypto contexts must. It is single-owner and not
+/// safe for concurrent polling.
 pub const StatusTrackingHandle = struct {
     allocator: std.mem.Allocator,
     table: SasStatusTableClient,
@@ -302,7 +300,7 @@ pub const StatusTrackingHandle = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         complete_table_sas_uri: []const u8,
-        transport: *core.http.HttpTransport,
+        runtime: core.http.HttpRuntime,
         ingestion_source_id: []const u8,
         database: []const u8,
         target_table: []const u8,
@@ -310,7 +308,7 @@ pub const StatusTrackingHandle = struct {
         try validateTrackingKey(ingestion_source_id);
         var handle = StatusTrackingHandle{
             .allocator = allocator,
-            .table = try SasStatusTableClient.init(allocator, complete_table_sas_uri, transport),
+            .table = try SasStatusTableClient.init(allocator, complete_table_sas_uri, runtime),
             .partition_key = &.{},
             .row_key = &.{},
             .ingestion_source_id = &.{},
@@ -432,7 +430,11 @@ pub const StatusTrackingHandle = struct {
                         } };
                     }
                     transient_retries += 1;
-                    delay_ms = retryDelay(options, transient_retries);
+                    delay_ms = try retryDelay(
+                        options,
+                        self.table.runtime.crypto,
+                        transient_retries,
+                    );
                 },
                 .unknown => |value| {
                     // GET is idempotent: the server cannot ingest data because
@@ -445,7 +447,11 @@ pub const StatusTrackingHandle = struct {
                         } };
                     }
                     transient_retries += 1;
-                    delay_ms = retryDelay(options, transient_retries);
+                    delay_ms = try retryDelay(
+                        options,
+                        self.table.runtime.crypto,
+                        transient_retries,
+                    );
                 },
                 .malformed_response => return .{ .stopped = .{
                     .reason = .malformed_response,
@@ -640,7 +646,11 @@ fn saturatingAdd(base: i64, milliseconds: u64) i64 {
     return std.math.add(i64, base, value) catch std.math.maxInt(i64);
 }
 
-fn retryDelay(options: StatusPollOptions, retry: u32) u64 {
+fn retryDelay(
+    options: StatusPollOptions,
+    crypto_provider: core.crypto.CryptoProvider,
+    retry: u32,
+) !u64 {
     var delay = options.transient_retry_initial_delay_ms;
     var exponent: u32 = 1;
     while (exponent < retry) : (exponent += 1) {
@@ -655,11 +665,10 @@ fn retryDelay(options: StatusPollOptions, retry: u32) u64 {
     else if (options.random) |random|
         random.below(options.max_jitter_ms + 1)
     else blk: {
-        var threaded: std.Io.Threaded = .init_single_threaded;
-        var seed: [std.Random.DefaultCsprng.secret_seed_length]u8 = undefined;
-        threaded.io().randomSecure(&seed) catch break :blk 0;
-        var random = std.Random.DefaultCsprng.init(seed);
-        break :blk random.random().uintLessThan(u64, options.max_jitter_ms + 1);
+        var bytes: [8]u8 = undefined;
+        try crypto_provider.randomBytes(&bytes);
+        const value = std.mem.readInt(u64, &bytes, .little);
+        break :blk value % (options.max_jitter_ms + 1);
     };
     return std.math.add(u64, delay, jitter) catch std.math.maxInt(u64);
 }
@@ -669,6 +678,12 @@ fn isTransientStorageStatus(status_code: u16) bool {
         status_code == 500 or status_code == 502 or status_code == 503 or status_code == 504;
 }
 
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+fn testRuntime(transport: core.http.HttpTransport) core.http.HttpRuntime {
+    return core.http.HttpRuntime.init(transport, testing_crypto_provider.asProvider());
+}
+
 test "status table initial entity uses opaque SAS without authorization" {
     const allocator = std.testing.allocator;
     var transport = core.http.MockTransport.init(allocator, 204, "");
@@ -676,7 +691,7 @@ test "status table initial entity uses opaque SAS without authorization" {
     var handle = try StatusTrackingHandle.init(
         allocator,
         "https://account.table.core.windows.net/status?sig=a%2Bb%3D&sp=raud",
-        transport.asTransport(),
+        testRuntime(transport.asTransport()),
         "11111111-1111-4111-8111-111111111111",
         "DB",
         "Table",
@@ -717,7 +732,7 @@ test "status table reads encode reference keys without authorization" {
     var client = try SasStatusTableClient.init(
         allocator,
         "https://account.table.core.windows.net/status?sig=a%2Bb%3D&sp=r",
-        transport.asTransport(),
+        testRuntime(transport.asTransport()),
     );
     defer client.deinit();
     var outcome = try client.readEntity(
@@ -748,7 +763,7 @@ test "oversized status entities stop as malformed without retry classification" 
     var client = try SasStatusTableClient.init(
         allocator,
         "https://account.table.core.windows.net/status?sig=opaque",
-        transport.asTransport(),
+        testRuntime(transport.asTransport()),
     );
     defer client.deinit();
 
@@ -822,7 +837,7 @@ test "status tracking rejects unsafe SAS and status keys" {
         StatusTrackingHandle.init(
             allocator,
             "https://account.queue.core.windows.net/status?sig=x",
-            transport.asTransport(),
+            testRuntime(transport.asTransport()),
             "11111111-1111-4111-8111-111111111111",
             "DB",
             "T",
@@ -833,7 +848,7 @@ test "status tracking rejects unsafe SAS and status keys" {
         StatusTrackingHandle.init(
             allocator,
             "https://account.table.core.windows.net/status?sig=x",
-            transport.asTransport(),
+            testRuntime(transport.asTransport()),
             "not-a-status-key",
             "DB",
             "T",
@@ -853,17 +868,17 @@ const StatusPollTransport = struct {
     seams: ?*PollSeams = null,
     advance_on_send_ms: u64 = 0,
     cancel_on_send: bool = false,
-    transport: core.http.HttpTransport = .{ .sendFn = &send },
+    const vtable: core.http.HttpTransport.VTable = .{ .send = &send };
 
-    fn asTransport(self: *StatusPollTransport) *core.http.HttpTransport {
-        return &self.transport;
+    fn asTransport(self: *StatusPollTransport) core.http.HttpTransport {
+        return .{ .context = self, .vtable = &vtable };
     }
 
     fn send(
-        transport: *core.http.HttpTransport,
+        context: *anyopaque,
         _: *core.http.Request,
     ) !core.http.Response {
-        const self: *StatusPollTransport = @alignCast(@fieldParentPtr("transport", transport));
+        const self: *StatusPollTransport = @ptrCast(@alignCast(context));
         const index = @min(self.call_count, self.steps.len - 1);
         self.call_count += 1;
         if (self.seams) |seams| {
@@ -934,12 +949,12 @@ const PollSeams = struct {
 
 fn testTrackingHandle(
     allocator: std.mem.Allocator,
-    transport: *core.http.HttpTransport,
+    runtime: core.http.HttpRuntime,
 ) !StatusTrackingHandle {
     return StatusTrackingHandle.init(
         allocator,
         "https://account.table.core.windows.net/status?sig=opaque",
-        transport,
+        runtime,
         "11111111-1111-4111-8111-111111111111",
         "DB",
         "Table",
@@ -954,7 +969,7 @@ test "status polling retries pending and transient reads with bounded jitter" {
         .{ .response = .{ .status_code = 200, .body = "{\"Status\":\"Succeeded\",\"OperationId\":\"op\"}" } },
     };
     var transport = StatusPollTransport{ .allocator = allocator, .steps = &steps };
-    var tracking = try testTrackingHandle(allocator, transport.asTransport());
+    var tracking = try testTrackingHandle(allocator, testRuntime(transport.asTransport()));
     defer tracking.deinit();
     var seams = PollSeams{};
     defer seams.deinit(allocator);
@@ -979,7 +994,7 @@ test "status polling retries idempotent transport ambiguity" {
         .{ .response = .{ .status_code = 200, .body = "{\"Status\":\"Failed\",\"FailureStatus\":\"Transient\"}" } },
     };
     var transport = StatusPollTransport{ .allocator = allocator, .steps = &steps };
-    var tracking = try testTrackingHandle(allocator, transport.asTransport());
+    var tracking = try testTrackingHandle(allocator, testRuntime(transport.asTransport()));
     defer tracking.deinit();
     var seams = PollSeams{};
     defer seams.deinit(allocator);
@@ -1004,7 +1019,7 @@ test "status polling stops on permanent auth and malformed table responses" {
             .{ .response = .{ .status_code = 403, .body = "denied" } },
         };
         var transport = StatusPollTransport{ .allocator = allocator, .steps = &steps };
-        var tracking = try testTrackingHandle(allocator, transport.asTransport());
+        var tracking = try testTrackingHandle(allocator, testRuntime(transport.asTransport()));
         defer tracking.deinit();
         var seams = PollSeams{};
         defer seams.deinit(allocator);
@@ -1024,7 +1039,7 @@ test "status polling stops on permanent auth and malformed table responses" {
             .{ .response = .{ .status_code = 200, .body = "{\"Status\":" } },
         };
         var transport = StatusPollTransport{ .allocator = allocator, .steps = &steps };
-        var tracking = try testTrackingHandle(allocator, transport.asTransport());
+        var tracking = try testTrackingHandle(allocator, testRuntime(transport.asTransport()));
         defer tracking.deinit();
         var seams = PollSeams{};
         defer seams.deinit(allocator);
@@ -1048,7 +1063,7 @@ test "status polling does not request or sleep after timeout or cancellation" {
     };
     {
         var transport = StatusPollTransport{ .allocator = allocator, .steps = &steps };
-        var tracking = try testTrackingHandle(allocator, transport.asTransport());
+        var tracking = try testTrackingHandle(allocator, testRuntime(transport.asTransport()));
         defer tracking.deinit();
         var seams = PollSeams{ .timeout_on_second_clock = true };
         defer seams.deinit(allocator);
@@ -1065,7 +1080,7 @@ test "status polling does not request or sleep after timeout or cancellation" {
     }
     {
         var transport = StatusPollTransport{ .allocator = allocator, .steps = &steps };
-        var tracking = try testTrackingHandle(allocator, transport.asTransport());
+        var tracking = try testTrackingHandle(allocator, testRuntime(transport.asTransport()));
         defer tracking.deinit();
         var seams = PollSeams{};
         defer seams.deinit(allocator);
@@ -1083,7 +1098,7 @@ test "status polling does not request or sleep after timeout or cancellation" {
     }
     {
         var transport = StatusPollTransport{ .allocator = allocator, .steps = &steps };
-        var tracking = try testTrackingHandle(allocator, transport.asTransport());
+        var tracking = try testTrackingHandle(allocator, testRuntime(transport.asTransport()));
         defer tracking.deinit();
         var cancellation = core.http.CancellationToken{};
         cancellation.cancel();
@@ -1101,7 +1116,7 @@ test "status polling does not request or sleep after timeout or cancellation" {
     }
     {
         var transport = StatusPollTransport{ .allocator = allocator, .steps = &steps };
-        var tracking = try testTrackingHandle(allocator, transport.asTransport());
+        var tracking = try testTrackingHandle(allocator, testRuntime(transport.asTransport()));
         defer tracking.deinit();
         var cancellation = core.http.CancellationToken{};
         var seams = PollSeams{ .cancellation = &cancellation, .cancel_on_sleep = true };
@@ -1128,7 +1143,7 @@ test "status polling does not request or sleep after timeout or cancellation" {
             .seams = &seams,
             .cancel_on_send = true,
         };
-        var tracking = try testTrackingHandle(allocator, transport.asTransport());
+        var tracking = try testTrackingHandle(allocator, testRuntime(transport.asTransport()));
         defer tracking.deinit();
         var options = seams.options();
         options.cancellation = &cancellation;
@@ -1152,7 +1167,7 @@ test "status polling does not request or sleep after timeout or cancellation" {
             .seams = &seams,
             .advance_on_send_ms = 5,
         };
-        var tracking = try testTrackingHandle(allocator, transport.asTransport());
+        var tracking = try testTrackingHandle(allocator, testRuntime(transport.asTransport()));
         defer tracking.deinit();
         var options = seams.options();
         options.timeout_ms = 5;
@@ -1185,9 +1200,13 @@ fn statusEntityAllocationTest(allocator: std.mem.Allocator) !void {
 
 fn statusHandleAllocationTest(allocator: std.mem.Allocator) !void {
     const NoopTransport = struct {
-        transport: core.http.HttpTransport = .{ .sendFn = &send },
+        const vtable: core.http.HttpTransport.VTable = .{ .send = &send };
 
-        fn send(_: *core.http.HttpTransport, _: *core.http.Request) !core.http.Response {
+        fn asTransport(self: *@This()) core.http.HttpTransport {
+            return .{ .context = self, .vtable = &vtable };
+        }
+
+        fn send(_: *anyopaque, _: *core.http.Request) !core.http.Response {
             return error.UnexpectedRequest;
         }
     };
@@ -1195,7 +1214,7 @@ fn statusHandleAllocationTest(allocator: std.mem.Allocator) !void {
     var handle = try StatusTrackingHandle.init(
         allocator,
         "https://account.table.core.windows.net/status?sig=opaque",
-        &transport.transport,
+        testRuntime(transport.asTransport()),
         "11111111-1111-4111-8111-111111111111",
         "DB",
         "Table",

@@ -211,31 +211,12 @@ pub const IngestionResult = struct {
 
 /// Direct streaming ingestion via the Kusto engine endpoint.
 pub const StreamingIngestClient = struct {
-    runtime: Runtime,
+    connection: *KustoConnection,
 
-    const Runtime = union(enum) {
-        legacy: struct {
-            connection: ConnectionProperties,
-            pipeline: core.pipeline.HttpPipeline,
-        },
-        shared: *KustoConnection,
-    };
-
-    pub fn init(
-        connection: ConnectionProperties,
-        transport: *core.http.HttpTransport,
-    ) StreamingIngestClient {
-        return .{
-            .runtime = .{ .legacy = .{
-                .connection = connection,
-                .pipeline = .{ .policies = &.{}, .transport_impl = transport },
-            } },
-        };
-    }
-
-    /// Creates a client borrowing an authenticated shared Kusto connection.
-    pub fn initWithConnection(connection: *KustoConnection) StreamingIngestClient {
-        return .{ .runtime = .{ .shared = connection } };
+    /// Copies only the connection pointer. The connection, credential, and
+    /// borrowed runtime contexts must outlive this client and every operation.
+    pub fn init(connection: *KustoConnection) StreamingIngestClient {
+        return .{ .connection = connection };
     }
 
     /// Ingests a runtime source. Service failures are logged and returned as a
@@ -280,7 +261,11 @@ pub const StreamingIngestClient = struct {
         const prepared = try prepareSource(source, options);
         try validateOptions(target, source.kind(), options, prepared.raw_size);
 
-        const logical_source_id = try makeLogicalSourceId(allocator, options.source_id);
+        const logical_source_id = try makeLogicalSourceId(
+            allocator,
+            self.connection.runtime.crypto,
+            options.source_id,
+        );
         var source_id_owned = true;
         defer if (source_id_owned) allocator.free(logical_source_id);
 
@@ -500,10 +485,7 @@ pub const StreamingIngestClient = struct {
         const encoded_table = try core.url.percentEncode(allocator, target.table);
         defer allocator.free(encoded_table);
 
-        const endpoint = switch (self.runtime) {
-            .legacy => |legacy| legacy.connection.cluster_url,
-            .shared => |connection| connection.engineUrl(),
-        };
+        const endpoint = self.connection.engineUrl();
 
         var query = std.ArrayList(u8).empty;
         defer query.deinit(allocator);
@@ -529,23 +511,9 @@ pub const StreamingIngestClient = struct {
         request: *core.http.Request,
         options: core.http.OpenOptions,
     ) !*core.http.HttpOperation {
-        return switch (self.runtime) {
-            .shared => |connection| connection.open(request, options),
-            .legacy => |*legacy| {
-                if (connectionHasAuthentication(legacy.connection))
-                    return error.AuthenticatedConnectionRequired;
-                return legacy.pipeline.open(request, options);
-            },
-        };
+        return self.connection.open(request, options);
     }
 };
-
-fn connectionHasAuthentication(connection: ConnectionProperties) bool {
-    return connection.credential != null or
-        connection.application_client_id != null or
-        connection.application_key != null or
-        connection.authority_id != null;
-}
 
 const PreparedSource = struct {
     raw_size: u64,
@@ -614,15 +582,16 @@ fn validateSourceId(source_id: []const u8) !void {
     }
 }
 
-fn makeLogicalSourceId(allocator: std.mem.Allocator, provided: ?[]const u8) ![]u8 {
+fn makeLogicalSourceId(
+    allocator: std.mem.Allocator,
+    crypto_provider: core.crypto.CryptoProvider,
+    provided: ?[]const u8,
+) ![]u8 {
     if (provided) |source_id| {
         try validateSourceId(source_id);
         return allocator.dupe(u8, source_id);
     }
-    var threaded: std.Io.Threaded = .init_single_threaded;
-    const timestamp = std.Io.Timestamp.now(threaded.io(), .real).toNanoseconds();
-    var prng = std.Random.DefaultPrng.init(@truncate(@as(u96, @bitCast(timestamp))));
-    const uuid = core.uuid.Uuid.init(prng.random()).toString();
+    const uuid = (try core.uuid.Uuid.init(crypto_provider)).toString();
     return allocator.dupe(u8, &uuid);
 }
 
@@ -994,14 +963,67 @@ pub fn JsonRows(comptime Row: type) type {
     };
 }
 
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+fn testRuntime(transport: core.http.HttpTransport) core.http.HttpRuntime {
+    return core.http.HttpRuntime.init(transport, testing_crypto_provider.asProvider());
+}
+
+const RoutingCryptoProvider = struct {
+    calls: usize = 0,
+    fail: bool = false,
+
+    const vtable: core.crypto.CryptoProvider.VTable = .{
+        .random_bytes = &randomBytes,
+        .md5 = &md5,
+        .sha256 = &sha256,
+        .hmac_sha256 = &hmacSha256,
+        .sha256_init = &sha256Init,
+    };
+
+    fn provider(self: *RoutingCryptoProvider) core.crypto.CryptoProvider {
+        return .{ .context = self, .vtable = &vtable };
+    }
+
+    fn randomBytes(context: *anyopaque, out: []u8) !void {
+        const self: *RoutingCryptoProvider = @ptrCast(@alignCast(context));
+        self.calls += 1;
+        if (self.fail) return error.ProviderFailure;
+        for (out, 0..) |*byte, index| byte.* = @truncate(index);
+    }
+
+    fn md5(_: *anyopaque, _: []const u8, _: *core.crypto.Md5Digest) !void {
+        return error.Unused;
+    }
+
+    fn sha256(_: *anyopaque, _: []const u8, _: *core.crypto.Sha256Digest) !void {
+        return error.Unused;
+    }
+
+    fn hmacSha256(
+        _: *anyopaque,
+        _: []const u8,
+        _: []const u8,
+        _: *core.crypto.HmacSha256Digest,
+    ) !void {
+        return error.Unused;
+    }
+
+    fn sha256Init(
+        _: *anyopaque,
+        _: std.mem.Allocator,
+    ) !core.crypto.Sha256Operation {
+        return error.Unused;
+    }
+};
+
 test "direct bytes streaming uses gzip and a stable logical source ID" {
     const allocator = std.testing.allocator;
     var transport = core.http.MockTransport.init(allocator, 200, "{}");
     defer transport.deinit();
-    var client = StreamingIngestClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        transport.asTransport(),
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(transport.asTransport()));
+    defer connection.deinit();
+    var client = StreamingIngestClient.init(connection);
 
     var result = try client.ingestResult(
         allocator,
@@ -1024,6 +1046,75 @@ test "direct bytes streaming uses gzip and a stable logical source ID" {
     try std.testing.expectEqualStrings("hello streaming\n", body);
 }
 
+test "streaming source IDs use the selected provider and failures prevent transport" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 200, "{}");
+    defer transport.deinit();
+    var crypto_provider = RoutingCryptoProvider{};
+    const runtime = core.http.HttpRuntime.init(
+        transport.asTransport(),
+        crypto_provider.provider(),
+    );
+    const connection = try testConnection(
+        allocator,
+        "https://cluster.kusto.windows.net",
+        runtime,
+    );
+    defer connection.deinit();
+    var client = StreamingIngestClient.init(connection);
+
+    var result = try client.ingestResult(
+        allocator,
+        .{ .database = "DB", .table = "Table" },
+        .{ .bytes = "provider" },
+        .{ .compression = .none },
+    );
+    defer result.deinit(allocator);
+    try std.testing.expectEqualStrings(
+        "00010203-0405-4607-8809-0a0b0c0d0e0f",
+        result.ok.ingestion_id.?,
+    );
+    try std.testing.expectEqual(@as(usize, 1), crypto_provider.calls);
+
+    crypto_provider.fail = true;
+    try std.testing.expectError(
+        error.ProviderFailure,
+        client.ingestResult(
+            allocator,
+            .{ .database = "DB", .table = "Table" },
+            .{ .bytes = "provider failure" },
+            .{ .compression = .none },
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 2), crypto_provider.calls);
+    try std.testing.expectEqual(@as(usize, 1), transport.call_count);
+}
+
+test "stream upload failure is reported as unknown without leaking" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 200, "{}");
+    defer transport.deinit();
+    transport.stream_fail_upload_after = 0;
+    const connection = try testConnection(
+        allocator,
+        "https://cluster.kusto.windows.net",
+        testRuntime(transport.asTransport()),
+    );
+    defer connection.deinit();
+    var client = StreamingIngestClient.init(connection);
+
+    var result = try client.ingestResult(
+        allocator,
+        .{ .database = "DB", .table = "Table" },
+        .{ .bytes = "upload failure" },
+        .{ .compression = .none },
+    );
+    defer result.deinit(allocator);
+    try std.testing.expectEqual(KustoOperationOutcome.unknown, result.err.outcome);
+    try std.testing.expectEqual(error.InjectedUploadFailure, result.err.transport_error.?);
+    try std.testing.expectEqual(@as(usize, 0), transport.call_count);
+}
+
 const StreamingToken = struct {
     credential: core.credentials.TokenCredential = .{ .getTokenFn = &getToken },
 
@@ -1031,6 +1122,7 @@ const StreamingToken = struct {
         _: *core.credentials.TokenCredential,
         _: core.credentials.TokenRequestContext,
         _: core.context.Context,
+        _: core.http.HttpRuntime,
     ) anyerror!core.credentials.AccessToken {
         return .{
             .token = "streaming-token",
@@ -1038,6 +1130,24 @@ const StreamingToken = struct {
         };
     }
 };
+
+var streaming_test_token = StreamingToken{};
+
+fn testConnection(
+    allocator: std.mem.Allocator,
+    cluster_url: []const u8,
+    runtime: core.http.HttpRuntime,
+) !*KustoConnection {
+    return KustoConnection.init(
+        allocator,
+        .{
+            .cluster_url = cluster_url,
+            .credential = &streaming_test_token.credential,
+        },
+        runtime,
+        .{ .metadata_mode = .disabled },
+    );
+}
 
 test "shared connections authenticate streamed reader uploads" {
     const allocator = std.testing.allocator;
@@ -1050,12 +1160,12 @@ test "shared connections authenticate streamed reader uploads" {
             .cluster_url = "https://cluster.kusto.windows.net",
             .credential = &token.credential,
         },
-        transport.asTransport(),
+        testRuntime(transport.asTransport()),
         .{ .metadata_mode = .disabled },
     );
     defer connection.deinit();
     var reader = std.Io.Reader.fixed("authenticated reader");
-    var client = StreamingIngestClient.initWithConnection(connection);
+    var client = StreamingIngestClient.init(connection);
     var result = try client.ingestFromReaderResult(
         allocator,
         .{ .database = "DB", .table = "Table" },
@@ -1075,10 +1185,9 @@ test "direct URI source uses typed JSON and sourceKind uri" {
     const allocator = std.testing.allocator;
     var transport = core.http.MockTransport.init(allocator, 200, "{}");
     defer transport.deinit();
-    var client = StreamingIngestClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        transport.asTransport(),
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(transport.asTransport()));
+    defer connection.deinit();
+    var client = StreamingIngestClient.init(connection);
     var result = try client.ingestResult(
         allocator,
         .{ .database = "DB", .table = "Table" },
@@ -1115,10 +1224,9 @@ test "file sources are streamed through open without whole-file buffering" {
 
     var transport = core.http.MockTransport.init(allocator, 200, "{}");
     defer transport.deinit();
-    var client = StreamingIngestClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        transport.asTransport(),
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(transport.asTransport()));
+    defer connection.deinit();
+    var client = StreamingIngestClient.init(connection);
     var result = try client.ingestFromFileResult(
         allocator,
         .{ .database = "DB", .table = "Table" },
@@ -1175,10 +1283,9 @@ test "large readers use bounded gzip working storage" {
     var source = ChunkedReader.init(bytes);
     var transport = core.http.MockTransport.init(allocator, 200, "{}");
     defer transport.deinit();
-    var client = StreamingIngestClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        transport.asTransport(),
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(transport.asTransport()));
+    defer connection.deinit();
+    var client = StreamingIngestClient.init(connection);
     var result = try client.ingestFromReaderResult(
         allocator,
         .{ .database = "DB", .table = "Table" },
@@ -1195,10 +1302,9 @@ test "direct URL components are independently encoded" {
     const allocator = std.testing.allocator;
     var transport = core.http.MockTransport.init(allocator, 200, "{}");
     defer transport.deinit();
-    var client = StreamingIngestClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        transport.asTransport(),
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(transport.asTransport()));
+    defer connection.deinit();
+    var client = StreamingIngestClient.init(connection);
     var result = try client.ingestResult(
         allocator,
         .{ .database = "DB /&?=+", .table = "Table /&?=+" },
@@ -1216,10 +1322,9 @@ test "unsupported direct options fail before transport" {
     const allocator = std.testing.allocator;
     var transport = core.http.MockTransport.init(allocator, 200, "{}");
     defer transport.deinit();
-    var client = StreamingIngestClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        transport.asTransport(),
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(transport.asTransport()));
+    defer connection.deinit();
+    var client = StreamingIngestClient.init(connection);
     try std.testing.expectError(
         error.StreamingExtentTagsUnsupported,
         client.ingestResult(
@@ -1236,10 +1341,9 @@ test "unsupported direct formats and required mappings fail before transport" {
     const allocator = std.testing.allocator;
     var transport = core.http.MockTransport.init(allocator, 200, "{}");
     defer transport.deinit();
-    var client = StreamingIngestClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        transport.asTransport(),
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(transport.asTransport()));
+    defer connection.deinit();
+    var client = StreamingIngestClient.init(connection);
     try std.testing.expectError(
         error.StreamingFormatUnsupported,
         client.ingestResult(
@@ -1270,10 +1374,9 @@ test "reader sources require known raw size and are never retried" {
         "{\"error\":{\"message\":\"retry\"}}",
     );
     defer transport.deinit();
-    var client = StreamingIngestClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        transport.asTransport(),
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(transport.asTransport()));
+    defer connection.deinit();
+    var client = StreamingIngestClient.init(connection);
 
     var result = try client.ingestResult(
         allocator,
@@ -1332,10 +1435,9 @@ test "replay factories reopen only after known retryable responses" {
         .{ .name = "Retry-After", .value = "10" },
     };
     var fixture = ReplayFixture{ .bytes = "retry body" };
-    var client = StreamingIngestClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        transport.asTransport(),
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(transport.asTransport()));
+    defer connection.deinit();
+    var client = StreamingIngestClient.init(connection);
     var result = try client.ingestResult(
         allocator,
         .{ .database = "DB", .table = "Table" },
@@ -1378,10 +1480,9 @@ test "payload limits and raw sizes are validated before transport" {
     const allocator = std.testing.allocator;
     var transport = core.http.MockTransport.init(allocator, 200, "{}");
     defer transport.deinit();
-    var client = StreamingIngestClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        transport.asTransport(),
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(transport.asTransport()));
+    defer connection.deinit();
+    var client = StreamingIngestClient.init(connection);
     const too_large = try allocator.alloc(u8, @as(usize, @intCast(max_streaming_payload_bytes + 1)));
     defer allocator.free(too_large);
     try std.testing.expectError(
@@ -1399,10 +1500,9 @@ test "payload limits and raw sizes are validated before transport" {
 fn ingestAllocationFixture(allocator: std.mem.Allocator) !void {
     var transport = core.http.MockTransport.init(allocator, 200, "{}");
     defer transport.deinit();
-    var client = StreamingIngestClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        transport.asTransport(),
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(transport.asTransport()));
+    defer connection.deinit();
+    var client = StreamingIngestClient.init(connection);
     var result = try client.ingestResult(
         allocator,
         .{ .database = "DB", .table = "Table" },

@@ -18,7 +18,7 @@ entirely into memory. Direct ingestion is limited to 4 MiB uncompressed.
 
 ```zig
 const ingest = @import("azure_sdk_kusto").ingest;
-var client = ingest.StreamingIngestClient.initWithConnection(connection);
+var client = ingest.StreamingIngestClient.init(connection);
 var result = try client.ingestFromFileResult(
     allocator,
     .{ .database = "db", .table = "events" },
@@ -81,7 +81,7 @@ complete-SAS Blob client, then posted through the complete-SAS Queue client.
 Storage requests never carry Kusto bearer authorization.
 
 ```zig
-var executor = ingest.DataManagementCommandExecutor.initWithConnection(connection);
+var executor = ingest.DataManagementCommandExecutor.init(connection);
 var io_thread = std.Io.Threaded.init_single_threaded;
 var manager = try ingest.ResourceManager.init(
     allocator,
@@ -92,10 +92,10 @@ var manager = try ingest.ResourceManager.init(
 );
 defer manager.deinit();
 
-var client = ingest.QueuedIngestClient.initWithConnectionAndResourceManager(
-    connection,
-    &manager,
-);
+var client = ingest.QueuedIngestClient.init(connection.runtime, .{
+    .connection = connection,
+    .resource_manager = &manager,
+});
 var submission = try client.ingest(
     allocator,
     .{ .database = "db", .table = "events" },
@@ -134,7 +134,8 @@ if (submission.takeTracking()) |owned| {
 
 Polling retries idempotent transient/ambiguous GETs within its explicit
 budget. Authentication, permanent HTTP, and malformed-entity failures stop
-polling without becoming ingestion failures. The handle borrows its transport,
+polling without becoming ingestion failures. The handle copies its runtime and
+borrows the runtime transport and crypto contexts,
 is single-owner, and is not concurrency-safe.
 
 Use `.failures_and_successes` reporting when terminal success must be observed.

@@ -78,47 +78,26 @@ pub const dynamic = kql.dynamic;
 
 pub const KustoClientOptions = struct {
     application_name: []const u8 = "azure-sdk-zig",
-    client_version: []const u8 = "azsdk-zig-kusto/0.1.0",
+    client_version: []const u8 = "azsdk-zig-kusto/0.2.0",
 };
 
 /// Client for executing KQL queries and management commands against a Kusto cluster.
 ///
-/// Clients created with `initWithConnection` borrow their `KustoConnection` and
-/// may be copied or moved. The connection must outlive every client copy. Since
+/// Clients borrow their `KustoConnection` and may be copied or moved. The
+/// connection and its borrowed runtime contexts must outlive every client copy. Since
 /// `KustoConnection.supports_concurrent_use` is false, callers must serialize
 /// requests that share one connection.
 pub const KustoClient = struct {
-    runtime: Runtime,
+    connection: *KustoConnection,
     application_name: []const u8,
     client_version: []const u8,
 
-    const Runtime = union(enum) {
-        legacy: struct {
-            connection: ConnectionProperties,
-            pipeline: core.pipeline.HttpPipeline,
-        },
-        shared: *KustoConnection,
-    };
-
     pub fn init(
-        connection: ConnectionProperties,
-        transport: *core.http.HttpTransport,
+        connection: *KustoConnection,
         options: KustoClientOptions,
     ) KustoClient {
         return .{
-            .runtime = .{ .legacy = .{
-                .connection = connection,
-                .pipeline = .{ .policies = &.{}, .transport_impl = transport },
-            } },
-            .application_name = options.application_name,
-            .client_version = options.client_version,
-        };
-    }
-
-    /// Create a client that borrows `connection`; this client has no deinit.
-    pub fn initWithConnection(connection: *KustoConnection, options: KustoClientOptions) KustoClient {
-        return .{
-            .runtime = .{ .shared = connection },
+            .connection = connection,
             .application_name = options.application_name,
             .client_version = options.client_version,
         };
@@ -362,10 +341,7 @@ pub const KustoClient = struct {
     }
 
     fn engineUrl(self: *const KustoClient) []const u8 {
-        return switch (self.runtime) {
-            .legacy => |legacy| legacy.connection.cluster_url,
-            .shared => |connection| connection.engineUrl(),
-        };
+        return self.connection.engineUrl();
     }
 
     fn configureRequest(
@@ -383,25 +359,12 @@ pub const KustoClient = struct {
         try request.setHeader("x-ms-version", "2024-12-12");
         if (props.client_request_id) |request_id|
             try request.setHeader("x-ms-client-request-id", request_id);
-        try core.pipeline.ensureRequestId(request);
+        try core.http.ensureRequestId(request, self.connection.runtime);
         request.operation_timeout_ms = try props.effectiveClientTimeoutMs(kind);
     }
 
     fn send(self: *KustoClient, request: *core.http.Request) !core.http.Response {
-        return switch (self.runtime) {
-            .shared => |connection| connection.send(request),
-            .legacy => |*legacy| {
-                const connection = legacy.connection;
-                if (connection.credential != null or
-                    connection.authority_id != null or
-                    connection.application_client_id != null or
-                    connection.application_key != null)
-                {
-                    return error.AuthenticatedConnectionRequired;
-                }
-                return legacy.pipeline.send(request);
-            },
-        };
+        return self.connection.send(request);
     }
 
     fn open(
@@ -409,20 +372,7 @@ pub const KustoClient = struct {
         request: *core.http.Request,
         options: core.http.OpenOptions,
     ) !*core.http.HttpOperation {
-        return switch (self.runtime) {
-            .shared => |connection| connection.open(request, options),
-            .legacy => |*legacy| {
-                const connection = legacy.connection;
-                if (connection.credential != null or
-                    connection.authority_id != null or
-                    connection.application_client_id != null or
-                    connection.application_key != null)
-                {
-                    return error.AuthenticatedConnectionRequired;
-                }
-                return legacy.pipeline.open(request, options);
-            },
-        };
+        return self.connection.open(request, options);
     }
 };
 
@@ -532,6 +482,7 @@ const TestTokenCredential = struct {
         credential: *core.credentials.TokenCredential,
         request_context: core.credentials.TokenRequestContext,
         _: core.context.Context,
+        _: core.http.HttpRuntime,
     ) anyerror!core.credentials.AccessToken {
         const self: *TestTokenCredential = @alignCast(@fieldParentPtr("credential", credential));
         self.call_count += 1;
@@ -550,6 +501,29 @@ const empty_v2_response =
     \\]
 ;
 
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+var testing_token_credential = TestTokenCredential{};
+
+fn testRuntime(transport: core.http.HttpTransport) core.http.HttpRuntime {
+    return core.http.HttpRuntime.init(transport, testing_crypto_provider.asProvider());
+}
+
+fn testConnection(
+    allocator: std.mem.Allocator,
+    cluster_url: []const u8,
+    runtime: core.http.HttpRuntime,
+) !*KustoConnection {
+    return KustoConnection.init(
+        allocator,
+        .{
+            .cluster_url = cluster_url,
+            .credential = testing_token_credential.asCredential(),
+        },
+        runtime,
+        .{ .metadata_mode = .disabled },
+    );
+}
+
 test "KustoClient executes a normal V2 query" {
     const allocator = std.testing.allocator;
     const response_body =
@@ -561,11 +535,9 @@ test "KustoClient executes a normal V2 query" {
     ;
     var mock = core.http.MockTransport.init(allocator, 200, response_body);
     defer mock.deinit();
-    var client = KustoClient.init(
-        .{ .cluster_url = "https://mycluster.eastus.kusto.windows.net" },
-        mock.asTransport(),
-        .{},
-    );
+    const connection = try testConnection(allocator, "https://mycluster.eastus.kusto.windows.net", testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = KustoClient.init(connection, .{});
 
     var dataset = try client.executeQuery(allocator, "TestDB", "StormEvents | count", null);
     defer dataset.deinit(allocator);
@@ -592,12 +564,12 @@ test "shared KustoClient authenticates queries" {
             .cluster_url = "https://cluster.kusto.windows.net/",
             .credential = credential.asCredential(),
         },
-        mock.asTransport(),
+        testRuntime(mock.asTransport()),
         .{ .metadata_mode = .disabled },
     );
     defer connection.deinit();
 
-    var client = KustoClient.initWithConnection(connection, .{});
+    var client = KustoClient.init(connection, .{});
     var dataset = try client.executeQuery(
         allocator,
         "db",
@@ -633,7 +605,7 @@ test "shared KustoClient uses an explicit engine endpoint" {
             .cluster_url = "https://cluster.kusto.windows.net",
             .credential = credential.asCredential(),
         },
-        mock.asTransport(),
+        testRuntime(mock.asTransport()),
         .{
             .metadata_mode = .disabled,
             .engine_endpoint = "https://query-engine.kusto.windows.net",
@@ -642,7 +614,7 @@ test "shared KustoClient uses an explicit engine endpoint" {
     );
     defer connection.deinit();
 
-    var client = KustoClient.initWithConnection(connection, .{});
+    var client = KustoClient.init(connection, .{});
     var dataset = try client.executeQuery(allocator, "db", "print 1", null);
     defer dataset.deinit(allocator);
     try std.testing.expectEqualStrings(
@@ -662,39 +634,17 @@ test "copied shared KustoClient remains usable" {
             .cluster_url = "https://cluster.kusto.windows.net",
             .credential = credential.asCredential(),
         },
-        mock.asTransport(),
+        testRuntime(mock.asTransport()),
         .{ .metadata_mode = .disabled },
     );
     defer connection.deinit();
 
-    const copied = KustoClient.initWithConnection(connection, .{});
+    const copied = KustoClient.init(connection, .{});
     var moved = copied;
     var dataset = try moved.executeQuery(allocator, "db", "print 1", null);
     defer dataset.deinit(allocator);
     try std.testing.expect(mock.last_url != null);
     try std.testing.expectEqual(@as(usize, 1), credential.call_count);
-}
-
-test "legacy authenticated KustoClient fails before transport" {
-    const allocator = std.testing.allocator;
-    var credential = TestTokenCredential{};
-    var mock = core.http.MockTransport.init(allocator, 200, empty_v2_response);
-    defer mock.deinit();
-    var client = KustoClient.init(
-        .{
-            .cluster_url = "https://cluster.kusto.windows.net",
-            .credential = credential.asCredential(),
-        },
-        mock.asTransport(),
-        .{},
-    );
-
-    try std.testing.expectError(
-        error.AuthenticatedConnectionRequired,
-        client.executeQuery(allocator, "db", "print 1", null),
-    );
-    try std.testing.expect(mock.last_url == null);
-    try std.testing.expectEqual(@as(usize, 0), credential.call_count);
 }
 
 test "shared KustoClient retries queries but not management commands" {
@@ -711,14 +661,14 @@ test "shared KustoClient retries queries but not management commands" {
             .cluster_url = "https://cluster.kusto.windows.net",
             .credential = query_credential.asCredential(),
         },
-        query_sequence.asTransport(),
+        testRuntime(query_sequence.asTransport()),
         .{
             .metadata_mode = .disabled,
             .retry = .{ .max_retries = 1, .initial_delay_ms = 0, .max_delay_ms = 0 },
         },
     );
     defer query_connection.deinit();
-    var query_client = KustoClient.initWithConnection(query_connection, .{});
+    var query_client = KustoClient.init(query_connection, .{});
     var dataset = try query_client.executeQuery(allocator, "db", "print 1", null);
     defer dataset.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 2), query_sequence.call_count);
@@ -735,14 +685,14 @@ test "shared KustoClient retries queries but not management commands" {
             .cluster_url = "https://cluster.kusto.windows.net",
             .credential = management_credential.asCredential(),
         },
-        management_sequence.asTransport(),
+        testRuntime(management_sequence.asTransport()),
         .{
             .metadata_mode = .disabled,
             .retry = .{ .max_retries = 1, .initial_delay_ms = 0, .max_delay_ms = 0 },
         },
     );
     defer management_connection.deinit();
-    var management_client = KustoClient.initWithConnection(management_connection, .{});
+    var management_client = KustoClient.init(management_connection, .{});
     try std.testing.expectError(
         error.KustoQueryFailed,
         management_client.executeMgmt(allocator, "db", ".show tables", null),
@@ -757,11 +707,9 @@ test "KustoClient executes management and auto-routes requests" {
     ;
     var mock = core.http.MockTransport.init(allocator, 200, response_body);
     defer mock.deinit();
-    var client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        mock.asTransport(),
-        .{},
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = KustoClient.init(connection, .{});
 
     var management = try client.executeMgmt(allocator, "TestDB", ".show databases", null);
     defer management.deinit(allocator);
@@ -785,11 +733,9 @@ test "KustoClient returns query HTTP failures" {
         \\{"error":{"code":"BadRequest","message":"Invalid query"}}
     );
     defer mock.deinit();
-    var client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        mock.asTransport(),
-        .{},
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = KustoClient.init(connection, .{});
     try std.testing.expectError(
         error.KustoQueryFailed,
         client.executeQuery(allocator, "db", "INVALID", null),
@@ -800,11 +746,9 @@ test "Kusto request bodies round trip caller strings" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 200, empty_v2_response);
     defer mock.deinit();
-    var client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        mock.asTransport(),
-        .{},
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = KustoClient.init(connection, .{});
     const database = "db\"\\\n\t\x01";
     const query = "print value = \"a\\\\b\"\n\t\r";
     var query_dataset = try client.executeQuery(
@@ -873,7 +817,7 @@ test "KustoClient applies diagnostic headers and owns response correlation" {
             .cluster_url = "https://cluster.kusto.windows.net",
             .credential = credential.asCredential(),
         },
-        mock.asTransport(),
+        testRuntime(mock.asTransport()),
         .{ .metadata_mode = .disabled },
     );
     defer connection.deinit();
@@ -890,7 +834,7 @@ test "KustoClient applies diagnostic headers and owns response correlation" {
     try properties.setOption(allocator, "best_effort", true);
     try properties.setParameter(allocator, "limit", @as(i64, 5));
 
-    var client = KustoClient.initWithConnection(connection, .{
+    var client = KustoClient.init(connection, .{
         .application_name = "default-app",
         .client_version = "default-version",
     });
@@ -914,11 +858,9 @@ test "KustoClient rejects invalid request properties before transport" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 200, empty_v2_response);
     defer mock.deinit();
-    var client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        mock.asTransport(),
-        .{},
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = KustoClient.init(connection, .{});
     try std.testing.expectError(
         error.InvalidServerTimeout,
         client.executeQuery(allocator, "db", "print 1", .{ .server_timeout_ms = 999 }),
@@ -930,11 +872,9 @@ test "Kusto non-2xx malformed body is a structured HTTP failure" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 502, "gateway said no");
     defer mock.deinit();
-    var client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        mock.asTransport(),
-        .{},
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = KustoClient.init(connection, .{});
     var response_result = try client.executeQueryResult(allocator, "db", "print 1", null);
     defer response_result.deinit(allocator);
     switch (response_result) {
@@ -957,11 +897,9 @@ test "KustoClient decodes V1 management responses" {
     ;
     var mock = core.http.MockTransport.init(allocator, 200, response_body);
     defer mock.deinit();
-    var client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        mock.asTransport(),
-        .{},
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = KustoClient.init(connection, .{});
 
     var dataset = try client.executeMgmt(allocator, "db", ".show databases", null);
     defer dataset.deinit(allocator);
@@ -977,11 +915,9 @@ test "KustoClient preserves structured HTTP failures" {
         \\{"error":{"code":"BadRequest","message":"Invalid query"}}
     );
     defer mock.deinit();
-    var client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        mock.asTransport(),
-        .{},
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = KustoClient.init(connection, .{});
 
     var response_result = try client.executeQueryResult(allocator, "db", "bad", null);
     defer response_result.deinit(allocator);
@@ -1010,11 +946,9 @@ test "KustoClient returns completion failures with buffered V2 tables" {
         .{ .name = "x-ms-activity-id", .value = "response-activity" },
     };
     defer mock.deinit();
-    var client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        mock.asTransport(),
-        .{},
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = KustoClient.init(connection, .{});
 
     var response_result = try client.executeQueryResult(allocator, "db", "print 1", null);
     defer response_result.deinit(allocator);
@@ -1040,11 +974,9 @@ test "KustoClient returns V1 exceptions as partial buffered results" {
     ;
     var mock = core.http.MockTransport.init(allocator, 200, response_body);
     defer mock.deinit();
-    var client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        mock.asTransport(),
-        .{},
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = KustoClient.init(connection, .{});
 
     var response_result = try client.executeMgmtResult(allocator, "db", ".show tables", null);
     defer response_result.deinit(allocator);
@@ -1069,11 +1001,9 @@ test "KustoClient honors varying-result-width request property" {
     ;
     var mock = core.http.MockTransport.init(allocator, 200, response_body);
     defer mock.deinit();
-    var client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        mock.asTransport(),
-        .{},
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = KustoClient.init(connection, .{});
     var properties = ClientRequestProperties{};
     defer properties.deinit(allocator);
     try properties.setClientResultsReaderAllowVaryingRowWidths(allocator, true);
@@ -1097,11 +1027,9 @@ test "typed parameter bindings stay in properties rather than query text" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 200, empty_v2_response);
     defer mock.deinit();
-    var client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        mock.asTransport(),
-        .{},
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = KustoClient.init(connection, .{});
     var properties = try Binding.bind(allocator, .{
         .secret = "'; .drop table T //",
         .limit = 7,
@@ -1157,11 +1085,9 @@ test "KustoClient progressively pulls tiny chunks with explicit replace and comp
         .{ .name = "x-ms-client-request-id", .value = "service-request-id" },
         .{ .name = "x-ms-activity-id", .value = "service-activity-id" },
     };
-    var client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        mock.asTransport(),
-        .{},
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = KustoClient.init(connection, .{});
     var properties = ClientRequestProperties{};
     defer properties.deinit(allocator);
     try properties.setProgressiveRowCount(allocator, 10);
@@ -1248,11 +1174,11 @@ test "shared KustoClient opens progressive queries through authenticated no-redi
             .cluster_url = "https://cluster.kusto.windows.net",
             .credential = credential.asCredential(),
         },
-        mock.asTransport(),
+        testRuntime(mock.asTransport()),
         .{ .metadata_mode = .disabled },
     );
     defer connection.deinit();
-    var client = KustoClient.initWithConnection(connection, .{});
+    var client = KustoClient.init(connection, .{});
     const opened = try client.executeProgressiveQuery(allocator, "db", "print 1", null, .{});
     const query_stream = switch (opened) {
         .ok => |value| value,
@@ -1272,11 +1198,9 @@ test "progressive query reports non-success opens as structured errors" {
         "{\"error\":{\"code\":\"Throttled\",\"message\":\"retry later\"}}",
     );
     defer mock.deinit();
-    var client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        mock.asTransport(),
-        .{},
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = KustoClient.init(connection, .{});
     var opened = try client.executeProgressiveQuery(
         allocator,
         "db",
@@ -1302,11 +1226,9 @@ test "progressive row iterator exposes zero row replacement reset" {
     var mock = core.http.MockTransport.init(allocator, 200, progressive_v2_response);
     defer mock.deinit();
     mock.stream_response_chunk_size = 2;
-    var client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        mock.asTransport(),
-        .{},
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = KustoClient.init(connection, .{});
     const opened = try client.executeProgressiveQuery(allocator, "db", "print 1", null, .{});
     const query_stream = switch (opened) {
         .ok => |value| value,
@@ -1342,11 +1264,9 @@ test "progressive row iterator resets once and preserves every partial failure" 
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 200, progressive_replace_response);
     defer mock.deinit();
-    var client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        mock.asTransport(),
-        .{},
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = KustoClient.init(connection, .{});
     const opened = try client.executeProgressiveQuery(allocator, "db", "print 1", null, .{});
     const query_stream = switch (opened) {
         .ok => |value| value,
@@ -1378,11 +1298,9 @@ test "progressive fragment events own their row schema" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 200, progressive_replace_response);
     defer mock.deinit();
-    var client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        mock.asTransport(),
-        .{},
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = KustoClient.init(connection, .{});
     const opened = try client.executeProgressiveQuery(allocator, "db", "print 1", null, .{});
     const query_stream = switch (opened) {
         .ok => |value| value,
@@ -1410,11 +1328,9 @@ test "KustoResult deinitializes an owned progressive stream pointer" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 200, progressive_v2_response);
     defer mock.deinit();
-    var client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        mock.asTransport(),
-        .{},
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = KustoClient.init(connection, .{});
     var opened = try client.executeProgressiveQuery(allocator, "db", "print 1", null, .{});
     opened.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 1), mock.stream_abort_count);
@@ -1425,11 +1341,9 @@ test "progressive query cannot send remote cancellation after dataset completion
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 200, progressive_v2_response);
     defer mock.deinit();
-    var client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        mock.asTransport(),
-        .{},
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = KustoClient.init(connection, .{});
     const opened = try client.executeProgressiveQuery(allocator, "db", "print 1", null, .{});
     const query_stream = switch (opened) {
         .ok => |value| value,
@@ -1454,11 +1368,9 @@ test "progressive stream releases early operations and does not retain many fram
     const allocator = std.testing.allocator;
     var early_mock = core.http.MockTransport.init(allocator, 200, progressive_v2_response);
     defer early_mock.deinit();
-    var client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        early_mock.asTransport(),
-        .{},
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(early_mock.asTransport()));
+    defer connection.deinit();
+    var client = KustoClient.init(connection, .{});
     const early_opened = try client.executeProgressiveQuery(allocator, "db", "print 1", null, .{});
     const early_stream = switch (early_opened) {
         .ok => |value| value,
@@ -1489,11 +1401,13 @@ test "progressive stream releases early operations and does not retain many fram
     var mock = core.http.MockTransport.init(allocator, 200, response.items);
     defer mock.deinit();
     mock.stream_response_chunk_size = 3;
-    client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        mock.asTransport(),
-        .{},
+    const stream_connection = try testConnection(
+        allocator,
+        "https://cluster.kusto.windows.net",
+        testRuntime(mock.asTransport()),
     );
+    defer stream_connection.deinit();
+    client = KustoClient.init(stream_connection, .{});
     const opened = try client.executeProgressiveQuery(
         allocator,
         "db",
@@ -1521,11 +1435,9 @@ test "progressive stream bounds frames and rejects malformed order or reader fai
     const allocator = std.testing.allocator;
     var too_large = core.http.MockTransport.init(allocator, 200, progressive_v2_response);
     defer too_large.deinit();
-    var client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        too_large.asTransport(),
-        .{},
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(too_large.asTransport()));
+    defer connection.deinit();
+    var client = KustoClient.init(connection, .{});
     var opened = try client.executeProgressiveQuery(allocator, "db", "print 1", null, .{ .max_frame_bytes = 8 });
     const limited = switch (opened) {
         .ok => |value| value,
@@ -1540,11 +1452,13 @@ test "progressive stream bounds frames and rejects malformed order or reader fai
     ;
     var bad_mock = core.http.MockTransport.init(allocator, 200, malformed);
     defer bad_mock.deinit();
-    client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        bad_mock.asTransport(),
-        .{},
+    const bad_connection = try testConnection(
+        allocator,
+        "https://cluster.kusto.windows.net",
+        testRuntime(bad_mock.asTransport()),
     );
+    defer bad_connection.deinit();
+    client = KustoClient.init(bad_connection, .{});
     opened = try client.executeProgressiveQuery(allocator, "db", "print 1", null, .{});
     const bad_stream = switch (opened) {
         .ok => |value| value,
@@ -1559,11 +1473,13 @@ test "progressive stream bounds frames and rejects malformed order or reader fai
     ;
     var comma_mock = core.http.MockTransport.init(allocator, 200, trailing_comma);
     defer comma_mock.deinit();
-    client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        comma_mock.asTransport(),
-        .{},
+    const comma_connection = try testConnection(
+        allocator,
+        "https://cluster.kusto.windows.net",
+        testRuntime(comma_mock.asTransport()),
     );
+    defer comma_connection.deinit();
+    client = KustoClient.init(comma_connection, .{});
     opened = try client.executeProgressiveQuery(allocator, "db", "print 1", null, .{});
     const comma_stream = switch (opened) {
         .ok => |value| value,
@@ -1581,11 +1497,13 @@ test "progressive stream bounds frames and rejects malformed order or reader fai
     ;
     var header_mock = core.http.MockTransport.init(allocator, 200, invalid_header);
     defer header_mock.deinit();
-    client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        header_mock.asTransport(),
-        .{},
+    const header_connection = try testConnection(
+        allocator,
+        "https://cluster.kusto.windows.net",
+        testRuntime(header_mock.asTransport()),
     );
+    defer header_connection.deinit();
+    client = KustoClient.init(header_connection, .{});
     opened = try client.executeProgressiveQuery(allocator, "db", "print 1", null, .{});
     const header_stream = switch (opened) {
         .ok => |value| value,
@@ -1602,11 +1520,13 @@ test "progressive stream bounds frames and rejects malformed order or reader fai
     ;
     var table_mock = core.http.MockTransport.init(allocator, 200, too_many_tables);
     defer table_mock.deinit();
-    client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        table_mock.asTransport(),
-        .{},
+    const table_connection = try testConnection(
+        allocator,
+        "https://cluster.kusto.windows.net",
+        testRuntime(table_mock.asTransport()),
     );
+    defer table_connection.deinit();
+    client = KustoClient.init(table_connection, .{});
     opened = try client.executeProgressiveQuery(
         allocator,
         "db",
@@ -1631,11 +1551,13 @@ test "progressive stream bounds frames and rejects malformed order or reader fai
     var failed_mock = core.http.MockTransport.init(allocator, 200, progressive_v2_response);
     defer failed_mock.deinit();
     failed_mock.stream_fail_response_after = 0;
-    client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        failed_mock.asTransport(),
-        .{},
+    const failed_connection = try testConnection(
+        allocator,
+        "https://cluster.kusto.windows.net",
+        testRuntime(failed_mock.asTransport()),
     );
+    defer failed_connection.deinit();
+    client = KustoClient.init(failed_connection, .{});
     opened = try client.executeProgressiveQuery(allocator, "db", "print 1", null, .{});
     const failed_stream = switch (opened) {
         .ok => |value| value,
@@ -1649,11 +1571,9 @@ test "progressive query cancellation uses original request ID and management req
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 200, progressive_v2_response);
     defer mock.deinit();
-    var client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        mock.asTransport(),
-        .{},
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = KustoClient.init(connection, .{});
     const target_id = "query-request-id";
     const properties = ClientRequestProperties{ .client_request_id = target_id };
     const opened = try client.executeProgressiveQuery(allocator, "db", "print 1", properties, .{});
@@ -1685,11 +1605,9 @@ test "progressive query checks pre-cancellation and deadlines between pulls" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 200, progressive_v2_response);
     defer mock.deinit();
-    var client = KustoClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        mock.asTransport(),
-        .{},
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(mock.asTransport()));
+    defer connection.deinit();
+    var client = KustoClient.init(connection, .{});
     var token = core.http.CancellationToken{};
     token.cancel();
     try std.testing.expectError(
