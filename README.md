@@ -178,9 +178,13 @@ recorded but not applied: it is a threshold the peer picks, with no room for
 the annotations a broker adds on delivery, and going over detaches the link.
 Applying it would buy a tighter ceiling but not a qualitatively different one,
 since unbounded growth is already closed by your limit — and that tightening
-does not pay for tearing links down on a number the peer chose. Setting yours
-to `null` restores unlimited reassembly, which is what let a sender open a
-delivery, never end it, and grow the buffer until the process died.
+does not pay for tearing links down on a number the peer chose.
+
+Setting `max_message_size` to null or zero restores unlimited per-message
+reassembly only when `max_buffered_bytes` is also null. With a finite aggregate
+budget, that budget is advertised and enforced as the effective
+`max-message-size`, so a conforming peer is never granted credit for a legal
+message this receiver would have to reject.
 
 `max_buffered_bytes` separately bounds the aggregate payload retained in the
 ready queue and the delivery currently being reassembled. It defaults to
@@ -200,6 +204,14 @@ and remains valid until the next successful `receive`; it is still bounded by
 service's smaller message limit should set `max_message_size` accordingly:
 that both advertises the real limit and permits proportionally more of the
 requested prefetch window.
+
+Credit and delivery count are charged on the initial transfer, exactly once.
+An aborted multi-frame delivery releases its partial bytes without entering the
+ready queue, while a new delivery id arriving before the current delivery ends
+is a protocol error that terminally detaches the receiver. Any allocation
+failure after a transfer has been consumed does the same: the missing frame
+cannot be replayed, so keeping its old prefix for a later continuation would
+surface truncated data.
 
 Settling one delivery at a time costs a frame per message, which at a 300-deep
 prefetch is 300 frames of bookkeeping. A disposition can name a `first`..`last`
@@ -282,8 +294,11 @@ If a multi-frame send fails after its opening transfer reached the wire, the
 link is poisoned and detached best-effort. The peer is already holding an
 unterminated delivery, so starting another delivery on that link would instead
 continue the failed bytes and corrupt the protocol stream. Recovery must open a
-new sender. Link credit and delivery count are consumed when the first frame
-succeeds, while no settlement entry is created for the incomplete delivery.
+new sender. The poisoned object is terminal and must first be removed with
+`Session.closeSender`; late attach or flow frames cannot reactivate it or bind
+to a replacement with the same name. Link credit and delivery count are
+consumed when the first frame succeeds, while no settlement entry is created
+for the incomplete delivery.
 
 `abandonInFlight` is the way out of a pipeline that failed partway. Waiting is
 what just failed, so the caller cannot wait the remaining deliveries out, and a
