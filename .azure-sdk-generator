@@ -1,4 +1,4 @@
-generator_commit=f5dde2c7aa95e7a5ac496793b5527c9a212d642c
+generator_commit=c83a1cbef5f728d7530fdec4a724cc453233cfa4
 fixture=codegen/fixtures/data_tables.json
 source_repository=https://github.com/Azure/azure-rest-api-specs
 source_commit=0744f52a86919d243ba2225e55bdb9c87bf521a5
@@ -6,4 +6,4 @@ source_path=specification/cosmos-db/data-plane/Tables/tspconfig.yaml
 stable_api_versions=2019-02-02
 selected_api_version=2019-02-02
 batch_operation=absent
-command=(cd codegen/cli && zig build -Ddata-tables-output=<package-output> -Dazure-sdk-core-commit=da55987aa3c90393a726fc1fa5e86ccd69d72271 -Dazure-sdk-core-hash=azure_sdk_core-0.1.2-eFY0EtO6BQARBvYkxdhibifztfqTgJKEN1fe14sMUIYs generate-data-tables-package)
+command=(cd codegen/cli && zig build -Ddata-tables-output=<package-output> -Dazure-sdk-core-commit=bc77bcacbb64af935ca53d60bf8a351c9592bc41 -Dazure-sdk-core-hash=azure_sdk_core-0.3.0-eFY0Ev0-CACjsFaYPL6jS7CpeVNvsqYqTrXRfgQKiRFV generate-data-tables-package)
