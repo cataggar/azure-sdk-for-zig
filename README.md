@@ -41,19 +41,26 @@ defer parsed.deinit();
 var playback = testing.PlaybackTransport.init(allocator, parsed.asSlice());
 ```
 
-Recording stages a complete redirect/retry chain before publishing any of its
-exchanges. Buffered chains commit only when their final nonretry response is
-returned; a retryable final response remains tentative until it is accepted or
-the original request restarts. Streaming chains commit only after the final
-operation finishes. Intermediate redirect aborts remain tentative, while
-redirect allocation failure, retry restart from the original request,
-operation failure, abort, or cancellation discards the whole tentative chain.
+Each exchange represents one raw HTTP transport invocation, not a logical
+pipeline transaction. Redirect and retry responses are recorded and replayed
+in the order observed. Buffered responses are recorded when the inner
+transport returns them. Streaming responses are recorded when the operation
+finishes, is aborted, or is cancelled, including only response body bytes
+observed before that terminal event.
+
+A redirect allocation failure still consumed a real transport attempt. A
+later caller retry therefore requires the next recorded attempt, just as live
+recording would. A terminal retryable result must include every raw attempt
+produced by the selected retry configuration.
 
 Recording JSON replaces recognized authorization, token, secret, key, cookie,
 and SAS-bearing header values with `REDACTED`. Credential URL headers such as
 `x-ms-copy-source`, `x-ms-rename-source`, and
 `x-ms-file-rename-source` are fully redacted; recognized credential-specific
 query parameters in request URLs and location-style headers are value-redacted.
+Established vendor signing fields such as `X-Amz-Signature`,
+`X-Amz-Credential`, `X-Amz-Security-Token`, and `X-Goog-Signature` receive the
+same treatment, including nested and multiply encoded URLs.
 Each redacted header carries a structured `redacted` flag, so playback
 wildcards only values that recording explicitly classified as credentials.
 Those structured redactions match a caller-supplied live credential, while
@@ -126,9 +133,11 @@ hosts and the matching action. Managed HSM host rules include every supported
 sovereign suffix, including `managedhsm.microsoftazure.de`. Endpoint path
 segments and query names/values are canonicalized with the same bounded
 recursive decoder before schema classification; malformed or over-depth
-endpoint encodings fail closed. Arbitrary URL text cannot activate these
-schema rules, so App Configuration key/value documents and paths containing
-words such as `vault/secrets` remain recordable and exact.
+endpoint encodings fail closed. Endpoint hosts are parsed canonically,
+percent-decoded, and normalized by removing a terminal DNS root dot; malformed
+and userinfo-bearing authorities fail closed. Arbitrary URL text cannot
+activate these schema rules, so App Configuration key/value documents and
+paths containing words such as `vault/secrets` remain recordable and exact.
 
 The default body contract is deny-by-default: every non-empty body is rejected
 with `BodyPolicyRequired` unless `bodyPolicyFn` classifies that exact exchange.
@@ -177,13 +186,11 @@ legal preambles, epilogues, and nested multipart parts are inspected, while
 invalid close suffixes, missing closes, and malformed multipart structures fail
 closed. Policy contexts are borrowed through `toJson`.
 
-Playback matches without consuming an exchange. It advances the caller-
-serialized index only after a nonredirect buffered response succeeds or a
-final streaming operation finishes successfully. Redirect chains remain a
-single tentative transaction until their final response/operation commits, so
-allocation failure at any Core redirect-resolution/request-construction step
-can retry the original request. Aborted, cancelled, or failed streaming
-operations remain retryable.
+Playback consumes one exchange for each successful raw transport invocation.
+Buffered attempts advance after response allocation succeeds; streaming
+attempts advance after operation allocation succeeds. Outer pipeline redirect
+allocation, retry, backoff, and cancellation behavior does not roll back an
+already completed raw attempt.
 
 Run its independent tests from this directory:
 
