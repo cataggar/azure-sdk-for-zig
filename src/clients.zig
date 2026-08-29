@@ -21,80 +21,30 @@ fn responseStatusExpected(status: u16, expected: []const u16) bool {
 }
 const default_endpoint = "https://management.azure.com";
 const default_api_version = "2025-09-01";
-const auth_scopes: []const []const u8 = &.{"https://management.azure.com/.default"};
 
 /// Azure VMware Solution API
 pub const AVSClient = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     subscription_id: []const u8,
-    allocator: std.mem.Allocator,
-    auth_policy: ?*core.pipeline.BearerTokenAuthPolicy,
-    policy_ptrs: []*core.pipeline.HttpPolicy,
 
     pub const InitOptions = struct {
         subscription_id: []const u8,
-        credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
         endpoint: []const u8 = default_endpoint,
         api_version: []const u8 = default_api_version,
     };
 
-    pub const PipelineOptions = struct {
-        subscription_id: []const u8,
-        endpoint: []const u8 = default_endpoint,
-        api_version: []const u8 = default_api_version,
-    };
-
-    pub fn init(allocator: std.mem.Allocator, options: InitOptions) !AVSClient {
-        const auth_policy = try allocator.create(core.pipeline.BearerTokenAuthPolicy);
-        errdefer allocator.destroy(auth_policy);
-        auth_policy.* = core.pipeline.BearerTokenAuthPolicy.init(
-            allocator,
-            options.credential,
-            auth_scopes,
-        );
-
-        const policy_ptrs = try allocator.alloc(*core.pipeline.HttpPolicy, 1);
-        errdefer allocator.free(policy_ptrs);
-        policy_ptrs[0] = auth_policy.asPolicy();
-
-        return .{
-            .allocator = allocator,
-            .endpoint = options.endpoint,
-            .api_version = options.api_version,
-            .auth_policy = auth_policy,
-            .policy_ptrs = policy_ptrs,
-            .pipeline = .{
-                .policies = policy_ptrs,
-                .transport_impl = options.transport,
-            },
-            .subscription_id = options.subscription_id,
-        };
-    }
-    pub fn initWithPipeline(
-        allocator: std.mem.Allocator,
-        pipeline: core.pipeline.HttpPipeline,
-        options: PipelineOptions,
+    pub fn init(
+        pipeline: core.http.HttpPipeline,
+        options: InitOptions,
     ) AVSClient {
         return .{
-            .allocator = allocator,
             .endpoint = options.endpoint,
             .api_version = options.api_version,
-            .auth_policy = null,
-            .policy_ptrs = &.{},
             .pipeline = pipeline,
             .subscription_id = options.subscription_id,
         };
-    }
-
-    pub fn deinit(self: *@This()) void {
-        if (self.auth_policy) |auth_policy| {
-            auth_policy.deinit();
-            self.allocator.destroy(auth_policy);
-            self.allocator.free(self.policy_ptrs);
-        }
     }
 
     pub fn operations(self: *@This()) Operations {
@@ -317,9 +267,10 @@ pub const AVSClient = struct {
 pub const Operations = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// List the operations for the provider
     pub fn list(self: *@This(), alloc: std.mem.Allocator) !core.pager.PipelinePager(models.Operation) {
+        @setEvalBranchQuota(100_000);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/providers/Microsoft.AVS/operations", .{self.endpoint});
         defer alloc.free(base_url);
         var url_buf: std.ArrayList(u8) = .empty;
@@ -345,10 +296,11 @@ pub const Operations = struct {
 pub const Addons = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     subscription_id: []const u8,
     /// List Addon resources by PrivateCloud
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.Addon) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -377,6 +329,7 @@ pub const Addons = struct {
     }
     /// Get a Addon
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, addon_name: []const u8) !models.Addon {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -412,6 +365,7 @@ pub const Addons = struct {
     }
     /// Create a Addon
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, addon_name: []const u8, addon: models.Addon) !core.lro.TypedPoller(models.Addon) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -451,6 +405,7 @@ pub const Addons = struct {
     }
     /// Delete a Addon
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, addon_name: []const u8) !core.lro.TypedPoller(void) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -488,10 +443,11 @@ pub const Addons = struct {
 pub const Authorizations = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     subscription_id: []const u8,
     /// List ExpressRouteAuthorization resources by PrivateCloud
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.ExpressRouteAuthorization) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -520,6 +476,7 @@ pub const Authorizations = struct {
     }
     /// Get a ExpressRouteAuthorization
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, authorization_name: []const u8) !models.ExpressRouteAuthorization {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -555,6 +512,7 @@ pub const Authorizations = struct {
     }
     /// Create a ExpressRouteAuthorization
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, authorization_name: []const u8, authorization: models.ExpressRouteAuthorization) !core.lro.TypedPoller(models.ExpressRouteAuthorization) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -594,6 +552,7 @@ pub const Authorizations = struct {
     }
     /// Delete a ExpressRouteAuthorization
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, authorization_name: []const u8) !core.lro.TypedPoller(void) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -631,10 +590,11 @@ pub const Authorizations = struct {
 pub const CloudLinks = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     subscription_id: []const u8,
     /// List CloudLink resources by PrivateCloud
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.CloudLink) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -663,6 +623,7 @@ pub const CloudLinks = struct {
     }
     /// Get a CloudLink
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cloud_link_name: []const u8) !models.CloudLink {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -698,6 +659,7 @@ pub const CloudLinks = struct {
     }
     /// Create a CloudLink
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cloud_link_name: []const u8, cloud_link: models.CloudLink) !core.lro.TypedPoller(models.CloudLink) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -737,6 +699,7 @@ pub const CloudLinks = struct {
     }
     /// Delete a CloudLink
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cloud_link_name: []const u8) !core.lro.TypedPoller(void) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -774,10 +737,11 @@ pub const CloudLinks = struct {
 pub const Clusters = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     subscription_id: []const u8,
     /// List Cluster resources by PrivateCloud
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.Cluster) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -806,6 +770,7 @@ pub const Clusters = struct {
     }
     /// Get a Cluster
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8) !models.Cluster {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -841,6 +806,7 @@ pub const Clusters = struct {
     }
     /// Create a Cluster
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, cluster: models.Cluster) !core.lro.TypedPoller(models.Cluster) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -880,6 +846,7 @@ pub const Clusters = struct {
     }
     /// Update a Cluster
     pub fn update(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, cluster_update: models.ClusterUpdate) !core.lro.TypedPoller(models.Cluster) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -919,6 +886,7 @@ pub const Clusters = struct {
     }
     /// Delete a Cluster
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8) !core.lro.TypedPoller(void) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -953,6 +921,7 @@ pub const Clusters = struct {
     }
     /// List hosts by zone in a cluster
     pub fn listZones(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8) !models.ClusterZoneList {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -991,10 +960,11 @@ pub const Clusters = struct {
 pub const Datastores = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     subscription_id: []const u8,
     /// List Datastore resources by Cluster
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8) !core.pager.PipelinePager(models.Datastore) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1025,6 +995,7 @@ pub const Datastores = struct {
     }
     /// Get a Datastore
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, datastore_name: []const u8) !models.Datastore {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1062,6 +1033,7 @@ pub const Datastores = struct {
     }
     /// Create a Datastore
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, datastore_name: []const u8, datastore: models.Datastore) !core.lro.TypedPoller(models.Datastore) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1103,6 +1075,7 @@ pub const Datastores = struct {
     }
     /// Delete a Datastore
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, datastore_name: []const u8) !core.lro.TypedPoller(void) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1142,10 +1115,11 @@ pub const Datastores = struct {
 pub const GlobalReachConnections = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     subscription_id: []const u8,
     /// List GlobalReachConnection resources by PrivateCloud
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.GlobalReachConnection) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1174,6 +1148,7 @@ pub const GlobalReachConnections = struct {
     }
     /// Get a GlobalReachConnection
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, global_reach_connection_name: []const u8) !models.GlobalReachConnection {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1209,6 +1184,7 @@ pub const GlobalReachConnections = struct {
     }
     /// Create a GlobalReachConnection
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, global_reach_connection_name: []const u8, global_reach_connection: models.GlobalReachConnection) !core.lro.TypedPoller(models.GlobalReachConnection) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1248,6 +1224,7 @@ pub const GlobalReachConnections = struct {
     }
     /// Delete a GlobalReachConnection
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, global_reach_connection_name: []const u8) !core.lro.TypedPoller(void) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1285,10 +1262,11 @@ pub const GlobalReachConnections = struct {
 pub const HcxEnterpriseSites = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     subscription_id: []const u8,
     /// List HcxEnterpriseSite resources by PrivateCloud
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.HcxEnterpriseSite) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1317,6 +1295,7 @@ pub const HcxEnterpriseSites = struct {
     }
     /// Get a HcxEnterpriseSite
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, hcx_enterprise_site_name: []const u8) !models.HcxEnterpriseSite {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1352,6 +1331,7 @@ pub const HcxEnterpriseSites = struct {
     }
     /// Create a HcxEnterpriseSite
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, hcx_enterprise_site_name: []const u8, hcx_enterprise_site: models.HcxEnterpriseSite) !models.HcxEnterpriseSite {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1391,6 +1371,7 @@ pub const HcxEnterpriseSites = struct {
     }
     /// Delete a HcxEnterpriseSite
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, hcx_enterprise_site_name: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1428,10 +1409,11 @@ pub const HcxEnterpriseSites = struct {
 pub const Hosts = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     subscription_id: []const u8,
     /// List Host resources by Cluster
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8) !core.pager.PipelinePager(models.Host) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1462,6 +1444,7 @@ pub const Hosts = struct {
     }
     /// Get a Host
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, host_id: []const u8) !models.Host {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1502,10 +1485,11 @@ pub const Hosts = struct {
 pub const IscsiPaths = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     subscription_id: []const u8,
     /// List IscsiPath resources by PrivateCloud
     pub fn listByPrivateCloud(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.IscsiPath) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1534,6 +1518,7 @@ pub const IscsiPaths = struct {
     }
     /// Get a IscsiPath
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !models.IscsiPath {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1567,6 +1552,7 @@ pub const IscsiPaths = struct {
     }
     /// Create a IscsiPath
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, resource: models.IscsiPath) !core.lro.TypedPoller(models.IscsiPath) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1604,6 +1590,7 @@ pub const IscsiPaths = struct {
     }
     /// Delete a IscsiPath
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1639,10 +1626,11 @@ pub const IscsiPaths = struct {
 pub const Licenses = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     subscription_id: []const u8,
     /// List License resources by PrivateCloud
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.License) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1671,6 +1659,7 @@ pub const Licenses = struct {
     }
     /// Get a License
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, license_name: enums.LicenseName) !models.License {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1706,6 +1695,7 @@ pub const Licenses = struct {
     }
     /// Create a License
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, license_name: enums.LicenseName, resource: models.License) !core.lro.TypedPoller(models.License) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1745,6 +1735,7 @@ pub const Licenses = struct {
     }
     /// Delete a License
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, license_name: enums.LicenseName) !core.lro.TypedPoller(void) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1779,6 +1770,7 @@ pub const Licenses = struct {
     }
     /// Just like ArmResourceActionSync, but with no request body.
     pub fn getProperties(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, license_name: enums.LicenseName) !models.LicenseProperties {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1817,10 +1809,11 @@ pub const Licenses = struct {
 pub const Locations = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     subscription_id: []const u8,
     /// Return trial status for subscription by region
     pub fn checkTrialAvailability(self: *@This(), alloc: std.mem.Allocator, location: []const u8, sku: ?models.Sku) !models.Trial {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, location);
@@ -1860,6 +1853,7 @@ pub const Locations = struct {
     }
     /// Return quota for subscription by region
     pub fn checkQuotaAvailability(self: *@This(), alloc: std.mem.Allocator, location: []const u8) !models.Quota {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, location);
@@ -1894,10 +1888,11 @@ pub const Locations = struct {
 pub const Maintenances = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     subscription_id: []const u8,
     /// List Maintenance resources by subscription ID
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, state_name: ?enums.MaintenanceStateName, status: ?enums.MaintenanceStatusFilter, from: ?[]const u8, to: ?[]const u8) !core.pager.PipelinePager(models.Maintenance) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1914,30 +1909,30 @@ pub const Maintenances = struct {
         defer alloc.free(encoded_query_0);
         try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
         has_query = true;
-        if (state_name) |v| {
+        if (state_name) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            const enc = try core.url.percentEncode(alloc, v.toWire());
+            const enc = try core.url.percentEncode(alloc, query_value.toWire());
             defer alloc.free(enc);
             try url_buf.print(alloc, "{s}stateName={s}", .{ sep, enc });
             has_query = true;
         }
-        if (status) |v| {
+        if (status) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            const enc = try core.url.percentEncode(alloc, v.toWire());
+            const enc = try core.url.percentEncode(alloc, query_value.toWire());
             defer alloc.free(enc);
             try url_buf.print(alloc, "{s}status={s}", .{ sep, enc });
             has_query = true;
         }
-        if (from) |v| {
+        if (from) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            const enc = try core.url.percentEncode(alloc, v);
+            const enc = try core.url.percentEncode(alloc, query_value);
             defer alloc.free(enc);
             try url_buf.print(alloc, "{s}from={s}", .{ sep, enc });
             has_query = true;
         }
-        if (to) |v| {
+        if (to) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            const enc = try core.url.percentEncode(alloc, v);
+            const enc = try core.url.percentEncode(alloc, query_value);
             defer alloc.free(enc);
             try url_buf.print(alloc, "{s}to={s}", .{ sep, enc });
             has_query = true;
@@ -1954,6 +1949,7 @@ pub const Maintenances = struct {
     }
     /// Get a Maintenance
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, maintenance_name: []const u8) !models.Maintenance {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -1989,6 +1985,7 @@ pub const Maintenances = struct {
     }
     /// Reschedule a maintenance
     pub fn reschedule(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, maintenance_name: []const u8, body: models.MaintenanceReschedule) !models.Maintenance {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2028,6 +2025,7 @@ pub const Maintenances = struct {
     }
     /// Schedule a maintenance
     pub fn schedule(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, maintenance_name: []const u8, body: models.MaintenanceSchedule) !models.Maintenance {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2067,6 +2065,7 @@ pub const Maintenances = struct {
     }
     /// Initiate maintenance readiness checks
     pub fn initiateChecks(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, maintenance_name: []const u8) !models.Maintenance {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2105,10 +2104,11 @@ pub const Maintenances = struct {
 pub const PlacementPolicies = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     subscription_id: []const u8,
     /// List PlacementPolicy resources by Cluster
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8) !core.pager.PipelinePager(models.PlacementPolicy) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2139,6 +2139,7 @@ pub const PlacementPolicies = struct {
     }
     /// Get a PlacementPolicy
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, placement_policy_name: []const u8) !models.PlacementPolicy {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2176,6 +2177,7 @@ pub const PlacementPolicies = struct {
     }
     /// Create a PlacementPolicy
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, placement_policy_name: []const u8, placement_policy: models.PlacementPolicy) !core.lro.TypedPoller(models.PlacementPolicy) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2217,6 +2219,7 @@ pub const PlacementPolicies = struct {
     }
     /// Update a PlacementPolicy
     pub fn update(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, placement_policy_name: []const u8, placement_policy_update: models.PlacementPolicyUpdate) !core.lro.TypedPoller(models.PlacementPolicy) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2258,6 +2261,7 @@ pub const PlacementPolicies = struct {
     }
     /// Delete a PlacementPolicy
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, placement_policy_name: []const u8) !core.lro.TypedPoller(void) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2297,10 +2301,11 @@ pub const PlacementPolicies = struct {
 pub const PrivateClouds = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     subscription_id: []const u8,
     /// List PrivateCloud resources by resource group
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8) !core.pager.PipelinePager(models.PrivateCloud) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2327,6 +2332,7 @@ pub const PrivateClouds = struct {
     }
     /// List PrivateCloud resources by subscription ID
     pub fn listInSubscription(self: *@This(), alloc: std.mem.Allocator) !core.pager.PipelinePager(models.PrivateCloud) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/providers/Microsoft.AVS/privateClouds", .{ self.endpoint, encoded_path_0 });
@@ -2351,6 +2357,7 @@ pub const PrivateClouds = struct {
     }
     /// Get a PrivateCloud
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !models.PrivateCloud {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2384,6 +2391,7 @@ pub const PrivateClouds = struct {
     }
     /// Create a PrivateCloud
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, private_cloud: models.PrivateCloud) !core.lro.TypedPoller(models.PrivateCloud) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2421,6 +2429,7 @@ pub const PrivateClouds = struct {
     }
     /// Update a PrivateCloud
     pub fn update(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, private_cloud_update: models.PrivateCloudUpdate) !core.lro.TypedPoller(models.PrivateCloud) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2458,6 +2467,7 @@ pub const PrivateClouds = struct {
     }
     /// Delete a PrivateCloud
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2490,6 +2500,7 @@ pub const PrivateClouds = struct {
     }
     /// Rotate the vCenter password
     pub fn rotateVcenterPassword(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2522,6 +2533,7 @@ pub const PrivateClouds = struct {
     }
     /// Rotate the NSX-T Manager password
     pub fn rotateNsxtPassword(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2554,6 +2566,7 @@ pub const PrivateClouds = struct {
     }
     /// List the admin credentials for the private cloud
     pub fn listAdminCredentials(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !models.AdminCredentials {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2587,6 +2600,7 @@ pub const PrivateClouds = struct {
     }
     /// Get the license for the private cloud
     pub fn getVcfLicense(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !models.VcfLicense {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2623,10 +2637,11 @@ pub const PrivateClouds = struct {
 pub const ProvisionedNetworks = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     subscription_id: []const u8,
     /// List ProvisionedNetwork resources by PrivateCloud
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.ProvisionedNetwork) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2655,6 +2670,7 @@ pub const ProvisionedNetworks = struct {
     }
     /// Get a ProvisionedNetwork
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, provisioned_network_name: []const u8) !models.ProvisionedNetwork {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2693,10 +2709,11 @@ pub const ProvisionedNetworks = struct {
 pub const PureStoragePolicies = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     subscription_id: []const u8,
     /// List PureStoragePolicy resources by PrivateCloud
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.PureStoragePolicy) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2725,6 +2742,7 @@ pub const PureStoragePolicies = struct {
     }
     /// Get a PureStoragePolicy
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, storage_policy_name: []const u8) !models.PureStoragePolicy {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2760,6 +2778,7 @@ pub const PureStoragePolicies = struct {
     }
     /// Create a PureStoragePolicy
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, storage_policy_name: []const u8, resource: models.PureStoragePolicy) !core.lro.TypedPoller(models.PureStoragePolicy) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2799,6 +2818,7 @@ pub const PureStoragePolicies = struct {
     }
     /// Delete a PureStoragePolicy
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, storage_policy_name: []const u8) !core.lro.TypedPoller(void) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2836,10 +2856,11 @@ pub const PureStoragePolicies = struct {
 pub const ScriptCmdlets = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     subscription_id: []const u8,
     /// List ScriptCmdlet resources by ScriptPackage
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, script_package_name: []const u8) !core.pager.PipelinePager(models.ScriptCmdlet) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2870,6 +2891,7 @@ pub const ScriptCmdlets = struct {
     }
     /// Get a ScriptCmdlet
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, script_package_name: []const u8, script_cmdlet_name: []const u8) !models.ScriptCmdlet {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2910,10 +2932,11 @@ pub const ScriptCmdlets = struct {
 pub const ScriptExecutions = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     subscription_id: []const u8,
     /// List ScriptExecution resources by PrivateCloud
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.ScriptExecution) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2942,6 +2965,7 @@ pub const ScriptExecutions = struct {
     }
     /// Get a ScriptExecution
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, script_execution_name: []const u8) !models.ScriptExecution {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -2977,6 +3001,7 @@ pub const ScriptExecutions = struct {
     }
     /// Create a ScriptExecution
     pub fn createOrUpdate(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, script_execution_name: []const u8, script_execution: models.ScriptExecution) !core.lro.TypedPoller(models.ScriptExecution) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3016,6 +3041,7 @@ pub const ScriptExecutions = struct {
     }
     /// Delete a ScriptExecution
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, script_execution_name: []const u8) !core.lro.TypedPoller(void) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3050,6 +3076,7 @@ pub const ScriptExecutions = struct {
     }
     /// Return the logs for a script execution resource
     pub fn getExecutionLogs(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, script_execution_name: []const u8, script_output_stream_type: ?[]const enums.ScriptOutputStreamType) !models.ScriptExecution {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3096,10 +3123,11 @@ pub const ScriptExecutions = struct {
 pub const ScriptPackages = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     subscription_id: []const u8,
     /// List ScriptPackage resources by PrivateCloud
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.ScriptPackage) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3128,6 +3156,7 @@ pub const ScriptPackages = struct {
     }
     /// Get a ScriptPackage
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, script_package_name: []const u8) !models.ScriptPackage {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3166,10 +3195,11 @@ pub const ScriptPackages = struct {
 pub const ServiceComponents = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     subscription_id: []const u8,
     /// Return service component availability
     pub fn checkAvailability(self: *@This(), alloc: std.mem.Allocator, location: []const u8, service_component_name: []const u8) !core.lro.TypedPoller(void) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, location);
@@ -3205,10 +3235,11 @@ pub const ServiceComponents = struct {
 pub const Skus = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     subscription_id: []const u8,
     /// A list of SKUs.
     pub fn list(self: *@This(), alloc: std.mem.Allocator) !core.pager.PipelinePager(models.ResourceSku) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/subscriptions/{s}/providers/Microsoft.AVS/skus", .{ self.endpoint, encoded_path_0 });
@@ -3236,10 +3267,11 @@ pub const Skus = struct {
 pub const VirtualMachines = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     subscription_id: []const u8,
     /// List VirtualMachine resources by Cluster
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8) !core.pager.PipelinePager(models.VirtualMachine) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3270,6 +3302,7 @@ pub const VirtualMachines = struct {
     }
     /// Get a VirtualMachine
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, virtual_machine_id: []const u8) !models.VirtualMachine {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3307,6 +3340,7 @@ pub const VirtualMachines = struct {
     }
     /// Enable or disable DRS-driven VM movement restriction
     pub fn restrictMovement(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, cluster_name: []const u8, virtual_machine_id: []const u8, restrict_movement: models.VirtualMachineRestrictMovement) !core.lro.TypedPoller(void) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3350,10 +3384,11 @@ pub const VirtualMachines = struct {
 pub const WorkloadNetworks = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     subscription_id: []const u8,
     /// Get a WorkloadNetwork
     pub fn get(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !models.WorkloadNetwork {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3387,6 +3422,7 @@ pub const WorkloadNetworks = struct {
     }
     /// List WorkloadNetwork resources by PrivateCloud
     pub fn list(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetwork) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3415,6 +3451,7 @@ pub const WorkloadNetworks = struct {
     }
     /// List WorkloadNetworkDhcp resources by WorkloadNetwork
     pub fn listDhcp(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetworkDhcp) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3443,6 +3480,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Get a WorkloadNetworkDhcp
     pub fn getDhcp(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, dhcp_id: []const u8, private_cloud_name: []const u8) !models.WorkloadNetworkDhcp {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3478,6 +3516,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Create a WorkloadNetworkDhcp
     pub fn createDhcp(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, dhcp_id: []const u8, workload_network_dhcp: models.WorkloadNetworkDhcp) !core.lro.TypedPoller(models.WorkloadNetworkDhcp) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3517,6 +3556,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Update a WorkloadNetworkDhcp
     pub fn updateDhcp(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, dhcp_id: []const u8, workload_network_dhcp: models.WorkloadNetworkDhcp) !core.lro.TypedPoller(models.WorkloadNetworkDhcp) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3556,6 +3596,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Delete a WorkloadNetworkDhcp
     pub fn deleteDhcp(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, dhcp_id: []const u8) !core.lro.TypedPoller(void) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3590,6 +3631,7 @@ pub const WorkloadNetworks = struct {
     }
     /// List WorkloadNetworkDnsService resources by WorkloadNetwork
     pub fn listDnsServices(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetworkDnsService) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3618,6 +3660,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Get a WorkloadNetworkDnsService
     pub fn getDnsService(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, dns_service_id: []const u8) !models.WorkloadNetworkDnsService {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3653,6 +3696,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Create a WorkloadNetworkDnsService
     pub fn createDnsService(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, dns_service_id: []const u8, workload_network_dns_service: models.WorkloadNetworkDnsService) !core.lro.TypedPoller(models.WorkloadNetworkDnsService) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3692,6 +3736,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Update a WorkloadNetworkDnsService
     pub fn updateDnsService(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, dns_service_id: []const u8, workload_network_dns_service: models.WorkloadNetworkDnsService) !core.lro.TypedPoller(models.WorkloadNetworkDnsService) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3731,6 +3776,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Delete a WorkloadNetworkDnsService
     pub fn deleteDnsService(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, dns_service_id: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3765,6 +3811,7 @@ pub const WorkloadNetworks = struct {
     }
     /// List WorkloadNetworkDnsZone resources by WorkloadNetwork
     pub fn listDnsZones(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetworkDnsZone) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3793,6 +3840,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Get a WorkloadNetworkDnsZone
     pub fn getDnsZone(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, dns_zone_id: []const u8) !models.WorkloadNetworkDnsZone {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3828,6 +3876,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Create a WorkloadNetworkDnsZone
     pub fn createDnsZone(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, dns_zone_id: []const u8, workload_network_dns_zone: models.WorkloadNetworkDnsZone) !core.lro.TypedPoller(models.WorkloadNetworkDnsZone) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3867,6 +3916,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Update a WorkloadNetworkDnsZone
     pub fn updateDnsZone(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, dns_zone_id: []const u8, workload_network_dns_zone: models.WorkloadNetworkDnsZone) !core.lro.TypedPoller(models.WorkloadNetworkDnsZone) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3906,6 +3956,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Delete a WorkloadNetworkDnsZone
     pub fn deleteDnsZone(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, dns_zone_id: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3940,6 +3991,7 @@ pub const WorkloadNetworks = struct {
     }
     /// List WorkloadNetworkGateway resources by WorkloadNetwork
     pub fn listGateways(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetworkGateway) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -3968,6 +4020,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Get a WorkloadNetworkGateway
     pub fn getGateway(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, gateway_id: []const u8) !models.WorkloadNetworkGateway {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -4003,6 +4056,7 @@ pub const WorkloadNetworks = struct {
     }
     /// List WorkloadNetworkPortMirroring resources by WorkloadNetwork
     pub fn listPortMirroring(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetworkPortMirroring) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -4031,6 +4085,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Get a WorkloadNetworkPortMirroring
     pub fn getPortMirroring(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, port_mirroring_id: []const u8) !models.WorkloadNetworkPortMirroring {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -4066,6 +4121,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Create a WorkloadNetworkPortMirroring
     pub fn createPortMirroring(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, port_mirroring_id: []const u8, workload_network_port_mirroring: models.WorkloadNetworkPortMirroring) !core.lro.TypedPoller(models.WorkloadNetworkPortMirroring) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -4105,6 +4161,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Update a WorkloadNetworkPortMirroring
     pub fn updatePortMirroring(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, port_mirroring_id: []const u8, workload_network_port_mirroring: models.WorkloadNetworkPortMirroring) !core.lro.TypedPoller(models.WorkloadNetworkPortMirroring) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -4144,6 +4201,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Delete a WorkloadNetworkPortMirroring
     pub fn deletePortMirroring(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, port_mirroring_id: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -4178,6 +4236,7 @@ pub const WorkloadNetworks = struct {
     }
     /// List WorkloadNetworkPublicIP resources by WorkloadNetwork
     pub fn listPublicIPs(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetworkPublicIP) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -4206,6 +4265,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Get a WorkloadNetworkPublicIP
     pub fn getPublicIP(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, public_ip_id: []const u8) !models.WorkloadNetworkPublicIP {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -4241,6 +4301,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Create a WorkloadNetworkPublicIP
     pub fn createPublicIP(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, public_ip_id: []const u8, workload_network_public_ip: models.WorkloadNetworkPublicIP) !core.lro.TypedPoller(models.WorkloadNetworkPublicIP) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -4280,6 +4341,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Delete a WorkloadNetworkPublicIP
     pub fn deletePublicIP(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, public_ip_id: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -4314,6 +4376,7 @@ pub const WorkloadNetworks = struct {
     }
     /// List WorkloadNetworkSegment resources by WorkloadNetwork
     pub fn listSegments(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetworkSegment) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -4342,6 +4405,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Get a WorkloadNetworkSegment
     pub fn getSegment(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, segment_id: []const u8) !models.WorkloadNetworkSegment {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -4377,6 +4441,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Create a WorkloadNetworkSegment
     pub fn createSegments(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, segment_id: []const u8, workload_network_segment: models.WorkloadNetworkSegment) !core.lro.TypedPoller(models.WorkloadNetworkSegment) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -4416,6 +4481,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Update a WorkloadNetworkSegment
     pub fn updateSegments(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, segment_id: []const u8, workload_network_segment: models.WorkloadNetworkSegment) !core.lro.TypedPoller(models.WorkloadNetworkSegment) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -4455,6 +4521,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Delete a WorkloadNetworkSegment
     pub fn deleteSegment(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, segment_id: []const u8) !core.lro.TypedPoller(void) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -4489,6 +4556,7 @@ pub const WorkloadNetworks = struct {
     }
     /// List WorkloadNetworkVirtualMachine resources by WorkloadNetwork
     pub fn listVirtualMachines(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetworkVirtualMachine) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -4517,6 +4585,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Get a WorkloadNetworkVirtualMachine
     pub fn getVirtualMachine(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, virtual_machine_id: []const u8) !models.WorkloadNetworkVirtualMachine {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -4552,6 +4621,7 @@ pub const WorkloadNetworks = struct {
     }
     /// List WorkloadNetworkVMGroup resources by WorkloadNetwork
     pub fn listVMGroups(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8) !core.pager.PipelinePager(models.WorkloadNetworkVMGroup) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -4580,6 +4650,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Get a WorkloadNetworkVMGroup
     pub fn getVMGroup(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, vm_group_id: []const u8) !models.WorkloadNetworkVMGroup {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -4615,6 +4686,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Create a WorkloadNetworkVMGroup
     pub fn createVMGroup(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, vm_group_id: []const u8, workload_network_vm_group: models.WorkloadNetworkVMGroup) !core.lro.TypedPoller(models.WorkloadNetworkVMGroup) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -4654,6 +4726,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Update a WorkloadNetworkVMGroup
     pub fn updateVMGroup(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, private_cloud_name: []const u8, vm_group_id: []const u8, workload_network_vm_group: models.WorkloadNetworkVMGroup) !core.lro.TypedPoller(models.WorkloadNetworkVMGroup) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);
@@ -4693,6 +4766,7 @@ pub const WorkloadNetworks = struct {
     }
     /// Delete a WorkloadNetworkVMGroup
     pub fn deleteVMGroup(self: *@This(), alloc: std.mem.Allocator, resource_group_name: []const u8, vm_group_id: []const u8, private_cloud_name: []const u8) !core.lro.TypedPoller(void) {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodePathSegment(alloc, self.subscription_id);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, resource_group_name);

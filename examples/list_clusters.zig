@@ -27,16 +27,26 @@ pub fn main(init: std.process.Init) !void {
         try resolveArgs(init, &dotenv, args.next(), args.next(), args.next());
 
     var cli_cred = identity.AzureCliCredential.init(gpa, init.io);
+    var auth_policy = core.http.BearerTokenAuthPolicy.init(
+        gpa,
+        cli_cred.asCredential(),
+        &.{"https://management.azure.com/.default"},
+    );
+    defer auth_policy.deinit();
 
     var http_transport = core.http.StdHttpTransport.init(gpa, init.io);
     defer http_transport.deinit();
+    var crypto_provider = core.crypto.StdCryptoProvider.init(init.io);
+    const runtime = core.http.HttpRuntime.init(
+        http_transport.asTransport(),
+        crypto_provider.asProvider(),
+    );
+    var policies = [_]*core.http.HttpPolicy{auth_policy.asPolicy()};
+    const pipeline = core.http.HttpPipeline.init(runtime, &policies);
 
-    var client = try arm_avs.AVSClient.init(gpa, .{
+    var client = arm_avs.AVSClient.init(pipeline, .{
         .subscription_id = subscription_id,
-        .credential = cli_cred.asCredential(),
-        .transport = http_transport.asTransport(),
     });
-    defer client.deinit();
 
     // Pager + per-page items use an arena so we don't have to deep-free
     // each Cluster's owned strings field-by-field.

@@ -93,7 +93,7 @@ pub const JsonValue = union(enum) {
 /// A list of REST API operations supported by an Azure Resource Provider. It contains an URL link to get the next set of results.
 pub const OperationListResult = struct {
     /// The Operation items on this page
-    value: []const Operation,
+    value: ?[]const Operation = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -179,7 +179,7 @@ pub const ErrorAdditionalInfo = struct {
 /// The response of a Addon list operation.
 pub const AddonList = struct {
     /// The Addon items on this page
-    value: []const Addon,
+    value: ?[]const Addon = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -325,7 +325,7 @@ pub const ArmOperationStatusResourceProvisioningState = struct {
 /// The response of a ExpressRouteAuthorization list operation.
 pub const ExpressRouteAuthorizationList = struct {
     /// The ExpressRouteAuthorization items on this page
-    value: []const ExpressRouteAuthorization,
+    value: ?[]const ExpressRouteAuthorization = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -372,7 +372,7 @@ pub const ExpressRouteAuthorizationProperties = struct {
 /// The response of a CloudLink list operation.
 pub const CloudLinkList = struct {
     /// The CloudLink items on this page
-    value: []const CloudLink,
+    value: ?[]const CloudLink = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -417,7 +417,7 @@ pub const CloudLinkProperties = struct {
 /// The response of a Cluster list operation.
 pub const ClusterList = struct {
     /// The Cluster items on this page
-    value: []const Cluster,
+    value: ?[]const Cluster = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -532,7 +532,7 @@ pub const ClusterZone = struct {
 /// The response of a Datastore list operation.
 pub const DatastoreList = struct {
     /// The Datastore items on this page
-    value: []const Datastore,
+    value: ?[]const Datastore = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -632,7 +632,7 @@ pub const PureStorageVolume = struct {
 /// The response of a GlobalReachConnection list operation.
 pub const GlobalReachConnectionList = struct {
     /// The GlobalReachConnection items on this page
-    value: []const GlobalReachConnection,
+    value: ?[]const GlobalReachConnection = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -687,7 +687,7 @@ pub const GlobalReachConnectionProperties = struct {
 /// The response of a HcxEnterpriseSite list operation.
 pub const HcxEnterpriseSiteList = struct {
     /// The HcxEnterpriseSite items on this page
-    value: []const HcxEnterpriseSite,
+    value: ?[]const HcxEnterpriseSite = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -732,7 +732,7 @@ pub const HcxEnterpriseSiteProperties = struct {
 /// The response of a Host list operation.
 pub const HostListResult = struct {
     /// The Host items on this page
-    value: []const Host,
+    value: ?[]const Host = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -746,7 +746,7 @@ pub const Host = struct {
     /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
     id: ?[]const u8 = null,
     /// The host identifier.
-    name: []const u8,
+    name: ?[]const u8 = null,
     /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
     type: ?[]const u8 = null,
     /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
@@ -767,7 +767,7 @@ pub const Host = struct {
 /// The properties of a host.
 pub const HostProperties = struct {
     /// The kind of host
-    kind: enums.HostKind,
+    kind: ?enums.HostKind = null,
     /// The state of the host provisioning.
     provisioning_state: ?enums.HostProvisioningState = null,
     /// Display name of the host in VMware vCenter.
@@ -788,7 +788,7 @@ pub const HostProperties = struct {
 /// The properties of a general host.
 pub const GeneralHostProperties = struct {
     /// The kind of host.
-    kind: []const u8,
+    kind: ?[]const u8 = null,
     /// The state of the host provisioning.
     provisioning_state: ?enums.HostProvisioningState = null,
     /// Display name of the host in VMware vCenter.
@@ -809,7 +809,7 @@ pub const GeneralHostProperties = struct {
 /// The properties of a specialized host.
 pub const SpecializedHostProperties = struct {
     /// The kind of host is specialized.
-    kind: []const u8,
+    kind: ?[]const u8 = null,
     /// The state of the host provisioning.
     provisioning_state: ?enums.HostProvisioningState = null,
     /// Display name of the host in VMware vCenter.
@@ -830,7 +830,7 @@ pub const SpecializedHostProperties = struct {
 /// The response of a IscsiPath list operation.
 pub const IscsiPathListResult = struct {
     /// The IscsiPath items on this page
-    value: []const IscsiPath,
+    value: ?[]const IscsiPath = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -873,7 +873,7 @@ pub const IscsiPathProperties = struct {
 /// The response of a License list operation.
 pub const LicenseListResult = struct {
     /// The License items on this page
-    value: []const License,
+    value: ?[]const License = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -976,7 +976,7 @@ pub const Quota = struct {
 /// The response of a Maintenance list operation.
 pub const MaintenanceListResult = struct {
     /// The Maintenance items on this page
-    value: []const Maintenance,
+    value: ?[]const Maintenance = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -990,7 +990,7 @@ pub const Maintenance = struct {
     /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
     id: ?[]const u8 = null,
     /// Name of the maintenance
-    name: []const u8,
+    name: ?[]const u8 = null,
     /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
     type: ?[]const u8 = null,
     /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
@@ -1055,7 +1055,7 @@ pub const MaintenanceState = struct {
 /// Defines operations that can be performed on maintenance
 pub const MaintenanceManagementOperation = struct {
     /// The kind of operation
-    kind: enums.MaintenanceManagementOperationKind,
+    kind: ?enums.MaintenanceManagementOperationKind = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -1065,7 +1065,7 @@ pub const MaintenanceManagementOperation = struct {
 /// Scheduling window constraint
 pub const ScheduleOperation = struct {
     /// The kind of operation
-    kind: []const u8,
+    kind: ?[]const u8 = null,
     /// If scheduling is disabled
     is_disabled: ?bool = null,
     /// Reason for schedule disabled
@@ -1081,7 +1081,7 @@ pub const ScheduleOperation = struct {
 /// Defines constraints for schedule operation on maintenance
 pub const ScheduleOperationConstraint = struct {
     /// The kind of operation
-    kind: enums.ScheduleOperationConstraintKind,
+    kind: ?enums.ScheduleOperationConstraintKind = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -1091,11 +1091,11 @@ pub const ScheduleOperationConstraint = struct {
 /// Time window in which Customer has option to schedule maintenance
 pub const SchedulingWindow = struct {
     /// The kind of constraint
-    kind: []const u8,
+    kind: ?[]const u8 = null,
     /// Start date time
-    starts_at: []const u8,
+    starts_at: ?[]const u8 = null,
     /// End date Time
-    ends_at: []const u8,
+    ends_at: ?[]const u8 = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -1105,11 +1105,11 @@ pub const SchedulingWindow = struct {
 /// Time window in which Customer can to schedule maintenance
 pub const AvailableWindowForMaintenanceWhileScheduleOperation = struct {
     /// The kind of constraint
-    kind: []const u8,
+    kind: ?[]const u8 = null,
     /// Start date time
-    starts_at: []const u8,
+    starts_at: ?[]const u8 = null,
     /// End date Time
-    ends_at: []const u8,
+    ends_at: ?[]const u8 = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -1119,9 +1119,9 @@ pub const AvailableWindowForMaintenanceWhileScheduleOperation = struct {
 /// Time ranges blocked for scheduling maintenance
 pub const BlockedWhileScheduleOperation = struct {
     /// The kind of constraint
-    kind: []const u8,
+    kind: ?[]const u8 = null,
     /// Category of blocked date
-    category: enums.BlockedDatesConstraintCategory,
+    category: ?enums.BlockedDatesConstraintCategory = null,
     /// Date ranges blocked for schedule
     time_ranges: ?[]const BlockedDatesConstraintTimeRange = null,
 
@@ -1133,9 +1133,9 @@ pub const BlockedWhileScheduleOperation = struct {
 /// Blocked Time range Constraints for maintenance
 pub const BlockedDatesConstraintTimeRange = struct {
     /// Start date time
-    starts_at: []const u8,
+    starts_at: ?[]const u8 = null,
     /// End date Time
-    ends_at: []const u8,
+    ends_at: ?[]const u8 = null,
     /// Reason category for blocking maintenance reschedule
     reason: ?[]const u8 = null,
 
@@ -1147,7 +1147,7 @@ pub const BlockedDatesConstraintTimeRange = struct {
 /// Constraints for rescheduling maintenance
 pub const RescheduleOperation = struct {
     /// The kind of operation
-    kind: []const u8,
+    kind: ?[]const u8 = null,
     /// If rescheduling is disabled
     is_disabled: ?bool = null,
     /// Reason for reschedule disabled
@@ -1163,7 +1163,7 @@ pub const RescheduleOperation = struct {
 /// Defines constraints for reschedule operation on maintenance
 pub const RescheduleOperationConstraint = struct {
     /// The kind of operation
-    kind: enums.RescheduleOperationConstraintKind,
+    kind: ?enums.RescheduleOperationConstraintKind = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -1173,11 +1173,11 @@ pub const RescheduleOperationConstraint = struct {
 /// Time window in which Customer can reschedule maintenance
 pub const AvailableWindowForMaintenanceWhileRescheduleOperation = struct {
     /// The kind of constraint
-    kind: []const u8,
+    kind: ?[]const u8 = null,
     /// Start date time
-    starts_at: []const u8,
+    starts_at: ?[]const u8 = null,
     /// End date Time
-    ends_at: []const u8,
+    ends_at: ?[]const u8 = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -1187,9 +1187,9 @@ pub const AvailableWindowForMaintenanceWhileRescheduleOperation = struct {
 /// Time ranges blocked for rescheduling maintenance
 pub const BlockedWhileRescheduleOperation = struct {
     /// The kind of constraint
-    kind: []const u8,
+    kind: ?[]const u8 = null,
     /// Category of blocked date
-    category: enums.BlockedDatesConstraintCategory,
+    category: ?enums.BlockedDatesConstraintCategory = null,
     /// Date ranges blocked for schedule
     time_ranges: ?[]const BlockedDatesConstraintTimeRange = null,
 
@@ -1201,7 +1201,7 @@ pub const BlockedWhileRescheduleOperation = struct {
 /// Refresh MaintenanceReadiness status
 pub const MaintenanceReadinessRefreshOperation = struct {
     /// The kind of operation
-    kind: []const u8,
+    kind: ?[]const u8 = null,
     /// If maintenanceReadiness refresh is disabled
     is_disabled: ?bool = null,
     /// Reason disabling refresh for maintenanceReadiness
@@ -1221,9 +1221,9 @@ pub const MaintenanceReadinessRefreshOperation = struct {
 /// Maintenance readiness details
 pub const MaintenanceReadiness = struct {
     /// The type of maintenance readiness check
-    type: enums.MaintenanceCheckType,
+    type: ?enums.MaintenanceCheckType = null,
     /// The current readiness status of maintenance
-    status: enums.MaintenanceReadinessStatus,
+    status: ?enums.MaintenanceReadinessStatus = null,
     /// A summary message of the readiness check result
     message: ?[]const u8 = null,
     /// A list of failed checks, if any
@@ -1305,7 +1305,7 @@ pub const MaintenanceSchedule = struct {
 /// The response of a PlacementPolicy list operation.
 pub const PlacementPoliciesList = struct {
     /// The PlacementPolicy items on this page
-    value: []const PlacementPolicy,
+    value: ?[]const PlacementPolicy = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -1426,7 +1426,7 @@ pub const PlacementPolicyUpdateProperties = struct {
 /// The response of a PrivateCloud list operation.
 pub const PrivateCloudList = struct {
     /// The PrivateCloud items on this page
-    value: []const PrivateCloud,
+    value: ?[]const PrivateCloud = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -1773,7 +1773,7 @@ pub const AdminCredentials = struct {
 /// The response of a ProvisionedNetwork list operation.
 pub const ProvisionedNetworkListResult = struct {
     /// The ProvisionedNetwork items on this page
-    value: []const ProvisionedNetwork,
+    value: ?[]const ProvisionedNetwork = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -1787,7 +1787,7 @@ pub const ProvisionedNetwork = struct {
     /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
     id: ?[]const u8 = null,
     /// Name of the cloud link.
-    name: []const u8,
+    name: ?[]const u8 = null,
     /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
     type: ?[]const u8 = null,
     /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
@@ -1818,7 +1818,7 @@ pub const ProvisionedNetworkProperties = struct {
 /// The response of a PureStoragePolicy list operation.
 pub const PureStoragePolicyListResult = struct {
     /// The PureStoragePolicy items on this page
-    value: []const PureStoragePolicy,
+    value: ?[]const PureStoragePolicy = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -1863,7 +1863,7 @@ pub const PureStoragePolicyProperties = struct {
 /// The response of a ScriptCmdlet list operation.
 pub const ScriptCmdletsList = struct {
     /// The ScriptCmdlet items on this page
-    value: []const ScriptCmdlet,
+    value: ?[]const ScriptCmdlet = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -1877,7 +1877,7 @@ pub const ScriptCmdlet = struct {
     /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
     id: ?[]const u8 = null,
     /// Name of the script cmdlet.
-    name: []const u8,
+    name: ?[]const u8 = null,
     /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
     type: ?[]const u8 = null,
     /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
@@ -1932,7 +1932,7 @@ pub const ScriptParameter = struct {
 /// The response of a ScriptExecution list operation.
 pub const ScriptExecutionsList = struct {
     /// The ScriptExecution items on this page
-    value: []const ScriptExecution,
+    value: ?[]const ScriptExecution = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -2065,7 +2065,7 @@ pub const ScriptExecutionPropertiesNamedOutput = struct {
 /// The response of a ScriptPackage list operation.
 pub const ScriptPackagesList = struct {
     /// The ScriptPackage items on this page
-    value: []const ScriptPackage,
+    value: ?[]const ScriptPackage = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -2079,7 +2079,7 @@ pub const ScriptPackage = struct {
     /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
     id: ?[]const u8 = null,
     /// Name of the script package.
-    name: []const u8,
+    name: ?[]const u8 = null,
     /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
     type: ?[]const u8 = null,
     /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
@@ -2114,7 +2114,7 @@ pub const ScriptPackageProperties = struct {
 /// Paged collection of ResourceSku items
 pub const PagedResourceSku = struct {
     /// The ResourceSku items on this page
-    value: []const ResourceSku,
+    value: ?[]const ResourceSku = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -2126,9 +2126,9 @@ pub const PagedResourceSku = struct {
 /// A SKU for a resource.
 pub const ResourceSku = struct {
     /// The type of resource the SKU applies to.
-    resource_type: enums.ResourceSkuResourceType,
+    resource_type: ?enums.ResourceSkuResourceType = null,
     /// The name of the SKU.
-    name: []const u8,
+    name: ?[]const u8 = null,
     /// The tier of virtual machines in a scale set
     tier: ?[]const u8 = null,
     /// The size of the SKU.
@@ -2136,13 +2136,13 @@ pub const ResourceSku = struct {
     /// The family of the SKU.
     family: ?[]const u8 = null,
     /// The set of locations that the SKU is available.
-    locations: []const []const u8,
+    locations: ?[]const []const u8 = null,
     /// A list of locations and availability zones in those locations where the SKU is available
-    location_info: []const ResourceSkuLocationInfo,
+    location_info: ?[]const ResourceSkuLocationInfo = null,
     /// Name value pairs to describe the capability.
     capabilities: ?[]const ResourceSkuCapabilities = null,
     /// The restrictions of the SKU.
-    restrictions: []const ResourceSkuRestrictions,
+    restrictions: ?[]const ResourceSkuRestrictions = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -2152,11 +2152,11 @@ pub const ResourceSku = struct {
 /// Describes an available Compute SKU Location Information.
 pub const ResourceSkuLocationInfo = struct {
     /// Location of the SKU
-    location: []const u8,
+    location: ?[]const u8 = null,
     /// List of availability zones where the SKU is supported.
-    zones: []const []const u8,
+    zones: ?[]const []const u8 = null,
     /// Gets details of capabilities available to a SKU in specific zones.
-    zone_details: []const ResourceSkuZoneDetails,
+    zone_details: ?[]const ResourceSkuZoneDetails = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -2166,9 +2166,9 @@ pub const ResourceSkuLocationInfo = struct {
 /// Describes The zonal capabilities of a SKU.
 pub const ResourceSkuZoneDetails = struct {
     /// Gets the set of zones that the SKU is available in with the specified capabilities.
-    name: []const []const u8,
+    name: ?[]const []const u8 = null,
     /// A list of capabilities that are available for the SKU in the specified list of zones.
-    capabilities: []const ResourceSkuCapabilities,
+    capabilities: ?[]const ResourceSkuCapabilities = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -2178,9 +2178,9 @@ pub const ResourceSkuZoneDetails = struct {
 /// Describes The SKU capabilities object.
 pub const ResourceSkuCapabilities = struct {
     /// The name of the SKU capability.
-    name: []const u8,
+    name: ?[]const u8 = null,
     /// The value of the SKU capability.
-    value: []const u8,
+    value: ?[]const u8 = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -2192,9 +2192,9 @@ pub const ResourceSkuRestrictions = struct {
     /// the type of restrictions.
     type: ?enums.ResourceSkuRestrictionsType = null,
     /// The value of restrictions. If the restriction type is set to location. This would be different locations where the SKU is restricted.
-    values: []const []const u8,
+    values: ?[]const []const u8 = null,
     /// The information about the restriction where the SKU cannot be used.
-    restriction_info: ResourceSkuRestrictionInfo,
+    restriction_info: ?ResourceSkuRestrictionInfo = null,
     /// the reason for restriction.
     reason_code: ?enums.ResourceSkuRestrictionsReasonCode = null,
 
@@ -2218,7 +2218,7 @@ pub const ResourceSkuRestrictionInfo = struct {
 /// The response of a VirtualMachine list operation.
 pub const VirtualMachinesList = struct {
     /// The VirtualMachine items on this page
-    value: []const VirtualMachine,
+    value: ?[]const VirtualMachine = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -2232,7 +2232,7 @@ pub const VirtualMachine = struct {
     /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
     id: ?[]const u8 = null,
     /// ID of the virtual machine.
-    name: []const u8,
+    name: ?[]const u8 = null,
     /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
     type: ?[]const u8 = null,
     /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
@@ -2279,7 +2279,7 @@ pub const WorkloadNetwork = struct {
     /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
     id: ?[]const u8 = null,
     /// Name of the global reach connection
-    name: []const u8,
+    name: ?[]const u8 = null,
     /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
     type: ?[]const u8 = null,
     /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
@@ -2306,7 +2306,7 @@ pub const WorkloadNetworkProperties = struct {
 /// The response of a WorkloadNetwork list operation.
 pub const WorkloadNetworkList = struct {
     /// The WorkloadNetwork items on this page
-    value: []const WorkloadNetwork,
+    value: ?[]const WorkloadNetwork = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -2318,7 +2318,7 @@ pub const WorkloadNetworkList = struct {
 /// The response of a WorkloadNetworkDhcp list operation.
 pub const WorkloadNetworkDhcpList = struct {
     /// The WorkloadNetworkDhcp items on this page
-    value: []const WorkloadNetworkDhcp,
+    value: ?[]const WorkloadNetworkDhcp = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -2410,7 +2410,7 @@ pub const WorkloadNetworkDhcpRelay = struct {
 /// The response of a WorkloadNetworkDnsService list operation.
 pub const WorkloadNetworkDnsServicesList = struct {
     /// The WorkloadNetworkDnsService items on this page
-    value: []const WorkloadNetworkDnsService,
+    value: ?[]const WorkloadNetworkDnsService = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -2465,7 +2465,7 @@ pub const WorkloadNetworkDnsServiceProperties = struct {
 /// The response of a WorkloadNetworkDnsZone list operation.
 pub const WorkloadNetworkDnsZonesList = struct {
     /// The WorkloadNetworkDnsZone items on this page
-    value: []const WorkloadNetworkDnsZone,
+    value: ?[]const WorkloadNetworkDnsZone = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -2518,7 +2518,7 @@ pub const WorkloadNetworkDnsZoneProperties = struct {
 /// The response of a WorkloadNetworkGateway list operation.
 pub const WorkloadNetworkGatewayList = struct {
     /// The WorkloadNetworkGateway items on this page
-    value: []const WorkloadNetworkGateway,
+    value: ?[]const WorkloadNetworkGateway = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -2532,7 +2532,7 @@ pub const WorkloadNetworkGateway = struct {
     /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
     id: ?[]const u8 = null,
     /// The ID of the NSX Gateway
-    name: []const u8,
+    name: ?[]const u8 = null,
     /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
     type: ?[]const u8 = null,
     /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
@@ -2563,7 +2563,7 @@ pub const WorkloadNetworkGatewayProperties = struct {
 /// The response of a WorkloadNetworkPortMirroring list operation.
 pub const WorkloadNetworkPortMirroringList = struct {
     /// The WorkloadNetworkPortMirroring items on this page
-    value: []const WorkloadNetworkPortMirroring,
+    value: ?[]const WorkloadNetworkPortMirroring = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -2616,7 +2616,7 @@ pub const WorkloadNetworkPortMirroringProperties = struct {
 /// The response of a WorkloadNetworkPublicIP list operation.
 pub const WorkloadNetworkPublicIPsList = struct {
     /// The WorkloadNetworkPublicIP items on this page
-    value: []const WorkloadNetworkPublicIP,
+    value: ?[]const WorkloadNetworkPublicIP = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -2666,7 +2666,7 @@ pub const WorkloadNetworkPublicIPProperties = struct {
 /// The response of a WorkloadNetworkSegment list operation.
 pub const WorkloadNetworkSegmentsList = struct {
     /// The WorkloadNetworkSegment items on this page
-    value: []const WorkloadNetworkSegment,
+    value: ?[]const WorkloadNetworkSegment = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -2741,7 +2741,7 @@ pub const WorkloadNetworkSegmentPortVif = struct {
 /// The response of a WorkloadNetworkVirtualMachine list operation.
 pub const WorkloadNetworkVirtualMachinesList = struct {
     /// The WorkloadNetworkVirtualMachine items on this page
-    value: []const WorkloadNetworkVirtualMachine,
+    value: ?[]const WorkloadNetworkVirtualMachine = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 
@@ -2755,7 +2755,7 @@ pub const WorkloadNetworkVirtualMachine = struct {
     /// Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}
     id: ?[]const u8 = null,
     /// ID of the virtual machine.
-    name: []const u8,
+    name: ?[]const u8 = null,
     /// The type of the resource. E.g. "Microsoft.Compute/virtualMachines" or "Microsoft.Storage/storageAccounts"
     type: ?[]const u8 = null,
     /// Azure Resource Manager metadata containing createdBy and modifiedBy information.
@@ -2786,7 +2786,7 @@ pub const WorkloadNetworkVirtualMachineProperties = struct {
 /// The response of a WorkloadNetworkVMGroup list operation.
 pub const WorkloadNetworkVMGroupsList = struct {
     /// The WorkloadNetworkVMGroup items on this page
-    value: []const WorkloadNetworkVMGroup,
+    value: ?[]const WorkloadNetworkVMGroup = null,
     /// The link to the next page of items
     next_link: ?[]const u8 = null,
 

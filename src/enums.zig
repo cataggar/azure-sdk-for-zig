@@ -36,6 +36,10 @@ pub const Origin = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Extensible enum. Indicates the action type. "Internal" refers to actions that are for internal only APIs.
@@ -61,6 +65,10 @@ pub const ActionType = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -93,6 +101,10 @@ pub const AddonType = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -132,6 +144,10 @@ pub const AddonProvisioningState = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// The kind of entity that created the resource.
@@ -164,6 +180,10 @@ pub const createdByType = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// The provisioning state of a resource type.
@@ -193,6 +213,10 @@ pub const ResourceProvisioningState = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -226,6 +250,10 @@ pub const ExpressRouteAuthorizationProvisioningState = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// cloud link provisioning state
@@ -255,6 +283,10 @@ pub const CloudLinkProvisioningState = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -289,6 +321,10 @@ pub const CloudLinkStatus = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -326,6 +362,10 @@ pub const ClusterProvisioningState = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// This field is required to be implemented by the Resource Provider if the service has more than one tier, but is not required on a PUT.
@@ -334,6 +374,35 @@ pub const SkuTier = enum {
     basic,
     standard,
     premium,
+
+    pub fn toWire(self: @This()) []const u8 {
+        return switch (self) {
+            .free => "Free",
+            .basic => "Basic",
+            .standard => "Standard",
+            .premium => "Premium",
+        };
+    }
+
+    pub fn fromWire(s: []const u8) ?@This() {
+        if (std.mem.eql(u8, s, "Free")) return .free;
+        if (std.mem.eql(u8, s, "Basic")) return .basic;
+        if (std.mem.eql(u8, s, "Standard")) return .standard;
+        if (std.mem.eql(u8, s, "Premium")) return .premium;
+        return null;
+    }
+
+    pub fn zerdeDeserialize(
+        comptime T: type,
+        allocator: std.mem.Allocator,
+        deserializer: anytype,
+    ) @TypeOf(deserializer.*).Error!T {
+        return core.fixed_enum.deserialize(T, allocator, deserializer);
+    }
+
+    pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
+        return core.fixed_enum.serialize(self, serializer);
+    }
 };
 
 /// datastore provisioning state
@@ -374,6 +443,10 @@ pub const DatastoreProvisioningState = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// mount option
@@ -401,6 +474,10 @@ pub const MountOptionEnum = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -440,6 +517,10 @@ pub const DatastoreStatus = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Global Reach Connection provisioning state
@@ -472,6 +553,10 @@ pub const GlobalReachConnectionProvisioningState = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Global Reach Connection status
@@ -502,6 +587,10 @@ pub const GlobalReachConnectionStatus = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// HCX Enterprise Site provisioning state
@@ -531,6 +620,10 @@ pub const HcxEnterpriseSiteProvisioningState = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -564,6 +657,10 @@ pub const HcxEnterpriseSiteStatus = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// The kind of host.
@@ -591,6 +688,10 @@ pub const HostKind = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -622,6 +723,10 @@ pub const HostProvisioningState = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// The reason for host maintenance.
@@ -649,6 +754,10 @@ pub const HostMaintenance = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -688,6 +797,10 @@ pub const IscsiPathProvisioningState = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// The kind of license.
@@ -713,6 +826,10 @@ pub const LicenseKind = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -744,6 +861,10 @@ pub const LicenseProvisioningState = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// The name of the license.
@@ -769,6 +890,10 @@ pub const LicenseName = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -800,6 +925,10 @@ pub const TrialStatus = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// quota enabled
@@ -827,6 +956,10 @@ pub const QuotaEnabled = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -864,6 +997,10 @@ pub const MaintenanceStateName = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// status filter for the maintenance
@@ -891,6 +1028,10 @@ pub const MaintenanceStatusFilter = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -921,6 +1062,10 @@ pub const MaintenanceType = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -954,6 +1099,10 @@ pub const MaintenanceProvisioningState = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Defines the type of operation
@@ -983,6 +1132,10 @@ pub const MaintenanceManagementOperationKind = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -1014,6 +1167,10 @@ pub const ScheduleOperationConstraintKind = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Reason for blocking operation on maintenance
@@ -1044,6 +1201,10 @@ pub const BlockedDatesConstraintCategory = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Constraints for rescheduling of maintenance
@@ -1071,6 +1232,10 @@ pub const RescheduleOperationConstraintKind = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -1104,6 +1269,10 @@ pub const MaintenanceReadinessRefreshOperationStatus = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Defines the type of maintenance readiness check
@@ -1131,6 +1300,10 @@ pub const MaintenanceCheckType = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -1164,6 +1337,10 @@ pub const MaintenanceReadinessStatus = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Placement Policy type
@@ -1192,6 +1369,10 @@ pub const PlacementPolicyType = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Placement Policy state
@@ -1219,6 +1400,10 @@ pub const PlacementPolicyState = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -1256,6 +1441,10 @@ pub const PlacementPolicyProvisioningState = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Affinity type
@@ -1283,6 +1472,10 @@ pub const AffinityType = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -1312,6 +1505,10 @@ pub const AffinityStrength = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Azure Hybrid Benefit type
@@ -1339,6 +1536,10 @@ pub const AzureHybridBenefitType = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -1368,6 +1569,10 @@ pub const InternetEnum = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Whether SSL is enabled or disabled
@@ -1395,6 +1600,10 @@ pub const SslEnum = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -1424,6 +1633,10 @@ pub const AvailabilityStrategy = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Whether encryption is enabled or disabled
@@ -1451,6 +1664,10 @@ pub const EncryptionState = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -1480,6 +1697,10 @@ pub const EncryptionKeyStatus = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Whether the encryption version is fixed or auto-detected
@@ -1507,6 +1728,10 @@ pub const EncryptionVersionType = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -1548,6 +1773,10 @@ pub const PrivateCloudProvisioningState = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// NSX public IP quota raised
@@ -1575,6 +1804,10 @@ pub const NsxPublicIpQuotaRaisedEnum = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -1604,6 +1837,10 @@ pub const DnsZoneType = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// The kind of license.
@@ -1629,6 +1866,10 @@ pub const VcfLicenseKind = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -1657,6 +1898,10 @@ pub const SystemAssignedServiceIdentityType = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -1687,6 +1932,10 @@ pub const ProvisionedNetworkProvisioningState = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -1726,6 +1975,10 @@ pub const ProvisionedNetworkTypes = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Pure Storage Policy Based Management policy provisioning state
@@ -1760,6 +2013,10 @@ pub const PureStoragePolicyProvisioningState = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// A script cmdlet provisioning state
@@ -1790,6 +2047,10 @@ pub const ScriptCmdletProvisioningState = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Specifies whether a script cmdlet is intended to be invoked only through automation or visible to customers
@@ -1817,6 +2078,10 @@ pub const ScriptCmdletAudience = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -1854,6 +2119,10 @@ pub const ScriptParameterTypes = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Visibility Parameter
@@ -1882,6 +2151,10 @@ pub const VisibilityParameterEnum = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Optional Param
@@ -1909,6 +2182,10 @@ pub const OptionalParamEnum = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -1939,6 +2216,10 @@ pub const ScriptExecutionParameterType = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -1980,6 +2261,10 @@ pub const ScriptExecutionProvisioningState = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Script Output Stream type
@@ -2012,6 +2297,10 @@ pub const ScriptOutputStreamType = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Script Package provisioning state
@@ -2042,6 +2331,10 @@ pub const ScriptPackageProvisioningState = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Describes the type of resource the SKU applies to.
@@ -2069,6 +2362,10 @@ pub const ResourceSkuResourceType = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -2098,6 +2395,10 @@ pub const ResourceSkuRestrictionsType = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Describes the reason for SKU restriction.
@@ -2125,6 +2426,10 @@ pub const ResourceSkuRestrictionsReasonCode = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -2156,6 +2461,10 @@ pub const VirtualMachineProvisioningState = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Virtual Machine Restrict Movement state
@@ -2183,6 +2492,10 @@ pub const VirtualMachineRestrictMovementState = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -2220,6 +2533,10 @@ pub const WorkloadNetworkProvisioningState = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Type of DHCP: SERVER or RELAY.
@@ -2247,6 +2564,10 @@ pub const DhcpTypeEnum = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -2284,6 +2605,10 @@ pub const WorkloadNetworkDhcpProvisioningState = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// DNS service log level
@@ -2318,6 +2643,10 @@ pub const DnsServiceLogLevelEnum = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// DNS service status
@@ -2345,6 +2674,10 @@ pub const DnsServiceStatusEnum = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -2382,6 +2715,10 @@ pub const WorkloadNetworkDnsServiceProvisioningState = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Workload Network DNS Zone provisioning state
@@ -2418,6 +2755,10 @@ pub const WorkloadNetworkDnsZoneProvisioningState = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Port Mirroring Direction
@@ -2448,6 +2789,10 @@ pub const PortMirroringDirectionEnum = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Port Mirroring status
@@ -2475,6 +2820,10 @@ pub const PortMirroringStatusEnum = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -2512,6 +2861,10 @@ pub const WorkloadNetworkPortMirroringProvisioningState = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Workload Network Public IP provisioning state
@@ -2548,6 +2901,10 @@ pub const WorkloadNetworkPublicIPProvisioningState = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Segment status
@@ -2575,6 +2932,10 @@ pub const SegmentStatusEnum = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -2612,6 +2973,10 @@ pub const WorkloadNetworkSegmentProvisioningState = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// VM type
@@ -2642,6 +3007,10 @@ pub const VMTypeEnum = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// VM group status
@@ -2669,6 +3038,10 @@ pub const VMGroupStatusEnum = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -2706,6 +3079,10 @@ pub const WorkloadNetworkVMGroupProvisioningState = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Azure VMware Solution API versions.
@@ -2713,4 +3090,31 @@ pub const Versions = enum {
     v2023_09_01,
     v2024_09_01,
     v2025_09_01,
+
+    pub fn toWire(self: @This()) []const u8 {
+        return switch (self) {
+            .v2023_09_01 => "2023-09-01",
+            .v2024_09_01 => "2024-09-01",
+            .v2025_09_01 => "2025-09-01",
+        };
+    }
+
+    pub fn fromWire(s: []const u8) ?@This() {
+        if (std.mem.eql(u8, s, "2023-09-01")) return .v2023_09_01;
+        if (std.mem.eql(u8, s, "2024-09-01")) return .v2024_09_01;
+        if (std.mem.eql(u8, s, "2025-09-01")) return .v2025_09_01;
+        return null;
+    }
+
+    pub fn zerdeDeserialize(
+        comptime T: type,
+        allocator: std.mem.Allocator,
+        deserializer: anytype,
+    ) @TypeOf(deserializer.*).Error!T {
+        return core.fixed_enum.deserialize(T, allocator, deserializer);
+    }
+
+    pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
+        return core.fixed_enum.serialize(self, serializer);
+    }
 };
