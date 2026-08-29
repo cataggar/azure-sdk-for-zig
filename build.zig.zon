@@ -1,6 +1,6 @@
 .{
     .name = .azure_rest_container_registry,
-    .version = "0.1.0",
+    .version = "0.2.0",
     .fingerprint = 0x5dd0e10aa1e38a93,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
