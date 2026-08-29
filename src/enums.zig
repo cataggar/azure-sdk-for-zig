@@ -36,6 +36,10 @@ pub const ArtifactTagOrder = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Sort options for ordering manifests in a collection.
@@ -65,6 +69,10 @@ pub const ArtifactManifestOrder = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -115,6 +123,10 @@ pub const ArtifactArchitecture = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };
 
@@ -168,6 +180,10 @@ pub const ArtifactOperatingSystem = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// Can take a value of access_token_refresh_token, or access_token, or
@@ -199,11 +215,38 @@ pub const PostContentSchemaGrantType = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// The available API versions.
 pub const Versions = enum {
     v2021_07_01,
+
+    pub fn toWire(self: @This()) []const u8 {
+        return switch (self) {
+            .v2021_07_01 => "2021-07-01",
+        };
+    }
+
+    pub fn fromWire(s: []const u8) ?@This() {
+        if (std.mem.eql(u8, s, "2021-07-01")) return .v2021_07_01;
+        return null;
+    }
+
+    pub fn zerdeDeserialize(
+        comptime T: type,
+        allocator: std.mem.Allocator,
+        deserializer: anytype,
+    ) @TypeOf(deserializer.*).Error!T {
+        return core.fixed_enum.deserialize(T, allocator, deserializer);
+    }
+
+    pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
+        return core.fixed_enum.serialize(self, serializer);
+    }
 };
 
 /// Grant type is expected to be refresh_token
@@ -231,5 +274,9 @@ pub const TokenGrantType = union(enum) {
 
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
+    }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
     }
 };

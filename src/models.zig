@@ -451,19 +451,19 @@ pub const Repositories = struct {
 pub const ContainerRepositoryProperties = struct {
     /// Registry login server name. This is likely to be similar to
     /// {registry-name}.azurecr.io.
-    registry_login_server: []const u8,
+    registry_login_server: ?[]const u8 = null,
     /// Image name
-    name: []const u8,
+    name: ?[]const u8 = null,
     /// Image created time
-    created_on: []const u8,
+    created_on: ?[]const u8 = null,
     /// Image last update time
-    last_updated_on: []const u8,
+    last_updated_on: ?[]const u8 = null,
     /// Number of the manifests
-    manifest_count: i32,
+    manifest_count: ?i32 = null,
     /// Number of the tags
-    tag_count: i32,
+    tag_count: ?i32 = null,
     /// Writeable properties of the resource
-    changeable_attributes: RepositoryChangeableAttributes,
+    changeable_attributes: ?RepositoryChangeableAttributes = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -502,11 +502,11 @@ pub const RepositoryChangeableAttributes = struct {
 pub const TagList = struct {
     /// Registry login server name. This is likely to be similar to
     /// {registry-name}.azurecr.io.
-    registry_login_server: []const u8,
+    registry_login_server: ?[]const u8 = null,
     /// Image name
-    repository: []const u8,
+    repository: ?[]const u8 = null,
     /// List of tag attribute details
-    tag_attribute_bases: []const TagAttributesBase,
+    tag_attribute_bases: ?[]const TagAttributesBase = null,
     /// Link to the next page of results
     link: ?[]const u8 = null,
 
@@ -523,17 +523,17 @@ pub const TagList = struct {
 /// Tag attribute details
 pub const TagAttributesBase = struct {
     /// Tag name
-    name: []const u8,
+    name: ?[]const u8 = null,
     /// Tag digest
-    digest: []const u8,
+    digest: ?[]const u8 = null,
     /// Tag created time
-    created_on: []const u8,
+    created_on: ?[]const u8 = null,
     /// Tag last update time
-    last_updated_on: []const u8,
+    last_updated_on: ?[]const u8 = null,
     /// Is signed
     signed: ?bool = null,
     /// Writeable properties of the resource
-    changeable_attributes: TagChangeableAttributes,
+    changeable_attributes: ?TagChangeableAttributes = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -570,11 +570,11 @@ pub const TagChangeableAttributes = struct {
 pub const ArtifactTagProperties = struct {
     /// Registry login server name. This is likely to be similar to
     /// {registry-name}.azurecr.io.
-    registry_login_server: []const u8,
+    registry_login_server: ?[]const u8 = null,
     /// Image name
-    repository_name: []const u8,
+    repository_name: ?[]const u8 = null,
     /// List of tag attribute details
-    tag: TagAttributesBase,
+    tag: ?TagAttributesBase = null,
 
     pub const serde = .{
         .rename_all = .camel_case,
@@ -609,13 +609,13 @@ pub const AcrManifests = struct {
 /// Manifest details
 pub const ManifestAttributesBase = struct {
     /// Manifest
-    digest: []const u8,
+    digest: ?[]const u8 = null,
     /// Image size
     size: ?i64 = null,
     /// Created time
-    created_on: []const u8,
+    created_on: ?[]const u8 = null,
     /// Last update time
-    last_updated_on: []const u8,
+    last_updated_on: ?[]const u8 = null,
     /// CPU architecture
     architecture: ?enums.ArtifactArchitecture = null,
     /// Operating system
@@ -646,7 +646,7 @@ pub const ManifestAttributesBase = struct {
 /// The artifact's platform, consisting of operating system and architecture.
 pub const ArtifactManifestPlatform = struct {
     /// Manifest digest
-    digest: []const u8,
+    digest: ?[]const u8 = null,
     /// CPU architecture
     architecture: ?enums.ArtifactArchitecture = null,
     /// Operating system
@@ -690,7 +690,7 @@ pub const ArtifactManifestProperties = struct {
     /// Repository name
     repository_name: ?[]const u8 = null,
     /// Manifest attributes
-    manifest: ManifestAttributesBase,
+    manifest: ?ManifestAttributesBase = null,
 
     pub const serde = .{
         .rename_all = .camel_case,

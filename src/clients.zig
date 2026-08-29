@@ -20,75 +20,27 @@ fn responseStatusExpected(status: u16, expected: []const u16) bool {
     return false;
 }
 const default_api_version = "2021-07-01";
-const auth_scopes: []const []const u8 = &.{"https://containerregistry.azure.net/.default"};
 
 /// Metadata API definition for the Azure Container Registry runtime
 pub const ContainerRegistryClient = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
-    allocator: std.mem.Allocator,
-    auth_policy: ?*core.pipeline.BearerTokenAuthPolicy,
-    policy_ptrs: []*core.pipeline.HttpPolicy,
+    pipeline: core.http.HttpPipeline,
 
     pub const InitOptions = struct {
-        credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
         endpoint: []const u8,
         api_version: []const u8 = default_api_version,
     };
 
-    pub const PipelineOptions = struct {
-        endpoint: []const u8,
-        api_version: []const u8 = default_api_version,
-    };
-
-    pub fn init(allocator: std.mem.Allocator, options: InitOptions) !ContainerRegistryClient {
-        const auth_policy = try allocator.create(core.pipeline.BearerTokenAuthPolicy);
-        errdefer allocator.destroy(auth_policy);
-        auth_policy.* = core.pipeline.BearerTokenAuthPolicy.init(
-            allocator,
-            options.credential,
-            auth_scopes,
-        );
-
-        const policy_ptrs = try allocator.alloc(*core.pipeline.HttpPolicy, 1);
-        errdefer allocator.free(policy_ptrs);
-        policy_ptrs[0] = auth_policy.asPolicy();
-
-        return .{
-            .allocator = allocator,
-            .endpoint = options.endpoint,
-            .api_version = options.api_version,
-            .auth_policy = auth_policy,
-            .policy_ptrs = policy_ptrs,
-            .pipeline = .{
-                .policies = policy_ptrs,
-                .transport_impl = options.transport,
-            },
-        };
-    }
-    pub fn initWithPipeline(
-        allocator: std.mem.Allocator,
-        pipeline: core.pipeline.HttpPipeline,
-        options: PipelineOptions,
+    pub fn init(
+        pipeline: core.http.HttpPipeline,
+        options: InitOptions,
     ) ContainerRegistryClient {
         return .{
-            .allocator = allocator,
             .endpoint = options.endpoint,
             .api_version = options.api_version,
-            .auth_policy = null,
-            .policy_ptrs = &.{},
             .pipeline = pipeline,
         };
-    }
-
-    pub fn deinit(self: *@This()) void {
-        if (self.auth_policy) |auth_policy| {
-            auth_policy.deinit();
-            self.allocator.destroy(auth_policy);
-            self.allocator.free(self.policy_ptrs);
-        }
     }
 
     pub fn containerRegistry(self: *@This()) ContainerRegistry {
@@ -119,7 +71,7 @@ pub const ContainerRegistryClient = struct {
 pub const ContainerRegistry = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const CreateManifestResult = union(enum) {
         status_201: struct {
@@ -203,6 +155,7 @@ pub const ContainerRegistry = struct {
     };
     /// Tells whether this Docker Registry instance supports Docker Registry HTTP API v2
     pub fn checkDockerV2Support(self: *@This(), alloc: std.mem.Allocator) !void {
+        @setEvalBranchQuota(100_000);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/v2/", .{self.endpoint});
         defer alloc.free(base_url);
         var url_buf: std.ArrayList(u8) = .empty;
@@ -230,6 +183,7 @@ pub const ContainerRegistry = struct {
     /// Get the manifest identified by `name` and `reference` where `reference` can be
     /// a tag or digest.
     pub fn getManifest(self: *@This(), alloc: std.mem.Allocator, name: []const u8, reference: []const u8, accept: ?[]const u8) !models.ManifestWrapper {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodeRepositoryName(alloc, name);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, reference);
@@ -262,6 +216,7 @@ pub const ContainerRegistry = struct {
     /// Put the manifest identified by `name` and `reference` where `reference` can be
     /// a tag or digest.
     pub fn createManifest(self: *@This(), alloc: std.mem.Allocator, name: []const u8, reference: []const u8, payload: models.Manifest) !CreateManifestResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodeRepositoryName(alloc, name);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, reference);
@@ -324,6 +279,7 @@ pub const ContainerRegistry = struct {
     /// Delete the manifest identified by `name` and `reference`. Note that a manifest
     /// can _only_ be deleted by `digest`.
     pub fn deleteManifest(self: *@This(), alloc: std.mem.Allocator, name: []const u8, reference: []const u8) !DeleteManifestResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodeRepositoryName(alloc, name);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, reference);
@@ -369,6 +325,7 @@ pub const ContainerRegistry = struct {
     }
     /// List repositories
     pub fn getRepositories(self: *@This(), alloc: std.mem.Allocator, last: ?[]const u8, n: ?i32) !GetRepositoriesResult {
+        @setEvalBranchQuota(100_000);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/acr/v1/_catalog", .{self.endpoint});
         defer alloc.free(base_url);
         var url_buf: std.ArrayList(u8) = .empty;
@@ -379,16 +336,16 @@ pub const ContainerRegistry = struct {
         defer alloc.free(encoded_query_0);
         try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
         has_query = true;
-        if (last) |v| {
+        if (last) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            const enc = try core.url.percentEncode(alloc, v);
+            const enc = try core.url.percentEncode(alloc, query_value);
             defer alloc.free(enc);
             try url_buf.print(alloc, "{s}last={s}", .{ sep, enc });
             has_query = true;
         }
-        if (n) |v| {
+        if (n) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            try url_buf.print(alloc, "{s}n={d}", .{ sep, v });
+            try url_buf.print(alloc, "{s}n={d}", .{ sep, query_value });
             has_query = true;
         }
         const url = try url_buf.toOwnedSlice(alloc);
@@ -424,6 +381,7 @@ pub const ContainerRegistry = struct {
     }
     /// Get repository attributes
     pub fn getProperties(self: *@This(), alloc: std.mem.Allocator, name: []const u8) !models.ContainerRepositoryProperties {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodeRepositoryName(alloc, name);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/acr/v1/{s}", .{ self.endpoint, encoded_path_0 });
@@ -453,6 +411,7 @@ pub const ContainerRegistry = struct {
     }
     /// Delete the repository identified by `name`
     pub fn deleteRepository(self: *@This(), alloc: std.mem.Allocator, name: []const u8) !DeleteRepositoryResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodeRepositoryName(alloc, name);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/acr/v1/{s}", .{ self.endpoint, encoded_path_0 });
@@ -497,6 +456,7 @@ pub const ContainerRegistry = struct {
     /// Update the attribute identified by `name` where `reference` is the name of the
     /// repository.
     pub fn updateProperties(self: *@This(), alloc: std.mem.Allocator, name: []const u8, value: ?models.RepositoryChangeableAttributes) !models.ContainerRepositoryProperties {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodeRepositoryName(alloc, name);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/acr/v1/{s}", .{ self.endpoint, encoded_path_0 });
@@ -534,6 +494,7 @@ pub const ContainerRegistry = struct {
     }
     /// List tags of a repository
     pub fn getTags(self: *@This(), alloc: std.mem.Allocator, name: []const u8, last: ?[]const u8, n: ?i32, orderby: ?enums.ArtifactTagOrder, digest: ?[]const u8) !GetTagsResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodeRepositoryName(alloc, name);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/acr/v1/{s}/_tags", .{ self.endpoint, encoded_path_0 });
@@ -546,28 +507,28 @@ pub const ContainerRegistry = struct {
         defer alloc.free(encoded_query_0);
         try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
         has_query = true;
-        if (last) |v| {
+        if (last) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            const enc = try core.url.percentEncode(alloc, v);
+            const enc = try core.url.percentEncode(alloc, query_value);
             defer alloc.free(enc);
             try url_buf.print(alloc, "{s}last={s}", .{ sep, enc });
             has_query = true;
         }
-        if (n) |v| {
+        if (n) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            try url_buf.print(alloc, "{s}n={d}", .{ sep, v });
+            try url_buf.print(alloc, "{s}n={d}", .{ sep, query_value });
             has_query = true;
         }
-        if (orderby) |v| {
+        if (orderby) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            const enc = try core.url.percentEncode(alloc, v.toWire());
+            const enc = try core.url.percentEncode(alloc, query_value.toWire());
             defer alloc.free(enc);
             try url_buf.print(alloc, "{s}orderby={s}", .{ sep, enc });
             has_query = true;
         }
-        if (digest) |v| {
+        if (digest) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            const enc = try core.url.percentEncode(alloc, v);
+            const enc = try core.url.percentEncode(alloc, query_value);
             defer alloc.free(enc);
             try url_buf.print(alloc, "{s}digest={s}", .{ sep, enc });
             has_query = true;
@@ -605,6 +566,7 @@ pub const ContainerRegistry = struct {
     }
     /// Get tag attributes by tag
     pub fn getTagProperties(self: *@This(), alloc: std.mem.Allocator, name: []const u8, reference: []const u8) !models.ArtifactTagProperties {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodeRepositoryName(alloc, name);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, reference);
@@ -636,6 +598,7 @@ pub const ContainerRegistry = struct {
     }
     /// Update tag attributes
     pub fn updateTagAttributes(self: *@This(), alloc: std.mem.Allocator, name: []const u8, reference: []const u8, value: ?models.TagChangeableAttributes) !models.ArtifactTagProperties {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodeRepositoryName(alloc, name);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, reference);
@@ -675,6 +638,7 @@ pub const ContainerRegistry = struct {
     }
     /// Delete tag
     pub fn deleteTag(self: *@This(), alloc: std.mem.Allocator, name: []const u8, reference: []const u8) !DeleteTagResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodeRepositoryName(alloc, name);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, reference);
@@ -720,6 +684,7 @@ pub const ContainerRegistry = struct {
     }
     /// List manifests of a repository
     pub fn getManifests(self: *@This(), alloc: std.mem.Allocator, name: []const u8, last: ?[]const u8, n: ?i32, orderby: ?enums.ArtifactManifestOrder) !GetManifestsResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodeRepositoryName(alloc, name);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/acr/v1/{s}/_manifests", .{ self.endpoint, encoded_path_0 });
@@ -732,21 +697,21 @@ pub const ContainerRegistry = struct {
         defer alloc.free(encoded_query_0);
         try url_buf.print(alloc, "{s}api-version={s}", .{ if (has_query) "&" else "?", encoded_query_0 });
         has_query = true;
-        if (last) |v| {
+        if (last) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            const enc = try core.url.percentEncode(alloc, v);
+            const enc = try core.url.percentEncode(alloc, query_value);
             defer alloc.free(enc);
             try url_buf.print(alloc, "{s}last={s}", .{ sep, enc });
             has_query = true;
         }
-        if (n) |v| {
+        if (n) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            try url_buf.print(alloc, "{s}n={d}", .{ sep, v });
+            try url_buf.print(alloc, "{s}n={d}", .{ sep, query_value });
             has_query = true;
         }
-        if (orderby) |v| {
+        if (orderby) |query_value| {
             const sep: []const u8 = if (has_query) "&" else "?";
-            const enc = try core.url.percentEncode(alloc, v.toWire());
+            const enc = try core.url.percentEncode(alloc, query_value.toWire());
             defer alloc.free(enc);
             try url_buf.print(alloc, "{s}orderby={s}", .{ sep, enc });
             has_query = true;
@@ -784,6 +749,7 @@ pub const ContainerRegistry = struct {
     }
     /// Get manifest attributes
     pub fn getManifestProperties(self: *@This(), alloc: std.mem.Allocator, name: []const u8, digest: []const u8) !models.ArtifactManifestProperties {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodeRepositoryName(alloc, name);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, digest);
@@ -815,6 +781,7 @@ pub const ContainerRegistry = struct {
     }
     /// Update properties of a manifest
     pub fn updateManifestProperties(self: *@This(), alloc: std.mem.Allocator, name: []const u8, digest: []const u8, value: ?models.ManifestChangeableAttributes) !models.ArtifactManifestProperties {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodeRepositoryName(alloc, name);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, digest);
@@ -857,7 +824,7 @@ pub const ContainerRegistry = struct {
 pub const ContainerRegistryBlob = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const GetBlobResult = union(enum) {
         status_200: struct {
@@ -987,6 +954,7 @@ pub const ContainerRegistryBlob = struct {
     };
     /// Retrieve the blob from the registry identified by digest.
     pub fn getBlob(self: *@This(), alloc: std.mem.Allocator, name: []const u8, digest: []const u8) !GetBlobResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodeRepositoryName(alloc, name);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, digest);
@@ -1056,6 +1024,7 @@ pub const ContainerRegistryBlob = struct {
     }
     /// Same as GET, except only the headers are returned.
     pub fn checkBlobExists(self: *@This(), alloc: std.mem.Allocator, name: []const u8, digest: []const u8) !CheckBlobExistsResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodeRepositoryName(alloc, name);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, digest);
@@ -1122,6 +1091,7 @@ pub const ContainerRegistryBlob = struct {
     }
     /// Removes an already uploaded blob.
     pub fn deleteBlob(self: *@This(), alloc: std.mem.Allocator, name: []const u8, digest: []const u8) !DeleteBlobResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodeRepositoryName(alloc, name);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, digest);
@@ -1167,6 +1137,7 @@ pub const ContainerRegistryBlob = struct {
     }
     /// Mount a blob identified by the `mount` parameter from another repository.
     pub fn mountBlob(self: *@This(), alloc: std.mem.Allocator, name: []const u8, from: []const u8, mount: []const u8) !MountBlobResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodeRepositoryName(alloc, name);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/v2/{s}/blobs/uploads/", .{ self.endpoint, encoded_path_0 });
@@ -1231,6 +1202,7 @@ pub const ContainerRegistryBlob = struct {
     /// Retrieve status of upload identified by uuid. The primary purpose of this
     /// endpoint is to resolve the current status of a resumable upload.
     pub fn getUploadStatus(self: *@This(), alloc: std.mem.Allocator, next_blob_uuid_link: []const u8) !GetUploadStatusResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.expandGreedyPathValue(alloc, next_blob_uuid_link);
         defer alloc.free(encoded_path_0);
         const endpoint_uri = std.Uri.parse(self.endpoint) catch return error.InvalidUrl;
@@ -1288,6 +1260,7 @@ pub const ContainerRegistryBlob = struct {
     }
     /// Upload a stream of data without completing the upload.
     pub fn uploadChunk(self: *@This(), alloc: std.mem.Allocator, next_blob_uuid_link: []const u8, value: []const u8) !UploadChunkResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.expandGreedyPathValue(alloc, next_blob_uuid_link);
         defer alloc.free(encoded_path_0);
         const endpoint_uri = std.Uri.parse(self.endpoint) catch return error.InvalidUrl;
@@ -1355,6 +1328,7 @@ pub const ContainerRegistryBlob = struct {
     /// request without a body will just complete the upload with previously uploaded
     /// content.
     pub fn completeUpload(self: *@This(), alloc: std.mem.Allocator, digest: []const u8, next_blob_uuid_link: []const u8, value: ?[]const u8) !CompleteUploadResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.expandGreedyPathValue(alloc, next_blob_uuid_link);
         defer alloc.free(encoded_path_0);
         const endpoint_uri = std.Uri.parse(self.endpoint) catch return error.InvalidUrl;
@@ -1425,6 +1399,7 @@ pub const ContainerRegistryBlob = struct {
     /// Cancel outstanding upload processes, releasing associated resources. If this is
     /// not called, the unfinished uploads will eventually timeout.
     pub fn cancelUpload(self: *@This(), alloc: std.mem.Allocator, next_blob_uuid_link: []const u8) !void {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.expandGreedyPathValue(alloc, next_blob_uuid_link);
         defer alloc.free(encoded_path_0);
         const endpoint_uri = std.Uri.parse(self.endpoint) catch return error.InvalidUrl;
@@ -1461,6 +1436,7 @@ pub const ContainerRegistryBlob = struct {
     }
     /// Initiate a resumable blob upload with an empty request body.
     pub fn startUpload(self: *@This(), alloc: std.mem.Allocator, name: []const u8) !StartUploadResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodeRepositoryName(alloc, name);
         defer alloc.free(encoded_path_0);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/v2/{s}/blobs/uploads/", .{ self.endpoint, encoded_path_0 });
@@ -1519,6 +1495,7 @@ pub const ContainerRegistryBlob = struct {
     /// issuing a HEAD request. If the header `Accept-Range: bytes` is returned, range
     /// requests can be used to fetch partial content.
     pub fn getChunk(self: *@This(), alloc: std.mem.Allocator, name: []const u8, digest: []const u8, range: []const u8) !GetChunkResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodeRepositoryName(alloc, name);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, digest);
@@ -1574,6 +1551,7 @@ pub const ContainerRegistryBlob = struct {
     }
     /// Same as GET, except only the headers are returned.
     pub fn checkChunkExists(self: *@This(), alloc: std.mem.Allocator, name: []const u8, digest: []const u8, range: []const u8) !CheckChunkExistsResult {
+        @setEvalBranchQuota(100_000);
         const encoded_path_0 = try core.url.encodeRepositoryName(alloc, name);
         defer alloc.free(encoded_path_0);
         const encoded_path_1 = try core.url.encodePathSegment(alloc, digest);
@@ -1629,9 +1607,10 @@ pub const ContainerRegistryBlob = struct {
 pub const Authentication = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Exchange AAD tokens for an ACR refresh Token
     pub fn exchangeAadAccessTokenForAcrRefreshToken(self: *@This(), alloc: std.mem.Allocator, body: models.MultipartBodyParameter) !models.AcrRefreshToken {
+        @setEvalBranchQuota(100_000);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/oauth2/exchange", .{self.endpoint});
         defer alloc.free(base_url);
         const url = base_url;
@@ -1689,6 +1668,7 @@ pub const Authentication = struct {
     }
     /// Exchange ACR Refresh token for an ACR Access Token
     pub fn exchangeAcrRefreshTokenForAcrAccessToken(self: *@This(), alloc: std.mem.Allocator, body: models.MultipartBodyParameter) !models.AcrAccessToken {
+        @setEvalBranchQuota(100_000);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/oauth2/token", .{self.endpoint});
         defer alloc.free(base_url);
         const url = base_url;
@@ -1746,6 +1726,7 @@ pub const Authentication = struct {
     }
     /// Exchange Username, Password and Scope for an ACR Access Token
     pub fn getAcrAccessTokenFromLogin(self: *@This(), alloc: std.mem.Allocator, service: []const u8, scope: []const u8) !models.AcrAccessToken {
+        @setEvalBranchQuota(100_000);
         const base_url = try std.fmt.allocPrint(alloc, "{s}/oauth2/token", .{self.endpoint});
         defer alloc.free(base_url);
         var url_buf: std.ArrayList(u8) = .empty;

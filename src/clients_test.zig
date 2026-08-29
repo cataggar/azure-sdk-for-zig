@@ -56,17 +56,21 @@ fn expectPublicMethods(comptime Client: type, comptime methods: []const []const 
 const Mock = struct {
     allocator: std.mem.Allocator,
     mode: enum { blob, redirect, multipart, cancel },
-    transport: core.http.HttpTransport = undefined,
     calls: usize = 0,
 
     fn init(allocator: std.mem.Allocator, mode: @FieldType(@This(), "mode")) @This() {
-        var result = @This(){ .allocator = allocator, .mode = mode };
-        result.transport = .{ .sendFn = send };
-        return result;
+        return .{ .allocator = allocator, .mode = mode };
     }
 
-    fn send(transport: *core.http.HttpTransport, request: *core.http.Request) !core.http.Response {
-        const self: *@This() = @alignCast(@fieldParentPtr("transport", transport));
+    fn asTransport(self: *@This()) core.http.HttpTransport {
+        return .{
+            .context = self,
+            .vtable = &.{ .send = send },
+        };
+    }
+
+    fn send(context: *anyopaque, request: *core.http.Request) !core.http.Response {
+        const self: *@This() = @ptrCast(@alignCast(context));
         self.calls += 1;
         const headers = std.StringHashMap([]const u8).init(self.allocator);
         var response_headers = core.http.ResponseHeaders.init(self.allocator);
@@ -153,15 +157,16 @@ const Mock = struct {
 
 test "generated ACR raw, multipart, statuses, and validated continuations" {
     const allocator = std.testing.allocator;
-    var empty = [_]*core.pipeline.HttpPolicy{};
+    var empty = [_]*core.http.HttpPolicy{};
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
 
     var blob_mock = Mock.init(allocator, .blob);
-    const blob_pipeline = core.pipeline.HttpPipeline{
-        .policies = &empty,
-        .transport_impl = &blob_mock.transport,
-    };
-    var root = clients.ContainerRegistryClient.initWithPipeline(
-        allocator,
+    const blob_runtime = core.http.HttpRuntime.init(
+        blob_mock.asTransport(),
+        crypto.asProvider(),
+    );
+    const blob_pipeline = core.http.HttpPipeline.init(blob_runtime, &empty);
+    var root = clients.ContainerRegistryClient.init(
         blob_pipeline,
         .{ .endpoint = "https://registry.example" },
     );
@@ -186,12 +191,12 @@ test "generated ACR raw, multipart, statuses, and validated continuations" {
     try std.testing.expectEqual(@as(usize, 1), blob_mock.calls);
 
     var redirect_mock = Mock.init(allocator, .redirect);
-    const redirect_pipeline = core.pipeline.HttpPipeline{
-        .policies = &empty,
-        .transport_impl = &redirect_mock.transport,
-    };
-    root = clients.ContainerRegistryClient.initWithPipeline(
-        allocator,
+    const redirect_runtime = core.http.HttpRuntime.init(
+        redirect_mock.asTransport(),
+        crypto.asProvider(),
+    );
+    const redirect_pipeline = core.http.HttpPipeline.init(redirect_runtime, &empty);
+    root = clients.ContainerRegistryClient.init(
         redirect_pipeline,
         .{ .endpoint = "https://registry.example" },
     );
@@ -229,12 +234,12 @@ test "generated ACR raw, multipart, statuses, and validated continuations" {
     try std.testing.expectEqual(@as(usize, 2), redirect_mock.calls);
 
     var multipart_mock = Mock.init(allocator, .multipart);
-    const multipart_pipeline = core.pipeline.HttpPipeline{
-        .policies = &empty,
-        .transport_impl = &multipart_mock.transport,
-    };
-    root = clients.ContainerRegistryClient.initWithPipeline(
-        allocator,
+    const multipart_runtime = core.http.HttpRuntime.init(
+        multipart_mock.asTransport(),
+        crypto.asProvider(),
+    );
+    const multipart_pipeline = core.http.HttpPipeline.init(multipart_runtime, &empty);
+    root = clients.ContainerRegistryClient.init(
         multipart_pipeline,
         .{ .endpoint = "https://registry.example" },
     );
@@ -251,12 +256,12 @@ test "generated ACR raw, multipart, statuses, and validated continuations" {
     try std.testing.expectEqualStrings("token", token.refresh_token.?);
 
     var cancel_mock = Mock.init(allocator, .cancel);
-    const cancel_pipeline = core.pipeline.HttpPipeline{
-        .policies = &empty,
-        .transport_impl = &cancel_mock.transport,
-    };
-    root = clients.ContainerRegistryClient.initWithPipeline(
-        allocator,
+    const cancel_runtime = core.http.HttpRuntime.init(
+        cancel_mock.asTransport(),
+        crypto.asProvider(),
+    );
+    const cancel_pipeline = core.http.HttpPipeline.init(cancel_runtime, &empty);
+    root = clients.ContainerRegistryClient.init(
         cancel_pipeline,
         .{ .endpoint = "https://registry.example" },
     );
