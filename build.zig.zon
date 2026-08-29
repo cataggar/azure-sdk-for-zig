@@ -1,6 +1,6 @@
 .{
     .name = .azure_rest_keyvault_secrets,
-    .version = "0.1.0",
+    .version = "0.2.0",
     .fingerprint = 0xad641d6d073a99c,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
