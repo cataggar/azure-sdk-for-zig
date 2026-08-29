@@ -85,9 +85,6 @@ pub const PartitionClient = struct {
     filter_expression: []u8,
     /// As configured, before `default_prefetch` is substituted for zero.
     prefetch: i32,
-    /// Manual credit requested but not yet consumed by deliveries. AMQP may
-    /// defer part of a batch request until aggregate buffer space returns.
-    manual_credit_pending: u32 = 0,
     owner_level: ?i64,
     deadline_ms: i64,
     /// Set when the broker detached the link; a stolen link reports
@@ -225,14 +222,13 @@ pub const PartitionClient = struct {
     ) ![]ReceivedEventData {
         if (count == 0 or count > max_credit) return ReceiveError.InvalidCount;
 
-        // A bounded AMQP receiver may defer part of a manual batch request
-        // until deliveries release aggregate buffer space. Track the whole
-        // request rather than only the credit currently on the wire, or a
-        // short batch would request the deferred remainder again next time.
-        if (self.prefetch < 0 and self.manual_credit_pending < count) {
-            const additional = count - self.manual_credit_pending;
+        // Credit is consumed by every initial transfer, including one the
+        // peer later aborts. Use AMQP's actual outstanding plus deferred
+        // request rather than counting only deliveries returned to callers.
+        const outstanding = manualCreditOutstanding(self.receiver);
+        if (self.prefetch < 0 and outstanding < count) {
+            const additional = count - outstanding;
             try self.receiver.issueCredit(additional);
-            self.manual_credit_pending += additional;
         }
 
         var events: std.ArrayList(ReceivedEventData) = .empty;
@@ -261,7 +257,6 @@ pub const PartitionClient = struct {
                 if (events.items.len > 0) break;
                 return err;
             };
-            if (self.prefetch < 0) self.manual_credit_pending -|= 1;
 
             const received = blk: {
                 // Decode into the client's scratch arena rather than a fresh
@@ -324,6 +319,10 @@ fn prefetchCredit(prefetch: i32) u32 {
     if (prefetch < 0) return 0;
     const requested: u32 = @intCast(if (prefetch == 0) default_prefetch else prefetch);
     return @min(requested, max_prefetch);
+}
+
+fn manualCreditOutstanding(receiver: *const amqp.Receiver) u32 {
+    return receiver.credit +| receiver.deferred_credit;
 }
 
 fn rawFrom(message: *const amqp.message_codec.Message) event_data.RawMessage {
@@ -1115,7 +1114,57 @@ test "disabled prefetch issues credit per receive" {
     try testing.expect(flows >= 1);
 }
 
-test "disabled prefetch carries a short batch request into the next receive" {
+test "disabled prefetch replenishes after an aborted delivery" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock = driver.ManualClock{};
+    var conn = try driver.Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
+    defer conn.deinit();
+
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+    try scriptAttach(peer);
+    const aborted_tag = [_]u8{0};
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 0,
+        .delivery_tag = &aborted_tag,
+        .settled = true,
+        .aborted = true,
+    }, "");
+
+    var scripted: Scripted = undefined;
+    try scripted.open(allocator, &mem, &clock, &conn, .{ .prefetch = -1 });
+    defer scripted.deinit();
+
+    mem.starve = true;
+    clock.auto_advance_ms = 1_000;
+    try testing.expectError(error.Timeout, scripted.client.receiveEvents(allocator, 1));
+    try testing.expectEqual(@as(u32, 0), manualCreditOutstanding(scripted.client.receiver));
+
+    mem.clearWritten();
+    try pushEvent(allocator, peer, 1, 1, "after abort");
+    scripted.client.deadline_ms = 20_000;
+
+    const events = try scripted.client.receiveEvents(allocator, 1);
+    defer event_data.freeReceivedEvents(allocator, events);
+    try testing.expectEqual(@as(usize, 1), events.len);
+    try testing.expectEqualStrings("after abort", events[0].body());
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    var flows: usize = 0;
+    for (frames.bodies.items) |body| {
+        if (amqp.performative.peekDescriptor(body) != amqp.performative.descriptor.flow) continue;
+        var decoded = try amqp.performative.decode(allocator, body);
+        defer decoded.deinit();
+        try testing.expectEqual(@as(?u32, 1), decoded.performative.flow.link_credit);
+        flows += 1;
+    }
+    try testing.expectEqual(@as(usize, 1), flows);
+}
+
+test "disabled prefetch preserves repeated short and large batch demand" {
     const allocator = testing.allocator;
     var mem = MemoryTransport.init(allocator);
     defer mem.deinit();
@@ -1136,19 +1185,28 @@ test "disabled prefetch carries a short batch request into the next receive" {
     const first = try scripted.client.receiveEvents(allocator, 10);
     defer event_data.freeReceivedEvents(allocator, first);
     try testing.expectEqual(@as(usize, 1), first.len);
-    try testing.expectEqual(@as(u32, 9), scripted.client.manual_credit_pending);
+    try testing.expectEqual(@as(u32, 9), manualCreditOutstanding(scripted.client.receiver));
 
-    var i: u32 = 0;
-    while (i < 10) : (i += 1) {
-        try pushEvent(allocator, peer, i + 1, @as(i64, i) + 2, "next");
-    }
-    mem.starve = false;
+    try pushEvent(allocator, peer, 1, 2, "second");
     scripted.client.deadline_ms = 20_000;
 
     const second = try scripted.client.receiveEvents(allocator, 10);
     defer event_data.freeReceivedEvents(allocator, second);
-    try testing.expectEqual(@as(usize, 10), second.len);
-    try testing.expectEqual(@as(u32, 0), scripted.client.manual_credit_pending);
+    try testing.expectEqual(@as(usize, 1), second.len);
+    try testing.expectEqual(@as(u32, 9), manualCreditOutstanding(scripted.client.receiver));
+
+    var i: u32 = 0;
+    while (i < 10) : (i += 1) {
+        try pushEvent(allocator, peer, i + 2, @as(i64, i) + 3, "next");
+    }
+    scripted.client.deadline_ms = 30_000;
+
+    const third = try scripted.client.receiveEvents(allocator, 10);
+    defer event_data.freeReceivedEvents(allocator, third);
+    try testing.expectEqual(@as(usize, 10), third.len);
+    try testing.expectEqual(@as(u32, 0), manualCreditOutstanding(scripted.client.receiver));
+
+    try testing.expectEqualStrings("next", third[0].body());
 
     var frames = try EmittedFrames.parse(allocator, mem.written());
     defer frames.deinit();
