@@ -135,37 +135,29 @@ const SynchronizedBearerAuthPolicy = struct {
             runtime,
         );
         defer fresh.deinit();
+
+        self.cache_lock.lock();
+        defer self.cache_lock.unlock();
+        if (self.cached_auth_value) |auth_value| {
+            if (unixTimestampSeconds() < self.cached_expires_on - refresh_buffer_secs) {
+                return request.setHeader("Authorization", auth_value);
+            }
+        }
+
         const replacement = try std.fmt.allocPrint(
             self.allocator,
             "Bearer {s}",
             .{fresh.token},
         );
-        var replacement_owned = true;
-        errdefer if (replacement_owned) self.allocator.free(replacement);
+        errdefer self.allocator.free(replacement);
+        try request.setHeader("Authorization", replacement);
 
-        var old_auth_value: ?[]u8 = null;
-        self.cache_lock.lock();
-        if (self.cached_auth_value) |auth_value| {
-            if (unixTimestampSeconds() < self.cached_expires_on - refresh_buffer_secs) {
-                const result = request.setHeader("Authorization", auth_value);
-                self.cache_lock.unlock();
-                replacement_owned = false;
-                self.allocator.free(replacement);
-                return result;
-            }
-        }
-
-        request.setHeader("Authorization", replacement) catch |err| {
-            self.cache_lock.unlock();
-            return err;
-        };
-        old_auth_value = self.cached_auth_value;
+        const old_auth_value = self.cached_auth_value;
         self.cached_auth_value = replacement;
         self.cached_expires_on = fresh.expires_on;
-        replacement_owned = false;
-        self.cache_lock.unlock();
         // Request headers own their copies, and no cache reader can retain this
-        // slice after releasing the lock.
+        // slice after releasing the lock. Free under the same lock as the swap
+        // because the cache allocator need not be thread-safe.
         if (old_auth_value) |value| self.allocator.free(value);
     }
 };
@@ -744,6 +736,84 @@ const ConcurrentWorker = struct {
     }
 };
 
+const GuardedAllocator = struct {
+    parent: std.mem.Allocator,
+    active: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+    overlapped: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    const vtable: std.mem.Allocator.VTable = .{
+        .alloc = alloc,
+        .resize = resize,
+        .remap = remap,
+        .free = free,
+    };
+
+    fn allocator(self: *GuardedAllocator) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+
+    fn enter(self: *GuardedAllocator) void {
+        if (self.active.fetchAdd(1, .acq_rel) != 0) {
+            self.overlapped.store(true, .release);
+        }
+        for (0..128) |_| std.Thread.yield() catch {};
+    }
+
+    fn leave(self: *GuardedAllocator) void {
+        _ = self.active.fetchSub(1, .acq_rel);
+    }
+
+    fn alloc(
+        context: *anyopaque,
+        len: usize,
+        alignment: std.mem.Alignment,
+        return_address: usize,
+    ) ?[*]u8 {
+        const self: *GuardedAllocator = @ptrCast(@alignCast(context));
+        self.enter();
+        defer self.leave();
+        return self.parent.rawAlloc(len, alignment, return_address);
+    }
+
+    fn resize(
+        context: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        return_address: usize,
+    ) bool {
+        const self: *GuardedAllocator = @ptrCast(@alignCast(context));
+        self.enter();
+        defer self.leave();
+        return self.parent.rawResize(memory, alignment, new_len, return_address);
+    }
+
+    fn remap(
+        context: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        return_address: usize,
+    ) ?[*]u8 {
+        const self: *GuardedAllocator = @ptrCast(@alignCast(context));
+        self.enter();
+        defer self.leave();
+        return self.parent.rawRemap(memory, alignment, new_len, return_address);
+    }
+
+    fn free(
+        context: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        return_address: usize,
+    ) void {
+        const self: *GuardedAllocator = @ptrCast(@alignCast(context));
+        self.enter();
+        defer self.leave();
+        self.parent.rawFree(memory, alignment, return_address);
+    }
+};
+
 test "AdministrationClient preserves runtime and provider failures are atomic" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 200, "");
@@ -949,5 +1019,50 @@ test "AdministrationClient synchronizes shared authentication cache" {
     try std.testing.expect(!failed.load(.acquire));
     try std.testing.expect(!transport.missing_auth.load(.acquire));
     try std.testing.expectEqual(worker_count, transport.calls.load(.acquire));
+    try std.testing.expectEqual(worker_count, credential.entered.load(.acquire));
+}
+
+test "AdministrationClient serializes cache allocator operations during concurrent refresh" {
+    const worker_allocator = std.testing.allocator;
+    const worker_count = 8;
+    var guarded = GuardedAllocator{ .parent = std.heap.page_allocator };
+    const cache_allocator = guarded.allocator();
+    var transport = ConcurrentTransport{};
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    var credential = BarrierCredential{
+        .allocator = worker_allocator,
+        .expected_calls = worker_count,
+    };
+    var admin = try ServiceBusAdministrationClient.init(
+        cache_allocator,
+        "ns.servicebus.windows.net",
+        credential.asCredential(),
+        testRuntime(transport.asTransport(), crypto.asProvider()),
+        .{},
+    );
+    defer admin.deinit();
+
+    admin.pipeline_state.auth_policy.cached_auth_value =
+        try cache_allocator.dupe(u8, "expired");
+    admin.pipeline_state.auth_policy.cached_expires_on = 0;
+
+    var start = std.atomic.Value(bool).init(false);
+    var failed = std.atomic.Value(bool).init(false);
+    var threads: [worker_count]std.Thread = undefined;
+    for (&threads, 0..) |*thread, index| {
+        thread.* = try std.Thread.spawn(.{}, ConcurrentWorker.run, .{ConcurrentWorker{
+            .client = &admin,
+            .allocator = worker_allocator,
+            .index = index,
+            .start = &start,
+            .failed = &failed,
+        }});
+    }
+    start.store(true, .release);
+    for (threads) |thread| thread.join();
+
+    try std.testing.expect(!failed.load(.acquire));
+    try std.testing.expect(!guarded.overlapped.load(.acquire));
+    try std.testing.expectEqual(@as(usize, 0), guarded.active.load(.acquire));
     try std.testing.expectEqual(worker_count, credential.entered.load(.acquire));
 }

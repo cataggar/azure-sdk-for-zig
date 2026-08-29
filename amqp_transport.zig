@@ -170,6 +170,8 @@ pub const TlsSettings = struct {
 const receiver_prefetch_limit: u32 = 8;
 const receiver_max_message_size: u64 = 128 * 1024 * 1024;
 const receiver_max_buffered_bytes: u64 = 1024 * 1024 * 1024;
+const receive_and_delete_settlement_batch: u32 =
+    amqp.default_max_unsettled_deliveries;
 
 pub const ConnectionOptions = struct {
     /// Prefixed to the user agent so the service can attribute traffic to the
@@ -328,7 +330,9 @@ const dead_letter_condition = "com.microsoft:dead-letter";
 ///
 /// The same ceiling `azure_sdk_eventhubs` puts on a receive, and for the same
 /// reason: the count becomes both a credit grant and a precise reservation, so
-/// it has to be the caller's intent rather than whatever number arrived.
+/// it has to be the caller's intent rather than whatever number arrived. The
+/// receiver retains at most this many unsettled ids; payload buffering remains
+/// independently bounded by the eight-credit, one-GiB window above.
 pub const max_receive_count: u32 = 5000;
 
 /// How much of a management call's remaining deadline is kept back from the
@@ -744,6 +748,7 @@ pub const AmqpTransport = struct {
             .prefetch = @min(self.options.prefetch, receiver_prefetch_limit),
             .max_message_size = receiver_max_message_size,
             .max_buffered_bytes = receiver_max_buffered_bytes,
+            .max_unsettled_deliveries = max_receive_count,
         }, deadline_ms);
         errdefer current.closeReceiver(receiver, 0);
 
@@ -855,10 +860,18 @@ pub const AmqpTransport = struct {
         const deadline_ms = self.deadlineFrom(current);
         const receiver = try self.receiverFor(current, entity, mode, deadline_ms);
 
-        // Without a prefetch window the link holds no credit at all, so ask
-        // for exactly what this call needs on top of anything outstanding.
-        if (self.options.prefetch == 0 and receiver.credit < max_count) {
-            try receiver.issueCredit(max_count - receiver.credit);
+        // Manual credit may be partly live and partly deferred behind the
+        // receiver's byte or settlement bounds. Both are still outstanding
+        // demand; asking from live credit alone duplicates the deferred part
+        // on every short receive. Charged deliveries, including aborted ones,
+        // reduce these public AMQP counters, and a replacement link starts
+        // them at zero.
+        if (self.options.prefetch == 0) {
+            const outstanding =
+                (receiver.credit +| receiver.deferred_credit) -| receiver.overrun;
+            if (outstanding < max_count) {
+                try receiver.issueCredit(max_count - outstanding);
+            }
         }
 
         // Nothing is allocated until a message actually arrives. A consumer on
@@ -879,6 +892,7 @@ pub const AmqpTransport = struct {
         // where the broker's own mode is at-most-once: a disposition lost in
         // flight means redelivery rather than a silently dropped message.
         var settling = amqp.SettleBatch.init(receiver, .accepted);
+        var settlements_since_flush: u32 = 0;
 
         while (messages.items.len < max_count) {
             const delivery = receiver.receive(deadline_ms) catch |err| {
@@ -908,7 +922,12 @@ pub const AmqpTransport = struct {
                 // Settling is advisory: a message that could not be settled
                 // is redelivered, and failing here would throw away messages
                 // the caller has already been given.
-                settling.add(delivery) catch {};
+                settling.add(delivery) catch continue;
+                settlements_since_flush += 1;
+                if (settlements_since_flush >= receive_and_delete_settlement_batch) {
+                    settling.flush() catch {};
+                    settlements_since_flush = 0;
+                }
             }
         }
 
@@ -2668,6 +2687,19 @@ fn pushMessage(
     }, payload);
 }
 
+/// Consume one delivery and its credit without producing a message.
+fn pushAborted(peer: Peer, handle: u32, delivery_id: u32) !void {
+    try peer.pushTransfer(0, .{
+        .handle = handle,
+        .delivery_id = delivery_id,
+        .delivery_tag = "aborted",
+        .message_format = 0,
+        .settled = false,
+        .more = false,
+        .aborted = true,
+    }, "");
+}
+
 /// Every disposition body the client emitted.
 fn emittedDispositions(allocator: Allocator, written: []const u8) ![]const []const u8 {
     var frames = try harness.EmittedFrames.parse(allocator, written);
@@ -3232,6 +3264,216 @@ test "max_count is honoured and leaves the rest for the next call" {
     try testing.expectEqual(@as(i64, 2), rest.messages[0].sequence_number.?);
 }
 
+test "manual credit does not duplicate deferred demand across short maximum batches" {
+    const allocator = testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    try scriptEntityReceiver(&h, allocator, "orders");
+    h.mem.starve = true;
+    try h.start(.{ .prefetch = 0, .deadline_ms = 1_000 });
+    h.clock.auto_advance_ms = 5;
+
+    for (0..3) |i| {
+        try pushMessage(
+            h.peer(),
+            allocator,
+            2,
+            first_incoming_id + @as(u32, @intCast(i)),
+            "t",
+            "m",
+            @intCast(i),
+        );
+        var batch = try h.transport.receiveMessages(
+            allocator,
+            "orders",
+            max_receive_count,
+            .peek_lock,
+        );
+        defer batch.deinit();
+        try testing.expectEqual(@as(usize, 1), batch.count());
+
+        const receiver = h.transport.receivers.get("orders").?.receiver;
+        try testing.expectEqual(
+            max_receive_count - 1,
+            receiver.credit + receiver.deferred_credit,
+        );
+    }
+}
+
+test "manual demand accounts for an aborted delivery before the next call" {
+    const allocator = testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    try scriptEntityReceiver(&h, allocator, "orders");
+    h.mem.starve = true;
+    try h.start(.{ .prefetch = 0, .deadline_ms = 1_000 });
+    h.clock.auto_advance_ms = 5;
+
+    try pushAborted(h.peer(), 2, first_incoming_id);
+    try pushMessage(h.peer(), allocator, 2, first_incoming_id + 1, "t", "first", 1);
+    var first = try h.transport.receiveMessages(
+        allocator,
+        "orders",
+        max_receive_count,
+        .peek_lock,
+    );
+    defer first.deinit();
+    try testing.expectEqual(@as(usize, 1), first.count());
+
+    const receiver = h.transport.receivers.get("orders").?.receiver;
+    try testing.expectEqual(
+        max_receive_count - 2,
+        receiver.credit + receiver.deferred_credit,
+    );
+
+    try pushMessage(h.peer(), allocator, 2, first_incoming_id + 2, "t", "second", 2);
+    var second = try h.transport.receiveMessages(
+        allocator,
+        "orders",
+        max_receive_count,
+        .peek_lock,
+    );
+    defer second.deinit();
+    try testing.expectEqual(@as(usize, 1), second.count());
+    try testing.expectEqual(
+        max_receive_count - 1,
+        receiver.credit + receiver.deferred_credit,
+    );
+}
+
+test "manual deferred demand is discarded with a replaced receiver link" {
+    const allocator = testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    try scriptEntityReceiver(&h, allocator, "orders");
+    try pushMessage(h.peer(), allocator, 2, first_incoming_id, "t", "first", 1);
+    try h.peer().push(0, .{ .detach = .{ .handle = 2, .closed = true } });
+    try scriptReceiverAttach(h.peer(), 3, "servicebus-receiver-orders");
+    try pushMessage(h.peer(), allocator, 3, first_incoming_id + 1, "t", "second", 2);
+    try h.start(.{ .prefetch = 0 });
+
+    var first = try h.transport.receiveMessages(
+        allocator,
+        "orders",
+        max_receive_count,
+        .peek_lock,
+    );
+    defer first.deinit();
+    try testing.expectEqual(@as(usize, 1), first.count());
+    try testing.expect(!h.transport.receivers.get("orders").?.receiver.attached);
+    try testing.expect(
+        h.transport.receivers.get("orders").?.receiver.deferred_credit > 0,
+    );
+
+    h.mem.clearWritten();
+    var second = try h.transport.receiveMessages(allocator, "orders", 1, .peek_lock);
+    defer second.deinit();
+    try testing.expectEqualStrings("second", second.messages[0].body);
+    try testing.expectEqual(
+        @as(?u32, 1),
+        try creditFor(allocator, h.mem.written(), 3),
+    );
+}
+
+test "peek lock receives beyond AMQP's default unsettled limit" {
+    const allocator = testing.allocator;
+    const count: u32 = amqp.default_max_unsettled_deliveries + 1;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    try scriptEntityReceiver(&h, allocator, "orders");
+    for (0..count) |i| {
+        try pushMessage(
+            h.peer(),
+            allocator,
+            2,
+            first_incoming_id + @as(u32, @intCast(i)),
+            "t",
+            "m",
+            @intCast(i),
+        );
+    }
+    try h.start(.{});
+
+    var batch = try h.transport.receiveMessages(allocator, "orders", count, .peek_lock);
+    defer batch.deinit();
+    try testing.expectEqual(@as(usize, count), batch.count());
+
+    const receiver = h.transport.receivers.get("orders").?.receiver;
+    try testing.expectEqual(max_receive_count, receiver.max_unsettled_deliveries);
+    try testing.expectEqual(@as(usize, count), receiver.unsettled_ids.items.len);
+}
+
+test "receive and delete periodically settles beyond the default unsettled limit" {
+    const allocator = testing.allocator;
+    const count: u32 = amqp.default_max_unsettled_deliveries + 1;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    try scriptEntityReceiver(&h, allocator, "orders");
+    for (0..count) |i| {
+        try pushMessage(
+            h.peer(),
+            allocator,
+            2,
+            first_incoming_id + @as(u32, @intCast(i)),
+            "t",
+            "m",
+            @intCast(i),
+        );
+    }
+    try h.start(.{});
+    _ = try h.transport.receiverFor(
+        h.session,
+        "orders",
+        .receive_and_delete,
+        10_000,
+    );
+    h.mem.clearWritten();
+
+    var batch = try h.transport.receiveMessages(
+        allocator,
+        "orders",
+        count,
+        .receive_and_delete,
+    );
+    defer batch.deinit();
+    try testing.expectEqual(@as(usize, count), batch.count());
+    try testing.expectEqual(
+        @as(usize, 0),
+        h.transport.receivers.get("orders").?.receiver.unsettled_ids.items.len,
+    );
+
+    const dispositions = try emittedDispositions(allocator, h.mem.written());
+    defer allocator.free(dispositions);
+    try testing.expectEqual(@as(usize, 2), dispositions.len);
+
+    var first = try amqp.performative.decode(allocator, dispositions[0]);
+    defer first.deinit();
+    try testing.expectEqual(
+        first_incoming_id,
+        first.performative.disposition.first,
+    );
+    try testing.expectEqual(
+        first_incoming_id + receive_and_delete_settlement_batch - 1,
+        first.performative.disposition.last.?,
+    );
+
+    var last = try amqp.performative.decode(allocator, dispositions[1]);
+    defer last.deinit();
+    try testing.expectEqual(
+        first_incoming_id + receive_and_delete_settlement_batch,
+        last.performative.disposition.first,
+    );
+    try testing.expectEqual(
+        first_incoming_id + receive_and_delete_settlement_batch,
+        last.performative.disposition.last.?,
+    );
+}
+
 test "a prefetch window grants credit up front, and no window grants exactly what is asked" {
     const allocator = testing.allocator;
 
@@ -3252,6 +3494,7 @@ test "a prefetch window grants credit up front, and no window grants exactly wha
         const receiver = h.transport.receivers.get("orders").?.receiver;
         try testing.expectEqual(@as(?u64, receiver_max_message_size), receiver.max_message_size);
         try testing.expectEqual(@as(?u64, receiver_max_buffered_bytes), receiver.max_buffered_bytes);
+        try testing.expectEqual(max_receive_count, receiver.max_unsettled_deliveries);
     }
 
     {
