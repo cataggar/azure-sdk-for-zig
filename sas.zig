@@ -11,17 +11,19 @@ pub const max_queue_message_bytes: usize = 48 * 1024;
 pub const storage_api_version = "2024-11-04";
 
 /// A Queue client constructed only from an allocator, a complete queue SAS
-/// URL, and a transport. It never accepts a credential or an external
-/// pipeline, so Kusto bearer authentication cannot reach Queue Storage.
+/// URL, and an HTTP runtime. It never accepts a credential or an external
+/// pipeline, so bearer authentication cannot reach Queue Storage.
 pub const SasQueueClient = struct {
     allocator: std.mem.Allocator,
     uri: sas.CompleteSasUri,
-    transport: *core.http.HttpTransport,
+    runtime: core.http.HttpRuntime,
 
+    /// Copies `runtime` while borrowing its transport and crypto contexts.
+    /// Both contexts must outlive this client and every operation on it.
     pub fn init(
         allocator: std.mem.Allocator,
         complete_queue_sas_uri: []const u8,
-        transport: *core.http.HttpTransport,
+        runtime: core.http.HttpRuntime,
     ) !SasQueueClient {
         var uri = try sas.CompleteSasUri.init(allocator, complete_queue_sas_uri);
         errdefer uri.deinit();
@@ -30,7 +32,7 @@ pub const SasQueueClient = struct {
         return .{
             .allocator = allocator,
             .uri = uri,
-            .transport = transport,
+            .runtime = runtime,
         };
     }
 
@@ -67,7 +69,7 @@ pub const SasQueueClient = struct {
         try request.setHeader("Content-Type", "application/xml");
         try request.setHeader("x-ms-version", storage_api_version);
         request.body = body;
-        const outcome = try sas.send(self.transport, &request, null);
+        const outcome = try sas.send(self.runtime, &request, null);
         return switch (outcome) {
             .accepted => |value| if (value.status_code == 201)
                 outcome
@@ -112,10 +114,14 @@ test "SAS queue message preserves SAS, base64 encodes special bytes, and isolate
     const allocator = std.testing.allocator;
     var transport = core.http.MockTransport.init(allocator, 201, "");
     defer transport.deinit();
+    var crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
     var client = try SasQueueClient.init(
         allocator,
         "https://account.queue.core.windows.net/queue?sig=a%2Bb%3D&sp=a",
-        transport.asTransport(),
+        core.http.HttpRuntime.init(
+            transport.asTransport(),
+            crypto_provider.asProvider(),
+        ),
     );
     defer client.deinit();
 
@@ -139,10 +145,14 @@ test "SAS queue reports received rejection and validates message size" {
     const allocator = std.testing.allocator;
     var transport = core.http.MockTransport.init(allocator, 403, "denied");
     defer transport.deinit();
+    var crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
     var client = try SasQueueClient.init(
         allocator,
         "https://account.queue.core.windows.net/queue?sig=opaque",
-        transport.asTransport(),
+        core.http.HttpRuntime.init(
+            transport.asTransport(),
+            crypto_provider.asProvider(),
+        ),
     );
     defer client.deinit();
 
@@ -161,10 +171,14 @@ test "SAS queue requires the protocol success status" {
     const allocator = std.testing.allocator;
     var transport = core.http.MockTransport.init(allocator, 204, "");
     defer transport.deinit();
+    var crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
     var client = try SasQueueClient.init(
         allocator,
         "https://account.queue.core.windows.net/queue?sig=opaque",
-        transport.asTransport(),
+        core.http.HttpRuntime.init(
+            transport.asTransport(),
+            crypto_provider.asProvider(),
+        ),
     );
     defer client.deinit();
 
@@ -180,10 +194,14 @@ test "SAS queue preserves accepted status when response draining fails" {
     var transport = core.http.MockTransport.init(allocator, 201, "response");
     defer transport.deinit();
     transport.stream_fail_response_after = 0;
+    var crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
     var client = try SasQueueClient.init(
         allocator,
         "https://account.queue.core.windows.net/queue?sig=opaque",
-        transport.asTransport(),
+        core.http.HttpRuntime.init(
+            transport.asTransport(),
+            crypto_provider.asProvider(),
+        ),
     );
     defer client.deinit();
 
@@ -201,10 +219,15 @@ test "Queue XML escaping and client diagnostics redact sensitive queries" {
 
     var transport = core.http.MockTransport.init(allocator, 201, "");
     defer transport.deinit();
+    var crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+    const runtime = core.http.HttpRuntime.init(
+        transport.asTransport(),
+        crypto_provider.asProvider(),
+    );
     var client = try SasQueueClient.init(
         allocator,
         "https://account.queue.core.windows.net/queue?sig=secret",
-        transport.asTransport(),
+        runtime,
     );
     defer client.deinit();
     var buffer: [256]u8 = undefined;
@@ -216,7 +239,7 @@ test "Queue XML escaping and client diagnostics redact sensitive queries" {
         SasQueueClient.init(
             allocator,
             "https://account.blob.core.windows.net/container/blob?sig=opaque",
-            transport.asTransport(),
+            runtime,
         ),
     );
 }

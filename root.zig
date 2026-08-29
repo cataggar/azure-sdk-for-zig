@@ -7,9 +7,12 @@ pub const SasQueueClient = sas.SasQueueClient;
 pub const CompleteSasQueueClient = sas.CompleteSasQueueClient;
 pub const QueueMessageOutcome = sas.QueueMessageOutcome;
 pub const max_queue_message_bytes = sas.max_queue_message_bytes;
+pub const auth_scopes: []const []const u8 = &.{"https://storage.azure.com/.default"};
 
 test {
     std.testing.refAllDecls(sas);
+    std.testing.refAllDecls(QueueClient);
+    std.testing.refAllDecls(QueueServiceClient);
 }
 
 // ─────────────────────────── Models ───────────────────────────
@@ -31,21 +34,23 @@ pub const QueueClient = struct {
     endpoint: []const u8,
     queue_name: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
+    /// Constructs a queue-scoped client by copying `pipeline`.
+    ///
+    /// The pipeline's policy pointers and runtime backend contexts are
+    /// borrowed and must outlive this client and every operation on it.
     pub fn init(
         endpoint: []const u8,
         queue_name: []const u8,
-        credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
+        pipeline: core.http.HttpPipeline,
         options: QueueClientOptions,
     ) QueueClient {
-        _ = credential;
         return .{
             .endpoint = endpoint,
             .queue_name = queue_name,
             .api_version = options.api_version,
-            .pipeline = .{ .policies = &.{}, .transport_impl = transport },
+            .pipeline = pipeline,
         };
     }
 
@@ -181,22 +186,22 @@ pub const QueueClient = struct {
 
 pub const QueueServiceClient = struct {
     endpoint: []const u8,
-    credential: *core.credentials.TokenCredential,
-    transport: *core.http.HttpTransport,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
+    /// Constructs a service client by copying `pipeline`.
+    ///
+    /// The pipeline's policy pointers and runtime backend contexts are
+    /// borrowed and must outlive this client, clients derived from it, and
+    /// every operation on those clients.
     pub fn init(
         endpoint: []const u8,
-        credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
+        pipeline: core.http.HttpPipeline,
     ) QueueServiceClient {
         return .{
             .endpoint = endpoint,
-            .credential = credential,
-            .transport = transport,
             .api_version = "2024-11-04",
-            .pipeline = .{ .policies = &.{}, .transport_impl = transport },
+            .pipeline = pipeline,
         };
     }
 
@@ -257,7 +262,7 @@ pub const QueueServiceClient = struct {
     }
 
     pub fn getQueueClient(self: *QueueServiceClient, queue_name: []const u8) QueueClient {
-        return QueueClient.init(self.endpoint, queue_name, self.credential, self.transport, .{});
+        return QueueClient.init(self.endpoint, queue_name, self.pipeline, .{});
     }
 };
 
@@ -298,29 +303,118 @@ fn parseMessages(allocator: std.mem.Allocator, body: []const u8) ![]QueueMessage
 
 // ─────────────────────────── Tests ────────────────────────────
 
+const RoutingCryptoProvider = struct {
+    calls: usize = 0,
+    fail: bool = false,
+
+    const vtable: core.crypto.CryptoProvider.VTable = .{
+        .random_bytes = &randomBytes,
+        .md5 = &md5,
+        .sha256 = &sha256,
+        .hmac_sha256 = &hmacSha256,
+        .sha256_init = &sha256Init,
+    };
+
+    fn provider(self: *@This()) core.crypto.CryptoProvider {
+        return .{ .context = self, .vtable = &vtable };
+    }
+
+    fn randomBytes(context: *anyopaque, out: []u8) !void {
+        const self: *@This() = @ptrCast(@alignCast(context));
+        self.calls += 1;
+        if (self.fail) return error.ProviderFailure;
+        @memset(out, 0xa5);
+    }
+
+    fn md5(
+        _: *anyopaque,
+        _: []const u8,
+        _: *core.crypto.Md5Digest,
+    ) !void {
+        return error.UnexpectedCryptoOperation;
+    }
+
+    fn sha256(
+        _: *anyopaque,
+        _: []const u8,
+        _: *core.crypto.Sha256Digest,
+    ) !void {
+        return error.UnexpectedCryptoOperation;
+    }
+
+    fn hmacSha256(
+        _: *anyopaque,
+        _: []const u8,
+        _: []const u8,
+        _: *core.crypto.HmacSha256Digest,
+    ) !void {
+        return error.UnexpectedCryptoOperation;
+    }
+
+    fn sha256Init(
+        _: *anyopaque,
+        _: std.mem.Allocator,
+    ) !core.crypto.Sha256Operation {
+        return error.UnexpectedCryptoOperation;
+    }
+};
+
 test "QueueClient sendMessage" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 201, "");
     defer mock.deinit();
-
-    const identity = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
+    var crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+    const runtime = core.http.HttpRuntime.init(
+        mock.asTransport(),
+        crypto_provider.asProvider(),
     );
-    defer cred_mock.deinit();
-    var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
 
     var client = QueueClient.init(
         "https://myaccount.queue.core.windows.net",
         "myqueue",
-        cred.asCredential(),
-        mock.asTransport(),
+        core.http.HttpPipeline.init(runtime, &.{}),
         .{},
     );
 
     try client.sendMessage(allocator, "Hello Queue!");
     try std.testing.expectEqual(core.http.Method.POST, mock.last_method.?);
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "myqueue/messages") != null);
+}
+
+test "derived QueueClient preserves runtime crypto and provider failures" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 201, "");
+    defer mock.deinit();
+    var crypto_provider = RoutingCryptoProvider{};
+    const runtime = core.http.HttpRuntime.init(
+        mock.asTransport(),
+        crypto_provider.provider(),
+    );
+    var request_id_policy = core.http.RequestIdPolicy.init();
+    var policies = [_]*core.http.HttpPolicy{request_id_policy.asPolicy()};
+    const pipeline = core.http.HttpPipeline.init(runtime, &policies);
+    var service_client = QueueServiceClient.init(
+        "https://myaccount.queue.core.windows.net",
+        pipeline,
+    );
+    var queue_client = service_client.getQueueClient("myqueue");
+
+    try queue_client.sendMessage(allocator, "first");
+    try std.testing.expectEqual(@as(usize, 1), crypto_provider.calls);
+    try std.testing.expectEqual(@as(usize, 1), mock.call_count);
+    try std.testing.expect(mock.last_headers.get("x-ms-client-request-id") != null);
+    try std.testing.expectEqual(
+        runtime.crypto.context,
+        queue_client.pipeline.runtime.crypto.context,
+    );
+
+    crypto_provider.fail = true;
+    try std.testing.expectError(
+        error.ProviderFailure,
+        queue_client.sendMessage(allocator, "second"),
+    );
+    try std.testing.expectEqual(@as(usize, 2), crypto_provider.calls);
+    try std.testing.expectEqual(@as(usize, 1), mock.call_count);
 }
 
 test "QueueClient receiveMessages" {
@@ -330,19 +424,16 @@ test "QueueClient receiveMessages" {
     ;
     var mock = core.http.MockTransport.init(allocator, 200, body);
     defer mock.deinit();
-
-    const identity2 = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
+    var crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+    const runtime = core.http.HttpRuntime.init(
+        mock.asTransport(),
+        crypto_provider.asProvider(),
     );
-    defer cred_mock.deinit();
-    var cred = identity2.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
 
     var client = QueueClient.init(
         "https://myaccount.queue.core.windows.net",
         "myqueue",
-        cred.asCredential(),
-        mock.asTransport(),
+        core.http.HttpPipeline.init(runtime, &.{}),
         .{},
     );
 
