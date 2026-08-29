@@ -42,11 +42,16 @@ test "live: the organization's projects can be listed with a PAT" {
 
     var transport = core.http.StdHttpTransport.init(allocator, std.testing.io);
     defer transport.deinit();
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    const runtime = core.http.HttpRuntime.init(
+        transport.asTransport(),
+        crypto.asProvider(),
+    );
 
     var client = try devops.DevOpsClient.init(allocator, .{
         .organization = settings.organization,
         .credential = .fromPat(settings.pat),
-        .transport = transport.asTransport(),
+        .runtime = runtime,
     });
     defer client.deinit();
 
@@ -77,11 +82,16 @@ test "live: a project's Git repositories can be listed" {
 
     var transport = core.http.StdHttpTransport.init(allocator, std.testing.io);
     defer transport.deinit();
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    const runtime = core.http.HttpRuntime.init(
+        transport.asTransport(),
+        crypto.asProvider(),
+    );
 
     var client = try devops.DevOpsClient.init(allocator, .{
         .organization = settings.organization,
         .credential = .fromPat(settings.pat),
-        .transport = transport.asTransport(),
+        .runtime = runtime,
     });
     defer client.deinit();
 
@@ -111,11 +121,16 @@ test "live: an invalid PAT is rejected rather than silently succeeding" {
 
     var transport = core.http.StdHttpTransport.init(allocator, std.testing.io);
     defer transport.deinit();
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    const runtime = core.http.HttpRuntime.init(
+        transport.asTransport(),
+        crypto.asProvider(),
+    );
 
     var client = try devops.DevOpsClient.init(allocator, .{
         .organization = settings.organization,
         .credential = .fromPat("this-is-not-a-valid-pat"),
-        .transport = transport.asTransport(),
+        .runtime = runtime,
     });
     defer client.deinit();
 

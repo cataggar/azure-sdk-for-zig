@@ -19,11 +19,16 @@ const devops = @import("azure_sdk_devops");
 pub fn main(init: std.process.Init) !void {
     var transport = core.http.StdHttpTransport.init(init.gpa, init.io);
     defer transport.deinit();
+    var crypto = core.crypto.StdCryptoProvider.init(init.io);
+    const runtime = core.http.HttpRuntime.init(
+        transport.asTransport(),
+        crypto.asProvider(),
+    );
 
     var client = try devops.DevOpsClient.init(init.gpa, .{
         .organization = "contoso",
         .credential = .fromPat(pat),
-        .transport = transport.asTransport(),
+        .runtime = runtime,
     });
     defer client.deinit();
 
@@ -85,7 +90,7 @@ var client = try devops.DevOpsClient.init(allocator, .{
     .organization = "DefaultCollection",
     .endpoint = "https://tfs.contoso.com/tfs",
     .credential = .fromPat(pat),
-    .transport = transport.asTransport(),
+    .runtime = runtime,
 });
 ```
 
@@ -155,6 +160,27 @@ const Repository = models.GitRepository;
 
 `DevOpsClient.areaClient` builds any generated root client on the shared
 pipeline, so an area without a named accessor is still one call away.
+
+## Runtime and ownership
+
+`DevOpsClient` has one canonical dependency path: callers supply a
+`core.http.HttpRuntime`, and the client builds its telemetry, retry, and
+credential policies around that runtime. Runtime, transport, and crypto
+provider descriptors are copied by value. Their backend contexts are borrowed
+and must outlive the client, every derived area/sub-client or pager fetcher,
+every token-credential call, and every open operation.
+
+The selected HTTP transport and SDK crypto provider remain independent and are
+preserved through all generated derived clients. Entra ID token credentials
+receive that same runtime for each token acquisition. This package performs no
+MD5, SHA-256, HMAC-SHA256, or random-byte operation itself; it has no direct
+`std.crypto` use or standard-provider fallback. PAT Base64 is wire encoding,
+not hashing or signing.
+
+The client borrows `organization`, `endpoint`, `scope`, credential, and runtime
+backend contexts. Deinitialize the client before releasing them. A
+`ContinuationPager` borrows its fetcher; fetchers normally contain a generated
+sub-client whose copied pipeline still borrows the original runtime contexts.
 
 ## Examples
 

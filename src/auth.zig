@@ -17,10 +17,10 @@
 const std = @import("std");
 const core = @import("azure_sdk_core");
 
-const HttpPolicy = core.pipeline.HttpPolicy;
+const HttpPolicy = core.http.HttpPolicy;
 const Request = core.http.Request;
 const Response = core.http.Response;
-const HttpTransport = core.http.HttpTransport;
+const HttpRuntime = core.http.HttpRuntime;
 
 /// The first-party application ID Azure DevOps registers in Entra ID.
 /// Every organization authenticates against this same resource, so the
@@ -51,7 +51,10 @@ pub const Credential = union(enum) {
 /// Applies a `Credential` to every request travelling through a pipeline.
 ///
 /// Bearer tokens are cached until they approach expiry; PAT headers are
-/// encoded once at `init` because they never change.
+/// encoded once at `init` because they never change. Entra ID acquisition
+/// receives the request's `HttpRuntime`, preserving the selected transport and
+/// crypto provider. Runtime backend contexts and credentials are borrowed and
+/// must outlive the policy and in-flight requests.
 pub const CredentialPolicy = struct {
     allocator: std.mem.Allocator,
     credential: Credential,
@@ -101,8 +104,10 @@ pub const CredentialPolicy = struct {
 
     /// The `Authorization` value for the current credential, refreshing a
     /// bearer token when the cached one is missing or near expiry.
-    /// Returns null when unauthenticated. The policy owns the slice.
-    pub fn authorizationHeader(self: *CredentialPolicy) !?[]const u8 {
+    /// Returns null when unauthenticated. The policy owns the slice. The
+    /// runtime descriptor is copied and its backend contexts are borrowed for
+    /// the duration of token acquisition.
+    pub fn authorizationHeader(self: *CredentialPolicy, runtime: HttpRuntime) !?[]const u8 {
         return switch (self.credential) {
             .unauthenticated => null,
             .pat => self.basic_value,
@@ -118,6 +123,7 @@ pub const CredentialPolicy = struct {
                 var token = try credential.getToken(
                     .{ .scopes = &scopes },
                     core.context.Context.none,
+                    runtime,
                 );
                 defer token.deinit();
                 const value = try std.fmt.allocPrint(
@@ -132,9 +138,9 @@ pub const CredentialPolicy = struct {
         };
     }
 
-    fn prepareImpl(policy: *HttpPolicy, request: *Request) !void {
+    fn prepareImpl(policy: *HttpPolicy, request: *Request, runtime: HttpRuntime) !void {
         const self: *CredentialPolicy = @alignCast(@fieldParentPtr("policy", policy));
-        if (try self.authorizationHeader()) |value| {
+        if (try self.authorizationHeader(runtime)) |value| {
             try request.setHeader("Authorization", value);
         }
     }
@@ -143,11 +149,11 @@ pub const CredentialPolicy = struct {
         policy: *HttpPolicy,
         request: *Request,
         next: []*HttpPolicy,
-        final_transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) !Response {
-        try prepareImpl(policy, request);
-        if (next.len == 0) return final_transport.send(request);
-        return next[0].process(request, next[1..], final_transport);
+        try prepareImpl(policy, request, runtime);
+        if (next.len == 0) return runtime.transport.send(request);
+        return next[0].process(request, next[1..], runtime);
     }
 };
 
@@ -163,12 +169,98 @@ fn encodeBasic(allocator: std.mem.Allocator, pat: []const u8) ![]u8 {
     return std.fmt.allocPrint(allocator, "Basic {s}", .{encoded});
 }
 
+const TestCryptoProvider = struct {
+    random_calls: usize = 0,
+    fail_random: bool = false,
+
+    const vtable: core.crypto.CryptoProvider.VTable = .{
+        .random_bytes = &randomBytes,
+        .md5 = &md5,
+        .sha256 = &sha256,
+        .hmac_sha256 = &hmacSha256,
+        .sha256_init = &sha256Init,
+    };
+
+    fn asProvider(self: *TestCryptoProvider) core.crypto.CryptoProvider {
+        return .{ .context = self, .vtable = &vtable };
+    }
+
+    fn randomBytes(context: *anyopaque, out: []u8) !void {
+        const self: *TestCryptoProvider = @ptrCast(@alignCast(context));
+        self.random_calls += 1;
+        if (self.fail_random) return error.InjectedProviderFailure;
+        @memset(out, 0x5a);
+    }
+
+    fn md5(_: *anyopaque, _: []const u8, _: *core.crypto.Md5Digest) !void {
+        return error.UnexpectedCryptoOperation;
+    }
+
+    fn sha256(_: *anyopaque, _: []const u8, _: *core.crypto.Sha256Digest) !void {
+        return error.UnexpectedCryptoOperation;
+    }
+
+    fn hmacSha256(
+        _: *anyopaque,
+        _: []const u8,
+        _: []const u8,
+        _: *core.crypto.HmacSha256Digest,
+    ) !void {
+        return error.UnexpectedCryptoOperation;
+    }
+
+    fn sha256Init(
+        _: *anyopaque,
+        _: std.mem.Allocator,
+    ) !core.crypto.Sha256Operation {
+        return error.UnexpectedCryptoOperation;
+    }
+};
+
+const RuntimeTokenCredential = struct {
+    credential: core.credentials.TokenCredential,
+    seen_transport_context: ?*anyopaque = null,
+    seen_crypto_context: ?*anyopaque = null,
+
+    fn init() RuntimeTokenCredential {
+        return .{
+            .credential = .{ .getTokenFn = &getToken },
+        };
+    }
+
+    fn getToken(
+        credential: *core.credentials.TokenCredential,
+        _: core.credentials.TokenRequestContext,
+        _: core.context.Context,
+        runtime: HttpRuntime,
+    ) !core.credentials.AccessToken {
+        const self: *RuntimeTokenCredential = @alignCast(
+            @fieldParentPtr("credential", credential),
+        );
+        self.seen_transport_context = runtime.transport.context;
+        self.seen_crypto_context = runtime.crypto.context;
+        var probe: [1]u8 = undefined;
+        try runtime.crypto.randomBytes(&probe);
+        return .{
+            .token = "runtime-token",
+            .expires_on = std.math.maxInt(i64),
+        };
+    }
+};
+
 test "PAT credentials are sent as Basic auth with an empty user name" {
     const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 200, "");
+    defer transport.deinit();
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    const runtime = core.http.HttpRuntime.init(
+        transport.asTransport(),
+        crypto.asProvider(),
+    );
     var policy = try CredentialPolicy.init(allocator, .fromPat("secret-pat"), .{});
     defer policy.deinit();
 
-    const header = (try policy.authorizationHeader()).?;
+    const header = (try policy.authorizationHeader(runtime)).?;
     try std.testing.expectStringStartsWith(header, "Basic ");
 
     const encoded = header["Basic ".len..];
@@ -180,9 +272,16 @@ test "PAT credentials are sent as Basic auth with an empty user name" {
 }
 
 test "unauthenticated credentials send no Authorization header" {
+    var transport = core.http.MockTransport.init(std.testing.allocator, 200, "");
+    defer transport.deinit();
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    const runtime = core.http.HttpRuntime.init(
+        transport.asTransport(),
+        crypto.asProvider(),
+    );
     var policy = try CredentialPolicy.init(std.testing.allocator, .unauthenticated, .{});
     defer policy.deinit();
-    try std.testing.expect((try policy.authorizationHeader()) == null);
+    try std.testing.expect((try policy.authorizationHeader(runtime)) == null);
 }
 
 test "the Azure DevOps scope is the first-party resource, not the endpoint" {
@@ -193,4 +292,62 @@ test "the Azure DevOps scope is the first-party resource, not the endpoint" {
         "499b84ac-1321-427f-aa17-267ca6975798/.default",
         devops_scope,
     );
+}
+
+test "token credentials receive the selected runtime" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 200, "{}");
+    defer transport.deinit();
+    var crypto = TestCryptoProvider{};
+    const runtime = core.http.HttpRuntime.init(
+        transport.asTransport(),
+        crypto.asProvider(),
+    );
+    var credential = RuntimeTokenCredential.init();
+    var policy = try CredentialPolicy.init(
+        allocator,
+        .fromTokenCredential(&credential.credential),
+        .{},
+    );
+    defer policy.deinit();
+
+    const header = (try policy.authorizationHeader(runtime)).?;
+    try std.testing.expectStringEndsWith(header, "runtime-token");
+    try std.testing.expectEqual(@as(usize, 1), crypto.random_calls);
+    try std.testing.expectEqual(
+        runtime.transport.context,
+        credential.seen_transport_context.?,
+    );
+    try std.testing.expectEqual(
+        runtime.crypto.context,
+        credential.seen_crypto_context.?,
+    );
+}
+
+test "provider failure propagates before transport dispatch" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 200, "{}");
+    defer transport.deinit();
+    var crypto = TestCryptoProvider{ .fail_random = true };
+    const runtime = core.http.HttpRuntime.init(
+        transport.asTransport(),
+        crypto.asProvider(),
+    );
+    var credential = RuntimeTokenCredential.init();
+    var policy = try CredentialPolicy.init(
+        allocator,
+        .fromTokenCredential(&credential.credential),
+        .{},
+    );
+    defer policy.deinit();
+    var request = Request.init(allocator, .GET, "https://dev.azure.com");
+    defer request.deinit();
+
+    try std.testing.expectError(
+        error.InjectedProviderFailure,
+        policy.asPolicy().process(&request, &.{}, runtime),
+    );
+    try std.testing.expectEqual(@as(usize, 1), crypto.random_calls);
+    try std.testing.expectEqual(@as(usize, 0), transport.call_count);
+    try std.testing.expect(request.getHeader("Authorization") == null);
 }

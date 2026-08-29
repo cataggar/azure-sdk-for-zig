@@ -6,10 +6,18 @@
 //! and authenticate 44 clients separately:
 //!
 //! ```zig
+//! var transport = core.http.StdHttpTransport.init(allocator, io);
+//! defer transport.deinit();
+//! var crypto = core.crypto.StdCryptoProvider.init(io);
+//! const runtime = core.http.HttpRuntime.init(
+//!     transport.asTransport(),
+//!     crypto.asProvider(),
+//! );
+//!
 //! var client = try DevOpsClient.init(allocator, .{
 //!     .organization = "contoso",
 //!     .credential = .fromPat(pat),
-//!     .transport = &transport,
+//!     .runtime = runtime,
 //! });
 //! defer client.deinit();
 //!
@@ -31,7 +39,7 @@ const auth = @import("auth.zig");
 
 const Credential = auth.Credential;
 const CredentialPolicy = auth.CredentialPolicy;
-const HttpPolicy = core.pipeline.HttpPolicy;
+const HttpPolicy = core.http.HttpPolicy;
 
 pub const user_agent = "azsdk-zig-devops/" ++ "0.1.0";
 
@@ -42,25 +50,32 @@ pub const ClientOptions = struct {
     /// instead of threading it through every call site.
     organization: []const u8,
     credential: Credential = .unauthenticated,
-    transport: *core.http.HttpTransport,
-    /// Overrides every area's own default host. Azure DevOps Server
+    /// HTTP and SDK crypto dependencies. The descriptor is copied by value
+    /// while its transport and crypto contexts remain borrowed.
+    runtime: core.http.HttpRuntime,
+    /// Borrowed override for every area's own default host. Azure DevOps Server
     /// serves all areas from one collection URL, e.g.
     /// `https://tfs.contoso.com/tfs/DefaultCollection`; Azure DevOps
     /// Services should leave this null.
     endpoint: ?[]const u8 = null,
-    /// Entra ID scope requested from a `TokenCredential`.
+    /// Borrowed Entra ID scope requested from a `TokenCredential`.
     scope: []const u8 = auth.devops_scope,
 };
 
+/// One authenticated pipeline shared by every generated Azure DevOps area.
+///
+/// Runtime and provider descriptors are copied by value. The transport and
+/// crypto backend contexts, credential, organization, endpoint, and scope are
+/// borrowed and must outlive this client and every derived area or operation.
 pub const DevOpsClient = struct {
     allocator: std.mem.Allocator,
     organization: []const u8,
     endpoint: ?[]const u8,
     credential_policy: *CredentialPolicy,
-    telemetry_policy: *core.pipeline.TelemetryPolicy,
-    retry_policy: *core.pipeline.RetryPolicy,
+    telemetry_policy: *core.http.TelemetryPolicy,
+    retry_policy: *core.http.RetryPolicy,
     policy_ptrs: []*HttpPolicy,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn init(allocator: std.mem.Allocator, options: ClientOptions) !DevOpsClient {
         const credential_policy = try allocator.create(CredentialPolicy);
@@ -72,13 +87,13 @@ pub const DevOpsClient = struct {
         );
         errdefer credential_policy.deinit();
 
-        const telemetry_policy = try allocator.create(core.pipeline.TelemetryPolicy);
+        const telemetry_policy = try allocator.create(core.http.TelemetryPolicy);
         errdefer allocator.destroy(telemetry_policy);
-        telemetry_policy.* = core.pipeline.TelemetryPolicy.init(user_agent);
+        telemetry_policy.* = core.http.TelemetryPolicy.init(user_agent);
 
-        const retry_policy = try allocator.create(core.pipeline.RetryPolicy);
+        const retry_policy = try allocator.create(core.http.RetryPolicy);
         errdefer allocator.destroy(retry_policy);
-        retry_policy.* = core.pipeline.RetryPolicy.init();
+        retry_policy.* = core.http.RetryPolicy.init();
 
         const policy_ptrs = try allocator.alloc(*HttpPolicy, 3);
         errdefer allocator.free(policy_ptrs);
@@ -94,10 +109,7 @@ pub const DevOpsClient = struct {
             .telemetry_policy = telemetry_policy,
             .retry_policy = retry_policy,
             .policy_ptrs = policy_ptrs,
-            .pipeline = .{
-                .policies = policy_ptrs,
-                .transport_impl = options.transport,
-            },
+            .pipeline = core.http.HttpPipeline.init(options.runtime, policy_ptrs),
         };
     }
 
@@ -117,11 +129,11 @@ pub const DevOpsClient = struct {
     /// itself generic over the area.
     pub fn areaClient(self: *DevOpsClient, comptime Client: type) Client {
         if (self.endpoint) |endpoint| {
-            return Client.initWithPipeline(self.allocator, self.pipeline, .{
+            return Client.init(self.pipeline, .{
                 .endpoint = endpoint,
             });
         }
-        return Client.initWithPipeline(self.allocator, self.pipeline, .{});
+        return Client.init(self.pipeline, .{});
     }
 
     pub fn account(self: *DevOpsClient) protocol.account.AccountClient {
