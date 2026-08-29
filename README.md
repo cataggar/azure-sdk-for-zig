@@ -14,6 +14,14 @@ retry schedule, CBS authorisation, and a connection that rebuilds itself. It
 is what turns a client into one that reaches the network.
 
 ```zig
+var http = core.http.StdHttpTransport.init(allocator, io);
+defer http.deinit();
+var crypto = core.crypto.StdCryptoProvider.init(io);
+const runtime = core.http.HttpRuntime.init(
+    http.asTransport(),
+    crypto.asProvider(),
+);
+
 var hub: HubConnection = undefined;
 hub.open(.{
     .allocator = allocator,
@@ -24,6 +32,7 @@ defer hub.deinit();
 
 var producer = try ProducerClient.fromConnectionString(
     allocator,
+    runtime,
     connection_string,
     "my-hub",
     hub.asTransport(),
@@ -34,7 +43,7 @@ defer producer.close();
 // parses, and that credential does not exist until the client is built.
 const audience = try producer.entityAudience(allocator);
 defer allocator.free(audience);
-try hub.bind(&producer.credential, audience);
+try hub.bind(&producer.credential, audience, producer.options.runtime);
 ```
 
 Initialise it in place. It holds interior pointers — the authorizer points at
@@ -53,11 +62,15 @@ holding it across a rebuild would leave it pointing at a dead session.
 ## Authentication
 
 Both clients hold a `Credential`, which is either an AAD `TokenCredential` or
-a shared access signature parsed out of a connection string:
+a shared access signature parsed out of a connection string. Their required
+`HttpRuntime` is copied by value; its HTTP transport and SDK crypto provider
+borrow their backend contexts, which must outlive the client, credential
+calls, and open HTTP operations:
 
 ```zig
 // AAD. The credential must outlive the client.
 var producer = ProducerClient.init(.{
+    .runtime = runtime,
     .fully_qualified_namespace = "ns.servicebus.windows.net",
     .event_hub_name = "hub",
 }, cred.asCredential(), transport);
@@ -65,12 +78,20 @@ defer producer.close();
 
 // Connection string. The string must outlive the client, because the
 // namespace, hub name, and key are all borrowed from it.
-var producer = try ProducerClient.fromConnectionString(allocator, cs, null, transport);
+var producer = try ProducerClient.fromConnectionString(
+    allocator,
+    runtime,
+    cs,
+    null,
+    transport,
+);
 defer producer.close();
 ```
 
 AAD tokens are requested for `https://eventhubs.azure.net/.default` and put to
 CBS as `jwt`; connection-string tokens are put as `servicebus.windows.net:sastoken`.
+Shared-key SAS signatures use `runtime.crypto`; provider failures propagate
+without falling back to the standard provider.
 
 A token authorises an audience rather than the whole namespace.
 `entityAudience` returns `amqps://{namespace}/{hub}` for management operations

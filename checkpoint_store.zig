@@ -376,14 +376,46 @@ test {
     _ = @import("checkpoint.zig");
 }
 
-fn testContainer(transport: *core.http.HttpTransport) blobs.BlobContainerClient {
-    return blobs.BlobContainerClient.initWithPipeline(
-        .{ .policies = &.{}, .transport_impl = transport },
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+fn testContainer(transport: core.http.HttpTransport) blobs.BlobContainerClient {
+    return testContainerWithProvider(
+        transport,
+        testing_crypto_provider.asProvider(),
+    );
+}
+
+fn testContainerWithProvider(
+    transport: core.http.HttpTransport,
+    provider: core.crypto.CryptoProvider,
+) blobs.BlobContainerClient {
+    const runtime = core.http.HttpRuntime.init(
+        transport,
+        provider,
+    );
+    return blobs.BlobContainerClient.init(
+        core.http.HttpPipeline.init(runtime, &.{}),
         .{
             .endpoint = "https://myaccount.blob.core.windows.net",
             .container_name = "checkpoints",
         },
     );
+}
+
+test "checkpoint blob clients preserve the selected runtime crypto provider" {
+    var mock = core.http.MockTransport.init(testing.allocator, 200, "");
+    defer mock.deinit();
+    var selected_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+    const provider = selected_provider.asProvider();
+
+    var container = testContainerWithProvider(mock.asTransport(), provider);
+    const blob = container.getBlobClient("ns/hub/$Default/checkpoint/0");
+
+    try testing.expectEqual(
+        provider.context,
+        blob.pipeline.runtime.crypto.context,
+    );
+    try testing.expectEqual(provider.vtable, blob.pipeline.runtime.crypto.vtable);
 }
 
 test "buildCheckpointPath" {
@@ -764,7 +796,10 @@ const ScriptedTransport = struct {
     replies: []const Reply,
     index: usize = 0,
     requests: std.ArrayList(Captured) = .empty,
-    transport: core.http.HttpTransport = .{ .sendFn = &sendImpl },
+
+    const vtable: core.http.HttpTransport.VTable = .{
+        .send = &sendImpl,
+    };
 
     fn init(allocator: std.mem.Allocator, replies: []const Reply) ScriptedTransport {
         return .{ .allocator = allocator, .replies = replies };
@@ -775,15 +810,15 @@ const ScriptedTransport = struct {
         self.requests.deinit(self.allocator);
     }
 
-    fn asTransport(self: *ScriptedTransport) *core.http.HttpTransport {
-        return &self.transport;
+    fn asTransport(self: *ScriptedTransport) core.http.HttpTransport {
+        return .{ .context = self, .vtable = &vtable };
     }
 
     fn sendImpl(
-        transport: *core.http.HttpTransport,
+        context: *anyopaque,
         request: *core.http.Request,
     ) anyerror!core.http.Response {
-        const self: *ScriptedTransport = @alignCast(@fieldParentPtr("transport", transport));
+        const self: *ScriptedTransport = @ptrCast(@alignCast(context));
 
         var captured = Captured{
             .url = try self.allocator.dupe(u8, request.url),

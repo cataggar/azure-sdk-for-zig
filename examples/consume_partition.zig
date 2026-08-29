@@ -8,6 +8,7 @@
 //! `examples/processor.zig`.
 
 const std = @import("std");
+const core = @import("azure_sdk_core");
 const eh = @import("azure_sdk_eventhubs");
 
 pub fn main(init: std.process.Init) !void {
@@ -23,6 +24,14 @@ pub fn main(init: std.process.Init) !void {
         return error.MissingConnectionString;
     const properties = try eh.ConnectionStringProperties.parse(connection_string);
 
+    var http = core.http.StdHttpTransport.init(allocator, init.io);
+    defer http.deinit();
+    var crypto_provider = core.crypto.StdCryptoProvider.init(init.io);
+    const runtime = core.http.HttpRuntime.init(
+        http.asTransport(),
+        crypto_provider.asProvider(),
+    );
+
     var hub: eh.HubConnection = undefined;
     hub.open(.{
         .allocator = allocator,
@@ -35,6 +44,7 @@ pub fn main(init: std.process.Init) !void {
 
     var consumer = try eh.ConsumerClient.fromConnectionString(
         allocator,
+        runtime,
         connection_string,
         hub_name,
         hub.asTransport(),
@@ -43,7 +53,7 @@ pub fn main(init: std.process.Init) !void {
 
     const audience = try consumer.entityAudience(allocator);
     defer allocator.free(audience);
-    try hub.bind(&consumer.credential, audience);
+    try hub.bind(&consumer.credential, audience, consumer.options.runtime);
 
     var stdout_file = std.Io.File.stdout();
     var buffer: [4096]u8 = undefined;

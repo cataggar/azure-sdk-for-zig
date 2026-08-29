@@ -35,3 +35,9 @@ Ownership additionally uses the blob's own `ETag` and `Last-Modified`:
 
 Slices returned by the store are allocator-owned; free them with
 `freeCheckpoints` or `freeOwnerships`.
+
+Construct `BlobContainerClient` with an `HttpPipeline` built from the
+application's `HttpRuntime`. Derived checkpoint blob clients preserve that
+runtime, including its SDK crypto provider. The pipeline's borrowed transport,
+crypto, policy, and credential contexts must outlive the checkpoint store and
+all of its operations.
