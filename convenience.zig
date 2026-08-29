@@ -75,7 +75,7 @@ pub fn containerExists(container: *Container, alloc: std.mem.Allocator, options:
 }
 
 fn existsRequest(
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     alloc: std.mem.Allocator,
     api_version: []const u8,
     url: []const u8,
@@ -332,7 +332,7 @@ pub fn uploadBlockBlob(
 /// status equals `expected`. Only the status line is inspected, so callers are
 /// insulated from optional/omitted Azure response headers.
 fn sendExpect(
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     req: *core.http.Request,
     expected: u16,
     ctx: []const u8,
@@ -396,6 +396,7 @@ test {
 // `stageBlock` / `commitBlockList` / `upload` parsers require.
 
 const testing = std.testing;
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
 const test_api_version = "2024-11-04";
 const test_blob_endpoint = "https://acct.blob.core.windows.net/cont/blob";
 const test_container_endpoint = "https://acct.blob.core.windows.net/cont";
@@ -407,15 +408,17 @@ const RecordedCall = struct {
 };
 
 const MockTransport = struct {
-    transport: core.http.HttpTransport,
     alloc: std.mem.Allocator,
     status: u16,
     body: []const u8,
     calls: std.ArrayList(RecordedCall),
 
+    const vtable: core.http.HttpTransport.VTable = .{
+        .send = &sendImpl,
+    };
+
     fn init(alloc: std.mem.Allocator, status: u16, body: []const u8) MockTransport {
         return .{
-            .transport = .{ .sendFn = &sendImpl, .openFn = null },
             .alloc = alloc,
             .status = status,
             .body = body,
@@ -431,8 +434,18 @@ const MockTransport = struct {
         self.calls.deinit(self.alloc);
     }
 
-    fn pipeline(self: *MockTransport) core.pipeline.HttpPipeline {
-        return .{ .policies = &.{}, .transport_impl = &self.transport };
+    fn asTransport(self: *MockTransport) core.http.HttpTransport {
+        return .{ .context = self, .vtable = &vtable };
+    }
+
+    fn pipeline(self: *MockTransport) core.http.HttpPipeline {
+        return core.http.HttpPipeline.init(
+            core.http.HttpRuntime.init(
+                self.asTransport(),
+                testing_crypto_provider.asProvider(),
+            ),
+            &.{},
+        );
     }
 
     fn blobClient(self: *MockTransport) Blob {
@@ -447,8 +460,8 @@ const MockTransport = struct {
         return .{ .endpoint = test_blob_endpoint, .api_version = test_api_version, .pipeline = self.pipeline() };
     }
 
-    fn sendImpl(transport: *core.http.HttpTransport, request: *core.http.Request) !core.http.Response {
-        const self: *MockTransport = @alignCast(@fieldParentPtr("transport", transport));
+    fn sendImpl(context: *anyopaque, request: *core.http.Request) !core.http.Response {
+        const self: *MockTransport = @ptrCast(@alignCast(context));
         try self.calls.append(self.alloc, .{
             .method = request.method,
             .url = try self.alloc.dupe(u8, request.url),

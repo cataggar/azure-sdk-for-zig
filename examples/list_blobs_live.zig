@@ -38,6 +38,19 @@ pub fn main(init: std.process.Init) !void {
 
     var transport = core.http.StdHttpTransport.init(allocator, init.io);
     defer transport.deinit();
+    var crypto_provider = core.crypto.StdCryptoProvider.init(init.io);
+    const runtime = core.http.HttpRuntime.init(
+        transport.asTransport(),
+        crypto_provider.asProvider(),
+    );
+    var auth_policy = core.http.BearerTokenAuthPolicy.init(
+        allocator,
+        env_cred.asCredential(),
+        blobs.auth_scopes,
+    );
+    defer auth_policy.deinit();
+    var policies = [_]*core.http.HttpPolicy{auth_policy.asPolicy()};
+    const pipeline = core.http.HttpPipeline.init(runtime, &policies);
 
     var stdout_file = std.Io.File.stdout();
     var buffer: [4096]u8 = undefined;
@@ -46,12 +59,9 @@ pub fn main(init: std.process.Init) !void {
     defer out.flush() catch {};
 
     // ── Service.listContainers ────────────────────────────────────────
-    var service_client = try blobs.BlobClient.init(allocator, .{
-        .credential = env_cred.asCredential(),
-        .transport = transport.asTransport(),
+    var service_client = blobs.BlobClient.init(pipeline, .{
         .endpoint = endpoint,
     });
-    defer service_client.deinit();
 
     try out.print("listContainers @ {s}\n", .{endpoint});
     var svc = service_client.service();
@@ -75,12 +85,9 @@ pub fn main(init: std.process.Init) !void {
     );
     defer allocator.free(container_endpoint);
 
-    var container_client = try blobs.BlobClient.init(allocator, .{
-        .credential = env_cred.asCredential(),
-        .transport = transport.asTransport(),
+    var container_client = blobs.BlobClient.init(pipeline, .{
         .endpoint = container_endpoint,
     });
-    defer container_client.deinit();
 
     try out.print("listBlobs @ {s}\n", .{container_endpoint});
     var cnt = container_client.container();

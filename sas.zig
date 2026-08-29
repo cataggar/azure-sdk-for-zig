@@ -111,17 +111,19 @@ pub const BlobUploadOutcome = union(enum) {
 };
 
 /// A Blob client constructed only from an allocator, a complete SAS URL, and
-/// a transport. It deliberately has no credential or caller-supplied
+/// an HTTP runtime. It deliberately has no credential or caller-supplied
 /// pipeline: every request uses an empty-policy, no-redirect pipeline.
 pub const SasBlobClient = struct {
     allocator: std.mem.Allocator,
     uri: sas.CompleteSasUri,
-    transport: *core.http.HttpTransport,
+    runtime: core.http.HttpRuntime,
 
+    /// The runtime descriptors are copied by value and borrow their backend
+    /// contexts. Those contexts must outlive this client and every upload.
     pub fn init(
         allocator: std.mem.Allocator,
         complete_sas_uri: []const u8,
-        transport: *core.http.HttpTransport,
+        runtime: core.http.HttpRuntime,
     ) !SasBlobClient {
         var uri = try sas.CompleteSasUri.init(allocator, complete_sas_uri);
         errdefer uri.deinit();
@@ -130,7 +132,7 @@ pub const SasBlobClient = struct {
         return .{
             .allocator = allocator,
             .uri = uri,
-            .transport = transport,
+            .runtime = runtime,
         };
     }
 
@@ -199,7 +201,7 @@ pub const SasBlobClient = struct {
                     .content_length = block_length,
                 },
             };
-            const outcome = sas.send(self.transport, &request, streaming_body) catch |err|
+            const outcome = sas.send(self.runtime, &request, streaming_body) catch |err|
                 return localFailureAfterBlocks(err, .put_block, block_index);
             switch (outcome) {
                 .accepted => {},
@@ -229,7 +231,7 @@ pub const SasBlobClient = struct {
         request.setHeader("x-ms-blob-content-type", options.content_type) catch |err|
             return localFailureAfterBlocks(err, .put_block_list, block_index);
         request.body = commit_body;
-        const outcome = sas.send(self.transport, &request, null) catch |err|
+        const outcome = sas.send(self.runtime, &request, null) catch |err|
             return localFailureAfterBlocks(err, .put_block_list, block_index);
         return mapOutcome(outcome, .put_block_list);
     }
@@ -325,7 +327,7 @@ pub const SasBlobClient = struct {
                 request.setHeader("x-ms-version", storage_api_version) catch |err|
                     return localFailureAfterBlocks(err, .put_block, staged_blocks);
                 request.body = block[0..used];
-                break :blk sas.send(self.transport, &request, null) catch |err|
+                break :blk sas.send(self.runtime, &request, null) catch |err|
                     return localFailureAfterBlocks(err, .put_block, staged_blocks);
             };
             switch (outcome) {
@@ -357,7 +359,7 @@ pub const SasBlobClient = struct {
         request.setHeader("x-ms-blob-content-type", options.content_type) catch |err|
             return localFailureAfterBlocks(err, .put_block_list, staged_blocks);
         request.body = commit.items;
-        const outcome = sas.send(self.transport, &request, null) catch |err|
+        const outcome = sas.send(self.runtime, &request, null) catch |err|
             return localFailureAfterBlocks(err, .put_block_list, staged_blocks);
         return mapOutcome(outcome, .put_block_list);
     }
@@ -375,7 +377,7 @@ pub const SasBlobClient = struct {
         try request.setHeader("x-ms-version", storage_api_version);
         return mapOutcome(
             try sas.send(
-                self.transport,
+                self.runtime,
                 &request,
                 .{ .reader = reader, .content_length = size },
             ),
@@ -394,7 +396,7 @@ pub const SasBlobClient = struct {
         try request.setHeader("x-ms-blob-type", "BlockBlob");
         try request.setHeader("x-ms-version", storage_api_version);
         request.body = bytes;
-        return mapOutcome(try sas.send(self.transport, &request, null), .put_blob);
+        return mapOutcome(try sas.send(self.runtime, &request, null), .put_blob);
     }
 };
 
@@ -635,37 +637,40 @@ fn ensureExhausted(reader: *std.Io.Reader) !void {
 
 const CommitFailureTransport = struct {
     allocator: std.mem.Allocator,
-    transport: core.http.HttpTransport,
     fail_on_call: usize,
     call_count: usize = 0,
     operation: core.http.HttpOperation = undefined,
     response_reader: std.Io.Reader = undefined,
 
+    const vtable: core.http.HttpTransport.VTable = .{
+        .send = &sendImpl,
+        .open = &openImpl,
+    };
+
     fn init(allocator: std.mem.Allocator, fail_on_call: usize) CommitFailureTransport {
         return .{
             .allocator = allocator,
-            .transport = .{ .sendFn = &sendImpl, .openFn = &openImpl },
             .fail_on_call = fail_on_call,
         };
     }
 
-    fn asTransport(self: *CommitFailureTransport) *core.http.HttpTransport {
-        return &self.transport;
+    fn asTransport(self: *CommitFailureTransport) core.http.HttpTransport {
+        return .{ .context = self, .vtable = &vtable };
     }
 
     fn sendImpl(
-        _: *core.http.HttpTransport,
+        _: *anyopaque,
         _: *core.http.Request,
     ) !core.http.Response {
         return error.TestUnexpectedSend;
     }
 
     fn openImpl(
-        transport: *core.http.HttpTransport,
+        context: *anyopaque,
         _: *core.http.Request,
         options: core.http.OpenOptions,
     ) !*core.http.HttpOperation {
-        const self: *CommitFailureTransport = @alignCast(@fieldParentPtr("transport", transport));
+        const self: *CommitFailureTransport = @ptrCast(@alignCast(context));
         self.call_count += 1;
         if (self.call_count == self.fail_on_call)
             return error.InjectedCommitFailure;
@@ -694,6 +699,23 @@ const CommitFailureTransport = struct {
     fn deinitImpl(operation: *core.http.HttpOperation) void {
         const self: *CommitFailureTransport = @alignCast(@fieldParentPtr("operation", operation));
         self.operation.headers.deinit();
+    }
+};
+
+const BufferedOnlyTransport = struct {
+    inner: *core.http.MockTransport,
+
+    const vtable: core.http.HttpTransport.VTable = .{
+        .send = &sendImpl,
+    };
+
+    fn asTransport(self: *BufferedOnlyTransport) core.http.HttpTransport {
+        return .{ .context = self, .vtable = &vtable };
+    }
+
+    fn sendImpl(context: *anyopaque, request: *core.http.Request) !core.http.Response {
+        const self: *BufferedOnlyTransport = @ptrCast(@alignCast(context));
+        return self.inner.asTransport().send(request);
     }
 };
 
@@ -733,16 +755,34 @@ const BoundedReadSource = struct {
     }
 };
 
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+fn testRuntime(transport: core.http.HttpTransport) core.http.HttpRuntime {
+    return core.http.HttpRuntime.init(
+        transport,
+        testing_crypto_provider.asProvider(),
+    );
+}
+
 test "SAS blob upload preserves query, isolates credentials, and drains response" {
     const allocator = std.testing.allocator;
     var transport = core.http.MockTransport.init(allocator, 201, "done");
     defer transport.deinit();
+    const runtime = testRuntime(transport.asTransport());
     var client = try SasBlobClient.init(
         allocator,
         "https://account.blob.core.windows.net/container/blob?sig=a%2Bb%3D&sp=rw",
-        transport.asTransport(),
+        runtime,
     );
     defer client.deinit();
+    try std.testing.expectEqual(
+        runtime.transport.context,
+        client.runtime.transport.context,
+    );
+    try std.testing.expectEqual(
+        runtime.crypto.context,
+        client.runtime.crypto.context,
+    );
 
     const outcome = try client.uploadBytes("payload", .{ .content_type = "text/plain" });
     try std.testing.expect(outcome.isAccepted());
@@ -760,11 +800,11 @@ test "SAS blob byte uploads support buffered-only transports" {
     const allocator = std.testing.allocator;
     var transport = core.http.MockTransport.init(allocator, 201, "");
     defer transport.deinit();
-    transport.transport.openFn = null;
+    var buffered_only = BufferedOnlyTransport{ .inner = &transport };
     var client = try SasBlobClient.init(
         allocator,
         "https://account.blob.core.windows.net/container/blob?sig=opaque",
-        transport.asTransport(),
+        testRuntime(buffered_only.asTransport()),
     );
     defer client.deinit();
 
@@ -792,7 +832,7 @@ test "SAS blob block upload orders deterministic IDs and bounds reads" {
     var client = try SasBlobClient.init(
         allocator,
         "https://account.blob.core.windows.net/container/blob?sp=w&sig=opaque%2Bvalue",
-        transport.asTransport(),
+        testRuntime(transport.asTransport()),
     );
     defer client.deinit();
 
@@ -821,7 +861,7 @@ test "SAS blob unknown-length block stream commits buffered blocks" {
     var client = try SasBlobClient.init(
         allocator,
         "https://account.blob.core.windows.net/container/blob?sig=opaque",
-        transport.asTransport(),
+        testRuntime(transport.asTransport()),
     );
     defer client.deinit();
 
@@ -851,7 +891,7 @@ test "SAS blob returns known rejections and unknown transport outcomes" {
     var rejected_client = try SasBlobClient.init(
         allocator,
         "https://account.blob.core.windows.net/container/blob?sig=opaque",
-        rejected_transport.asTransport(),
+        testRuntime(rejected_transport.asTransport()),
     );
     defer rejected_client.deinit();
     const rejected = try rejected_client.uploadBytes("x", .{});
@@ -869,7 +909,7 @@ test "SAS blob returns known rejections and unknown transport outcomes" {
     var unknown_client = try SasBlobClient.init(
         allocator,
         "https://account.blob.core.windows.net/container/blob?sig=opaque",
-        unknown_transport.asTransport(),
+        testRuntime(unknown_transport.asTransport()),
     );
     defer unknown_client.deinit();
     var unknown_reader = std.Io.Reader.fixed("x");
@@ -890,7 +930,7 @@ test "SAS blob rejects a host-changing redirect without another request" {
     var client = try SasBlobClient.init(
         allocator,
         "https://account.blob.core.windows.net/container/blob?sig=opaque",
-        transport.asTransport(),
+        testRuntime(transport.asTransport()),
     );
     defer client.deinit();
 
@@ -910,7 +950,7 @@ test "SAS blob does not commit after an unknown commit transport failure" {
     var client = try SasBlobClient.init(
         allocator,
         "https://account.blob.core.windows.net/container/blob?sig=opaque",
-        transport.asTransport(),
+        testRuntime(transport.asTransport()),
     );
     defer client.deinit();
 
@@ -937,7 +977,7 @@ test "SAS blob block reader stays bounded and short sources are unknown" {
     var client = try SasBlobClient.init(
         allocator,
         "https://account.blob.core.windows.net/container/blob?sig=opaque",
-        transport.asTransport(),
+        testRuntime(transport.asTransport()),
     );
     defer client.deinit();
 
@@ -964,7 +1004,7 @@ test "SAS blob reports extra source data after staging as incomplete" {
     var client = try SasBlobClient.init(
         allocator,
         "https://account.blob.core.windows.net/container/blob?sig=opaque",
-        transport.asTransport(),
+        testRuntime(transport.asTransport()),
     );
     defer client.deinit();
 
@@ -991,7 +1031,7 @@ test "SAS blob validates limits and redacts diagnostics" {
     var client = try SasBlobClient.init(
         allocator,
         "https://account.blob.core.windows.net/container/blob?sig=secret",
-        transport.asTransport(),
+        testRuntime(transport.asTransport()),
     );
     defer client.deinit();
 
@@ -1017,7 +1057,7 @@ test "SAS blob validates limits and redacts diagnostics" {
         SasBlobClient.init(
             allocator,
             "https://account.queue.core.windows.net/queue?sig=opaque",
-            transport.asTransport(),
+            testRuntime(transport.asTransport()),
         ),
     );
 }
