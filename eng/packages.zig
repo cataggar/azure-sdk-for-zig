@@ -136,6 +136,7 @@ pub const all = [_]Package{
             ".gitignore",
             "build.zig",
             "build.zig.zon",
+            "conformance_test.zig",
             "root.zig",
             "README.md",
             "LICENSE.txt",
