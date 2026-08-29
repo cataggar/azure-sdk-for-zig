@@ -1114,7 +1114,7 @@ test "disabled prefetch issues credit per receive" {
     try testing.expect(flows >= 1);
 }
 
-test "disabled prefetch replenishes after an aborted delivery" {
+test "disabled prefetch replaces an aborted delivery in the same receive" {
     const allocator = testing.allocator;
     var mem = MemoryTransport.init(allocator);
     defer mem.deinit();
@@ -1132,36 +1132,35 @@ test "disabled prefetch replenishes after an aborted delivery" {
         .settled = true,
         .aborted = true,
     }, "");
+    try pushEvent(allocator, peer, 1, 1, "after abort");
 
     var scripted: Scripted = undefined;
     try scripted.open(allocator, &mem, &clock, &conn, .{ .prefetch = -1 });
     defer scripted.deinit();
 
-    mem.starve = true;
-    clock.auto_advance_ms = 1_000;
-    try testing.expectError(error.Timeout, scripted.client.receiveEvents(allocator, 1));
-    try testing.expectEqual(@as(u32, 0), manualCreditOutstanding(scripted.client.receiver));
-
     mem.clearWritten();
-    try pushEvent(allocator, peer, 1, 1, "after abort");
-    scripted.client.deadline_ms = 20_000;
-
     const events = try scripted.client.receiveEvents(allocator, 1);
     defer event_data.freeReceivedEvents(allocator, events);
     try testing.expectEqual(@as(usize, 1), events.len);
     try testing.expectEqualStrings("after abort", events[0].body());
+    try testing.expectEqual(@as(u32, 0), manualCreditOutstanding(scripted.client.receiver));
+    try testing.expectEqual(@as(usize, 0), mem.reads_with_pending_writes);
 
     var frames = try EmittedFrames.parse(allocator, mem.written());
     defer frames.deinit();
-    var flows: usize = 0;
-    for (frames.bodies.items) |body| {
-        if (amqp.performative.peekDescriptor(body) != amqp.performative.descriptor.flow) continue;
-        var decoded = try amqp.performative.decode(allocator, body);
-        defer decoded.deinit();
-        try testing.expectEqual(@as(?u32, 1), decoded.performative.flow.link_credit);
-        flows += 1;
-    }
-    try testing.expectEqual(@as(usize, 1), flows);
+    const flows = try frames.of(allocator, amqp.performative.descriptor.flow);
+    defer allocator.free(flows);
+    try testing.expectEqual(@as(usize, 2), flows.len);
+
+    var initial = try amqp.performative.decode(allocator, flows[0]);
+    defer initial.deinit();
+    try testing.expectEqual(@as(?u32, 0), initial.performative.flow.delivery_count);
+    try testing.expectEqual(@as(?u32, 1), initial.performative.flow.link_credit);
+
+    var replacement = try amqp.performative.decode(allocator, flows[1]);
+    defer replacement.deinit();
+    try testing.expectEqual(@as(?u32, 1), replacement.performative.flow.delivery_count);
+    try testing.expectEqual(@as(?u32, 1), replacement.performative.flow.link_credit);
 }
 
 test "disabled prefetch preserves repeated short and large batch demand" {
