@@ -213,6 +213,11 @@ active only after its `Flow` is emitted. A compliant drain response may omit
 `link-credit`; the remaining credit is then derived with serial arithmetic
 from the prior delivery limit and the reported `delivery-count`.
 
+Only a locally emitted `Flow` advances that delivery limit. A sender's incoming
+`Flow` may reconcile its view and reduce remaining credit, but `link-credit`
+from the sender can never create receiver authorization or pay down overrun
+debt.
+
 The delivery already returned to the caller is outside the aggregate budget
 and remains valid until the next successful `receive`; it is still bounded by
 `max_message_size`. Callers that know a service's smaller message limit should
@@ -368,8 +373,15 @@ until it is asked for more. `sendBytes` waits for the oldest delivery, which is
 only its own when nothing else is outstanding, so it reports
 `error.DeliveriesInFlight` rather than mixing with `sendBytesAsync` and
 attributing one delivery's verdict to another. A send that never reaches a
-verdict retires its own entry, so a timed-out send leaves the sender as usable
-as it was before.
+verdict retires its own entry. In receiver-settle-mode first that leaves the
+sender reusable; in mode second the sender terminally detaches before
+discarding an undecided id, because a late first-phase disposition would
+otherwise require an acknowledgment the sender could no longer correlate.
+
+`SenderOptions.snd_settle_mode` is negotiated through Attach and honored on
+Transfer. In sender-settled mode every transfer carries `settled = true`;
+synchronous and asynchronous sends complete after emission without retaining
+an in-flight entry or waiting for a disposition.
 
 Deliveries settle in the order they were sent, and the ring holding them is
 allocated once at attach, so a silent peer costs a fixed amount of memory rather
@@ -388,9 +400,11 @@ for the incomplete delivery.
 `abandonInFlight` is the way out of a pipeline that failed partway. Waiting is
 what just failed, so the caller cannot wait the remaining deliveries out, and a
 sender still holding unsettled ones refuses every later blocking send — without
-it a single timed-out pipeline would wedge the link for good. Any disposition
-that arrives after the abandon is ignored, so resending an abandoned delivery
-the broker went on to accept publishes it twice.
+it a single timed-out pipeline would wedge the link for good. In settlement
+mode second, abandoning any undecided delivery closes the bounded link state
+before its ids are discarded. In other modes a later disposition is ignored,
+so resending an abandoned delivery the broker went on to accept publishes it
+twice.
 
 Some of those verdicts may already be in hand, though. A disposition is recorded
 on whichever delivery the peer names, wherever it sits in the window, while

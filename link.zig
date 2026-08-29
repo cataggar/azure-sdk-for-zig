@@ -90,6 +90,13 @@ fn removeLink(comptime T: type, list: *std.ArrayList(*T), link: *T) void {
     }
 }
 
+/// Remaining serial-number distance from `count` to `limit`. A value in the
+/// undefined/backwards half of RFC 1982 cannot authorize deliveries.
+fn remainingToDeliveryLimit(limit: u32, count: u32) u32 {
+    const remaining: i32 = @bitCast(limit -% count);
+    return if (remaining > 0) @intCast(remaining) else 0;
+}
+
 pub const Session = struct {
     allocator: Allocator,
     driver: *Driver,
@@ -378,41 +385,35 @@ pub const Session = struct {
             s.drain = f.drain;
         }
         if (self.receiverFor(handle)) |r| {
-            // For a receiving link the peer is the sender, so its flow reports
-            // where its delivery count has reached. Rebase the credit we still
-            // hold onto our own count; a drain response advances the count to
-            // consume the remainder, leaving us at zero.
-            const credit = f.link_credit orelse r.credit;
+            // Only this receiver grants credit. A sender's Flow may reconcile
+            // its view and reduce what remains, but can never manufacture a
+            // larger local authorization.
+            var reconciled = @min(
+                r.credit,
+                remainingToDeliveryLimit(r.delivery_limit, r.delivery_count),
+            );
+            if (f.link_credit) |peer_credit| {
+                const peer_count = f.delivery_count orelse r.delivery_count;
+                const peer_limit = peer_count +% peer_credit;
+                reconciled = @min(
+                    reconciled,
+                    remainingToDeliveryLimit(peer_limit, r.delivery_count),
+                );
+            }
             if (f.drain) {
                 // A drain response advances the sender's count over whatever
-                // credit went unused, so its count is authoritative. Link
-                // credit is optional; when omitted, derive what remains from
-                // the delivery limit established by our previous grant.
+                // credit went unused, so its count is authoritative. When
+                // link-credit is omitted, the locally emitted delivery limit
+                // still determines what remains.
                 if (f.delivery_count) |their_count| {
-                    const prior_limit = r.delivery_count +% r.credit;
-                    const remaining: i32 = @bitCast(prior_limit -% their_count);
+                    reconciled = @min(
+                        reconciled,
+                        remainingToDeliveryLimit(r.delivery_limit, their_count),
+                    );
                     r.delivery_count = their_count;
-                    r.grant(f.link_credit orelse
-                        if (remaining > 0)
-                            @min(r.credit, @as(u32, @intCast(remaining)))
-                        else
-                            0);
-                } else {
-                    r.grant(credit);
                 }
-            } else if (f.delivery_count) |their_count| {
-                // Serial arithmetic (RFC 1982). A flow whose count lags the
-                // transfers already on the wire — an ordinary crossing, not a
-                // malformed frame — leaves a negative remainder, and read as
-                // `u32` that wraps to billions. Taking it as signed and
-                // clamping keeps a lagging flow from handing this endpoint
-                // effectively unlimited credit, which would make any bound
-                // built on credit meaningless.
-                const remaining: i32 = @bitCast(their_count +% credit -% r.delivery_count);
-                r.grant(if (remaining > 0) @intCast(remaining) else 0);
-            } else {
-                r.grant(credit);
             }
+            r.credit = reconciled;
         }
         if (f.echo) try self.sendFlow(null);
     }
@@ -558,6 +559,7 @@ pub const Session = struct {
             if (s.awaiting_attach and !s.poisoned and std.mem.eql(u8, s.name, a.name)) {
                 s.remote_handle = a.handle;
                 s.max_message_size = a.max_message_size;
+                s.snd_settle_mode = a.snd_settle_mode;
                 s.rcv_settle_mode = a.rcv_settle_mode;
                 if (a.initial_delivery_count) |c| s.delivery_count = c;
                 s.attached = true;
@@ -714,7 +716,9 @@ pub const SenderOptions = struct {
     /// The entity the messages go to, such as `eh` or `eh/Partitions/3`.
     target_address: []const u8,
     source_address: ?[]const u8 = null,
-    /// Go asks for mixed settlement with receiver-settle-mode first.
+    /// Desired sender settlement mode. The receiver's Attach selects the
+    /// actual mode: settled deliveries complete once emitted and retain no
+    /// in-flight entry; mixed and unsettled deliveries await disposition.
     snd_settle_mode: perf.SenderSettleMode = .mixed,
     rcv_settle_mode: perf.ReceiverSettleMode = .first,
     desired_capabilities: ?[]const []const u8 = null,
@@ -815,6 +819,8 @@ pub const Sender = struct {
     credit: u32 = 0,
     drain: bool = false,
     delivery_count: u32 = 0,
+    /// Sender settlement mode selected by the remote receiver's Attach.
+    snd_settle_mode: perf.SenderSettleMode = .mixed,
     /// Receiver settlement mode selected by the remote receiver's Attach.
     rcv_settle_mode: perf.ReceiverSettleMode = .first,
     /// Peer's `max-message-size`; null or 0 means unlimited.
@@ -864,10 +870,12 @@ pub const Sender = struct {
     ///
     /// Their verdicts are lost — including any the peer has already sent but
     /// the caller has not collected, since `awaitSettlement` retires strictly
-    /// in send order and a peer may settle out of it. The peer may also settle
-    /// those ids later, and those dispositions are then ignored. So this is
-    /// at-least-once: a caller that abandons a delivery the broker went on to
-    /// accept and then resends it has published it twice.
+    /// in send order and a peer may settle out of it. In receiver-settle-mode
+    /// second, abandoning an undecided id terminally detaches the link because
+    /// a later first-phase disposition could no longer be acknowledged after
+    /// the id was discarded. Other modes remain at-least-once: a caller that
+    /// abandons a delivery the broker went on to accept and then resends it has
+    /// published it twice.
     ///
     /// This is the way out of a pipelined send that failed partway. A sender
     /// still holding unsettled deliveries refuses every later blocking send
@@ -907,6 +915,7 @@ pub const Sender = struct {
     /// comparing the result against `out.len` can tell that it was. Sizing
     /// `out` to `inFlight()` before the call is always enough.
     pub fn abandonInFlightInto(self: *Sender, out: []DecidedDelivery) usize {
+        self.terminalizeAbandonedModeSecond();
         var decided: usize = 0;
         while (self.in_flight_len > 0) {
             const entry = self.entryAt(0);
@@ -920,6 +929,44 @@ pub const Sender = struct {
             self.discardOldest();
         }
         return decided;
+    }
+
+    /// Receiver-settle-mode second requires us to acknowledge a late
+    /// unsettled receiver disposition. Once an undecided entry is discarded,
+    /// its id is gone and that acknowledgment cannot be produced safely.
+    /// Close the link instead of retaining unbounded tombstones or pretending
+    /// it remains reusable.
+    fn terminalizeAbandonedModeSecond(self: *Sender) void {
+        if (self.rcv_settle_mode != .second or self.poisoned) return;
+        var has_undecided = false;
+        for (0..self.in_flight_len) |i| {
+            if (self.entryAt(i).outcome == null) {
+                has_undecided = true;
+                break;
+            }
+        }
+        if (!has_undecided) return;
+
+        self.attached = false;
+        self.awaiting_attach = false;
+        self.poisoned = true;
+        self.detach_sent = true;
+        self.session.driver.sendPerformative(.amqp, self.session.channel, .{
+            .detach = .{
+                .handle = self.handle,
+                .closed = true,
+                .err = .{
+                    .condition = "amqp:link:detach-forced",
+                    .description = "mode-second delivery was abandoned before settlement",
+                },
+            },
+        }) catch {
+            // Without the Detach the peer would retain an id we are about to
+            // forget. Close the whole stream rather than leave an
+            // unacknowledgeable mode-second delivery on a reusable session.
+            self.session.driver.invalidate();
+            self.session.terminate();
+        };
     }
 
     /// How many deliveries are written but not yet settled.
@@ -1079,13 +1126,18 @@ pub const Sender = struct {
         // `sendBytesAsync` would either report another delivery's verdict as
         // this one's or discard that delivery's verdict entirely, so refuse
         // rather than guess. A caller that never pipelines never sees this.
-        if (self.in_flight_len != 0) return error.DeliveriesInFlight;
+        if (self.snd_settle_mode != .settled and self.in_flight_len != 0)
+            return error.DeliveriesInFlight;
 
         const token = try self.sendBytesAsync(payload, options, deadline_ms);
+        if (self.snd_settle_mode == .settled) return;
         // A send that never reaches a verdict — a timeout, a detach — used to
         // leave no trace. Keeping the entry would wedge the sender: with the
         // default window of one, every later send would find it full.
-        errdefer self.discardOldest();
+        errdefer {
+            self.terminalizeAbandonedModeSecond();
+            self.discardOldest();
+        }
 
         const settlement = try self.awaitSettlement(deadline_ms);
         std.debug.assert(settlement.token.id == token.id);
@@ -1112,7 +1164,9 @@ pub const Sender = struct {
     /// The returned token names the delivery in the `Settlement` that
     /// `awaitSettlement` later produces, so a caller keeping several
     /// deliveries in flight can tell which one the peer refused. Deliveries
-    /// settle in the order they were sent.
+    /// settle in the order they were sent. In negotiated sender-settled mode,
+    /// the token identifies the emitted delivery but no settlement entry is
+    /// retained and `awaitSettlement` has nothing to return.
     ///
     /// Returns `error.InFlightWindowFull` when `max_in_flight` deliveries are
     /// already unsettled. Blocking instead would deadlock: only the caller
@@ -1133,7 +1187,9 @@ pub const Sender = struct {
         if (self.maxMessageSize()) |limit| {
             if (payload.len > limit) return error.MessageTooLarge;
         }
-        if (self.in_flight_len == self.in_flight.len) return error.InFlightWindowFull;
+        const sender_settled = self.snd_settle_mode == .settled;
+        if (!sender_settled and self.in_flight_len == self.in_flight.len)
+            return error.InFlightWindowFull;
         try self.awaitCredit(deadline_ms);
 
         const delivery_id = self.session.next_outgoing_id;
@@ -1146,9 +1202,21 @@ pub const Sender = struct {
         // the delivery id, tag and message format, and every continuation
         // carries none of them. Measuring per chunk re-encoded the same
         // performative once per frame to learn the same two numbers.
-        const first_budget = try self.chunkBudget(delivery_id, &tag, true, options.message_format);
+        const first_budget = try self.chunkBudget(
+            delivery_id,
+            &tag,
+            true,
+            options.message_format,
+            sender_settled,
+        );
         const cont_budget: usize = if (payload.len > first_budget)
-            try self.chunkBudget(delivery_id, &tag, false, options.message_format)
+            try self.chunkBudget(
+                delivery_id,
+                &tag,
+                false,
+                options.message_format,
+                sender_settled,
+            )
         else
             first_budget;
         var begun = false;
@@ -1172,7 +1240,7 @@ pub const Sender = struct {
                 .delivery_id = if (first) delivery_id else null,
                 .delivery_tag = if (first) &tag else null,
                 .message_format = if (first) options.message_format else null,
-                .settled = false,
+                .settled = sender_settled,
                 .more = more,
             };
             // The frame is the performative plus the chunk, and `chunkBudget`
@@ -1205,6 +1273,8 @@ pub const Sender = struct {
         }
 
         complete = true;
+
+        if (sender_settled) return .{ .id = delivery_id };
 
         // Pushed only once every frame is away. A failure after the opening
         // frame poisons the link instead: the peer is holding an unterminated
@@ -1281,6 +1351,7 @@ pub const Sender = struct {
         tag: *const [4]u8,
         first: bool,
         message_format: u32,
+        settled: bool,
     ) LinkError!usize {
         var buf = uamqp.encoder.Buffer.initDynamic(self.allocator);
         defer buf.deinit();
@@ -1293,7 +1364,7 @@ pub const Sender = struct {
             .delivery_id = if (first) delivery_id else null,
             .delivery_tag = if (first) tag else null,
             .message_format = if (first) message_format else null,
-            .settled = false,
+            .settled = settled,
             .more = true,
         }, &buf);
 
@@ -1380,6 +1451,7 @@ pub fn openSender(
         .name = name,
         .handle = session.allocateHandle(),
         .in_flight = in_flight,
+        .snd_settle_mode = options.snd_settle_mode,
         .rcv_settle_mode = options.rcv_settle_mode,
     };
 
@@ -1554,6 +1626,9 @@ pub const Receiver = struct {
     deferred_credit: u32 = 0,
     drain: bool = false,
     delivery_count: u32 = 0,
+    /// Exclusive delivery id limit established only by a successfully emitted
+    /// local Flow. Remote Flow state may reduce credit but never advances it.
+    delivery_limit: u32 = 0,
     /// The limit declared in our `attach`; see `maxMessageSize` for the rule
     /// actually enforced, and `ReceiverOptions.max_message_size` for what null
     /// means.
@@ -1975,8 +2050,13 @@ pub const Receiver = struct {
     /// Maximum credit that can be outstanding without letting a conforming
     /// sender exceed the aggregate payload budget.
     fn byteCreditCapacity(self: *const Receiver) u32 {
-        const slots = self.max_unsettled_deliveries -|
-            @as(u32, @intCast(self.unsettled_ids.items.len));
+        // Delivery limits are serial numbers; a grant spanning the undefined
+        // half-range cannot later be reconciled safely across wrap.
+        const slots = @min(
+            self.max_unsettled_deliveries -|
+                @as(u32, @intCast(self.unsettled_ids.items.len)),
+            @as(u32, std.math.maxInt(i32)),
+        );
         const limit = self.max_buffered_bytes orelse return slots;
         // With no per-message bound, one delivery may consume the whole
         // aggregate budget. If the configured message limit is larger than
@@ -2019,7 +2099,7 @@ pub const Receiver = struct {
         prospective.deferred_credit +|= count;
         self.grantDeferredCredit(&prospective);
         try self.session.sendFlowWithCredit(self, prospective.credit);
-        self.commitCreditState(prospective);
+        self.commitEmittedCreditState(prospective);
     }
 
     fn reserveIncomingCapacity(self: *Receiver, count: u32) Allocator.Error!void {
@@ -2051,6 +2131,11 @@ pub const Receiver = struct {
         self.overrun = state.overrun;
     }
 
+    fn commitEmittedCreditState(self: *Receiver, state: CreditState) void {
+        self.commitCreditState(state);
+        self.delivery_limit = self.delivery_count +% state.credit;
+    }
+
     fn grantDeferredCredit(self: *const Receiver, state: *CreditState) void {
         const capacity = self.byteCreditCapacity();
         if (state.credit >= capacity or state.deferred_credit == 0) return;
@@ -2059,18 +2144,7 @@ pub const Receiver = struct {
         self.grantCreditState(state, state.credit + issued);
     }
 
-    /// Set credit to `amount`, charging any outstanding overrun against it.
-    ///
-    /// The single place credit is established. `replenish` and `issueCredit`
-    /// go through it, and so does `Session.applyFlow`, where the peer rebases
-    /// credit onto this endpoint's delivery count: a peer must not be able to
-    /// clear the debt it ran up simply by asserting a new window.
-    fn grant(self: *Receiver, amount: u32) void {
-        var state = self.creditState();
-        self.grantCreditState(&state, amount);
-        self.commitCreditState(state);
-    }
-
+    /// Set prospective locally authorized credit, charging overrun debt.
     fn grantCreditState(self: *const Receiver, state: *CreditState, amount: u32) void {
         const bounded = @min(amount, self.byteCreditCapacity());
         const charged = @min(state.overrun, bounded);
@@ -2087,7 +2161,7 @@ pub const Receiver = struct {
             self.grantDeferredCredit(&prospective);
             if (prospective.credit != before) {
                 try self.session.sendFlowWithCredit(self, prospective.credit);
-                self.commitCreditState(prospective);
+                self.commitEmittedCreditState(prospective);
                 return;
             }
         }
@@ -2125,7 +2199,7 @@ pub const Receiver = struct {
             return;
         }
         try self.session.sendFlowWithCredit(self, prospective.credit);
-        self.commitCreditState(prospective);
+        self.commitEmittedCreditState(prospective);
     }
 
     /// Charge overrun debt as buffered deliveries are released, but defer a
@@ -2236,8 +2310,9 @@ pub const Receiver = struct {
     fn refuseOverrun(self: *Receiver) LinkError!void {
         if (self.max_overrun == 0) return;
         if (self.overrun < self.max_overrun) return;
-        // Every path that establishes credit charges the debt first, so this
-        // should be unreachable — and it survives mutation for that reason.
+        // Every local path that establishes credit charges the debt first, and
+        // incoming sender Flow can only reduce credit, so this should be
+        // unreachable — and it survives mutation for that reason.
         // It stays a guard rather than an assert because `credit` is computed
         // from values the peer supplies in a flow, and an assert on an
         // invariant a remote peer participates in is a way to be aborted
@@ -2661,6 +2736,10 @@ fn expectReceiverAccounting(receiver: *const Receiver) !void {
     try testing.expect(
         receiver.unsettled_ids.items.len + @as(usize, receiver.credit) <=
             receiver.max_unsettled_deliveries,
+    );
+    try testing.expect(
+        receiver.credit <=
+            remainingToDeliveryLimit(receiver.delivery_limit, receiver.delivery_count),
     );
     try testing.expect(receiver.unsettled_ids.capacity <= receiver.max_unsettled_deliveries);
 }
@@ -3734,6 +3813,275 @@ fn scriptSenderAttach(peer: Peer, credit: u32) !void {
         .delivery_count = 0,
         .link_credit = credit,
     } });
+}
+
+fn scriptSettledSenderAttach(peer: Peer, credit: u32) !void {
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "producer",
+        .handle = 0,
+        .role = .receiver,
+        .snd_settle_mode = .settled,
+        .initial_delivery_count = 0,
+    } });
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 1000,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+        .handle = 0,
+        .delivery_count = 0,
+        .link_credit = credit,
+    } });
+}
+
+fn scriptModeSecondSenderAttach(peer: Peer, credit: u32) !void {
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "producer",
+        .handle = 0,
+        .role = .receiver,
+        .rcv_settle_mode = .second,
+        .initial_delivery_count = 0,
+    } });
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 1000,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+        .handle = 0,
+        .delivery_count = 0,
+        .link_credit = credit,
+    } });
+}
+
+test "negotiated settled sender completes sync and async sends on emission" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptSettledSenderAttach(peer, 3);
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "entity",
+        .snd_settle_mode = .settled,
+        .max_in_flight = 1,
+    }, 10_000);
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(perf.SenderSettleMode.settled, sender.snd_settle_mode);
+
+    mem.clearWritten();
+    try sender.sendBytes("sync", 10_000);
+    const token = try sender.sendBytesAsync("async", .{}, 10_000);
+    try testing.expectEqual(@as(u32, 1), token.id);
+    try testing.expectEqual(@as(usize, 0), sender.inFlight());
+    try testing.expectError(error.NoDeliveryInFlight, sender.awaitSettlement(10_000));
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const transfers = try frames.of(allocator, perf.descriptor.transfer);
+    defer allocator.free(transfers);
+    try testing.expectEqual(@as(usize, 2), transfers.len);
+    for (transfers, 0..) |body, id| {
+        var decoded = try perf.decode(allocator, body);
+        defer decoded.deinit();
+        const transfer = decoded.performative.transfer;
+        try testing.expect(transfer.settled orelse false);
+        try testing.expectEqual(@as(?u32, @intCast(id)), transfer.delivery_id);
+    }
+}
+
+test "remote receiver Attach selects the actual sender settlement mode" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    // The local sender requests settled, but the receiver answers with the
+    // default mixed mode. Transfers must follow the negotiated response.
+    try scriptSenderAttach(peer, 1);
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "entity",
+        .snd_settle_mode = .settled,
+    }, 10_000);
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(perf.SenderSettleMode.mixed, sender.snd_settle_mode);
+
+    mem.clearWritten();
+    const token = try sender.sendBytesAsync("mixed", .{}, 10_000);
+    try testing.expectEqual(@as(usize, 1), sender.inFlight());
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const transfers = try frames.of(allocator, perf.descriptor.transfer);
+    defer allocator.free(transfers);
+    try testing.expectEqual(@as(usize, 1), transfers.len);
+    var decoded = try perf.decode(allocator, transfers[0]);
+    defer decoded.deinit();
+    try testing.expect(!(decoded.performative.transfer.settled orelse false));
+
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = token.id,
+        .settled = true,
+        .state = .accepted,
+    } });
+    const settlement = try sender.awaitSettlement(10_000);
+    try testing.expectEqual(Outcome.accepted, settlement.outcome);
+}
+
+test "settled sender emission failure poisons without retaining in-flight state" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptSettledSenderAttach(peer, 1);
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "entity",
+        .snd_settle_mode = .settled,
+    }, 10_000);
+    _ = try fixture.session.pump(10_000);
+
+    mem.clearWritten();
+    mem.fail_write_after = mem.write_count + 1;
+    try testing.expectError(
+        error.WriteFailed,
+        sender.sendBytesAsync("settled", .{}, 10_000),
+    );
+    mem.fail_write_after = null;
+
+    try testing.expect(sender.poisoned);
+    try testing.expectEqual(@as(usize, 0), sender.inFlight());
+    try testing.expectEqual(connection.State.err, driver.state);
+    try testing.expectError(error.LinkDetached, sender.sendBytes("no reuse", 10_000));
+}
+
+test "mode-second settlement timeout closes the link before forgetting its id" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{ .auto_advance_ms = 1 };
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptModeSecondSenderAttach(peer, 1);
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "entity",
+        .rcv_settle_mode = .second,
+    }, 10_000);
+    _ = try fixture.session.pump(10_000);
+
+    mem.clearWritten();
+    mem.starve = true;
+    try testing.expectError(
+        error.Timeout,
+        sender.sendBytes("payload", clock.millis + 10),
+    );
+    try testing.expect(sender.poisoned);
+    try testing.expectEqual(@as(usize, 0), sender.inFlight());
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const transfers = try frames.of(allocator, perf.descriptor.transfer);
+    defer allocator.free(transfers);
+    const detaches = try frames.of(allocator, perf.descriptor.detach);
+    defer allocator.free(detaches);
+    try testing.expectEqual(@as(usize, 1), transfers.len);
+    try testing.expectEqual(@as(usize, 1), detaches.len);
+    var decoded = try perf.decode(allocator, detaches[0]);
+    defer decoded.deinit();
+    try testing.expect(decoded.performative.detach.closed);
+
+    // A late first-phase disposition needs no acknowledgment: the peer was
+    // already told this link is terminal before the id was discarded.
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 0,
+        .settled = false,
+        .state = .accepted,
+    } });
+    mem.clearWritten();
+    _ = try fixture.session.pump(clock.millis + 10_000);
+    try testing.expectEqual(@as(usize, 0), mem.written().len);
+    try testing.expectError(
+        error.LinkDetached,
+        sender.sendBytes("no reuse", clock.millis + 10_000),
+    );
+}
+
+test "abandoning undecided mode-second deliveries closes the bounded link state" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptModeSecondSenderAttach(peer, 2);
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "entity",
+        .rcv_settle_mode = .second,
+        .max_in_flight = 2,
+    }, 10_000);
+    _ = try fixture.session.pump(10_000);
+    _ = try sender.sendBytesAsync("a", .{}, 10_000);
+    _ = try sender.sendBytesAsync("b", .{}, 10_000);
+
+    mem.clearWritten();
+    sender.abandonInFlight();
+    sender.abandonInFlight();
+    try testing.expect(sender.poisoned);
+    try testing.expectEqual(@as(usize, 0), sender.inFlight());
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const detaches = try frames.of(allocator, perf.descriptor.detach);
+    defer allocator.free(detaches);
+    try testing.expectEqual(@as(usize, 1), detaches.len);
+
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 0,
+        .last = 1,
+        .settled = false,
+        .state = .accepted,
+    } });
+    mem.clearWritten();
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(usize, 0), mem.written().len);
+    try testing.expectError(error.LinkDetached, sender.sendBytes("no reuse", 10_000));
 }
 
 test "session ids count transfer frames, so a delivery id follows the frames before it" {
@@ -6780,6 +7128,7 @@ fn creditFlowFailureIsTransactional(path: CreditFlowPath, failure: CreditFlowFai
     receiver.overrun = 1;
     receiver.delivery_count = 7;
     const before = receiver.creditState();
+    const before_limit = receiver.delivery_limit;
     mem.clearWritten();
 
     var switching = SwitchAllocator{ .child = allocator };
@@ -6809,6 +7158,7 @@ fn creditFlowFailureIsTransactional(path: CreditFlowPath, failure: CreditFlowFai
     try testing.expectEqual(before.credit, receiver.credit);
     try testing.expectEqual(before.deferred_credit, receiver.deferred_credit);
     try testing.expectEqual(before.overrun, receiver.overrun);
+    try testing.expectEqual(before_limit, receiver.delivery_limit);
     try testing.expectEqual(@as(usize, 0), mem.written().len);
     try testing.expectEqual(@as(usize, 0), mem.pending.items.len);
 
@@ -6820,6 +7170,7 @@ fn creditFlowFailureIsTransactional(path: CreditFlowPath, failure: CreditFlowFai
         try testing.expectEqual(@as(u32, 3), receiver.credit);
         try testing.expectEqual(@as(u32, 0), receiver.deferred_credit);
         try testing.expectEqual(@as(u32, 0), receiver.overrun);
+        try testing.expectEqual(@as(u32, 10), receiver.delivery_limit);
 
         var frames = try EmittedFrames.parse(allocator, mem.written());
         defer frames.deinit();
@@ -6851,6 +7202,7 @@ fn creditFlowFailureIsTransactional(path: CreditFlowPath, failure: CreditFlowFai
     try testing.expectEqual(before.credit, receiver.credit);
     try testing.expectEqual(before.deferred_credit, receiver.deferred_credit);
     try testing.expectEqual(before.overrun, receiver.overrun);
+    try testing.expectEqual(before_limit, receiver.delivery_limit);
     try testing.expectEqual(@as(usize, 0), mem.written().len);
 }
 
@@ -6900,6 +7252,7 @@ test "drain state commits only after its Flow is emitted" {
     }, 10_000);
     receiver.credit = 4;
     receiver.delivery_count = 7;
+    receiver.delivery_limit = 11;
     mem.clearWritten();
 
     var switching = SwitchAllocator{ .child = allocator, .failing = true };
@@ -7235,6 +7588,7 @@ test "omitted drain credit derives remaining across delivery-count wrap" {
     }, 10_000);
     receiver.delivery_count = std.math.maxInt(u32) - 1;
     receiver.credit = 4;
+    receiver.delivery_limit = 2;
     receiver.drain = true;
 
     // The previous delivery limit wraps to 2. Advancing to 0 consumes two
@@ -8067,10 +8421,7 @@ test "a peer cannot clear the debt it ran up by sending a flow" {
     try testing.expect(!receiver.attached);
 }
 
-test "a flow that does grant credit has the debt charged against it" {
-    // The other half: a peer flow is a legitimate way to establish credit, and
-    // it must go through the same charging as `issueCredit` rather than
-    // resetting the count and forgiving what was already taken.
+test "a peer flow cannot grant receiver credit or clear overrun debt" {
     const allocator = testing.allocator;
     var mem = MemoryTransport.init(allocator);
     defer mem.deinit();
@@ -8120,8 +8471,13 @@ test "a flow that does grant credit has the debt charged against it" {
     while (i < 3) : (i += 1) _ = try receiver.receive(10_000);
     try testing.expectEqual(@as(u32, 3), receiver.overrun);
 
-    while (receiver.credit == 0) _ = try fixture.session.pump(10_000);
-    // Ten asserted by the peer, three already taken, so seven are usable.
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    try testing.expectEqual(@as(u32, 3), receiver.overrun);
+
+    // Only the local receiver can authorize more deliveries. Its ten-credit
+    // request pays the three-delivery debt and emits the remaining seven.
+    try receiver.issueCredit(10);
     try testing.expectEqual(@as(u32, 7), receiver.credit);
     try testing.expectEqual(@as(u32, 0), receiver.overrun);
 }
@@ -8313,14 +8669,7 @@ test "disabled overrun detachment saturates debt instead of overflowing" {
     try testing.expectEqual(@as(u32, 2), receiver.delivery_count);
 }
 
-test "a flow that names a delivery count has the debt charged against it too" {
-    // The branch above it. A flow carrying `delivery-count` is rebased onto
-    // this endpoint's own count before the credit is taken, and that rebase
-    // sits between the peer's number and the charge -- which is exactly where
-    // a grant can be established without the debt being charged against it.
-    // The sibling test covers the count-less branch, and the lagging-flow test
-    // covers the clamp, but neither can see this one: with the clamp in place
-    // a lagging flow grants zero, and zero is charged the same either way.
+test "a peer flow with delivery count cannot grant receiver credit" {
     const allocator = testing.allocator;
     var mem = MemoryTransport.init(allocator);
     defer mem.deinit();
@@ -8345,8 +8694,8 @@ test "a flow that names a delivery count has the debt charged against it too" {
             .more = false,
         }, "event");
     }
-    // Names the count this endpoint has itself reached, so the rebase is a
-    // no-op and the whole ten survives the clamp.
+    // Even an internally consistent peer delivery-count and link-credit pair
+    // cannot create authorization that this receiver never emitted.
     try peer.push(0, .{ .flow = .{
         .next_incoming_id = 0,
         .incoming_window = 100,
@@ -8374,9 +8723,109 @@ test "a flow that names a delivery count has the debt charged against it too" {
     try testing.expectEqual(@as(u32, 3), receiver.overrun);
     try testing.expectEqual(@as(u32, 3), receiver.delivery_count);
 
-    while (receiver.credit == 0) _ = try fixture.session.pump(10_000);
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    try testing.expectEqual(@as(u32, 3), receiver.overrun);
+
+    try receiver.issueCredit(10);
     try testing.expectEqual(@as(u32, 7), receiver.credit);
     try testing.expectEqual(@as(u32, 0), receiver.overrun);
+}
+
+test "hostile receiver flows cannot mint credit across delivery-count wrap" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "entity",
+        .prefetch = 0,
+        .max_overrun = 1,
+        .max_buffered_bytes = null,
+    }, 10_000);
+
+    // A local one-credit grant wraps its exclusive delivery limit to zero.
+    receiver.delivery_count = std.math.maxInt(u32);
+    try receiver.issueCredit(1);
+    try testing.expectEqual(@as(u32, 0), receiver.delivery_limit);
+    mem.clearWritten();
+
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 0,
+        .delivery_tag = "a",
+        .settled = true,
+    }, "");
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(u32, 0), receiver.delivery_count);
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+
+    // One raced transfer consumes the configured overrun allowance. Its
+    // preceding Flow claims fresh credit, but cannot enlarge local authority.
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 1000,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+        .handle = 0,
+        .delivery_count = 0,
+        .link_credit = 1,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 1,
+        .delivery_tag = "b",
+        .settled = true,
+    }, "");
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(u32, 1), receiver.overrun);
+
+    const ready_len = receiver.ready.items.len;
+    const ready_capacity = receiver.ready.capacity;
+    for (2..6) |id| {
+        try peer.push(0, .{ .flow = .{
+            .next_incoming_id = 0,
+            .incoming_window = 1000,
+            .next_outgoing_id = @intCast(id),
+            .outgoing_window = 1000,
+            .handle = 0,
+            .delivery_count = @intCast(id - 1),
+            .link_credit = 1,
+        } });
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = @intCast(id),
+            .delivery_tag = "hostile",
+            .settled = true,
+        }, "");
+    }
+
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    try testing.expectError(error.CreditExceeded, fixture.session.pump(10_000));
+    for (0..6) |_| _ = try fixture.session.pump(10_000);
+
+    try testing.expect(receiver.poisoned);
+    try testing.expectEqual(ready_len, receiver.ready.items.len);
+    try testing.expectEqual(ready_capacity, receiver.ready.capacity);
+    try testing.expectEqual(@as(u32, 1), receiver.overrun);
 }
 
 test "abandoning collects a verdict stranded behind an undecided delivery" {
