@@ -40,7 +40,8 @@ pub const CustomEndpoint = struct {
     port: u16 = amqp.tls_port,
 };
 
-/// TLS knobs.
+/// AMQP TLS trust knobs. This certificate bundle is unrelated to the SDK
+/// `CryptoProvider` carried by `core.http.HttpRuntime`.
 pub const TlsSettings = struct {
     /// Certificate bundle to validate against. Null rescans the system trust
     /// store on every dial, which is slow enough that a long-lived client

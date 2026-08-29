@@ -655,14 +655,22 @@ pub const Credential = union(enum) {
     pub fn getToken(
         self: *Credential,
         ctx: core.context.Context,
+        runtime: core.http.HttpRuntime,
     ) !core.credentials.AccessToken {
-        return self.tokenCredential().getToken(.{ .scopes = &.{token_scope} }, ctx);
+        return self.tokenCredential().getToken(
+            .{ .scopes = &.{token_scope} },
+            ctx,
+            runtime,
+        );
     }
 };
 
 // ─────────────────────── Clients ───────────────────────
 
 pub const ProducerClientOptions = struct {
+    /// Copied runtime whose transport and crypto descriptors borrow backend
+    /// contexts that must outlive this client and its credential calls.
+    runtime: core.http.HttpRuntime,
     fully_qualified_namespace: []const u8,
     event_hub_name: []const u8,
     /// Application id, custom endpoint, retry schedule, TLS, and WebSockets.
@@ -704,6 +712,7 @@ pub const ProducerClient = struct {
     /// hub name, and key all borrow from it.
     pub fn fromConnectionString(
         allocator: std.mem.Allocator,
+        runtime: core.http.HttpRuntime,
         connection_string: []const u8,
         event_hub_name: ?[]const u8,
         amqp_transport: *AmqpTransport,
@@ -716,6 +725,7 @@ pub const ProducerClient = struct {
 
         return .{
             .options = .{
+                .runtime = runtime,
                 .fully_qualified_namespace = cs.fully_qualified_namespace,
                 .event_hub_name = hub,
             },
@@ -745,7 +755,7 @@ pub const ProducerClient = struct {
     /// Acquire a token for this hub, for putting to CBS before a link
     /// attaches.
     pub fn getToken(self: *ProducerClient, ctx: core.context.Context) !core.credentials.AccessToken {
-        return self.credential.getToken(ctx);
+        return self.credential.getToken(ctx, self.options.runtime);
     }
 
     /// Scratch space for an entity path that is only needed long enough to
@@ -888,6 +898,9 @@ pub const ProducerClient = struct {
 };
 
 pub const ConsumerClientOptions = struct {
+    /// Copied runtime whose transport and crypto descriptors borrow backend
+    /// contexts that must outlive this client and its credential calls.
+    runtime: core.http.HttpRuntime,
     fully_qualified_namespace: []const u8,
     event_hub_name: []const u8,
     consumer_group: []const u8 = "$Default",
@@ -930,6 +943,7 @@ pub const ConsumerClient = struct {
     /// hub name, and key all borrow from it.
     pub fn fromConnectionString(
         allocator: std.mem.Allocator,
+        runtime: core.http.HttpRuntime,
         connection_string: []const u8,
         event_hub_name: ?[]const u8,
         amqp_transport: *AmqpTransport,
@@ -942,6 +956,7 @@ pub const ConsumerClient = struct {
 
         return .{
             .options = .{
+                .runtime = runtime,
                 .fully_qualified_namespace = cs.fully_qualified_namespace,
                 .event_hub_name = hub,
             },
@@ -987,7 +1002,7 @@ pub const ConsumerClient = struct {
     /// Acquire a token for this hub, for putting to CBS before a link
     /// attaches.
     pub fn getToken(self: *ConsumerClient, ctx: core.context.Context) !core.credentials.AccessToken {
-        return self.credential.getToken(ctx);
+        return self.credential.getToken(ctx, self.options.runtime);
     }
 
     /// The AMQP address a partition is read from. Caller owns the result.
@@ -1210,15 +1225,23 @@ pub const CbsAuthorizer = struct {
     credential: ?*Credential = null,
     /// `amqps://{fqns}/{hub}`. Owned when `bind` copied it.
     audience: ?[]u8 = null,
+    /// Copied descriptor whose backend contexts remain caller-owned.
+    runtime: ?core.http.HttpRuntime = null,
     link_id: []const u8 = "eventhubs",
     ctx: core.context.Context = .none,
     authorizer: recovery.Authorizer = .{ .authorizeFn = authorize },
 
-    pub fn bind(self: *CbsAuthorizer, credential: *Credential, audience: []const u8) !void {
+    pub fn bind(
+        self: *CbsAuthorizer,
+        credential: *Credential,
+        audience: []const u8,
+        runtime: core.http.HttpRuntime,
+    ) !void {
         const owned = try self.allocator.dupe(u8, audience);
         if (self.audience) |old| self.allocator.free(old);
         self.audience = owned;
         self.credential = credential;
+        self.runtime = runtime;
     }
 
     pub fn deinit(self: *CbsAuthorizer) void {
@@ -1234,8 +1257,9 @@ pub const CbsAuthorizer = struct {
         const self: *CbsAuthorizer = @fieldParentPtr("authorizer", a);
         const credential = self.credential orelse return error.CredentialNotBound;
         const audience = self.audience orelse return error.CredentialNotBound;
+        const runtime = self.runtime orelse return error.CredentialNotBound;
 
-        var token = try credential.getToken(self.ctx);
+        var token = try credential.getToken(self.ctx, runtime);
         defer token.deinit();
 
         const client = try amqp.Cbs.open(session, .{ .link_id = self.link_id }, deadline_ms);
@@ -1330,8 +1354,13 @@ pub const HubConnection = struct {
     /// Separate from `open` because a connection-string client owns the
     /// credential it parses, so the credential does not exist until after the
     /// client is built, and the client needs this transport to be built.
-    pub fn bind(self: *HubConnection, credential: *Credential, audience: []const u8) !void {
-        return self.authorizer.bind(credential, audience);
+    pub fn bind(
+        self: *HubConnection,
+        credential: *Credential,
+        audience: []const u8,
+        runtime: core.http.HttpRuntime,
+    ) !void {
+        return self.authorizer.bind(credential, audience, runtime);
     }
 
     pub fn asTransport(self: *HubConnection) *AmqpTransport {
@@ -1354,6 +1383,77 @@ test {
     _ = ConsumerPartitionOpener;
 }
 
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+var unused_http_context: u8 = 0;
+const unused_http_vtable: core.http.HttpTransport.VTable = .{
+    .send = struct {
+        fn send(_: *anyopaque, _: *core.http.Request) anyerror!core.http.Response {
+            return error.UnexpectedHttpRequest;
+        }
+    }.send,
+};
+
+fn testRuntime() core.http.HttpRuntime {
+    return testRuntimeWithCrypto(testing_crypto_provider.asProvider());
+}
+
+fn testRuntimeWithCrypto(
+    provider: core.crypto.CryptoProvider,
+) core.http.HttpRuntime {
+    return core.http.HttpRuntime.init(
+        .{ .context = &unused_http_context, .vtable = &unused_http_vtable },
+        provider,
+    );
+}
+
+const TestCryptoProvider = struct {
+    hmac_calls: usize = 0,
+    fail: bool = false,
+
+    const vtable: core.crypto.CryptoProvider.VTable = .{
+        .random_bytes = &unusedRandomBytes,
+        .md5 = &unusedMd5,
+        .sha256 = &unusedSha256,
+        .hmac_sha256 = &hmacSha256,
+        .sha256_init = &unusedSha256Init,
+    };
+
+    fn provider(self: *TestCryptoProvider) core.crypto.CryptoProvider {
+        return .{ .context = self, .vtable = &vtable };
+    }
+
+    fn unusedRandomBytes(_: *anyopaque, _: []u8) !void {
+        return error.UnexpectedCryptoOperation;
+    }
+
+    fn unusedMd5(_: *anyopaque, _: []const u8, _: *core.crypto.Md5Digest) !void {
+        return error.UnexpectedCryptoOperation;
+    }
+
+    fn unusedSha256(_: *anyopaque, _: []const u8, _: *core.crypto.Sha256Digest) !void {
+        return error.UnexpectedCryptoOperation;
+    }
+
+    fn hmacSha256(
+        context: *anyopaque,
+        _: []const u8,
+        _: []const u8,
+        out: *core.crypto.HmacSha256Digest,
+    ) !void {
+        const self: *TestCryptoProvider = @ptrCast(@alignCast(context));
+        self.hmac_calls += 1;
+        if (self.fail) return error.ProviderFailure;
+        @memset(out, 0xa5);
+    }
+
+    fn unusedSha256Init(
+        _: *anyopaque,
+        _: std.mem.Allocator,
+    ) !core.crypto.Sha256Operation {
+        return error.UnexpectedCryptoOperation;
+    }
+};
+
 test "a hub connection wires itself up without dialling" {
     const allocator = std.testing.allocator;
     var threaded: std.Io.Threaded = .init_single_threaded;
@@ -1373,7 +1473,11 @@ test "a hub connection wires itself up without dialling" {
     try std.testing.expect(hub.authorizer.credential == null);
 
     var credential = Credential{ .sas = undefined };
-    try hub.bind(&credential, "amqps://ns.servicebus.windows.net/hub");
+    try hub.bind(
+        &credential,
+        "amqps://ns.servicebus.windows.net/hub",
+        testRuntime(),
+    );
     try std.testing.expectEqualStrings(
         "amqps://ns.servicebus.windows.net/hub",
         hub.authorizer.audience.?,
@@ -1381,7 +1485,11 @@ test "a hub connection wires itself up without dialling" {
 
     // Binding twice replaces rather than leaks: recovery rebinds after a
     // credential is swapped.
-    try hub.bind(&credential, "amqps://ns.servicebus.windows.net/other");
+    try hub.bind(
+        &credential,
+        "amqps://ns.servicebus.windows.net/other",
+        testRuntime(),
+    );
     try std.testing.expectEqualStrings(
         "amqps://ns.servicebus.windows.net/other",
         hub.authorizer.audience.?,
@@ -1568,9 +1676,10 @@ test "ProducerClient createBatch" {
         \\{"access_token":"t","expires_in":3600}
     );
     defer mock.deinit();
-    var cred = cred_mod.ClientSecretCredential.init(allocator, mock.asTransport(), "t", "c", "s");
+    var cred = cred_mod.ClientSecretCredential.init(allocator, "t", "c", "s");
     var mock_amqp = MockAmqpTransport.init();
     var producer = ProducerClient.init(.{
+        .runtime = testRuntime(),
         .fully_qualified_namespace = "ns.servicebus.windows.net",
         .event_hub_name = "my-hub",
     }, cred.asCredential(), mock_amqp.asTransport());
@@ -1586,9 +1695,10 @@ test "ProducerClient sendBatch" {
         \\{"access_token":"t","expires_in":3600}
     );
     defer mock_http.deinit();
-    var cred = cred_mod.ClientSecretCredential.init(allocator, mock_http.asTransport(), "t", "c", "s");
+    var cred = cred_mod.ClientSecretCredential.init(allocator, "t", "c", "s");
     var mock_amqp = MockAmqpTransport.init();
     var producer = ProducerClient.init(.{
+        .runtime = testRuntime(),
         .fully_qualified_namespace = "ns.servicebus.windows.net",
         .event_hub_name = "my-hub",
     }, cred.asCredential(), mock_amqp.asTransport());
@@ -1611,9 +1721,10 @@ test "ProducerClient sendBatch targets the hub, or one partition when pinned" {
         \\{"access_token":"t","expires_in":3600}
     );
     defer mock_http.deinit();
-    var cred = cred_mod.ClientSecretCredential.init(allocator, mock_http.asTransport(), "t", "c", "s");
+    var cred = cred_mod.ClientSecretCredential.init(allocator, "t", "c", "s");
     var mock_amqp = MockAmqpTransport.init();
     var producer = ProducerClient.init(.{
+        .runtime = testRuntime(),
         .fully_qualified_namespace = "ns.servicebus.windows.net",
         .event_hub_name = "my-hub",
     }, cred.asCredential(), mock_amqp.asTransport());
@@ -1643,9 +1754,10 @@ test "createBatch adopts the sender link's max-message-size" {
         \\{"access_token":"t","expires_in":3600}
     );
     defer mock_http.deinit();
-    var cred = cred_mod.ClientSecretCredential.init(allocator, mock_http.asTransport(), "t", "c", "s");
+    var cred = cred_mod.ClientSecretCredential.init(allocator, "t", "c", "s");
     var mock_amqp = MockAmqpTransport.init();
     var producer = ProducerClient.init(.{
+        .runtime = testRuntime(),
         .fully_qualified_namespace = "ns.servicebus.windows.net",
         .event_hub_name = "my-hub",
     }, cred.asCredential(), mock_amqp.asTransport());
@@ -1697,9 +1809,10 @@ test "ProducerClient sendBatch empty returns error" {
         \\{"access_token":"t","expires_in":3600}
     );
     defer mock_http.deinit();
-    var cred = cred_mod.ClientSecretCredential.init(allocator, mock_http.asTransport(), "t", "c", "s");
+    var cred = cred_mod.ClientSecretCredential.init(allocator, "t", "c", "s");
     var mock_amqp = MockAmqpTransport.init();
     var producer = ProducerClient.init(.{
+        .runtime = testRuntime(),
         .fully_qualified_namespace = "ns.servicebus.windows.net",
         .event_hub_name = "my-hub",
     }, cred.asCredential(), mock_amqp.asTransport());
@@ -1718,10 +1831,11 @@ test "ProducerClient getEventHubProperties" {
         \\{"access_token":"t","expires_in":3600}
     );
     defer mock_http.deinit();
-    var cred = cred_mod.ClientSecretCredential.init(allocator, mock_http.asTransport(), "t", "c", "s");
+    var cred = cred_mod.ClientSecretCredential.init(allocator, "t", "c", "s");
     var mock_amqp = MockAmqpTransport.init();
     mock_amqp.hub_properties = .{ .name = "my-hub", .partition_ids = &.{ "0", "1", "2" } };
     var producer = ProducerClient.init(.{
+        .runtime = testRuntime(),
         .fully_qualified_namespace = "ns.servicebus.windows.net",
         .event_hub_name = "my-hub",
     }, cred.asCredential(), mock_amqp.asTransport());
@@ -1738,9 +1852,10 @@ test "ConsumerClient receiveEvents" {
         \\{"access_token":"t","expires_in":3600}
     );
     defer mock_http.deinit();
-    var cred = cred_mod.ClientSecretCredential.init(allocator, mock_http.asTransport(), "t", "c", "s");
+    var cred = cred_mod.ClientSecretCredential.init(allocator, "t", "c", "s");
     var mock_amqp = MockAmqpTransport.init();
     var consumer = ConsumerClient.init(.{
+        .runtime = testRuntime(),
         .fully_qualified_namespace = "ns.servicebus.windows.net",
         .event_hub_name = "my-hub",
     }, cred.asCredential(), mock_amqp.asTransport());
@@ -1992,7 +2107,7 @@ test "sendBatches groups batches by the link each one addresses" {
     const allocator = std.testing.allocator;
     var mock_amqp = MockAmqpTransport.init();
     const cs = "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=k;SharedAccessKey=v;EntityPath=hub";
-    var producer = try ProducerClient.fromConnectionString(allocator, cs, null, mock_amqp.asTransport());
+    var producer = try ProducerClient.fromConnectionString(allocator, testRuntime(), cs, null, mock_amqp.asTransport());
     defer producer.deinit();
 
     const partitions = [_]?[]const u8{ "0", "0", "1", null, null };
@@ -2031,7 +2146,7 @@ test "sendBatches keeps one run whole when every batch shares a partition" {
     const allocator = std.testing.allocator;
     var mock_amqp = MockAmqpTransport.init();
     const cs = "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=k;SharedAccessKey=v;EntityPath=hub";
-    var producer = try ProducerClient.fromConnectionString(allocator, cs, null, mock_amqp.asTransport());
+    var producer = try ProducerClient.fromConnectionString(allocator, testRuntime(), cs, null, mock_amqp.asTransport());
     defer producer.deinit();
 
     var batches: [4]EventDataBatch = undefined;
@@ -2057,7 +2172,7 @@ test "sendBatches refuses an empty batch before sending anything" {
     const allocator = std.testing.allocator;
     var mock_amqp = MockAmqpTransport.init();
     const cs = "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=k;SharedAccessKey=v;EntityPath=hub";
-    var producer = try ProducerClient.fromConnectionString(allocator, cs, null, mock_amqp.asTransport());
+    var producer = try ProducerClient.fromConnectionString(allocator, testRuntime(), cs, null, mock_amqp.asTransport());
     defer producer.deinit();
 
     var full = try EventDataBatch.init(.{});
@@ -2130,7 +2245,7 @@ test "ProducerClient fromConnectionString" {
     const allocator = std.testing.allocator;
     var mock_amqp = MockAmqpTransport.init();
     const cs = "Endpoint=sb://mynamespace.servicebus.windows.net/;SharedAccessKeyName=mykey;SharedAccessKey=abc123=;EntityPath=myhub";
-    var producer = try ProducerClient.fromConnectionString(allocator, cs, null, mock_amqp.asTransport());
+    var producer = try ProducerClient.fromConnectionString(allocator, testRuntime(), cs, null, mock_amqp.asTransport());
     defer producer.deinit();
     try std.testing.expectEqualStrings("mynamespace.servicebus.windows.net", producer.options.fully_qualified_namespace);
     try std.testing.expectEqualStrings("myhub", producer.options.event_hub_name);
@@ -2145,7 +2260,7 @@ test "ProducerClient fromConnectionString with override" {
     const allocator = std.testing.allocator;
     var mock_amqp = MockAmqpTransport.init();
     const cs = "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=k;SharedAccessKey=v;EntityPath=hub1";
-    var producer = try ProducerClient.fromConnectionString(allocator, cs, "hub2", mock_amqp.asTransport());
+    var producer = try ProducerClient.fromConnectionString(allocator, testRuntime(), cs, "hub2", mock_amqp.asTransport());
     defer producer.deinit();
     try std.testing.expectEqualStrings("hub2", producer.options.event_hub_name);
     try std.testing.expectEqualStrings("amqps://ns.servicebus.windows.net/hub2", producer.owned_audience.?);
@@ -2154,7 +2269,7 @@ test "ProducerClient fromConnectionString with override" {
 test "ProducerClient fromConnectionString missing hub" {
     var mock_amqp = MockAmqpTransport.init();
     const cs = "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=k;SharedAccessKey=v";
-    const result = ProducerClient.fromConnectionString(std.testing.allocator, cs, null, mock_amqp.asTransport());
+    const result = ProducerClient.fromConnectionString(std.testing.allocator, testRuntime(), cs, null, mock_amqp.asTransport());
     try std.testing.expectError(error.MissingEventHubName, result);
 }
 
@@ -2162,7 +2277,7 @@ test "ConsumerClient fromConnectionString" {
     const allocator = std.testing.allocator;
     var mock_amqp = MockAmqpTransport.init();
     const cs = "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=k;SharedAccessKey=v;EntityPath=hub";
-    var consumer = try ConsumerClient.fromConnectionString(allocator, cs, null, mock_amqp.asTransport());
+    var consumer = try ConsumerClient.fromConnectionString(allocator, testRuntime(), cs, null, mock_amqp.asTransport());
     defer consumer.deinit();
     try std.testing.expectEqualStrings("ns.servicebus.windows.net", consumer.options.fully_qualified_namespace);
     try std.testing.expectEqualStrings("hub", consumer.options.event_hub_name);
@@ -2188,6 +2303,7 @@ const ScopeRecordingCredential = struct {
         credential: *core.credentials.TokenCredential,
         request_context: core.credentials.TokenRequestContext,
         ctx: core.context.Context,
+        _: core.http.HttpRuntime,
     ) anyerror!core.credentials.AccessToken {
         _ = ctx;
         const self: *ScopeRecordingCredential = @fieldParentPtr("credential", credential);
@@ -2217,7 +2333,7 @@ test "connection string credential signs the parsed entity" {
     const allocator = std.testing.allocator;
     var mock_amqp = MockAmqpTransport.init();
     const cs = "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=policy;SharedAccessKey=c2VjcmV0;EntityPath=hub";
-    var producer = try ProducerClient.fromConnectionString(allocator, cs, null, mock_amqp.asTransport());
+    var producer = try ProducerClient.fromConnectionString(allocator, testRuntime(), cs, null, mock_amqp.asTransport());
     defer producer.deinit();
 
     try std.testing.expect(producer.credential == .sas);
@@ -2239,10 +2355,48 @@ test "connection string credential signs the parsed entity" {
     try std.testing.expect(token.expires_on > 0);
 }
 
+test "connection string credential uses the selected runtime crypto provider" {
+    const allocator = std.testing.allocator;
+    var provider = TestCryptoProvider{};
+    var mock_amqp = MockAmqpTransport.init();
+    const cs = "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=policy;SharedAccessKey=c2VjcmV0;EntityPath=hub";
+    var producer = try ProducerClient.fromConnectionString(
+        allocator,
+        testRuntimeWithCrypto(provider.provider()),
+        cs,
+        null,
+        mock_amqp.asTransport(),
+    );
+    defer producer.deinit();
+
+    var token = try producer.getToken(.none);
+    defer token.deinit();
+    try std.testing.expectEqual(@as(usize, 1), provider.hmac_calls);
+}
+
+test "connection string credential propagates runtime crypto provider failure" {
+    const allocator = std.testing.allocator;
+    var provider = TestCryptoProvider{ .fail = true };
+    var mock_amqp = MockAmqpTransport.init();
+    const cs = "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=policy;SharedAccessKey=c2VjcmV0;EntityPath=hub";
+    var producer = try ProducerClient.fromConnectionString(
+        allocator,
+        testRuntimeWithCrypto(provider.provider()),
+        cs,
+        null,
+        mock_amqp.asTransport(),
+    );
+    defer producer.deinit();
+
+    try std.testing.expectError(error.ProviderFailure, producer.getToken(.none));
+    try std.testing.expectEqual(@as(usize, 1), provider.hmac_calls);
+}
+
 test "AAD credential is asked for the Event Hubs scope" {
     var mock_amqp = MockAmqpTransport.init();
     var recorder = ScopeRecordingCredential.init();
     var producer = ProducerClient.init(.{
+        .runtime = testRuntime(),
         .fully_qualified_namespace = "ns.servicebus.windows.net",
         .event_hub_name = "hub",
     }, recorder.asCredential(), mock_amqp.asTransport());
@@ -2268,6 +2422,7 @@ test "entityAudience matches the hub, partitionAudience the consumer group path"
     var mock_amqp = MockAmqpTransport.init();
     var recorder = ScopeRecordingCredential.init();
     var consumer = ConsumerClient.init(.{
+        .runtime = testRuntime(),
         .fully_qualified_namespace = "ns.servicebus.windows.net",
         .event_hub_name = "hub",
         .consumer_group = "cg",
@@ -2294,7 +2449,7 @@ test "a SAS credential survives being returned by value" {
     // `SasCredential` recovers itself with `@fieldParentPtr`, so a pointer
     // taken before the client was moved would dangle. Resolving lazily
     // through the moved client must still produce a usable token.
-    var producer = try ProducerClient.fromConnectionString(allocator, cs, null, mock_amqp.asTransport());
+    var producer = try ProducerClient.fromConnectionString(allocator, testRuntime(), cs, null, mock_amqp.asTransport());
     defer producer.deinit();
     var moved = producer;
     producer.owned_audience = null;

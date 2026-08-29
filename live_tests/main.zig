@@ -97,6 +97,9 @@ fn nonEmpty(value: ?[]const u8) ?[]const u8 {
 /// transport at the connection. Copying it by value would leave both dangling.
 const LiveSession = struct {
     allocator: std.mem.Allocator,
+    http: core.http.StdHttpTransport,
+    crypto: core.crypto.StdCryptoProvider,
+    runtime: core.http.HttpRuntime,
     hub: eh.HubConnection,
     producer: eh.ProducerClient,
     audience: []u8,
@@ -109,6 +112,13 @@ const LiveSession = struct {
         const self = try allocator.create(LiveSession);
         errdefer allocator.destroy(self);
         self.allocator = allocator;
+        self.http = core.http.StdHttpTransport.init(allocator, io);
+        errdefer self.http.deinit();
+        self.crypto = core.crypto.StdCryptoProvider.init(io);
+        self.runtime = core.http.HttpRuntime.init(
+            self.http.asTransport(),
+            self.crypto.asProvider(),
+        );
 
         self.hub.open(.{
             .allocator = allocator,
@@ -120,6 +130,7 @@ const LiveSession = struct {
 
         self.producer = try eh.ProducerClient.fromConnectionString(
             allocator,
+            self.runtime,
             config.connection_string,
             config.hub_name,
             self.hub.asTransport(),
@@ -128,7 +139,11 @@ const LiveSession = struct {
 
         self.audience = try self.producer.entityAudience(allocator);
         errdefer allocator.free(self.audience);
-        try self.hub.bind(&self.producer.credential, self.audience);
+        try self.hub.bind(
+            &self.producer.credential,
+            self.audience,
+            self.producer.options.runtime,
+        );
         return self;
     }
 
@@ -139,6 +154,7 @@ const LiveSession = struct {
     fn consumer(self: *LiveSession, config: Config) !eh.ConsumerClient {
         var client = try eh.ConsumerClient.fromConnectionString(
             self.allocator,
+            self.runtime,
             config.connection_string,
             config.hub_name,
             self.hub.asTransport(),
@@ -151,6 +167,7 @@ const LiveSession = struct {
         self.allocator.free(self.audience);
         self.producer.deinit();
         self.hub.deinit();
+        self.http.deinit();
         self.allocator.destroy(self);
     }
 };
@@ -253,15 +270,25 @@ test "live: a checkpoint written to blob storage is listed back" {
 
     var http = core.http.StdHttpTransport.init(allocator, std.testing.io);
     defer http.deinit();
+    var crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+    const runtime = core.http.HttpRuntime.init(
+        http.asTransport(),
+        crypto_provider.asProvider(),
+    );
 
     var credential = core.env_token.EnvTokenCredential.init(allocator, storage.token);
-    var container = try blobs.BlobContainerClient.init(allocator, .{
-        .credential = credential.asCredential(),
-        .transport = http.asTransport(),
+    var auth_policy = core.http.BearerTokenAuthPolicy.init(
+        allocator,
+        credential.asCredential(),
+        blobs.auth_scopes,
+    );
+    defer auth_policy.deinit();
+    var policies = [_]*core.http.HttpPolicy{auth_policy.asPolicy()};
+    const pipeline = core.http.HttpPipeline.init(runtime, &policies);
+    var container = blobs.BlobContainerClient.init(pipeline, .{
         .endpoint = storage.endpoint,
         .container_name = storage.container,
     });
-    defer container.deinit();
 
     var blob_store = eh.checkpoint_store_blob.BlobCheckpointStore.init(&container);
     const store = blob_store.asCheckpointStore();

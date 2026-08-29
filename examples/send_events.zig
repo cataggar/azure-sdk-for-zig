@@ -27,11 +27,15 @@ pub fn main(init: std.process.Init) !void {
 
     var transport = core.http.StdHttpTransport.init(allocator, init.io);
     defer transport.deinit();
+    var crypto_provider = core.crypto.StdCryptoProvider.init(init.io);
+    const runtime = core.http.HttpRuntime.init(
+        transport.asTransport(),
+        crypto_provider.asProvider(),
+    );
 
     var credential = try core.identity.DefaultAzureCredential.init(
         allocator,
         init.io,
-        transport.asTransport(),
         init.environ_map,
     );
     defer credential.deinit();
@@ -48,6 +52,7 @@ pub fn main(init: std.process.Init) !void {
     defer hub.deinit();
 
     var producer = eh.ProducerClient.init(.{
+        .runtime = runtime,
         .fully_qualified_namespace = namespace,
         .event_hub_name = hub_name,
     }, credential.asCredential(), hub.asTransport());
@@ -57,7 +62,7 @@ pub fn main(init: std.process.Init) !void {
     // the transport, so binding is the last step rather than part of `open`.
     const audience = try producer.entityAudience(allocator);
     defer allocator.free(audience);
-    try hub.bind(&producer.credential, audience);
+    try hub.bind(&producer.credential, audience, producer.options.runtime);
 
     var batch = try producer.createBatch(allocator, .{});
     defer batch.deinit(allocator);

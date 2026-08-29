@@ -31,19 +31,29 @@ pub fn main(init: std.process.Init) !void {
     // ── Checkpoint store ──────────────────────────────────────────────
     var http = core.http.StdHttpTransport.init(allocator, init.io);
     defer http.deinit();
+    var crypto_provider = core.crypto.StdCryptoProvider.init(init.io);
+    const runtime = core.http.HttpRuntime.init(
+        http.asTransport(),
+        crypto_provider.asProvider(),
+    );
 
     var storage_credential = core.env_token.EnvTokenCredential.init(
         allocator,
         init.environ_map.get("AZURE_TOKEN") orelse return error.MissingAzureToken,
     );
 
-    var container = try blobs.BlobContainerClient.init(allocator, .{
-        .credential = storage_credential.asCredential(),
-        .transport = http.asTransport(),
+    var auth_policy = core.http.BearerTokenAuthPolicy.init(
+        allocator,
+        storage_credential.asCredential(),
+        blobs.auth_scopes,
+    );
+    defer auth_policy.deinit();
+    var storage_policies = [_]*core.http.HttpPolicy{auth_policy.asPolicy()};
+    const storage_pipeline = core.http.HttpPipeline.init(runtime, &storage_policies);
+    var container = blobs.BlobContainerClient.init(storage_pipeline, .{
         .endpoint = storage_endpoint,
         .container_name = container_name,
     });
-    defer container.deinit();
 
     var store = eh.checkpoint_store_blob.BlobCheckpointStore.init(&container);
 
@@ -59,6 +69,7 @@ pub fn main(init: std.process.Init) !void {
 
     var consumer = try eh.ConsumerClient.fromConnectionString(
         allocator,
+        runtime,
         connection_string,
         hub_name,
         hub.asTransport(),
@@ -67,7 +78,7 @@ pub fn main(init: std.process.Init) !void {
 
     const audience = try consumer.entityAudience(allocator);
     defer allocator.free(audience);
-    try hub.bind(&consumer.credential, audience);
+    try hub.bind(&consumer.credential, audience, consumer.options.runtime);
 
     var opener = consumer.partitionOpener(&hub.connection, 60_000);
     var clock = eh.load_balancing.SystemClock{ .io = init.io };

@@ -8,6 +8,7 @@
 //! `EntityPath`.
 
 const std = @import("std");
+const core = @import("azure_sdk_core");
 const eh = @import("azure_sdk_eventhubs");
 
 pub fn main(init: std.process.Init) !void {
@@ -25,6 +26,14 @@ pub fn main(init: std.process.Init) !void {
 
     const properties = try eh.ConnectionStringProperties.parse(connection_string);
 
+    var http = core.http.StdHttpTransport.init(allocator, init.io);
+    defer http.deinit();
+    var crypto_provider = core.crypto.StdCryptoProvider.init(init.io);
+    const runtime = core.http.HttpRuntime.init(
+        http.asTransport(),
+        crypto_provider.asProvider(),
+    );
+
     var hub: eh.HubConnection = undefined;
     hub.open(.{
         .allocator = allocator,
@@ -36,6 +45,7 @@ pub fn main(init: std.process.Init) !void {
 
     var producer = try eh.ProducerClient.fromConnectionString(
         allocator,
+        runtime,
         connection_string,
         hub_name,
         hub.asTransport(),
@@ -44,7 +54,7 @@ pub fn main(init: std.process.Init) !void {
 
     const audience = try producer.entityAudience(allocator);
     defer allocator.free(audience);
-    try hub.bind(&producer.credential, audience);
+    try hub.bind(&producer.credential, audience, producer.options.runtime);
 
     var batch = try producer.createBatch(allocator, .{});
     defer batch.deinit(allocator);
