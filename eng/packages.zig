@@ -384,6 +384,8 @@ pub const all = [_]Package{
             "build.zig",
             "build.zig.zon",
             "root.zig",
+            "pipeline.zig",
+            "test_support.zig",
             "secrets",
             "keys",
             "certificates",
