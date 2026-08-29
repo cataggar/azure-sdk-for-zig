@@ -167,6 +167,10 @@ pub const TlsSettings = struct {
     bundle: ?*std.crypto.Certificate.Bundle = null,
 };
 
+const receiver_prefetch_limit: u32 = 8;
+const receiver_max_message_size: u64 = 128 * 1024 * 1024;
+const receiver_max_buffered_bytes: u64 = 1024 * 1024 * 1024;
+
 pub const ConnectionOptions = struct {
     /// Prefixed to the user agent so the service can attribute traffic to the
     /// calling application. Borrowed; must outlive the transport.
@@ -193,10 +197,12 @@ pub const ConnectionOptions = struct {
     ///
     /// A receiver holding credit lets the broker stream messages ahead of the
     /// call that asks for them, so a batch is one round trip rather than one
-    /// per message. Zero disables the window and makes each `receiveMessages`
-    /// ask for exactly the count it was given, which is the right shape for a
-    /// consumer that must not hold locks it is not about to work through.
-    prefetch: u32 = 300,
+    /// per message. Service Bus caps this at eight deliveries to keep every
+    /// grant within the receiver's one-GiB aggregate byte budget. Zero
+    /// disables the window and makes each `receiveMessages` ask for exactly
+    /// the count it was given, which is the right shape for a consumer that
+    /// must not hold locks it is not about to work through.
+    prefetch: u32 = receiver_prefetch_limit,
     session: amqp.SessionOptions = .{},
     /// Service Bus expects an anonymous SASL layer and then CBS. Cleared for
     /// a peer that negotiates no SASL layer at all.
@@ -735,7 +741,9 @@ pub const AmqpTransport = struct {
         const receiver = try amqp.openReceiver(current, .{
             .name = name,
             .source_address = entity,
-            .prefetch = self.options.prefetch,
+            .prefetch = @min(self.options.prefetch, receiver_prefetch_limit),
+            .max_message_size = receiver_max_message_size,
+            .max_buffered_bytes = receiver_max_buffered_bytes,
         }, deadline_ms);
         errdefer current.closeReceiver(receiver, 0);
 
@@ -3238,9 +3246,12 @@ test "a prefetch window grants credit up front, and no window grants exactly wha
         var batch = try h.transport.receiveMessages(allocator, "orders", 1, .peek_lock);
         defer batch.deinit();
 
-        // The default window is granted on attach, so the broker may stream
-        // ahead of the call that asks for the messages.
-        try testing.expectEqual(@as(u32, 300), (try creditFor(allocator, h.mem.written(), 2)).?);
+        // The bounded default window is granted on attach, so the broker may
+        // stream ahead of the call that asks for the messages.
+        try testing.expectEqual(receiver_prefetch_limit, (try creditFor(allocator, h.mem.written(), 2)).?);
+        const receiver = h.transport.receivers.get("orders").?.receiver;
+        try testing.expectEqual(@as(?u64, receiver_max_message_size), receiver.max_message_size);
+        try testing.expectEqual(@as(?u64, receiver_max_buffered_bytes), receiver.max_buffered_bytes);
     }
 
     {
@@ -3291,6 +3302,13 @@ test "settling a message with no entity is refused rather than guessed at" {
 /// this package hands to the caller.
 const amqp_receive_allocs_per_delivery = 2;
 
+/// Encoding a replenishment Flow currently needs two temporary allocations.
+const amqp_allocs_per_refill = 2;
+
+/// AMQP 0.5 tracks each unsettled id both on the receiver and session-wide.
+/// Across the batch sizes below their backing storage moves at most twice.
+const max_receive_tracking_growth_allocs = 2;
+
 /// What a batch costs beyond those per-delivery copies: the arena struct, its
 /// first page, and the one copy of the entity name every message shares. The
 /// message list and the delivery tags come out of the arena page.
@@ -3336,40 +3354,55 @@ test "a received message costs a bounded number of allocations, whatever the bat
     var warm = try h.transport.receiveMessages(allocator, "orders", 1, .peek_lock);
     warm.deinit();
 
+    h.mem.clearWritten();
     counting.reset();
     var first = try h.transport.receiveMessages(allocator, "orders", small, .peek_lock);
     const cost_small = counting.count;
+    const small_refills = blk: {
+        const flows = try emittedFlows(testing.allocator, h.mem.written());
+        defer testing.allocator.free(flows);
+        break :blk flows.len;
+    };
     try testing.expectEqual(@as(usize, small), first.count());
     first.deinit();
 
+    h.mem.clearWritten();
     counting.reset();
     var rest = try h.transport.receiveMessages(allocator, "orders", large, .peek_lock);
     const cost_large = counting.count;
+    const large_refills = blk: {
+        const flows = try emittedFlows(testing.allocator, h.mem.written());
+        defer testing.allocator.free(flows);
+        break :blk flows.len;
+    };
     try testing.expectEqual(@as(usize, large), rest.count());
     rest.deinit();
 
-    // Never more than the dependency's own two copies per message, so this
-    // package adds no backing allocation that scales with the batch: the
-    // arena, the message list and the entity copy are all paid for once.
-    // It comes in a little under, because the receiver's ready queue has
-    // finished growing by the time the larger batch runs.
-    // Both bounds below sit at zero or one allocation of slack, which is what
-    // makes them worth having — but it also means a std growth-policy change
-    // or a different arena page split will trip them while nothing here has
-    // regressed. Check what moved before assuming it was this package.
+    // AMQP 0.5's bounded eight-delivery window is replenished as it drains.
+    // Account for those emitted Flows explicitly rather than weakening the
+    // per-delivery bound: this package still adds no backing allocation that
+    // scales with the batch.
     const marginal = cost_large - cost_small;
-    try testing.expect(marginal <= (large - small) * amqp_receive_allocs_per_delivery);
+    const refill_growth =
+        (large_refills - small_refills) * amqp_allocs_per_refill;
+    try testing.expect(marginal <=
+        (large - small) * amqp_receive_allocs_per_delivery +
+            refill_growth +
+            max_receive_tracking_growth_allocs);
 
     // The other half of the claim, and the discriminating half: what is left
-    // once the dependency's per-delivery copies are taken out is the batch's
-    // own overhead, and it is paid once rather than per message. A second
-    // arena, a second reservation or a per-message entity copy all land here.
+    // once the dependency's per-delivery copies and replenishment Flows are
+    // taken out is the batch's own overhead, paid once rather than per
+    // message. A second arena, reservation, or per-message entity copy lands
+    // here.
     //
     // No matching lower bound on `marginal`: `azure_sdk_amqp` dupes the
     // payload and the tag itself, so a lower bound of one per message would
     // be satisfied by the dependency alone whatever this code did. That the
     // messages really are copied is the lifetime test's job, not this one's.
-    const fixed = cost_small - small * amqp_receive_allocs_per_delivery;
+    const fixed = cost_small -
+        small * amqp_receive_allocs_per_delivery -
+        small_refills * amqp_allocs_per_refill;
     try testing.expect(fixed <= max_receive_fixed_allocs);
 }
 
@@ -3438,7 +3471,7 @@ test "a settle run stops at the entity boundary, whichever entity comes first" {
     try pushMessage(h.peer(), allocator, 2, first_incoming_id, "t", "o", 1);
     // A second audience means a second claim, but the connection and the
     // `$cbs` link pair are already up.
-    try scriptCbsReply(h.peer(), allocator, 2);
+    try scriptCbsReplyAt(h.peer(), allocator, 2, 1, 2);
     try scriptReceiverAttach(h.peer(), 3, "servicebus-receiver-audit");
     try pushMessage(h.peer(), allocator, 3, first_incoming_id + 2, "t", "a", 2);
 
