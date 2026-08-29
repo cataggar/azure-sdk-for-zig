@@ -3,7 +3,9 @@
 //! `PlaybackTransport` and `RecordingTransport` expose copyable Core 0.3
 //! transport descriptors whose opaque contexts borrow the transport values.
 //! The values and any wrapped backend contexts must outlive every descriptor
-//! copy and open operation. Both transports are caller-serialized.
+//! copy and open operation. Playback is caller-serialized. Recording attempt
+//! ordering/finalization is synchronized; borrowed slices and policy contexts
+//! still require caller synchronization.
 const std = @import("std");
 const core = @import("azure_sdk_core");
 
@@ -24,7 +26,7 @@ pub const RecordedOutcome = enum {
 
 /// Stable, serializable failure categories used instead of backend-specific
 /// error identities. Playback maps these to the corresponding
-/// `RecordedCancelled`, `RecordedTimeout`, `RecordedConnectionFailure`,
+/// `OperationCancelled`, `RecordedTimeout`, `RecordedConnectionFailure`,
 /// `RecordedTlsFailure`, `RecordedProtocolFailure`, `RecordedIoFailure`,
 /// `RecordedResourceExhausted`, `RecordedUnsupported`, or
 /// `RecordedUnknownFailure` error.
@@ -73,6 +75,7 @@ pub const OwnedExchange = struct {
     response_headers: []HeaderPair,
     outcome: RecordedOutcome = .response,
     error_category: ?RecordedErrorCategory = null,
+    resolved: bool = true,
 
     fn deinit(self: *OwnedExchange, allocator: std.mem.Allocator) void {
         allocator.free(self.request_url);
@@ -546,7 +549,7 @@ const PlaybackBodyReader = struct {
 
 fn recordedErrorValue(category: ?RecordedErrorCategory) anyerror {
     return switch (category orelse .unknown) {
-        .cancelled => error.RecordedCancelled,
+        .cancelled => error.OperationCancelled,
         .timeout => error.RecordedTimeout,
         .connection => error.RecordedConnectionFailure,
         .tls => error.RecordedTlsFailure,
@@ -612,7 +615,19 @@ fn classifyRecordedError(err: anyerror) RecordedErrorCategory {
     return .unknown;
 }
 
-/// Caller-serialized recording transport wrapping a full Core descriptor.
+const RecordingMutex = struct {
+    state: std.atomic.Mutex = .unlocked,
+
+    fn lock(self: *RecordingMutex) void {
+        while (!self.state.tryLock()) std.atomic.spinLoopHint();
+    }
+
+    fn unlock(self: *RecordingMutex) void {
+        self.state.unlock();
+    }
+};
+
+/// Recording transport wrapping a full Core descriptor.
 ///
 /// The inner descriptor is copied by value. Its context, this recording
 /// transport, and the recording allocator must outlive every open operation.
@@ -620,13 +635,15 @@ fn classifyRecordedError(err: anyerror) RecordedErrorCategory {
 /// `toJson`. Each exchange is one completed raw transport attempt, including
 /// redirect, retry, and stable staged failure outcomes. Post-dispatch
 /// bookkeeping failure poisons serialization rather than omitting an attempt.
-/// `deinit` does not deinitialize either borrowed context.
+/// Attempt ordering and finalization are internally synchronized. Borrowed
+/// slices from `getExchanges` still require caller synchronization. `deinit`
+/// does not deinitialize either borrowed context.
 pub const RecordingTransport = struct {
     inner: core.http.HttpTransport,
     exchanges: std.ArrayList(OwnedExchange) = .empty,
     allocator: std.mem.Allocator,
     options: RecordingOptions,
-    reserved_attempts: usize = 0,
+    mutex: RecordingMutex = .{},
     poisoned: bool = false,
 
     const vtable: core.http.HttpTransport.VTable = .{
@@ -665,6 +682,8 @@ pub const RecordingTransport = struct {
         self.* = undefined;
     }
 
+    /// Borrow all slots in dispatch order. Unresolved active slots have
+    /// `resolved == false`; do not retain this slice across concurrent calls.
     pub fn getExchanges(self: *const RecordingTransport) []const OwnedExchange {
         return self.exchanges.items;
     }
@@ -673,33 +692,93 @@ pub const RecordingTransport = struct {
     /// deinitialized without a terminal event. `toJson` then returns
     /// `error.IncompleteRecording`.
     pub fn isComplete(self: *const RecordingTransport) bool {
-        return !self.poisoned;
+        const mutex = @constCast(&self.mutex);
+        mutex.lock();
+        defer mutex.unlock();
+        return self.isCompleteLocked();
     }
 
-    fn reserveAttempt(self: *RecordingTransport) !void {
+    fn isCompleteLocked(self: *const RecordingTransport) bool {
+        if (self.poisoned) return false;
+        for (self.exchanges.items) |exchange| {
+            if (!exchange.resolved) return false;
+        }
+        return true;
+    }
+
+    fn ensureCanDispatch(self: *RecordingTransport) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         if (self.poisoned) return error.IncompleteRecording;
-        try self.exchanges.ensureUnusedCapacity(
-            self.allocator,
-            self.reserved_attempts + 1,
-        );
-        self.reserved_attempts += 1;
     }
 
-    fn releaseAttempt(self: *RecordingTransport) void {
-        std.debug.assert(self.reserved_attempts != 0);
-        self.reserved_attempts -= 1;
-    }
-
-    fn appendAttempt(
+    fn reserveAttempt(
         self: *RecordingTransport,
-        exchange: OwnedExchange,
-    ) void {
-        self.releaseAttempt();
-        self.exchanges.appendAssumeCapacity(exchange);
+        pending: *PendingRequest,
+    ) !usize {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        if (self.poisoned) return error.IncompleteRecording;
+        try self.exchanges.ensureUnusedCapacity(self.allocator, 1);
+        const ticket = self.exchanges.items.len;
+        self.exchanges.appendAssumeCapacity(pending.intoSlot());
+        return ticket;
     }
 
-    fn poisonAttempt(self: *RecordingTransport) void {
-        self.releaseAttempt();
+    fn setRequestBody(
+        self: *RecordingTransport,
+        ticket: usize,
+        body: []u8,
+    ) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        const slot = &self.exchanges.items[ticket];
+        std.debug.assert(!slot.resolved);
+        std.debug.assert(slot.request_body == null);
+        slot.request_body = body;
+    }
+
+    fn finalizePreResponse(
+        self: *RecordingTransport,
+        ticket: usize,
+        outcome: RecordedOutcome,
+        category: RecordedErrorCategory,
+    ) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        const slot = &self.exchanges.items[ticket];
+        std.debug.assert(!slot.resolved);
+        slot.outcome = outcome;
+        slot.error_category = category;
+        slot.resolved = true;
+    }
+
+    fn finalizeResponse(
+        self: *RecordingTransport,
+        ticket: usize,
+        response: OwnedResponse,
+        outcome: RecordedOutcome,
+        category: ?RecordedErrorCategory,
+    ) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        const slot = &self.exchanges.items[ticket];
+        std.debug.assert(!slot.resolved);
+        self.allocator.free(slot.response_body);
+        deinitHeaderPairs(self.allocator, slot.response_headers);
+        slot.response_status = response.status;
+        slot.response_body = response.body;
+        slot.response_body_allocation = response.body_allocation;
+        slot.response_headers = response.headers;
+        slot.outcome = outcome;
+        slot.error_category = category;
+        slot.resolved = true;
+    }
+
+    fn poisonAttempt(self: *RecordingTransport, ticket: usize) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        std.debug.assert(ticket < self.exchanges.items.len);
         self.poisoned = true;
     }
 
@@ -721,7 +800,6 @@ pub const RecordingTransport = struct {
         self: *const RecordingTransport,
         allocator: std.mem.Allocator,
     ) ![]u8 {
-        if (self.poisoned) return error.IncompleteRecording;
         var output: std.Io.Writer.Allocating = .init(allocator);
         errdefer output.deinit();
         const writer = &output.writer;
@@ -737,7 +815,10 @@ pub const RecordingTransport = struct {
         writer: *std.Io.Writer,
         allocator: std.mem.Allocator,
     ) !void {
-        if (self.poisoned) return error.IncompleteRecording;
+        const mutex = @constCast(&self.mutex);
+        mutex.lock();
+        defer mutex.unlock();
+        if (!self.isCompleteLocked()) return error.IncompleteRecording;
         try writer.print(
             "{{\"version\":{d},\"exchanges\":[",
             .{recording_format_version},
@@ -812,7 +893,7 @@ pub const RecordingTransport = struct {
         request: *core.http.Request,
     ) !core.http.Response {
         const self: *RecordingTransport = @ptrCast(@alignCast(context));
-        if (self.poisoned) return error.IncompleteRecording;
+        try self.ensureCanDispatch();
         var pending = try PendingRequest.init(
             self.allocator,
             request,
@@ -820,37 +901,30 @@ pub const RecordingTransport = struct {
         );
         var pending_owned = true;
         defer if (pending_owned) pending.deinit(self.allocator);
-        try self.reserveAttempt();
-        var reservation_owned = true;
-        errdefer if (reservation_owned) self.releaseAttempt();
+        const ticket = try self.reserveAttempt(&pending);
+        pending_owned = false;
 
         var response = self.inner.vtable.send(
             self.inner.context,
             request,
         ) catch |err| {
-            self.appendAttempt(pending.failureExchange(
+            self.finalizePreResponse(
+                ticket,
                 .transport_error,
                 classifyRecordedError(err),
-            ));
-            pending_owned = false;
-            reservation_owned = false;
+            );
             return err;
         };
         errdefer response.deinit();
-        var exchange = ownedExchangeFromResponse(
+        const owned_response = ownedResponseFromResponse(
             self.allocator,
-            &pending,
             &response,
             response.body,
         ) catch |err| {
-            self.poisonAttempt();
-            reservation_owned = false;
+            self.poisonAttempt(ticket);
             return err;
         };
-        pending_owned = false;
-        errdefer exchange.deinit(self.allocator);
-        self.appendAttempt(exchange);
-        reservation_owned = false;
+        self.finalizeResponse(ticket, owned_response, .response, null);
         return response;
     }
 
@@ -860,7 +934,7 @@ pub const RecordingTransport = struct {
         options: core.http.OpenOptions,
     ) !*core.http.HttpOperation {
         const self: *RecordingTransport = @ptrCast(@alignCast(context));
-        if (self.poisoned) return error.IncompleteRecording;
+        try self.ensureCanDispatch();
         if (options.body != null and request.body != null)
             return error.MultipleRequestBodies;
         try checkCancelled(options.cancellation);
@@ -875,9 +949,8 @@ pub const RecordingTransport = struct {
         );
         var pending_owned = true;
         defer if (pending_owned) pending.deinit(self.allocator);
-        try self.reserveAttempt();
-        var reservation_owned = true;
-        errdefer if (reservation_owned) self.releaseAttempt();
+        const ticket = try self.reserveAttempt(&pending);
+        pending_owned = false;
 
         var inner_options = options;
         var request_capture: CapturingReader = undefined;
@@ -901,31 +974,28 @@ pub const RecordingTransport = struct {
             ) catch |err| {
                 if (has_capture) {
                     if (request_capture.bookkeeping_failed) {
-                        self.poisonAttempt();
-                        reservation_owned = false;
+                        self.poisonAttempt(ticket);
                         return error.OutOfMemory;
                     }
-                    pending.body = request_capture.toOwnedSlice() catch |capture_err| {
-                        self.poisonAttempt();
-                        reservation_owned = false;
+                    const captured = request_capture.toOwnedSlice() catch |capture_err| {
+                        self.poisonAttempt(ticket);
                         return capture_err;
                     };
+                    self.setRequestBody(ticket, captured);
                     if (request_capture.failure) |failure| {
-                        self.appendAttempt(pending.failureExchange(
+                        self.finalizePreResponse(
+                            ticket,
                             .open_error,
                             classifyRecordedError(failure),
-                        ));
-                        pending_owned = false;
-                        reservation_owned = false;
+                        );
                         return failure;
                     }
                 }
-                self.appendAttempt(pending.failureExchange(
+                self.finalizePreResponse(
+                    ticket,
                     .open_error,
                     classifyRecordedError(err),
-                ));
-                pending_owned = false;
-                reservation_owned = false;
+                );
                 return err;
             };
             break :blk operation;
@@ -934,17 +1004,15 @@ pub const RecordingTransport = struct {
                 self.inner.context,
                 request,
             ) catch |err| {
-                self.appendAttempt(pending.failureExchange(
+                self.finalizePreResponse(
+                    ticket,
                     .open_error,
                     classifyRecordedError(err),
-                ));
-                pending_owned = false;
-                reservation_owned = false;
+                );
                 return err;
             };
             const operation = BufferedInnerOperation.create(response) catch |err| {
-                self.poisonAttempt();
-                reservation_owned = false;
+                self.poisonAttempt(ticket);
                 return err;
             };
             break :blk operation;
@@ -956,36 +1024,31 @@ pub const RecordingTransport = struct {
 
         if (has_capture) {
             if (request_capture.bookkeeping_failed) {
-                self.poisonAttempt();
-                reservation_owned = false;
+                self.poisonAttempt(ticket);
                 return error.OutOfMemory;
             }
-            pending.body = request_capture.toOwnedSlice() catch |err| {
-                self.poisonAttempt();
-                reservation_owned = false;
+            const captured = request_capture.toOwnedSlice() catch |err| {
+                self.poisonAttempt(ticket);
                 return err;
             };
+            self.setRequestBody(ticket, captured);
             if (request_capture.failure) |failure| {
-                self.appendAttempt(pending.failureExchange(
+                self.finalizePreResponse(
+                    ticket,
                     .open_error,
                     classifyRecordedError(failure),
-                ));
-                pending_owned = false;
-                reservation_owned = false;
+                );
                 return failure;
             }
         }
         const operation = RecordingOperation.create(
             self,
             inner_operation,
-            pending,
+            ticket,
         ) catch |err| {
-            self.poisonAttempt();
-            reservation_owned = false;
+            self.poisonAttempt(ticket);
             return err;
         };
-        pending_owned = false;
-        reservation_owned = false;
         return operation;
     }
 };
@@ -1034,14 +1097,9 @@ const PendingRequest = struct {
         self.* = undefined;
     }
 
-    fn failureExchange(
+    fn intoSlot(
         self: *PendingRequest,
-        outcome: RecordedOutcome,
-        category: RecordedErrorCategory,
     ) OwnedExchange {
-        std.debug.assert(
-            outcome == .transport_error or outcome == .open_error,
-        );
         const exchange = OwnedExchange{
             .request_method = self.method,
             .request_url = self.url,
@@ -1050,8 +1108,7 @@ const PendingRequest = struct {
             .response_status = 0,
             .response_body = self.empty_response_body,
             .response_headers = self.empty_response_headers,
-            .outcome = outcome,
-            .error_category = category,
+            .resolved = false,
         };
         self.* = undefined;
         return exchange;
@@ -1109,14 +1166,14 @@ const RecordingOperation = struct {
     allocator: std.mem.Allocator,
     owner: *RecordingTransport,
     inner: *core.http.HttpOperation,
-    pending: ?PendingRequest,
+    ticket: ?usize,
     attempt_headers: ?[]HeaderPair,
     response_reader: CapturingReader,
 
     fn create(
         owner: *RecordingTransport,
         inner: *core.http.HttpOperation,
-        pending_value: PendingRequest,
+        ticket: usize,
     ) !*core.http.HttpOperation {
         const self = try owner.allocator.create(RecordingOperation);
         errdefer owner.allocator.destroy(self);
@@ -1135,7 +1192,7 @@ const RecordingOperation = struct {
             .allocator = owner.allocator,
             .owner = owner,
             .inner = inner,
-            .pending = pending_value,
+            .ticket = ticket,
             .attempt_headers = attempt_headers,
             .response_reader = undefined,
         };
@@ -1159,40 +1216,36 @@ const RecordingOperation = struct {
         outcome: RecordedOutcome,
         category: ?RecordedErrorCategory,
     ) void {
-        const pending = self.pending orelse return;
-        self.pending = null;
+        const ticket = self.ticket orelse return;
+        self.ticket = null;
         const response_headers = self.attempt_headers.?;
         self.attempt_headers = null;
         const captured = self.response_reader.captured.toArrayList();
         const allocation = captured.allocatedSlice();
-        self.allocator.free(pending.empty_response_body);
-        self.allocator.free(pending.empty_response_headers);
-        self.owner.appendAttempt(.{
-            .request_method = pending.method,
-            .request_url = pending.url,
-            .request_headers = pending.headers,
-            .request_body = pending.body,
-            .response_status = self.operation.status_code,
-            .response_body = allocation[0..captured.items.len],
-            .response_body_allocation = if (allocation.len == 0)
-                null
-            else
-                allocation,
-            .response_headers = response_headers,
-            .outcome = outcome,
-            .error_category = category,
-        });
+        self.owner.finalizeResponse(
+            ticket,
+            .{
+                .status = self.operation.status_code,
+                .body = allocation[0..captured.items.len],
+                .body_allocation = if (allocation.len == 0)
+                    null
+                else
+                    allocation,
+                .headers = response_headers,
+            },
+            outcome,
+            category,
+        );
     }
 
     fn poisonIncompleteAttempt(self: *RecordingOperation) void {
-        if (self.pending) |*pending| {
-            pending.deinit(self.allocator);
-            self.pending = null;
+        if (self.ticket) |ticket| {
+            self.ticket = null;
             if (self.attempt_headers) |headers| {
                 deinitHeaderPairs(self.allocator, headers);
                 self.attempt_headers = null;
             }
-            self.owner.poisonAttempt();
+            self.owner.poisonAttempt(ticket);
         }
     }
 
@@ -1298,10 +1351,7 @@ const RecordingOperation = struct {
         const self: *RecordingOperation =
             @alignCast(@fieldParentPtr("operation", operation));
         self.inner.deinit();
-        if (self.pending) |*pending| {
-            self.owner.poisonAttempt();
-            pending.deinit(self.allocator);
-        }
+        if (self.ticket != null) self.poisonIncompleteAttempt();
         if (self.attempt_headers) |headers| {
             deinitHeaderPairs(self.allocator, headers);
         }
@@ -1322,7 +1372,6 @@ const CapturingReader = struct {
     source_operation: ?*core.http.HttpOperation,
     failure: ?anyerror = null,
     bookkeeping_failed: bool = false,
-    reader_buffer: [64]u8 = undefined,
     scratch: [4096]u8 = undefined,
 
     fn init(
@@ -1339,7 +1388,7 @@ const CapturingReader = struct {
         };
         self.interface = .{
             .vtable = &.{ .stream = &stream },
-            .buffer = &self.reader_buffer,
+            .buffer = &.{},
             .seek = 0,
             .end = 0,
         };
@@ -1495,12 +1544,18 @@ fn cloneResponseHeaders(
     return result;
 }
 
-fn ownedExchangeFromResponse(
+const OwnedResponse = struct {
+    status: u16,
+    body: []u8,
+    body_allocation: ?[]u8 = null,
+    headers: []HeaderPair,
+};
+
+fn ownedResponseFromResponse(
     allocator: std.mem.Allocator,
-    pending: *PendingRequest,
     response: *const core.http.Response,
     response_body: []const u8,
-) !OwnedExchange {
+) !OwnedResponse {
     const body = try allocator.dupe(u8, response_body);
     errdefer allocator.free(body);
     const headers = try cloneResponseHeaders(
@@ -1508,19 +1563,11 @@ fn ownedExchangeFromResponse(
         &response.headers,
         &response.response_headers,
     );
-    allocator.free(pending.empty_response_body);
-    allocator.free(pending.empty_response_headers);
-    const exchange = OwnedExchange{
-        .request_method = pending.method,
-        .request_url = pending.url,
-        .request_headers = pending.headers,
-        .request_body = pending.body,
-        .response_status = response.status_code,
-        .response_body = body,
-        .response_headers = headers,
+    return .{
+        .status = response.status_code,
+        .body = body,
+        .headers = headers,
     };
-    pending.* = undefined;
-    return exchange;
 }
 
 fn parseExchange(
@@ -3825,6 +3872,8 @@ fn sanitizeQueryValueAlloc(
             else => return err,
         };
         defer allocator.free(sanitized_nested);
+        if (std.mem.eql(u8, current, sanitized_nested))
+            return allocator.dupe(u8, encoded);
         return percentEncodeQueryValueAlloc(allocator, sanitized_nested);
     }
 
@@ -4174,6 +4223,8 @@ const FailureStageTransport = struct {
         open,
         body,
         finish,
+        cancel_open,
+        cancel_body,
     },
     call_count: usize = 0,
 
@@ -4209,13 +4260,24 @@ const FailureStageTransport = struct {
         self.call_count += 1;
         if (self.mode == .open and self.call_count == 1)
             return error.ConnectionResetByPeer;
+        if (self.mode == .cancel_open and self.call_count == 1) {
+            var prefix: [3]u8 = undefined;
+            try options.body.?.reader.readSliceAll(&prefix);
+            return error.OperationCancelled;
+        }
         if (self.call_count == 1 and
-            (self.mode == .body or self.mode == .finish))
+            (self.mode == .body or
+                self.mode == .finish or
+                self.mode == .cancel_body))
         {
             return FailureStageOperation.create(
                 self.allocator,
-                self.mode == .body,
+                self.mode == .body or self.mode == .cancel_body,
                 self.mode == .finish,
+                if (self.mode == .cancel_body)
+                    error.OperationCancelled
+                else
+                    error.ConnectionResetByPeer,
             );
         }
         const transport = self.inner.asTransport();
@@ -4233,11 +4295,13 @@ const FailureStageOperation = struct {
     reader: FailureStageReader,
     fail_body: bool,
     fail_finish: bool,
+    failure: anyerror,
 
     fn create(
         allocator: std.mem.Allocator,
         fail_body: bool,
         fail_finish: bool,
+        failure: anyerror,
     ) !*core.http.HttpOperation {
         const self = try allocator.create(FailureStageOperation);
         errdefer allocator.destroy(self);
@@ -4251,6 +4315,7 @@ const FailureStageOperation = struct {
             .reader = undefined,
             .fail_body = fail_body,
             .fail_finish = fail_finish,
+            .failure = failure,
         };
         self.reader.init(if (fail_body) "partial" else "", fail_body);
         self.operation = .{
@@ -4270,7 +4335,7 @@ const FailureStageOperation = struct {
     fn finish(operation: *core.http.HttpOperation) !void {
         const self: *FailureStageOperation =
             @alignCast(@fieldParentPtr("operation", operation));
-        if (self.fail_finish) return error.ConnectionResetByPeer;
+        if (self.fail_finish) return self.failure;
     }
 
     fn abort(_: *core.http.HttpOperation) void {}
@@ -4278,7 +4343,7 @@ const FailureStageOperation = struct {
     fn bodyError(operation: *const core.http.HttpOperation) ?anyerror {
         const self: *const FailureStageOperation =
             @alignCast(@fieldParentPtr("operation", operation));
-        return if (self.fail_body) error.ConnectionResetByPeer else null;
+        return if (self.fail_body) self.failure else null;
     }
 
     fn deinit(operation: *core.http.HttpOperation) void {
@@ -4358,6 +4423,34 @@ const FailureStageReader = struct {
         }
         if (total != 0) return total;
         return error.EndOfStream;
+    }
+};
+
+const ReplayableRequestBody = struct {
+    bytes: []const u8,
+    reader: std.Io.Reader,
+    rewind_count: usize = 0,
+
+    fn init(bytes: []const u8) ReplayableRequestBody {
+        return .{
+            .bytes = bytes,
+            .reader = std.Io.Reader.fixed(bytes),
+        };
+    }
+
+    fn streaming(self: *ReplayableRequestBody) core.http.StreamingRequestBody {
+        return core.http.StreamingRequestBody.chunked(&self.reader).withRewind(
+            self,
+            &rewind,
+        );
+    }
+
+    fn rewind(context: *anyopaque) !*std.Io.Reader {
+        const self: *ReplayableRequestBody =
+            @ptrCast(@alignCast(context));
+        self.rewind_count += 1;
+        self.reader = std.Io.Reader.fixed(self.bytes);
+        return &self.reader;
     }
 };
 
@@ -4894,6 +4987,86 @@ test "recording wraps streaming operations and copies descriptor by value" {
     try std.testing.expectEqual(@as(usize, 1), mock.stream_deinit_count);
 }
 
+test "overlapping attempts retain dispatch order and block serialization" {
+    var mock = core.http.MockTransport.init(
+        std.testing.allocator,
+        200,
+        "",
+    );
+    defer mock.deinit();
+    var recorder = RecordingTransport.init(
+        std.testing.allocator,
+        mock.asTransport(),
+    );
+    defer recorder.deinit();
+
+    var request_a = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://example.test/a",
+    );
+    defer request_a.deinit();
+    var request_b = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://example.test/b",
+    );
+    defer request_b.deinit();
+    var request_c = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://example.test/c",
+    );
+    defer request_c.deinit();
+
+    var operation_a = try recorder.asTransport().open(&request_a, .{});
+    var operation_b = try recorder.asTransport().open(&request_b, .{});
+    var response_c = try recorder.asTransport().send(&request_c);
+    response_c.deinit();
+
+    var slots = recorder.getExchanges();
+    try std.testing.expectEqual(@as(usize, 3), slots.len);
+    try std.testing.expectEqualStrings(request_a.url, slots[0].request_url);
+    try std.testing.expectEqualStrings(request_b.url, slots[1].request_url);
+    try std.testing.expectEqualStrings(request_c.url, slots[2].request_url);
+    try std.testing.expect(!slots[0].resolved);
+    try std.testing.expect(!slots[1].resolved);
+    try std.testing.expect(slots[2].resolved);
+    try std.testing.expect(!recorder.isComplete());
+    try std.testing.expectError(
+        error.IncompleteRecording,
+        recorder.toJson(std.testing.allocator),
+    );
+
+    try operation_b.finish();
+    operation_b.deinit();
+    slots = recorder.getExchanges();
+    try std.testing.expect(!slots[0].resolved);
+    try std.testing.expect(slots[1].resolved);
+    try std.testing.expect(slots[2].resolved);
+    try std.testing.expect(!recorder.isComplete());
+
+    try operation_a.finish();
+    operation_a.deinit();
+    try std.testing.expect(recorder.isComplete());
+    const json = try recorder.toJson(std.testing.allocator);
+    defer std.testing.allocator.free(json);
+    var parsed = try parseJson(std.testing.allocator, json);
+    defer parsed.deinit();
+    try std.testing.expectEqualStrings(
+        request_a.url,
+        parsed.asSlice()[0].request_url,
+    );
+    try std.testing.expectEqualStrings(
+        request_b.url,
+        parsed.asSlice()[1].request_url,
+    );
+    try std.testing.expectEqualStrings(
+        request_c.url,
+        parsed.asSlice()[2].request_url,
+    );
+}
+
 test "recording preserves buffered open fallback" {
     var mock = core.http.MockTransport.init(
         std.testing.allocator,
@@ -5250,6 +5423,166 @@ test "finish errors record and replay before retry success" {
     try std.testing.expectEqualStrings("done", replayed_body);
     try replayed_retry.finish();
     replayed_retry.deinit();
+}
+
+test "mid-upload cancellation remains terminal through playback retry policy" {
+    var mock = core.http.MockTransport.init(
+        std.testing.allocator,
+        200,
+        "",
+    );
+    defer mock.deinit();
+    var cancelling = FailureStageTransport{
+        .allocator = std.testing.allocator,
+        .inner = &mock,
+        .mode = .cancel_open,
+    };
+    var recorder = RecordingTransport.initWithOptions(
+        std.testing.allocator,
+        cancelling.asTransport(),
+        .{ .bodyPolicyFn = &inspectKnownSafeBody },
+    );
+    defer recorder.deinit();
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    var retry = core.http.RetryPolicy.init();
+    retry.initial_delay_ms = 0;
+    retry.max_delay_ms = 0;
+    retry.max_retries = 2;
+    var policies = [_]*core.http.HttpPolicy{retry.asPolicy()};
+    var pipeline = core.http.HttpPipeline.init(
+        initHttpRuntime(recorder.asTransport(), crypto.asProvider()),
+        &policies,
+    );
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .POST,
+        "https://example.test/upload-cancel",
+    );
+    defer request.deinit();
+    var upload = ReplayableRequestBody.init("payload");
+    try std.testing.expectError(
+        error.OperationCancelled,
+        pipeline.open(&request, .{ .body = upload.streaming() }),
+    );
+    try std.testing.expectEqual(@as(usize, 1), cancelling.call_count);
+    try std.testing.expectEqual(@as(usize, 0), upload.rewind_count);
+
+    const json = try recorder.toJson(std.testing.allocator);
+    defer std.testing.allocator.free(json);
+    var parsed = try parseJson(std.testing.allocator, json);
+    defer parsed.deinit();
+    try std.testing.expectEqual(
+        RecordedOutcome.open_error,
+        parsed.asSlice()[0].outcome,
+    );
+    try std.testing.expectEqual(
+        RecordedErrorCategory.cancelled,
+        parsed.asSlice()[0].error_category.?,
+    );
+    try std.testing.expectEqualStrings(
+        "pay",
+        parsed.asSlice()[0].request_body.?,
+    );
+
+    var playback = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    var playback_crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    var playback_retry = core.http.RetryPolicy.init();
+    playback_retry.initial_delay_ms = 0;
+    playback_retry.max_delay_ms = 0;
+    playback_retry.max_retries = 2;
+    var playback_policies = [_]*core.http.HttpPolicy{
+        playback_retry.asPolicy(),
+    };
+    var playback_pipeline = core.http.HttpPipeline.init(
+        initHttpRuntime(
+            playback.asTransport(),
+            playback_crypto.asProvider(),
+        ),
+        &playback_policies,
+    );
+    var replay_upload = ReplayableRequestBody.init("payload");
+    try std.testing.expectError(
+        error.OperationCancelled,
+        playback_pipeline.open(
+            &request,
+            .{ .body = replay_upload.streaming() },
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 1), playback.index);
+    try std.testing.expectEqual(@as(usize, 0), replay_upload.rewind_count);
+    try std.testing.expectEqual(@as(usize, 3), replay_upload.reader.seek);
+}
+
+test "response body cancellation replays exact terminal error once" {
+    var mock = core.http.MockTransport.init(
+        std.testing.allocator,
+        200,
+        "",
+    );
+    defer mock.deinit();
+    var cancelling = FailureStageTransport{
+        .allocator = std.testing.allocator,
+        .inner = &mock,
+        .mode = .cancel_body,
+    };
+    var recorder = RecordingTransport.initWithOptions(
+        std.testing.allocator,
+        cancelling.asTransport(),
+        .{ .bodyPolicyFn = &inspectKnownSafeBody },
+    );
+    defer recorder.deinit();
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://example.test/body-cancel",
+    );
+    defer request.deinit();
+    var operation = try recorder.asTransport().open(&request, .{});
+    var partial: [7]u8 = undefined;
+    try (try operation.reader()).readSliceAll(&partial);
+    var extra: [1]u8 = undefined;
+    try std.testing.expectError(
+        error.ReadFailed,
+        (try operation.reader()).readSliceAll(&extra),
+    );
+    try std.testing.expectEqual(
+        error.OperationCancelled,
+        operation.bodyError().?,
+    );
+    operation.abort();
+    operation.deinit();
+    try std.testing.expectEqual(@as(usize, 1), cancelling.call_count);
+
+    const json = try recorder.toJson(std.testing.allocator);
+    defer std.testing.allocator.free(json);
+    var parsed = try parseJson(std.testing.allocator, json);
+    defer parsed.deinit();
+    try std.testing.expectEqual(
+        RecordedErrorCategory.cancelled,
+        parsed.asSlice()[0].error_category.?,
+    );
+    var playback = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    var replayed = try playback.asTransport().open(&request, .{});
+    var replayed_partial: [7]u8 = undefined;
+    try (try replayed.reader()).readSliceAll(&replayed_partial);
+    try std.testing.expectEqualStrings("partial", &replayed_partial);
+    try std.testing.expectError(
+        error.ReadFailed,
+        (try replayed.reader()).readSliceAll(&extra),
+    );
+    try std.testing.expectEqual(
+        error.OperationCancelled,
+        replayed.bodyError().?,
+    );
+    replayed.abort();
+    replayed.deinit();
+    try std.testing.expectEqual(@as(usize, 1), playback.index);
 }
 
 test "recording stores abort and cancel as completed raw attempts" {
@@ -6645,6 +6978,100 @@ test "nested signed URI preserves exact host path and nonsensitive fields" {
     }
 }
 
+test "safe nested URI preserves caller encoding exactly" {
+    const urls = [_][]const u8{
+        "https://example.test/callback?return=" ++
+            "https%3a%2f%2fstorage.example%2fitem",
+        "https://example.test/callback?return=" ++
+            "https%3A%2F%2Fstorage.example%2F%7Euser",
+        "https://example.test/callback?return=" ++
+            "https%3A%2F%2Fstorage.example%2Fitem%3Flabel%3Da+b",
+        "https://example.test/callback?return=" ++
+            "https%3A%2F%2Fstorage.example%2Fitem%3Flabel%3Da%20b",
+    };
+    var sequence = core.http.SequenceMockTransport.init(
+        std.testing.allocator,
+        &.{
+            .{ .status = 200, .body = "" },
+            .{ .status = 200, .body = "" },
+            .{ .status = 200, .body = "" },
+            .{ .status = 200, .body = "" },
+        },
+    );
+    var recorder = RecordingTransport.init(
+        std.testing.allocator,
+        sequence.asTransport(),
+    );
+    defer recorder.deinit();
+    for (urls) |url| {
+        var request = core.http.Request.init(
+            std.testing.allocator,
+            .GET,
+            url,
+        );
+        defer request.deinit();
+        var response = try recorder.asTransport().send(&request);
+        response.deinit();
+    }
+    const json = try recorder.toJson(std.testing.allocator);
+    defer std.testing.allocator.free(json);
+    var parsed = try parseJson(std.testing.allocator, json);
+    defer parsed.deinit();
+    for (urls, parsed.asSlice()) |expected, exchange| {
+        try std.testing.expectEqualStrings(expected, exchange.request_url);
+    }
+
+    var playback = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    for (urls) |url| {
+        var request = core.http.Request.init(
+            std.testing.allocator,
+            .GET,
+            url,
+        );
+        defer request.deinit();
+        var response = try playback.asTransport().send(&request);
+        response.deinit();
+    }
+
+    for ([_]struct {
+        index: usize,
+        different: []const u8,
+    }{
+        .{
+            .index = 0,
+            .different = "https://example.test/callback?return=" ++
+                "https%3A%2F%2Fstorage.example%2Fitem",
+        },
+        .{
+            .index = 1,
+            .different = "https://example.test/callback?return=" ++
+                "https%3A%2F%2Fstorage.example%2F~user",
+        },
+        .{
+            .index = 2,
+            .different = urls[3],
+        },
+    }) |case| {
+        var mismatch_playback = PlaybackTransport.init(
+            std.testing.allocator,
+            parsed.asSlice()[case.index..],
+        );
+        var mismatch = core.http.Request.init(
+            std.testing.allocator,
+            .GET,
+            case.different,
+        );
+        defer mismatch.deinit();
+        try std.testing.expectError(
+            error.UrlMismatch,
+            mismatch_playback.asTransport().send(&mismatch),
+        );
+    }
+}
+
 test "pathless absolute and network-path URLs sanitize without range failures" {
     var mock = core.http.MockTransport.init(
         std.testing.allocator,
@@ -7216,7 +7643,7 @@ test "location headers preserve replayable URLs and rotated SAS next exchanges" 
         ).?,
     );
     try std.testing.expectEqualStrings(
-        "/callback?return=https%3A%2F%2Fsafe.example%2Fnext&mode=one",
+        "/callback?return=https://safe.example/next&mode=one",
         getHeaderPair(
             recordings[1].response_headers,
             "Content-Location",

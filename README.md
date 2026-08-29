@@ -12,7 +12,9 @@ playback HTTP transports.
 Transport descriptors are copied by value while their contexts are borrowed.
 Keep playback/recording transport values, wrapped transport contexts, crypto
 provider contexts, and any open operations alive for the full lifetime stated
-by their API documentation. These testing transports are caller-serialized.
+by their API documentation. Playback is caller-serialized. Recording attempt
+reservation/finalization is internally synchronized; callers must still
+synchronize borrowed `getExchanges` slices and policy contexts.
 
 Construct a runtime with independently selected dependencies:
 
@@ -32,7 +34,9 @@ duplicates are preserved.
 stable outcome stage and error category for transport/send, open, response-body,
 and finish failures; playback reproduces the failure at that stage without
 persisting backend-specific error identities. Version 2 successful-response
-recordings remain readable. Accepted request and response bodies are
+recordings remain readable. The stable cancellation category replays as
+Core's terminal `OperationCancelled` error so retry policy behavior does not
+diverge. Accepted request and response bodies are
 represented losslessly as base64 with an explicit encoding field. Every
 non-empty body is rejected by default and requires an explicit caller
 body-policy decision. Approved textual and binary bodies, including NUL and
@@ -54,11 +58,13 @@ observed before that terminal event. A body failure retains its partial bytes
 and replays the error after those bytes; a finish failure replays only from
 `finish`.
 
-Request metadata and exchange capacity are allocated before dispatch.
-Bookkeeping allocation failure after dispatch or deinitializing an open
-operation without a terminal event poisons the recorder. `isComplete` then
-returns false, subsequent dispatch is rejected, and `toJson` returns
-`IncompleteRecording` rather than silently emitting a divergent sequence.
+Request metadata and an ordered slot are allocated before dispatch. Each
+attempt finalizes its own ticket, so overlapping operations remain in dispatch
+order even when they complete out of order. Active unresolved slots make
+`isComplete` false and `toJson` returns `IncompleteRecording`. Bookkeeping
+allocation failure after dispatch or deinitializing an open operation without
+a terminal event additionally poisons the recorder and rejects subsequent
+dispatch rather than silently emitting a divergent sequence.
 
 A redirect allocation failure still consumed a real transport attempt. A
 later caller retry therefore requires the next recorded attempt, just as live
@@ -88,11 +94,13 @@ fully redacted.
 Credential source URL headers such as `x-ms-copy-source` remain fully redacted.
 URL sanitization parses the URI reference from its start, percent-decodes path
 and query components through a bounded recursive decoder, and recursively
-sanitizes URI-valued parameters. Nested URIs are re-encoded with their
-host/path/nonsensitive fields preserved and exact while only nested credential
-fields are redacted. Credential-bearing paths are rejected. Safe fragments
-are preserved in recorded URL headers; Core strips them when constructing the
-redirected HTTP request. Recognized sensitive Location fragments are stripped
+sanitizes URI-valued parameters. Safe nested URIs retain the caller's original
+encoding exactly. When nested credentials require redaction, the nested URI is
+re-encoded with its host/path/nonsensitive fields preserved and exact while
+only credential fields are redacted. Credential-bearing paths are rejected.
+Safe fragments are preserved in recorded URL headers; Core strips them when
+constructing the redirected HTTP request. Recognized sensitive Location
+fragments are stripped
 while preserving the replayable pre-fragment target; malformed location
 fragments fail closed. Relative redirects such as
 `/callback?return=https://...` remain replayable when their decoded values are
