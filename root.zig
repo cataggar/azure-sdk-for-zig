@@ -268,7 +268,9 @@ pub fn initHttpRuntime(
 /// descriptor copies and open operations are deinitialized. Each recording is
 /// one raw transport invocation and is consumed when its recorded pre-response
 /// error is returned or its response head has been allocated, including
-/// redirect and retry attempts.
+/// redirect and retry attempts. A cooperative upload cancellation consumes a
+/// matching recorded cancelled-open prefix; preflight cancellation and
+/// cancellation against a non-cancelled attempt do not advance playback.
 pub const PlaybackTransport = struct {
     recordings: []const RecordedExchange,
     index: usize = 0,
@@ -356,9 +358,19 @@ pub const PlaybackTransport = struct {
                     captured = try readRequestBodyPrefix(
                         self.allocator,
                         streaming,
-                        options.cancellation,
                         expected_body.len,
                     );
+                    if (isCancelled(options.cancellation)) {
+                        if (exchange.error_category == .cancelled) {
+                            try matchRequest(
+                                exchange,
+                                request,
+                                captured.?,
+                            );
+                            self.index += 1;
+                        }
+                        return error.OperationCancelled;
+                    }
                     break :blk captured.?;
                 }
             }
@@ -894,6 +906,8 @@ pub const RecordingTransport = struct {
     /// content.
     /// Generated URL wildcard locations are serialized as explicit templates;
     /// literal `REDACTED` URL values remain exact-match data.
+    /// Non-UTF-8 URL and header bytes use explicit lossless base64 metadata
+    /// objects rather than being emitted as invalid JSON strings.
     ///
     /// Structurally recognized credential-bearing JSON, form, connection
     /// string, XML, and private-key bodies cause
@@ -965,7 +979,11 @@ pub const RecordingTransport = struct {
                 exchange.request_url,
             );
             defer allocator.free(sanitized_request_url);
-            try writeJsonString(writer, sanitized_request_url);
+            try writeMetadataBytes(
+                writer,
+                allocator,
+                sanitized_request_url,
+            );
             try writer.writeAll(",\"request_url_redaction_template\":");
             if (!std.mem.eql(
                 u8,
@@ -979,7 +997,7 @@ pub const RecordingTransport = struct {
                 );
                 defer allocator.free(template);
                 if (std.mem.indexOfScalar(u8, template, 0) != null)
-                    try writeJsonString(writer, template)
+                    try writeMetadataBytes(writer, allocator, template)
                 else
                     try writer.writeAll("null");
             } else {
@@ -1724,11 +1742,11 @@ fn parseExchange(
         if (format_version == 2 or
         object.get("request_url_redaction_template") == null)
             null
-        else switch (object.get("request_url_redaction_template").?) {
-            .null => null,
-            .string => |template| try allocator.dupe(u8, template),
-            else => return error.InvalidRecordingJson,
-        };
+        else
+            try parseOptionalMetadataBytes(
+                allocator,
+                object.get("request_url_redaction_template").?,
+            );
     errdefer if (request_url_redaction_template) |template|
         allocator.free(template);
     const request_headers_value = object.get("request_headers") orelse
@@ -1736,7 +1754,7 @@ fn parseExchange(
     const request_body_value = object.get("request_body") orelse
         return error.InvalidRecordingJson;
     const method = try parseMethod(try jsonString(method_value));
-    const request_url = try allocator.dupe(u8, try jsonString(request_url_value));
+    const request_url = try parseMetadataBytes(allocator, request_url_value);
     errdefer allocator.free(request_url);
     if (request_url_redaction_template) |template|
         try validateUrlRedactionTemplate(request_url, template);
@@ -1865,18 +1883,14 @@ fn parseHeaders(
         } else false;
         const url_redaction_template: ?[]u8 =
             if (object.get("url_redaction_template")) |template_value|
-                switch (template_value) {
-                    .null => null,
-                    .string => |template| try allocator.dupe(u8, template),
-                    else => return error.InvalidRecordingJson,
-                }
+                try parseOptionalMetadataBytes(allocator, template_value)
             else
                 null;
         errdefer if (url_redaction_template) |template|
             allocator.free(template);
-        header.name = try allocator.dupe(u8, try jsonString(name_value));
+        header.name = try parseMetadataBytes(allocator, name_value);
         errdefer allocator.free(header.name);
-        header.value = try allocator.dupe(u8, try jsonString(field_value));
+        header.value = try parseMetadataBytes(allocator, field_value);
         errdefer allocator.free(header.value);
         header.redacted = redacted;
         header.url_redaction_template = url_redaction_template;
@@ -1919,6 +1933,27 @@ fn parseBody(
     std.base64.standard.Decoder.decode(decoded, encoded) catch
         return error.InvalidRecordingBody;
     return decoded;
+}
+
+fn parseMetadataBytes(
+    allocator: std.mem.Allocator,
+    value: std.json.Value,
+) ![]u8 {
+    return switch (value) {
+        .string => |bytes| allocator.dupe(u8, bytes),
+        .object => parseBody(allocator, value),
+        else => error.InvalidRecordingJson,
+    };
+}
+
+fn parseOptionalMetadataBytes(
+    allocator: std.mem.Allocator,
+    value: std.json.Value,
+) !?[]u8 {
+    return switch (value) {
+        .null => null,
+        else => try parseMetadataBytes(allocator, value),
+    };
 }
 
 fn jsonString(value: std.json.Value) ![]const u8 {
@@ -2122,24 +2157,23 @@ fn readRequestBody(
 fn readRequestBodyPrefix(
     allocator: std.mem.Allocator,
     body: core.http.StreamingRequestBody,
-    cancellation: ?*const core.http.CancellationToken,
     length: usize,
 ) ![]u8 {
     const result = try allocator.alloc(u8, length);
     errdefer allocator.free(result);
-    try checkCancelled(cancellation);
     body.reader.readSliceAll(result) catch |err| switch (err) {
         error.EndOfStream => return error.RequestBodyTooShort,
         else => return err,
     };
-    try checkCancelled(cancellation);
     return result;
 }
 
+fn isCancelled(token: ?*const core.http.CancellationToken) bool {
+    return if (token) |value| value.isCancelled() else false;
+}
+
 fn checkCancelled(token: ?*const core.http.CancellationToken) !void {
-    if (token) |value| {
-        if (value.isCancelled()) return error.OperationCancelled;
-    }
+    if (isCancelled(token)) return error.OperationCancelled;
 }
 
 fn cloneRequestHeaders(
@@ -2577,14 +2611,15 @@ fn ensureBodySafe(
 
     const xml = valid_text and identity_encoding and
         (containsIgnoreCase(content_type, "xml") or looksLikeXml(bytes));
-    if (xml and
-        (try containsSensitiveXml(allocator, bytes) or
+    if (xml) {
+        if (try inspectXmlDocument(allocator, bytes) or
             try containsSensitiveAssignment(allocator, bytes) or
             (try isStorageUserDelegationKeyExchange(allocator, context) and
                 containsIgnoreCase(bytes, "<UserDelegationKey") and
-                containsIgnoreCase(bytes, "<Value"))))
-    {
-        return error.SensitiveBodyRequiresSanitization;
+                containsIgnoreCase(bytes, "<Value")))
+        {
+            return error.SensitiveBodyRequiresSanitization;
+        }
     }
 
     if (!valid_text or
@@ -2719,17 +2754,19 @@ fn containsSensitiveMultipartPart(
         return error.UnsupportedBodySanitization;
     const outer_headers = part[0..outer_separator.start];
     var payload = part[outer_separator.end..];
-    var payload_content_type = headerValueFromBlock(
+    var payload_content_type = try headerValueFromBlockWithStartLine(
         outer_headers,
         "Content-Type",
+        false,
     );
     if (looksLikeHttpMessage(payload)) {
         const inner_separator = findHeaderSeparator(payload) orelse
             return error.UnsupportedBodySanitization;
         const inner_headers = payload[0..inner_separator.start];
-        payload_content_type = headerValueFromBlock(
+        payload_content_type = try headerValueFromBlockWithStartLine(
             inner_headers,
             "Content-Type",
+            true,
         );
         payload = payload[inner_separator.end..];
     }
@@ -2755,11 +2792,7 @@ fn containsSensitiveLoosePayload(
     const payload = std.mem.trim(u8, raw_payload, " \t\r\n");
     if (payload.len == 0) return false;
     if (try containsSensitiveScalar(allocator, payload)) return true;
-    if (try containsSensitiveXml(allocator, payload) or
-        try containsSensitiveAssignment(allocator, payload))
-    {
-        return true;
-    }
+    if (try containsSensitiveAssignment(allocator, payload)) return true;
     if (looksLikeStructuredJson(payload)) {
         const parsed = std.json.parseFromSlice(
             std.json.Value,
@@ -2775,7 +2808,9 @@ fn containsSensitiveLoosePayload(
             return true;
         return false;
     }
-    if (looksLikeXml(payload)) return false;
+    if (looksLikeXml(payload))
+        return inspectXmlDocument(allocator, payload);
+    if (try containsSensitiveXml(allocator, payload)) return true;
     if (std.mem.indexOfAny(u8, payload, "{}[]<>") != null)
         return error.UnsupportedBodySanitization;
     return false;
@@ -2857,19 +2892,47 @@ fn multipartBoundary(content_type: []const u8) ![]const u8 {
     return error.UnsupportedBodySanitization;
 }
 
-fn headerValueFromBlock(
+fn headerValueFromBlockWithStartLine(
     headers: []const u8,
     expected_name: []const u8,
-) ?[]const u8 {
+    allow_http_start_line: bool,
+) !?[]const u8 {
     var lines = std.mem.splitScalar(u8, headers, '\n');
+    var line_index: usize = 0;
+    var result: ?[]const u8 = null;
     while (lines.next()) |raw_line| {
-        const line = std.mem.trim(u8, raw_line, " \t\r");
-        const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
-        const name = std.mem.trim(u8, line[0..colon], " \t");
+        if (raw_line.len != 0 and
+            (raw_line[0] == ' ' or raw_line[0] == '\t'))
+        {
+            return error.UnsupportedBodySanitization;
+        }
+        const line = std.mem.trimEnd(u8, raw_line, "\r");
+        if (std.mem.indexOfScalar(u8, line, '\r') != null)
+            return error.UnsupportedBodySanitization;
+        if (line.len == 0) return error.UnsupportedBodySanitization;
+        const colon = std.mem.indexOfScalar(u8, line, ':') orelse {
+            if (allow_http_start_line and line_index == 0 and
+                looksLikeHttpMessage(line))
+            {
+                line_index += 1;
+                continue;
+            }
+            return error.UnsupportedBodySanitization;
+        };
+        const name = line[0..colon];
+        if (name.len == 0) return error.UnsupportedBodySanitization;
+        for (name) |byte| {
+            if (byte <= 0x20 or byte >= 0x7f or
+                std.mem.indexOfScalar(u8, "()<>@,;:\\\"/[]?={}", byte) != null)
+            {
+                return error.UnsupportedBodySanitization;
+            }
+        }
         if (std.ascii.eqlIgnoreCase(name, expected_name))
-            return std.mem.trim(u8, line[colon + 1 ..], " \t");
+            result = std.mem.trim(u8, line[colon + 1 ..], " \t");
+        line_index += 1;
     }
-    return null;
+    return result;
 }
 
 fn containsSensitiveHttpHeaderLine(
@@ -3630,6 +3693,290 @@ fn percentDecodeFieldName(
     return buffer[0..output_index];
 }
 
+const XmlInspector = struct {
+    allocator: std.mem.Allocator,
+    bytes: []const u8,
+    index: usize = 0,
+    sensitive: bool = false,
+
+    fn inspect(self: *XmlInspector) !bool {
+        self.skipWhitespace();
+        if (std.mem.startsWith(u8, self.bytes[self.index..], "<?xml")) {
+            try self.parseProcessingInstruction();
+            self.skipWhitespace();
+        }
+        while (try self.parseMisc()) self.skipWhitespace();
+        if (self.index >= self.bytes.len or self.bytes[self.index] != '<')
+            return error.UnsupportedBodySanitization;
+        try self.parseElement(0);
+        self.skipWhitespace();
+        while (try self.parseMisc()) self.skipWhitespace();
+        if (self.index != self.bytes.len)
+            return error.UnsupportedBodySanitization;
+        return self.sensitive;
+    }
+
+    fn parseElement(self: *XmlInspector, depth: usize) !void {
+        if (depth >= 128 or
+            self.index >= self.bytes.len or
+            self.bytes[self.index] != '<' or
+            std.mem.startsWith(u8, self.bytes[self.index..], "</") or
+            std.mem.startsWith(u8, self.bytes[self.index..], "<!") or
+            std.mem.startsWith(u8, self.bytes[self.index..], "<?"))
+        {
+            return error.UnsupportedBodySanitization;
+        }
+        self.index += 1;
+        const element_name = try self.parseName();
+        if (isSensitiveBodyField(xmlLocalName(element_name)))
+            self.sensitive = true;
+
+        var attribute_names: [64][]const u8 = undefined;
+        var attribute_count: usize = 0;
+        while (true) {
+            self.skipWhitespace();
+            if (self.consume("/>")) return;
+            if (self.consume(">")) break;
+            if (attribute_count == attribute_names.len)
+                return error.UnsupportedBodySanitization;
+            const attribute_name = try self.parseName();
+            for (attribute_names[0..attribute_count]) |previous| {
+                if (std.mem.eql(u8, previous, attribute_name))
+                    return error.UnsupportedBodySanitization;
+            }
+            attribute_names[attribute_count] = attribute_name;
+            attribute_count += 1;
+            self.skipWhitespace();
+            if (!self.consume("="))
+                return error.UnsupportedBodySanitization;
+            self.skipWhitespace();
+            const attribute_value = try self.parseQuotedValue();
+            if (try self.attributeSensitive(
+                xmlLocalName(attribute_name),
+                attribute_value,
+            )) self.sensitive = true;
+        }
+
+        while (true) {
+            if (self.index >= self.bytes.len)
+                return error.UnsupportedBodySanitization;
+            if (std.mem.startsWith(u8, self.bytes[self.index..], "</")) {
+                self.index += 2;
+                const closing_name = try self.parseName();
+                self.skipWhitespace();
+                if (!self.consume(">") or
+                    !std.mem.eql(u8, element_name, closing_name))
+                {
+                    return error.UnsupportedBodySanitization;
+                }
+                return;
+            }
+            if (std.mem.startsWith(
+                u8,
+                self.bytes[self.index..],
+                "<!--",
+            )) {
+                try self.parseComment();
+                continue;
+            }
+            if (std.mem.startsWith(
+                u8,
+                self.bytes[self.index..],
+                "<![CDATA[",
+            )) {
+                try self.parseCdata();
+                continue;
+            }
+            if (std.mem.startsWith(u8, self.bytes[self.index..], "<?")) {
+                try self.parseProcessingInstruction();
+                continue;
+            }
+            if (std.mem.startsWith(u8, self.bytes[self.index..], "<!"))
+                return error.UnsupportedBodySanitization;
+            if (self.bytes[self.index] == '<') {
+                try self.parseElement(depth + 1);
+                continue;
+            }
+            const text_start = self.index;
+            while (self.index < self.bytes.len and
+                self.bytes[self.index] != '<')
+            {
+                self.index += 1;
+            }
+            try self.inspectText(self.bytes[text_start..self.index]);
+        }
+    }
+
+    fn parseMisc(self: *XmlInspector) !bool {
+        if (std.mem.startsWith(u8, self.bytes[self.index..], "<!--")) {
+            try self.parseComment();
+            return true;
+        }
+        if (std.mem.startsWith(u8, self.bytes[self.index..], "<?")) {
+            try self.parseProcessingInstruction();
+            return true;
+        }
+        return false;
+    }
+
+    fn parseComment(self: *XmlInspector) !void {
+        if (!self.consume("<!--"))
+            return error.UnsupportedBodySanitization;
+        const end = std.mem.indexOfPos(
+            u8,
+            self.bytes,
+            self.index,
+            "-->",
+        ) orelse return error.UnsupportedBodySanitization;
+        const value = self.bytes[self.index..end];
+        if (std.mem.indexOf(u8, value, "--") != null)
+            return error.UnsupportedBodySanitization;
+        try self.inspectText(value);
+        self.index = end + 3;
+    }
+
+    fn parseCdata(self: *XmlInspector) !void {
+        if (!self.consume("<![CDATA["))
+            return error.UnsupportedBodySanitization;
+        const end = std.mem.indexOfPos(
+            u8,
+            self.bytes,
+            self.index,
+            "]]>",
+        ) orelse return error.UnsupportedBodySanitization;
+        try self.inspectText(self.bytes[self.index..end]);
+        self.index = end + 3;
+    }
+
+    fn parseProcessingInstruction(self: *XmlInspector) !void {
+        if (!self.consume("<?"))
+            return error.UnsupportedBodySanitization;
+        const end = std.mem.indexOfPos(
+            u8,
+            self.bytes,
+            self.index,
+            "?>",
+        ) orelse return error.UnsupportedBodySanitization;
+        try self.inspectText(self.bytes[self.index..end]);
+        self.index = end + 2;
+    }
+
+    fn parseName(self: *XmlInspector) ![]const u8 {
+        if (self.index >= self.bytes.len or
+            !isXmlNameStart(self.bytes[self.index]))
+        {
+            return error.UnsupportedBodySanitization;
+        }
+        const start = self.index;
+        self.index += 1;
+        while (self.index < self.bytes.len and
+            isXmlNameByte(self.bytes[self.index]))
+        {
+            self.index += 1;
+        }
+        return self.bytes[start..self.index];
+    }
+
+    fn parseQuotedValue(self: *XmlInspector) ![]const u8 {
+        if (self.index >= self.bytes.len or
+            (self.bytes[self.index] != '"' and
+                self.bytes[self.index] != '\''))
+        {
+            return error.UnsupportedBodySanitization;
+        }
+        const quote = self.bytes[self.index];
+        self.index += 1;
+        const start = self.index;
+        while (self.index < self.bytes.len and
+            self.bytes[self.index] != quote)
+        {
+            if (self.bytes[self.index] == '<' or
+                self.bytes[self.index] == '&')
+            {
+                return error.UnsupportedBodySanitization;
+            }
+            self.index += 1;
+        }
+        if (self.index >= self.bytes.len)
+            return error.UnsupportedBodySanitization;
+        const value = self.bytes[start..self.index];
+        self.index += 1;
+        return value;
+    }
+
+    fn attributeSensitive(
+        self: *XmlInspector,
+        name: []const u8,
+        value: []const u8,
+    ) !bool {
+        return isSensitiveBodyField(name) or
+            ((normalizedFieldEquals(name, "key") or
+                normalizedFieldEquals(name, "name") or
+                normalizedFieldEquals(name, "field") or
+                normalizedFieldEquals(name, "property")) and
+                isSensitiveBodyField(value)) or
+            try containsSensitiveAssignment(self.allocator, value) or
+            try containsSensitiveScalar(self.allocator, value) or
+            containsPrivateKeyMarker(value);
+    }
+
+    fn inspectText(self: *XmlInspector, value: []const u8) !void {
+        if (std.mem.indexOfScalar(u8, value, '&') != null)
+            return error.UnsupportedBodySanitization;
+        if (try containsSensitiveAssignment(self.allocator, value) or
+            try containsSensitiveScalar(self.allocator, value) or
+            containsPrivateKeyMarker(value))
+        {
+            self.sensitive = true;
+        }
+    }
+
+    fn skipWhitespace(self: *XmlInspector) void {
+        while (self.index < self.bytes.len and
+            (self.bytes[self.index] == ' ' or
+                self.bytes[self.index] == '\t' or
+                self.bytes[self.index] == '\r' or
+                self.bytes[self.index] == '\n'))
+        {
+            self.index += 1;
+        }
+    }
+
+    fn consume(self: *XmlInspector, value: []const u8) bool {
+        if (!std.mem.startsWith(u8, self.bytes[self.index..], value))
+            return false;
+        self.index += value.len;
+        return true;
+    }
+};
+
+fn inspectXmlDocument(
+    allocator: std.mem.Allocator,
+    body: []const u8,
+) !bool {
+    var inspector = XmlInspector{
+        .allocator = allocator,
+        .bytes = body,
+    };
+    return inspector.inspect();
+}
+
+fn xmlLocalName(name: []const u8) []const u8 {
+    if (std.mem.lastIndexOfScalar(u8, name, ':')) |colon|
+        return name[colon + 1 ..];
+    return name;
+}
+
+fn isXmlNameStart(byte: u8) bool {
+    return std.ascii.isAlphabetic(byte) or
+        byte == '_' or byte == ':' or byte >= 0x80;
+}
+
+fn isXmlNameByte(byte: u8) bool {
+    return isXmlNameStart(byte) or
+        std.ascii.isDigit(byte) or byte == '-' or byte == '.';
+}
+
 fn containsSensitiveXml(
     allocator: std.mem.Allocator,
     body: []const u8,
@@ -3754,7 +4101,7 @@ fn writeHeaders(
     for (headers, 0..) |header, index| {
         if (index != 0) try writer.writeByte(',');
         try writer.writeAll("{\"name\":");
-        try writeJsonString(writer, header.name);
+        try writeMetadataBytes(writer, allocator, header.name);
         try writer.writeAll(",\"value\":");
         const context = HeaderSafetyContext{
             .direction = direction,
@@ -3812,15 +4159,15 @@ fn writeHeaders(
         if (redact) {
             try writeJsonString(writer, redacted_value);
         } else if (sanitized_url) |url| {
-            try writeJsonString(writer, url);
+            try writeMetadataBytes(writer, allocator, url);
         } else {
-            try writeJsonString(writer, header.value);
+            try writeMetadataBytes(writer, allocator, header.value);
         }
         try writer.print(",\"redacted\":{}", .{redact});
         try writer.writeAll(",\"url_redaction_template\":");
         if (!redact) {
             if (sanitized_template) |template|
-                try writeJsonString(writer, template)
+                try writeMetadataBytes(writer, allocator, template)
             else
                 try writer.writeAll("null");
         } else {
@@ -4425,6 +4772,18 @@ fn writeBody(
     try writer.writeByte('}');
 }
 
+fn writeMetadataBytes(
+    writer: *std.Io.Writer,
+    allocator: std.mem.Allocator,
+    value: []const u8,
+) !void {
+    if (std.unicode.utf8ValidateSlice(value)) {
+        try writeJsonString(writer, value);
+    } else {
+        try writeBody(writer, allocator, value);
+    }
+}
+
 fn writeJsonString(writer: *std.Io.Writer, value: []const u8) !void {
     try writer.writeByte('"');
     for (value) |byte| {
@@ -4842,6 +5201,77 @@ const ReplayableRequestBody = struct {
         self.rewind_count += 1;
         self.reader = std.Io.Reader.fixed(self.bytes);
         return &self.reader;
+    }
+};
+
+const CooperativeCancellingReader = struct {
+    interface: std.Io.Reader,
+    bytes: []const u8,
+    offset: usize = 0,
+    cancellation: *core.http.CancellationToken,
+
+    fn init(
+        self: *CooperativeCancellingReader,
+        bytes: []const u8,
+        cancellation: *core.http.CancellationToken,
+    ) void {
+        self.* = .{
+            .interface = undefined,
+            .bytes = bytes,
+            .cancellation = cancellation,
+        };
+        self.interface = .{
+            .vtable = &.{
+                .stream = &stream,
+                .readVec = &readVec,
+            },
+            .buffer = &.{},
+            .seek = 0,
+            .end = 0,
+        };
+    }
+
+    fn stream(
+        interface: *std.Io.Reader,
+        writer: *std.Io.Writer,
+        limit: std.Io.Limit,
+    ) std.Io.Reader.StreamError!usize {
+        const self: *CooperativeCancellingReader =
+            @alignCast(@fieldParentPtr("interface", interface));
+        const count = @min(
+            limit.minInt(self.bytes.len - self.offset),
+            self.bytes.len - self.offset,
+        );
+        if (count == 0) return error.EndOfStream;
+        try writer.writeAll(self.bytes[self.offset..][0..count]);
+        self.offset += count;
+        if (self.offset == self.bytes.len) self.cancellation.cancel();
+        return count;
+    }
+
+    fn readVec(
+        interface: *std.Io.Reader,
+        data: [][]u8,
+    ) std.Io.Reader.Error!usize {
+        const self: *CooperativeCancellingReader =
+            @alignCast(@fieldParentPtr("interface", interface));
+        var total: usize = 0;
+        for (data) |destination| {
+            const count = @min(
+                destination.len,
+                self.bytes.len - self.offset,
+            );
+            @memcpy(
+                destination[0..count],
+                self.bytes[self.offset..][0..count],
+            );
+            self.offset += count;
+            total += count;
+            if (self.offset == self.bytes.len) break;
+        }
+        if (self.offset == self.bytes.len) self.cancellation.cancel();
+        if (total != 0) return total;
+        return error.EndOfStream;
     }
 };
 
@@ -5950,6 +6380,111 @@ test "mid-upload cancellation remains terminal through playback retry policy" {
     try std.testing.expectEqual(@as(usize, 1), playback.index);
     try std.testing.expectEqual(@as(usize, 0), replay_upload.rewind_count);
     try std.testing.expectEqual(@as(usize, 3), replay_upload.reader.seek);
+}
+
+test "cooperative upload cancellation consumes only matching cancelled attempt" {
+    const cancelled_recording = RecordedExchange{
+        .request_method = .POST,
+        .request_url = "https://example.test/cancelled-upload",
+        .request_body = "pay",
+        .outcome = .open_error,
+        .error_category = .cancelled,
+    };
+    const next_recording = RecordedExchange{
+        .request_method = .GET,
+        .request_url = "https://example.test/next",
+        .response_status = 200,
+        .response_body = "next",
+    };
+    const recordings = [_]RecordedExchange{
+        cancelled_recording,
+        next_recording,
+    };
+    var playback = PlaybackTransport.init(
+        std.testing.allocator,
+        &recordings,
+    );
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .POST,
+        cancelled_recording.request_url,
+    );
+    defer request.deinit();
+    var cancellation = core.http.CancellationToken{};
+    var reader: CooperativeCancellingReader = undefined;
+    reader.init("pay", &cancellation);
+    try std.testing.expectError(
+        error.OperationCancelled,
+        playback.asTransport().open(
+            &request,
+            .{
+                .body = core.http.StreamingRequestBody.chunked(
+                    &reader.interface,
+                ),
+                .cancellation = &cancellation,
+            },
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 1), playback.index);
+
+    var next_request = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        next_recording.request_url,
+    );
+    defer next_request.deinit();
+    var next_response = try playback.asTransport().send(&next_request);
+    defer next_response.deinit();
+    try std.testing.expectEqualStrings("next", next_response.body);
+    try std.testing.expectEqual(@as(usize, 2), playback.index);
+
+    var preflight_playback = PlaybackTransport.init(
+        std.testing.allocator,
+        &recordings,
+    );
+    var preflight_cancellation = core.http.CancellationToken{};
+    preflight_cancellation.cancel();
+    var preflight_reader = std.Io.Reader.fixed("pay");
+    try std.testing.expectError(
+        error.OperationCancelled,
+        preflight_playback.asTransport().open(
+            &request,
+            .{
+                .body = core.http.StreamingRequestBody.chunked(
+                    &preflight_reader,
+                ),
+                .cancellation = &preflight_cancellation,
+            },
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 0), preflight_playback.index);
+
+    const successful_recording = [_]RecordedExchange{.{
+        .request_method = .POST,
+        .request_url = cancelled_recording.request_url,
+        .request_body = "pay",
+        .response_status = 200,
+    }};
+    var successful_playback = PlaybackTransport.init(
+        std.testing.allocator,
+        &successful_recording,
+    );
+    var live_cancellation = core.http.CancellationToken{};
+    var live_reader: CooperativeCancellingReader = undefined;
+    live_reader.init("pay", &live_cancellation);
+    try std.testing.expectError(
+        error.OperationCancelled,
+        successful_playback.asTransport().open(
+            &request,
+            .{
+                .body = core.http.StreamingRequestBody.chunked(
+                    &live_reader.interface,
+                ),
+                .cancellation = &live_cancellation,
+            },
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 0), successful_playback.index);
 }
 
 test "response body cancellation replays exact terminal error once" {
@@ -7608,6 +8143,119 @@ test "legacy recordings never infer URL wildcards from marker text" {
             mismatch_playback.asTransport().send(&mismatch),
         );
     }
+}
+
+test "non UTF-8 URL and header metadata roundtrip as encoded bytes" {
+    const recorded_url = "https://example.test/\xff";
+    const rotated_url = "https://example.test/\xfe";
+    const recorded_header = [_]u8{ 0xff, 'a', 0x80 };
+    const different_header = [_]u8{ 0xfe, 'a', 0x80 };
+    const response_header = [_]u8{ 'b', 0xff, 0x81 };
+    var mock = core.http.MockTransport.init(
+        std.testing.allocator,
+        200,
+        "",
+    );
+    defer mock.deinit();
+    mock.response_headers_list = &.{
+        .{ .name = "ETag", .value = &response_header },
+    };
+    var recorder = RecordingTransport.init(
+        std.testing.allocator,
+        mock.asTransport(),
+    );
+    defer recorder.deinit();
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        recorded_url,
+    );
+    defer request.deinit();
+    try request.setHeader("ETag", &recorded_header);
+    var response = try recorder.asTransport().send(&request);
+    response.deinit();
+    const json = try recorder.toJson(std.testing.allocator);
+    defer std.testing.allocator.free(json);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(json));
+    try std.testing.expect(std.mem.indexOfScalar(u8, json, 0xff) == null);
+    try std.testing.expect(
+        std.mem.indexOf(u8, json, "\"encoding\":\"base64\"") != null,
+    );
+
+    var parsed = try parseJson(std.testing.allocator, json);
+    defer parsed.deinit();
+    const exchange = parsed.asSlice()[0];
+    try std.testing.expectEqualSlices(
+        u8,
+        recorded_url,
+        exchange.request_url,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        &recorded_header,
+        getHeaderPair(exchange.request_headers, "ETag").?,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        &response_header,
+        getHeaderPair(exchange.response_headers, "ETag").?,
+    );
+
+    var playback = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    var exact = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        recorded_url,
+    );
+    defer exact.deinit();
+    try exact.setHeader("ETag", &recorded_header);
+    var replayed = try playback.asTransport().send(&exact);
+    defer replayed.deinit();
+    try std.testing.expectEqualSlices(
+        u8,
+        &response_header,
+        replayed.getHeader("ETag").?,
+    );
+
+    var header_mismatch_playback = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    var header_mismatch = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        recorded_url,
+    );
+    defer header_mismatch.deinit();
+    try header_mismatch.setHeader("ETag", &different_header);
+    try std.testing.expectError(
+        error.HeaderMismatch,
+        header_mismatch_playback.asTransport().send(&header_mismatch),
+    );
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        header_mismatch_playback.index,
+    );
+
+    var url_mismatch_playback = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    var url_mismatch = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        rotated_url,
+    );
+    defer url_mismatch.deinit();
+    try url_mismatch.setHeader("ETag", &recorded_header);
+    try std.testing.expectError(
+        error.UrlMismatch,
+        url_mismatch_playback.asTransport().send(&url_mismatch),
+    );
+    try std.testing.expectEqual(@as(usize, 0), url_mismatch_playback.index);
 }
 
 test "safe nested URI preserves caller encoding exactly" {
@@ -9820,6 +10468,142 @@ test "multipart preamble and epilogue structures fail closed" {
     }
 }
 
+test "folded multipart headers fail closed before credential persistence" {
+    const folded_parts = [_][]const u8{
+        "--batch\r\nContent-Disposition: form-data;\r\n" ++
+            " name=\"password\"\r\n\r\nfolded-space-secret\r\n" ++
+            "--batch--\r\n",
+        "--batch\r\nContent-Disposition: form-data;\r\n" ++
+            "\tname=\"accessToken\"\r\n\r\nfolded-tab-secret\r\n" ++
+            "--batch--\r\n",
+        "--batch\r\nContent-Type: application/http\r\n\r\n" ++
+            "POST /resource HTTP/1.1\r\nAuthorization:\r\n" ++
+            "\tBearer embedded-auth-secret\r\n" ++
+            "Content-Type: text/plain\r\n\r\nsafe\r\n" ++
+            "--batch--\r\n",
+    };
+    for (folded_parts[0..2]) |body| {
+        try std.testing.expectError(
+            error.UnsupportedBodySanitization,
+            containsSensitiveMultipartContent(
+                std.testing.allocator,
+                "multipart/mixed; boundary=batch",
+                body,
+                0,
+            ),
+        );
+    }
+    try std.testing.expect(try containsSensitiveMultipartContent(
+        std.testing.allocator,
+        "multipart/mixed; boundary=batch",
+        folded_parts[2],
+        0,
+    ));
+
+    var mock = core.http.MockTransport.init(
+        std.testing.allocator,
+        200,
+        folded_parts[2],
+    );
+    defer mock.deinit();
+    mock.response_headers_list = &.{
+        .{
+            .name = "Content-Type",
+            .value = "multipart/mixed; boundary=batch",
+        },
+    };
+    var recorder = RecordingTransport.initWithOptions(
+        std.testing.allocator,
+        mock.asTransport(),
+        .{ .bodyPolicyFn = &allowOpaqueBody },
+    );
+    defer recorder.deinit();
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://example.test/folded-multipart",
+    );
+    defer request.deinit();
+    var response = try recorder.asTransport().send(&request);
+    response.deinit();
+    var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer output.deinit();
+    if (recorder.writeJson(
+        &output.writer,
+        std.testing.allocator,
+    )) |_| {
+        return error.TestExpectedError;
+    } else |err| {
+        try std.testing.expect(
+            err == error.UnsupportedBodySanitization or
+                err == error.SensitiveBodyRequiresSanitization,
+        );
+    }
+    try std.testing.expect(
+        std.mem.indexOf(u8, output.written(), "embedded-auth-secret") ==
+            null,
+    );
+}
+
+test "malformed and trailing mixed XML structures fail closed" {
+    const malformed = [_][]const u8{
+        "<notice>{\"token\":\"malformed-prefix-secret\"}",
+        "<notice/>{\"token\":\"trailing-json-secret\"}",
+        "<notice><child>safe</notice>",
+        "<notice>safe</notice><trailing/>",
+    };
+    for (malformed) |body| {
+        try std.testing.expectError(
+            error.UnsupportedBodySanitization,
+            inspectXmlDocument(std.testing.allocator, body),
+        );
+    }
+
+    var mock = core.http.MockTransport.init(
+        std.testing.allocator,
+        200,
+        malformed[0],
+    );
+    defer mock.deinit();
+    mock.response_headers_list = &.{
+        .{ .name = "Content-Type", .value = "application/xml" },
+    };
+    var recorder = RecordingTransport.initWithOptions(
+        std.testing.allocator,
+        mock.asTransport(),
+        .{ .bodyPolicyFn = &inspectKnownSafeBody },
+    );
+    defer recorder.deinit();
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://example.test/malformed-xml",
+    );
+    defer request.deinit();
+    var response = try recorder.asTransport().send(&request);
+    response.deinit();
+    var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer output.deinit();
+    if (recorder.writeJson(
+        &output.writer,
+        std.testing.allocator,
+    )) |_| {
+        return error.TestExpectedError;
+    } else |err| {
+        try std.testing.expect(
+            err == error.UnsupportedBodySanitization or
+                err == error.SensitiveBodyRequiresSanitization,
+        );
+    }
+    try std.testing.expect(
+        std.mem.indexOf(
+            u8,
+            output.written(),
+            "malformed-prefix-secret",
+        ) == null,
+    );
+}
+
 test "safe multipart application http batch roundtrips explicitly" {
     const body =
         "legal MIME preamble\r\n" ++
@@ -10445,6 +11229,37 @@ fn serializationAllocationFixture(allocator: std.mem.Allocator) !void {
     allocator.free(json);
 }
 
+fn binaryMetadataSerializationAllocationFixture(
+    allocator: std.mem.Allocator,
+) !void {
+    const header_value = [_]u8{ 0xff, 'a' };
+    var mock = core.http.MockTransport.init(
+        std.testing.allocator,
+        200,
+        "",
+    );
+    defer mock.deinit();
+    mock.response_headers_list = &.{
+        .{ .name = "ETag", .value = &header_value },
+    };
+    var recorder = RecordingTransport.init(
+        std.testing.allocator,
+        mock.asTransport(),
+    );
+    defer recorder.deinit();
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://example.test/\xff",
+    );
+    defer request.deinit();
+    try request.setHeader("ETag", &header_value);
+    var response = try recorder.asTransport().send(&request);
+    response.deinit();
+    const json = try recorder.toJson(allocator);
+    allocator.free(json);
+}
+
 fn multipartSerializationAllocationFixture(
     allocator: std.mem.Allocator,
 ) !void {
@@ -10590,6 +11405,35 @@ fn redactionTemplateParsingAllocationFixture(
     parsed.deinit();
 }
 
+const binary_metadata_allocation_fixture_json =
+    \\{"version":3,"exchanges":[{
+    \\"request_method":"GET",
+    \\"request_url":{"encoding":"base64","data":"aHR0cHM6Ly9leGFtcGxlLnRlc3Qv/w=="},
+    \\"request_url_redaction_template":null,
+    \\"request_headers":[{
+    \\"name":"ETag",
+    \\"value":{"encoding":"base64","data":"/2E="},
+    \\"redacted":false,
+    \\"url_redaction_template":null
+    \\}],
+    \\"request_body":null,
+    \\"outcome":"response",
+    \\"response_status":200,
+    \\"response_headers":[],
+    \\"response_body":{"encoding":"base64","data":""}
+    \\}]}
+;
+
+fn binaryMetadataParsingAllocationFixture(
+    allocator: std.mem.Allocator,
+) !void {
+    var parsed = try parseJson(
+        allocator,
+        binary_metadata_allocation_fixture_json,
+    );
+    parsed.deinit();
+}
+
 test "transport allocation failures clean up" {
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
@@ -10614,6 +11458,11 @@ test "transport allocation failures clean up" {
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
         serializationAllocationFixture,
+        .{},
+    );
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        binaryMetadataSerializationAllocationFixture,
         .{},
     );
     try std.testing.checkAllAllocationFailures(
@@ -10644,6 +11493,11 @@ test "transport allocation failures clean up" {
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
         redactionTemplateParsingAllocationFixture,
+        .{},
+    );
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        binaryMetadataParsingAllocationFixture,
         .{},
     );
 }

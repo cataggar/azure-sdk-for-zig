@@ -38,7 +38,10 @@ and finish failures; playback reproduces the failure at that stage without
 persisting backend-specific error identities. Version 2 successful-response
 recordings remain readable. The stable cancellation category replays as
 Core's terminal `OperationCancelled` error so retry policy behavior does not
-diverge. Accepted request and response bodies are
+diverge. URL and header metadata stays readable as JSON strings when it is
+valid UTF-8; arbitrary byte sequences such as HTTP obs-text are represented
+losslessly with the same explicit base64 encoding object and remain
+exact-match data. Accepted request and response bodies are
 represented losslessly as base64 with an explicit encoding field. Every
 non-empty body is rejected by default and requires an explicit caller
 body-policy decision. Approved textual and binary bodies, including NUL and
@@ -218,8 +221,12 @@ parsed from `Content-Type` and recognized only as exact MIME delimiter lines;
 legal preambles, epilogues, and nested multipart parts are inspected, while
 invalid close suffixes, missing closes, and malformed multipart structures fail
 closed. Mixed structured content in preambles or epilogues that cannot be
-classified in full also fails closed. Policy contexts are borrowed through
-`toJson`.
+classified in full also fails closed. Folded MIME/application-HTTP headers are
+unsupported and fail closed before disposition fields or embedded
+authorization can be hidden across continuation lines. XML-looking bodies
+must be consumed as one well-formed document; mismatched tags, malformed
+prefixes, extra roots, and trailing mixed structures are rejected. Policy
+contexts are borrowed through `toJson`.
 
 Playback consumes one exchange for each raw transport invocation, including
 recorded failures. Buffered attempts advance after either a recorded transport
@@ -227,7 +234,11 @@ error is returned or response allocation succeeds. Streaming attempts advance
 after either a recorded open error is returned or operation allocation
 succeeds. Body and finish outcomes then replay from the operation. Outer
 pipeline redirect allocation, retry, backoff, and cancellation behavior does
-not roll back an already completed raw attempt.
+not roll back an already completed raw attempt. If a cooperative upload reader
+cancels exactly after producing the prefix recorded for a cancelled open
+attempt, playback validates and consumes that attempt before returning
+`OperationCancelled`; preflight cancellation and cancellation against a
+non-cancelled recording leave the attempt unconsumed.
 
 Run its independent tests from this directory:
 
