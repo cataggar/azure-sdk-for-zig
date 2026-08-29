@@ -1,0 +1,6 @@
+generator_commit=c83a1cbef5f728d7530fdec4a724cc453233cfa4
+source_repository=https://github.com/Azure/azure-rest-api-specs
+source_commit=6d50d64d3eeca46ecf1b4af80e9994bac920a7d0
+source_path=specification/keyvault/data-plane/Secrets/tspconfig.yaml
+selected_api_version=2026-03-01-preview
+command=(codegen/scripts/sync.sh --output-root <package-output> --azure-sdk-core-commit bc77bcacbb64af935ca53d60bf8a351c9592bc41 --azure-sdk-core-hash azure_sdk_core-0.3.0-eFY0Ev0-CACjsFaYPL6jS7CpeVNvsqYqTrXRfgQKiRFV keyvault_secrets)

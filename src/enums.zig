@@ -44,6 +44,10 @@ pub const DeletionRecoveryLevel = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// The media type (MIME type).
@@ -72,6 +76,10 @@ pub const ContentType = union(enum) {
     pub fn toWire(self: @This()) []const u8 {
         return core.open_enum.toWire(self, wire_names);
     }
+
+    pub fn fromWire(allocator: std.mem.Allocator, s: []const u8) !@This() {
+        return core.open_enum.fromWire(@This(), wire_names, allocator, s);
+    }
 };
 
 /// The available API versions.
@@ -83,4 +91,39 @@ pub const Versions = enum {
     v2025_07_01,
     v2026_01_01_preview,
     v2026_03_01_preview,
+
+    pub fn toWire(self: @This()) []const u8 {
+        return switch (self) {
+            .@"v7.5" => "7.5",
+            .@"v7.6_preview.2" => "7.6-preview.2",
+            .@"v7.6" => "7.6",
+            .v2025_06_01_preview => "2025-06-01-preview",
+            .v2025_07_01 => "2025-07-01",
+            .v2026_01_01_preview => "2026-01-01-preview",
+            .v2026_03_01_preview => "2026-03-01-preview",
+        };
+    }
+
+    pub fn fromWire(s: []const u8) ?@This() {
+        if (std.mem.eql(u8, s, "7.5")) return .@"v7.5";
+        if (std.mem.eql(u8, s, "7.6-preview.2")) return .@"v7.6_preview.2";
+        if (std.mem.eql(u8, s, "7.6")) return .@"v7.6";
+        if (std.mem.eql(u8, s, "2025-06-01-preview")) return .v2025_06_01_preview;
+        if (std.mem.eql(u8, s, "2025-07-01")) return .v2025_07_01;
+        if (std.mem.eql(u8, s, "2026-01-01-preview")) return .v2026_01_01_preview;
+        if (std.mem.eql(u8, s, "2026-03-01-preview")) return .v2026_03_01_preview;
+        return null;
+    }
+
+    pub fn zerdeDeserialize(
+        comptime T: type,
+        allocator: std.mem.Allocator,
+        deserializer: anytype,
+    ) @TypeOf(deserializer.*).Error!T {
+        return core.fixed_enum.deserialize(T, allocator, deserializer);
+    }
+
+    pub fn zerdeSerialize(self: @This(), serializer: anytype) !void {
+        return core.fixed_enum.serialize(self, serializer);
+    }
 };
