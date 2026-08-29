@@ -169,6 +169,7 @@ const receiver = try amqp.openReceiver(&session, .{
     .name = link_name,
     .source_address = "myhub/ConsumerGroups/$Default/Partitions/0",
     .max_message_size = 4 * 1024 * 1024,
+    .max_buffered_bytes = 256 * 1024 * 1024,
 }, deadline_ms);
 ```
 
@@ -177,13 +178,130 @@ recorded but not applied: it is a threshold the peer picks, with no room for
 the annotations a broker adds on delivery, and going over detaches the link.
 Applying it would buy a tighter ceiling but not a qualitatively different one,
 since unbounded growth is already closed by your limit — and that tightening
-does not pay for tearing links down on a number the peer chose. Setting yours
-to `null` restores unlimited reassembly, which is what let a sender open a
-delivery, never end it, and grow the buffer until the process died.
+does not pay for tearing links down on a number the peer chose.
 
-This bounds one message. A receiver holds up to its outstanding credit plus
-`max_overrun` completed deliveries at once, so the memory one link can tie up
-is that product: at the default prefetch, ~600 times this.
+Setting `max_message_size` to null or zero restores unlimited per-message
+reassembly only when `max_buffered_bytes` is also null. With a finite aggregate
+budget, that budget is advertised and enforced as the effective
+`max-message-size`, so a conforming peer is never granted credit for a legal
+message this receiver would have to reject.
+
+`max_buffered_bytes` separately bounds the aggregate payload retained in the
+ready queue and the delivery currently being reassembled. The default is a
+finite 256 MiB (`default_max_buffered_bytes`); null explicitly opts out and
+makes the caller responsible for bounding retention above this layer. With a
+finite budget, credit is capped conservatively and a multi-frame delivery
+reserves its full legal size: ready bytes plus that reservation plus all
+outstanding credit can never exceed the aggregate budget. The default 128 MiB
+message limit therefore grants at most two deliveries at once. Service clients
+that know a smaller protocol maximum should set both limits explicitly to gain
+a deeper safe window. A sender that ignores the capped credit is detached with
+`amqp:resource-limit-exceeded` before the crossing chunk is retained.
+
+`issueCredit` also preserves one-shot manual receive requests. If a custom byte
+budget cannot safely put the whole request on the wire, the remainder is held
+and issued automatically as queued deliveries leave, so callers need not loop
+just to restate the same requested count.
+
+Credit issuance is transactional with its `Flow` frame. The prospective
+credit, deferred request, and overrun debt are committed only after the whole
+frame is encoded, written, and flushed. An encode allocation failure therefore
+leaves the request retryable without a phantom local grant or double count; a
+write or flush failure leaves the local counters uncommitted and terminalizes
+the dirty connection instead. Drain intent follows the same rule and becomes
+active only after its `Flow` is emitted. A compliant drain response may omit
+`link-credit`; the remaining credit is then derived with serial arithmetic
+from the prior delivery limit and the reported `delivery-count`.
+
+Only a locally emitted `Flow` advances that delivery limit. A sender's incoming
+`Flow` may reconcile its view and reduce remaining credit, but `link-credit`
+from the sender can never create receiver authorization or pay down overrun
+debt.
+
+The delivery already returned to the caller is outside the aggregate budget
+and remains valid until the next successful `receive`; it is still bounded by
+`max_message_size`. Callers that know a service's smaller message limit should
+set it explicitly, which permits proportionally more of the requested prefetch
+window under the aggregate ceiling.
+
+`max_unsettled_deliveries` independently bounds delivery-id bookkeeping, with
+a default of 1024. Credit reserves both payload bytes and unsettled slots, so a
+mode-second peer withholding settlement acknowledgments cannot make the
+session maps or per-link scans grow without bound after payloads leave the
+ready queue. Acknowledgments and mode-first local settlement release slots and
+replenish withheld credit.
+
+Credit and delivery count are charged on the initial transfer, exactly once.
+A continuation may omit `delivery-id` or repeat the initial value without
+being charged again. Settlement is cumulative across the transfer sequence:
+`settled = true` on any continuation remains true when later frames omit it,
+releases the active delivery id, and is reported on the completed delivery. An
+already sender-settled delivery ignores `rcv-settle-mode`, including on the
+frame that first makes cumulative settlement true; unsettled deliveries still
+enforce the locally negotiated mode. An aborted multi-frame delivery, including
+one that repeats the id, releases its
+partial bytes without entering the ready queue, while a different delivery id
+arriving before the current delivery ends is a protocol error that terminally
+detaches the receiver. Any allocation
+failure after a transfer has been consumed does the same: the missing frame
+cannot be replayed, so keeping its old prefix for a later continuation would
+surface truncated data.
+
+Any write or flush failure while emitting a frame terminally closes the
+connection transport. A header or body may already be buffered, so allowing a
+later send to reuse that byte stream could flush a corrupt partial frame.
+Protocol-header and heartbeat writes follow the same rule. Likewise, an error
+after any inbound frame header byte is consumed closes the connection; an
+unread body can no longer be parsed from a known boundary. EOF and terminal
+transport read failures also close the driver and every session link when they
+arrive before any frame byte; only a zero-byte deadline remains retryable.
+
+An acknowledgement timeout after a successfully emitted SASL or AMQP protocol
+header, Open, Begin, or End is terminal at the corresponding connection/session
+scope. Open encoding/allocation failure after the AMQP header exchange is
+terminal too: the peer is already waiting for Open, so returning to the start
+would duplicate the header. Attach uses the same invariant: if its response
+does not arrive, the session and transport are invalidated before the
+half-attached object is destroyed, so a delayed response cannot bind a
+same-name replacement.
+
+Every initial transfer, including aborted and pre-settled transfers, is checked
+against unsettled delivery ids active across every receiver on the session. An
+unsettled id remains active through completion and is released only by terminal
+settlement, abort, detach, error, or deinitialization. Repeating it while its
+own multi-frame delivery is still in progress remains a valid continuation.
+If a consumed disposition range cannot allocate rejection detail, every
+matching outbound delivery is still marked terminal before the connection is
+invalidated, so none can remain silently reusable or wait forever.
+
+Consumed SASL, Open, Begin, End, Close, and connection-pump controls are guarded
+the same way: decode or apply failure invalidates the driver and closes the
+transport before retry is possible. A valid remote End terminalizes its session
+and links and emits the End response; a valid remote Close responds, then
+terminalizes the connection and transport. Close is recognized globally before
+channel routing, on any negotiated channel. Locally emitted Close, End, and
+closing Detach enter terminal output state immediately; acknowledgement timeout
+cannot leave the connection, session, or link writable, and teardown retry does
+not emit a duplicate terminal frame. Later sender and receiver operations fail
+without emission. Remote Detach is acknowledged with `closed = true` and
+terminally poisons only the named link, even when the peer requested suspension
+with `closed = false`; resumable link state is not retained.
+
+Receiver settlement preserves the mode selected by the local receiver's
+Attach; the remote sender's Attach preference does not replace it. An initial
+Transfer may override a mode-second link to `first` for that delivery.
+`settleRange` records each effective mode and splits a mixed range into
+correctly settled runs. Mode first carries `settled = true` and releases ids
+immediately. Mode second carries `settled = false`; ids remain active until a
+sender-role disposition acknowledges only previously dispositioned ids with
+`settled = true`.
+
+On the outbound side, the remote receiver's Attach selects the sender's actual
+receiver-settle-mode. When mode second returns a receiver-role disposition with
+`settled = false`, the sender emits the corresponding sender-role
+`settled = true` acknowledgment before the delivery can be retired. Duplicate
+dispositions do not duplicate acknowledgments, and acknowledgment emission
+failure terminalizes the consumed-frame session.
 
 Settling one delivery at a time costs a frame per message, which at a 300-deep
 prefetch is 300 frames of bookkeeping. A disposition can name a `first`..`last`
@@ -255,19 +373,43 @@ until it is asked for more. `sendBytes` waits for the oldest delivery, which is
 only its own when nothing else is outstanding, so it reports
 `error.DeliveriesInFlight` rather than mixing with `sendBytesAsync` and
 attributing one delivery's verdict to another. A send that never reaches a
-verdict retires its own entry, so a timed-out send leaves the sender as usable
-as it was before.
+verdict retires its own entry. In receiver-settle-mode first that leaves the
+sender reusable; in mode second the sender terminally detaches before
+discarding an undecided id, because a late first-phase disposition would
+otherwise require an acknowledgment the sender could no longer correlate.
+
+`SenderOptions.snd_settle_mode` is the sender's authoritative settlement mode
+and is honored on Attach and Transfer. The remote receiver's Attach field is a
+desired preference only: omission, `mixed`, or an opposite fixed preference
+cannot replace the actual mode selected by this locally initiated sender. In
+sender-settled mode every transfer carries `settled = true`; synchronous and
+asynchronous sends complete after emission without retaining an in-flight
+entry or waiting for a disposition.
 
 Deliveries settle in the order they were sent, and the ring holding them is
 allocated once at attach, so a silent peer costs a fixed amount of memory rather
 than a growing one.
 
+If a multi-frame send fails after its opening transfer reached the wire, the
+link is poisoned and detached best-effort. Cleanup is idempotent and
+scope-aware: a remote Detach is answered once, and a remote End is never
+followed by a link-level Detach. The peer is already holding an unterminated
+delivery, so starting another delivery on that link would instead continue the
+failed bytes and corrupt the protocol stream. Recovery must open a new sender.
+The poisoned object is terminal and must first be removed with
+`Session.closeSender`; late attach or flow frames cannot reactivate it or bind
+to a replacement with the same name. Link credit and delivery count are
+consumed when the first frame succeeds, while no settlement entry is created
+for the incomplete delivery.
+
 `abandonInFlight` is the way out of a pipeline that failed partway. Waiting is
 what just failed, so the caller cannot wait the remaining deliveries out, and a
 sender still holding unsettled ones refuses every later blocking send — without
-it a single timed-out pipeline would wedge the link for good. Any disposition
-that arrives after the abandon is ignored, so resending an abandoned delivery
-the broker went on to accept publishes it twice.
+it a single timed-out pipeline would wedge the link for good. In settlement
+mode second, abandoning any undecided delivery closes the bounded link state
+before its ids are discarded. In other modes a later disposition is ignored,
+so resending an abandoned delivery the broker went on to accept publishes it
+twice.
 
 Some of those verdicts may already be in hand, though. A disposition is recorded
 on whichever delivery the peer names, wherever it sits in the window, while
