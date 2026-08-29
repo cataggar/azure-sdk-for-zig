@@ -228,10 +228,13 @@ first call for an address.
 `owner_level` attaches as an exclusive consumer via `com.microsoft:epoch`. A
 higher level detaches every lower one, which reports as `ownership_lost`.
 
-`prefetch` defaults to 300 credits, as Go and Rust do. A negative value
-disables prefetch and issues exactly the credit each receive needs, for a
-caller that wants to bound its own memory use. Neither prefetch nor a single
-receive may exceed 5000, the session's incoming window.
+`prefetch` defaults to a request for 300 credits, as Go and Rust do. Event Hubs
+receivers accept messages up to 32 MiB and retain at most 256 MiB of aggregate
+payload, so the link grants and replenishes at most eight credits at a time.
+A negative value disables prefetch and requests exactly the credit each receive
+needs; requests larger than eight are issued in bounded windows as deliveries
+release buffer space. Neither the requested prefetch nor a single receive may
+exceed 5000, the session's incoming window.
 
 A receive that asks for more events than arrive returns the ones that did
 rather than failing: a quiet partition is not an error.

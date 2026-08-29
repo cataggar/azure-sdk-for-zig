@@ -17,14 +17,22 @@ const Allocator = std.mem.Allocator;
 const EventPosition = position.EventPosition;
 const ReceivedEventData = event_data.ReceivedEventData;
 
-/// Credit issued on attach when the caller expresses no preference. Go and
-/// Rust both use 300.
+/// Public prefetch request when the caller expresses no preference. Go and
+/// Rust both use 300; the AMQP link clamps it to the bounded delivery window.
 pub const default_prefetch: i32 = 300;
 
 /// The largest number of events a single receive may ask for, and the ceiling
 /// on prefetch. It is the session's incoming window in Go, so asking for more
 /// would let the peer overrun it.
 pub const max_credit: u32 = 5000;
+
+/// Event Hubs allows 20 MB events on Dedicated clusters. Leave room for the
+/// annotations the service adds while bounding reassembly above that limit.
+const max_message_size: u64 = 32 * 1024 * 1024;
+
+/// Retain at most eight worst-case Event Hubs deliveries per receiver.
+const max_buffered_bytes: u64 = 256 * 1024 * 1024;
+const max_prefetch: u32 = max_buffered_bytes / max_message_size;
 
 /// Names the reader in the broker's error text, so a stolen link says which
 /// receiver took it.
@@ -47,7 +55,8 @@ pub const PartitionClientOptions = struct {
     /// Claims exclusive ownership of the partition at this level. Absent
     /// leaves the reader non-exclusive.
     owner_level: ?i64 = null,
-    /// Credit issued up front. Zero takes `default_prefetch`; a negative value
+    /// Prefetch requested up front. Zero takes `default_prefetch`; the AMQP
+    /// link caps either value to its safe delivery window. A negative value
     /// disables prefetch and issues credit per receive, which is what a caller
     /// that wants to bound its own memory use asks for.
     prefetch: i32 = 0,
@@ -76,6 +85,9 @@ pub const PartitionClient = struct {
     filter_expression: []u8,
     /// As configured, before `default_prefetch` is substituted for zero.
     prefetch: i32,
+    /// Manual credit requested but not yet consumed by deliveries. AMQP may
+    /// defer part of a batch request until aggregate buffer space returns.
+    manual_credit_pending: u32 = 0,
     owner_level: ?i64,
     deadline_ms: i64,
     /// Set when the broker detached the link; a stolen link reports
@@ -167,6 +179,8 @@ pub const PartitionClient = struct {
             .properties = properties[0..property_count],
             .desired_capabilities = &.{amqp.georeplication_capability},
             .prefetch = prefetchCredit(options.prefetch),
+            .max_message_size = max_message_size,
+            .max_buffered_bytes = max_buffered_bytes,
         }, args.deadline_ms);
 
         self.* = .{
@@ -211,10 +225,14 @@ pub const PartitionClient = struct {
     ) ![]ReceivedEventData {
         if (count == 0 or count > max_credit) return ReceiveError.InvalidCount;
 
-        // Without prefetch the link holds no credit, so ask for exactly what
-        // this call needs on top of anything still outstanding.
-        if (self.prefetch < 0 and self.receiver.credit < count) {
-            try self.receiver.issueCredit(count - self.receiver.credit);
+        // A bounded AMQP receiver may defer part of a manual batch request
+        // until deliveries release aggregate buffer space. Track the whole
+        // request rather than only the credit currently on the wire, or a
+        // short batch would request the deferred remainder again next time.
+        if (self.prefetch < 0 and self.manual_credit_pending < count) {
+            const additional = count - self.manual_credit_pending;
+            try self.receiver.issueCredit(additional);
+            self.manual_credit_pending += additional;
         }
 
         var events: std.ArrayList(ReceivedEventData) = .empty;
@@ -243,6 +261,7 @@ pub const PartitionClient = struct {
                 if (events.items.len > 0) break;
                 return err;
             };
+            if (self.prefetch < 0) self.manual_credit_pending -|= 1;
 
             const received = blk: {
                 // Decode into the client's scratch arena rather than a fresh
@@ -303,8 +322,8 @@ pub const PartitionClient = struct {
 /// Translate the public prefetch setting into link credit.
 fn prefetchCredit(prefetch: i32) u32 {
     if (prefetch < 0) return 0;
-    if (prefetch == 0) return @intCast(default_prefetch);
-    return @intCast(prefetch);
+    const requested: u32 = @intCast(if (prefetch == 0) default_prefetch else prefetch);
+    return @min(requested, max_prefetch);
 }
 
 fn rawFrom(message: *const amqp.message_codec.Message) event_data.RawMessage {
@@ -654,11 +673,45 @@ test "consumerPathFor builds the consumer group address" {
 }
 
 test "prefetch maps onto link credit" {
-    // Zero means "no preference", not "no credit"; only a negative value
+    // Zero means "no preference", not "no credit"; requests above the
+    // service-specific bounded window are clamped, and only a negative value
     // disables prefetch.
-    try testing.expectEqual(@as(u32, 300), prefetchCredit(0));
-    try testing.expectEqual(@as(u32, 50), prefetchCredit(50));
+    try testing.expectEqual(@as(u32, 8), prefetchCredit(0));
+    try testing.expectEqual(@as(u32, 8), prefetchCredit(50));
+    try testing.expectEqual(@as(u32, 4), prefetchCredit(4));
     try testing.expectEqual(@as(u32, 0), prefetchCredit(-1));
+}
+
+test "receiver uses the bounded Event Hubs delivery window" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock = driver.ManualClock{};
+    var conn = try driver.Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
+    defer conn.deinit();
+
+    try scriptAttach(.{ .allocator = allocator, .mem = &mem });
+
+    var scripted: Scripted = undefined;
+    try scripted.open(allocator, &mem, &clock, &conn, .{});
+    defer scripted.deinit();
+
+    try testing.expectEqual(max_prefetch, scripted.client.receiver.credit);
+    try testing.expectEqual(
+        @as(?u64, max_message_size),
+        scripted.client.receiver.maxMessageSize(),
+    );
+    try testing.expectEqual(
+        @as(?u64, max_buffered_bytes),
+        scripted.client.receiver.max_buffered_bytes,
+    );
+
+    var attach = try sentAttach(allocator, &mem);
+    defer attach.deinit();
+    try testing.expectEqual(
+        @as(?u64, max_message_size),
+        attach.performative.attach.max_message_size,
+    );
 }
 
 test "attach carries the start position as a selector filter" {
@@ -1060,6 +1113,52 @@ test "disabled prefetch issues credit per receive" {
         if (amqp.performative.peekDescriptor(body) == amqp.performative.descriptor.flow) flows += 1;
     }
     try testing.expect(flows >= 1);
+}
+
+test "disabled prefetch carries a short batch request into the next receive" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock = driver.ManualClock{};
+    var conn = try driver.Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
+    defer conn.deinit();
+
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+    try scriptAttach(peer);
+    try pushEvent(allocator, peer, 0, 1, "first");
+
+    var scripted: Scripted = undefined;
+    try scripted.open(allocator, &mem, &clock, &conn, .{ .prefetch = -1 });
+    defer scripted.deinit();
+
+    mem.starve = true;
+    clock.auto_advance_ms = 1_000;
+    const first = try scripted.client.receiveEvents(allocator, 10);
+    defer event_data.freeReceivedEvents(allocator, first);
+    try testing.expectEqual(@as(usize, 1), first.len);
+    try testing.expectEqual(@as(u32, 9), scripted.client.manual_credit_pending);
+
+    var i: u32 = 0;
+    while (i < 10) : (i += 1) {
+        try pushEvent(allocator, peer, i + 1, @as(i64, i) + 2, "next");
+    }
+    mem.starve = false;
+    scripted.client.deadline_ms = 20_000;
+
+    const second = try scripted.client.receiveEvents(allocator, 10);
+    defer event_data.freeReceivedEvents(allocator, second);
+    try testing.expectEqual(@as(usize, 10), second.len);
+    try testing.expectEqual(@as(u32, 0), scripted.client.manual_credit_pending);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    for (frames.bodies.items) |body| {
+        if (amqp.performative.peekDescriptor(body) != amqp.performative.descriptor.flow) continue;
+        var decoded = try amqp.performative.decode(allocator, body);
+        defer decoded.deinit();
+        const credit = decoded.performative.flow.link_credit orelse continue;
+        try testing.expect(credit <= max_prefetch);
+    }
 }
 
 test "receiveEvents rejects counts outside the credit window" {
