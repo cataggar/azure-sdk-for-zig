@@ -13,8 +13,10 @@ Transport descriptors are copied by value while their contexts are borrowed.
 Keep playback/recording transport values, wrapped transport contexts, crypto
 provider contexts, and any open operations alive for the full lifetime stated
 by their API documentation. Playback is caller-serialized. Recording attempt
-reservation/finalization is internally synchronized; callers must still
-synchronize borrowed `getExchanges` slices and policy contexts.
+reservation/finalization and every recorder-owned allocation/free are
+internally synchronized, so the allocator supplied to `RecordingTransport`
+need not itself support concurrent calls. Callers must still synchronize
+borrowed `getExchanges` slices, policy contexts, and `toJson` lifecycle access.
 
 Construct a runtime with independently selected dependencies:
 
@@ -81,6 +83,12 @@ Established vendor signing fields such as `X-Amz-Signature`,
 same treatment, including nested and multiply encoded URLs.
 Each redacted header carries a structured `redacted` flag, so playback
 wildcards only values that recording explicitly classified as credentials.
+Sanitized request URLs and location-style headers additionally carry an
+internal structured redaction template. Playback never infers wildcard
+positions from the literal text `REDACTED`, so caller data containing that
+text remains exact even beside a generated credential wildcard. Older version
+3 files without templates and version 2 files are matched conservatively as
+exact URL text.
 Those structured redactions match a caller-supplied live credential, while
 nonsensitive query fields such as App Configuration's `key` filter and all
 other nonsensitive URL components, headers, and bodies remain exact-match
@@ -97,7 +105,9 @@ and query components through a bounded recursive decoder, and recursively
 sanitizes URI-valued parameters. Safe nested URIs retain the caller's original
 encoding exactly. When nested credentials require redaction, the nested URI is
 re-encoded with its host/path/nonsensitive fields preserved and exact while
-only credential fields are redacted. Credential-bearing paths are rejected.
+only credential fields are redacted; outer percent-encoding depth is retained,
+so paths such as `/a%252Fb` and `/a%2Fb` cannot collapse into one match.
+Credential-bearing paths are rejected.
 Safe fragments are preserved in recorded URL headers; Core strips them when
 constructing the redirected HTTP request. Recognized sensitive Location
 fragments are stripped
@@ -207,7 +217,9 @@ JWTs, and parseable structured part payloads. Declared multipart boundaries are
 parsed from `Content-Type` and recognized only as exact MIME delimiter lines;
 legal preambles, epilogues, and nested multipart parts are inspected, while
 invalid close suffixes, missing closes, and malformed multipart structures fail
-closed. Policy contexts are borrowed through `toJson`.
+closed. Mixed structured content in preambles or epilogues that cannot be
+classified in full also fails closed. Policy contexts are borrowed through
+`toJson`.
 
 Playback consumes one exchange for each raw transport invocation, including
 recorded failures. Buffered attempts advance after either a recorded transport

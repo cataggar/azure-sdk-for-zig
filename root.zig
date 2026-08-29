@@ -4,8 +4,9 @@
 //! transport descriptors whose opaque contexts borrow the transport values.
 //! The values and any wrapped backend contexts must outlive every descriptor
 //! copy and open operation. Playback is caller-serialized. Recording attempt
-//! ordering/finalization is synchronized; borrowed slices and policy contexts
-//! still require caller synchronization.
+//! ordering/finalization and recorder-owned allocation are synchronized;
+//! borrowed slices, policy contexts, and lifecycle calls still require caller
+//! synchronization.
 const std = @import("std");
 const core = @import("azure_sdk_core");
 
@@ -13,6 +14,7 @@ pub const HeaderPair = struct {
     name: []const u8,
     value: []const u8,
     redacted: bool = false,
+    url_redaction_template: ?[]const u8 = null,
 };
 
 /// Stable failure stages represented by a raw transport attempt.
@@ -47,13 +49,15 @@ pub const RecordedErrorCategory = enum {
 /// Method, URL, and body are matched exactly, including whether a body is
 /// present. Every request header listed here must occur with the same value;
 /// additional live headers are allowed. `REDACTED` values produced by
-/// `toJson` wildcard only recognized sensitive header values and sensitive
-/// URL query values; nonsensitive fields remain exact. Response headers retain
-/// wire order and duplicate values. `outcome` replays stable failure
-/// categories at transport, open, response-body, or finish stages.
+/// `toJson` wildcard only recognized sensitive header values and explicit URL
+/// redaction-template positions; literal `REDACTED` values and nonsensitive
+/// fields remain exact. Response headers retain wire order and duplicate
+/// values. `outcome` replays stable failure categories at transport, open,
+/// response-body, or finish stages.
 pub const RecordedExchange = struct {
     request_method: core.http.Method,
     request_url: []const u8,
+    request_url_redaction_template: ?[]const u8 = null,
     request_headers: []const HeaderPair = &.{},
     request_body: ?[]const u8 = null,
     response_status: u16 = 0,
@@ -67,6 +71,7 @@ pub const RecordedExchange = struct {
 pub const OwnedExchange = struct {
     request_method: core.http.Method,
     request_url: []u8,
+    request_url_redaction_template: ?[]u8 = null,
     request_headers: []HeaderPair,
     request_body: ?[]u8,
     response_status: u16,
@@ -79,6 +84,8 @@ pub const OwnedExchange = struct {
 
     fn deinit(self: *OwnedExchange, allocator: std.mem.Allocator) void {
         allocator.free(self.request_url);
+        if (self.request_url_redaction_template) |template|
+            allocator.free(template);
         deinitHeaderPairs(allocator, self.request_headers);
         if (self.request_body) |body| allocator.free(body);
         allocator.free(self.response_body_allocation orelse self.response_body);
@@ -229,6 +236,7 @@ pub fn parseJson(
         recording.* = .{
             .request_method = exchange.request_method,
             .request_url = exchange.request_url,
+            .request_url_redaction_template = exchange.request_url_redaction_template,
             .request_headers = exchange.request_headers,
             .request_body = exchange.request_body,
             .response_status = exchange.response_status,
@@ -635,15 +643,18 @@ const RecordingMutex = struct {
 /// `toJson`. Each exchange is one completed raw transport attempt, including
 /// redirect, retry, and stable staged failure outcomes. Post-dispatch
 /// bookkeeping failure poisons serialization rather than omitting an attempt.
-/// Attempt ordering and finalization are internally synchronized. Borrowed
-/// slices from `getExchanges` still require caller synchronization. `deinit`
-/// does not deinitialize either borrowed context.
+/// Attempt ordering, finalization, and all recorder-owned allocator calls are
+/// internally synchronized, so the supplied allocator need not be
+/// thread-safe. Borrowed slices from `getExchanges`, policy contexts, and
+/// lifecycle calls still require caller synchronization. `deinit` does not
+/// deinitialize either borrowed context.
 pub const RecordingTransport = struct {
     inner: core.http.HttpTransport,
     exchanges: std.ArrayList(OwnedExchange) = .empty,
     allocator: std.mem.Allocator,
     options: RecordingOptions,
     mutex: RecordingMutex = .{},
+    allocator_mutex: RecordingMutex = .{},
     poisoned: bool = false,
 
     const vtable: core.http.HttpTransport.VTable = .{
@@ -675,10 +686,11 @@ pub const RecordingTransport = struct {
     }
 
     pub fn deinit(self: *RecordingTransport) void {
+        const allocator = self.synchronizedAllocator();
         for (self.exchanges.items) |*exchange| {
-            exchange.deinit(self.allocator);
+            exchange.deinit(allocator);
         }
-        self.exchanges.deinit(self.allocator);
+        self.exchanges.deinit(allocator);
         self.* = undefined;
     }
 
@@ -686,6 +698,92 @@ pub const RecordingTransport = struct {
     /// `resolved == false`; do not retain this slice across concurrent calls.
     pub fn getExchanges(self: *const RecordingTransport) []const OwnedExchange {
         return self.exchanges.items;
+    }
+
+    fn synchronizedAllocator(self: *RecordingTransport) std.mem.Allocator {
+        return .{
+            .ptr = self,
+            .vtable = &synchronized_allocator_vtable,
+        };
+    }
+
+    const synchronized_allocator_vtable: std.mem.Allocator.VTable = .{
+        .alloc = &synchronizedAlloc,
+        .resize = &synchronizedResize,
+        .remap = &synchronizedRemap,
+        .free = &synchronizedFree,
+    };
+
+    fn synchronizedAlloc(
+        context: *anyopaque,
+        len: usize,
+        alignment: std.mem.Alignment,
+        return_address: usize,
+    ) ?[*]u8 {
+        const self: *RecordingTransport = @ptrCast(@alignCast(context));
+        self.allocator_mutex.lock();
+        defer self.allocator_mutex.unlock();
+        return self.allocator.vtable.alloc(
+            self.allocator.ptr,
+            len,
+            alignment,
+            return_address,
+        );
+    }
+
+    fn synchronizedResize(
+        context: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        return_address: usize,
+    ) bool {
+        const self: *RecordingTransport = @ptrCast(@alignCast(context));
+        self.allocator_mutex.lock();
+        defer self.allocator_mutex.unlock();
+        return self.allocator.vtable.resize(
+            self.allocator.ptr,
+            memory,
+            alignment,
+            new_len,
+            return_address,
+        );
+    }
+
+    fn synchronizedRemap(
+        context: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        return_address: usize,
+    ) ?[*]u8 {
+        const self: *RecordingTransport = @ptrCast(@alignCast(context));
+        self.allocator_mutex.lock();
+        defer self.allocator_mutex.unlock();
+        return self.allocator.vtable.remap(
+            self.allocator.ptr,
+            memory,
+            alignment,
+            new_len,
+            return_address,
+        );
+    }
+
+    fn synchronizedFree(
+        context: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        return_address: usize,
+    ) void {
+        const self: *RecordingTransport = @ptrCast(@alignCast(context));
+        self.allocator_mutex.lock();
+        defer self.allocator_mutex.unlock();
+        self.allocator.vtable.free(
+            self.allocator.ptr,
+            memory,
+            alignment,
+            return_address,
+        );
     }
 
     /// False when post-dispatch bookkeeping failed or an open operation was
@@ -719,7 +817,10 @@ pub const RecordingTransport = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
         if (self.poisoned) return error.IncompleteRecording;
-        try self.exchanges.ensureUnusedCapacity(self.allocator, 1);
+        try self.exchanges.ensureUnusedCapacity(
+            self.synchronizedAllocator(),
+            1,
+        );
         const ticket = self.exchanges.items.len;
         self.exchanges.appendAssumeCapacity(pending.intoSlot());
         return ticket;
@@ -764,8 +865,9 @@ pub const RecordingTransport = struct {
         defer self.mutex.unlock();
         const slot = &self.exchanges.items[ticket];
         std.debug.assert(!slot.resolved);
-        self.allocator.free(slot.response_body);
-        deinitHeaderPairs(self.allocator, slot.response_headers);
+        const allocator = self.synchronizedAllocator();
+        allocator.free(slot.response_body);
+        deinitHeaderPairs(allocator, slot.response_headers);
         slot.response_status = response.status;
         slot.response_body = response.body;
         slot.response_body_allocation = response.body_allocation;
@@ -790,6 +892,8 @@ pub const RecordingTransport = struct {
     /// `.inspect` explicitly opts supported text into built-in checks;
     /// `.allow_opaque` is the caller's trust boundary for known-safe opaque
     /// content.
+    /// Generated URL wildcard locations are serialized as explicit templates;
+    /// literal `REDACTED` URL values remain exact-match data.
     ///
     /// Structurally recognized credential-bearing JSON, form, connection
     /// string, XML, and private-key bodies cause
@@ -800,10 +904,16 @@ pub const RecordingTransport = struct {
         self: *const RecordingTransport,
         allocator: std.mem.Allocator,
     ) ![]u8 {
-        var output: std.Io.Writer.Allocating = .init(allocator);
+        const mutable = @constCast(self);
+        const output_allocator = if (allocator.ptr == self.allocator.ptr and
+            allocator.vtable == self.allocator.vtable)
+            mutable.synchronizedAllocator()
+        else
+            allocator;
+        var output: std.Io.Writer.Allocating = .init(output_allocator);
         errdefer output.deinit();
         const writer = &output.writer;
-        self.writeJson(writer, allocator) catch |err| switch (err) {
+        self.writeJson(writer, output_allocator) catch |err| switch (err) {
             error.WriteFailed => return error.OutOfMemory,
             else => return err,
         };
@@ -850,7 +960,31 @@ pub const RecordingTransport = struct {
             try writer.writeAll("\n  {\"request_method\":");
             try writeJsonString(writer, methodToString(exchange.request_method));
             try writer.writeAll(",\"request_url\":");
-            try writeSanitizedUrl(writer, allocator, exchange.request_url);
+            const sanitized_request_url = try sanitizeUrlAlloc(
+                allocator,
+                exchange.request_url,
+            );
+            defer allocator.free(sanitized_request_url);
+            try writeJsonString(writer, sanitized_request_url);
+            try writer.writeAll(",\"request_url_redaction_template\":");
+            if (!std.mem.eql(
+                u8,
+                exchange.request_url,
+                sanitized_request_url,
+            )) {
+                const template = try sanitizeUrlAllocWithMarker(
+                    allocator,
+                    exchange.request_url,
+                    "\x00",
+                );
+                defer allocator.free(template);
+                if (std.mem.indexOfScalar(u8, template, 0) != null)
+                    try writeJsonString(writer, template)
+                else
+                    try writer.writeAll("null");
+            } else {
+                try writer.writeAll("null");
+            }
             try writer.writeAll(",\"request_headers\":");
             try writeHeaders(
                 writer,
@@ -894,13 +1028,14 @@ pub const RecordingTransport = struct {
     ) !core.http.Response {
         const self: *RecordingTransport = @ptrCast(@alignCast(context));
         try self.ensureCanDispatch();
+        const allocator = self.synchronizedAllocator();
         var pending = try PendingRequest.init(
-            self.allocator,
+            allocator,
             request,
             request.body,
         );
         var pending_owned = true;
-        defer if (pending_owned) pending.deinit(self.allocator);
+        defer if (pending_owned) pending.deinit(allocator);
         const ticket = try self.reserveAttempt(&pending);
         pending_owned = false;
 
@@ -917,7 +1052,7 @@ pub const RecordingTransport = struct {
         };
         errdefer response.deinit();
         const owned_response = ownedResponseFromResponse(
-            self.allocator,
+            allocator,
             &response,
             response.body,
         ) catch |err| {
@@ -935,6 +1070,7 @@ pub const RecordingTransport = struct {
     ) !*core.http.HttpOperation {
         const self: *RecordingTransport = @ptrCast(@alignCast(context));
         try self.ensureCanDispatch();
+        const allocator = self.synchronizedAllocator();
         if (options.body != null and request.body != null)
             return error.MultipleRequestBodies;
         try checkCancelled(options.cancellation);
@@ -943,12 +1079,12 @@ pub const RecordingTransport = struct {
             return error.StreamingRequestUnsupported;
 
         var pending = try PendingRequest.init(
-            self.allocator,
+            allocator,
             request,
             request.body,
         );
         var pending_owned = true;
-        defer if (pending_owned) pending.deinit(self.allocator);
+        defer if (pending_owned) pending.deinit(allocator);
         const ticket = try self.reserveAttempt(&pending);
         pending_owned = false;
 
@@ -957,7 +1093,7 @@ pub const RecordingTransport = struct {
         var has_capture = false;
         if (options.body) |streaming| {
             request_capture.init(
-                self.allocator,
+                allocator,
                 streaming.reader,
                 null,
             );
@@ -1175,28 +1311,29 @@ const RecordingOperation = struct {
         inner: *core.http.HttpOperation,
         ticket: usize,
     ) !*core.http.HttpOperation {
-        const self = try owner.allocator.create(RecordingOperation);
-        errdefer owner.allocator.destroy(self);
-        var header_set = try cloneOperationHeaders(owner.allocator, inner);
-        errdefer header_set.deinit(owner.allocator);
+        const allocator = owner.synchronizedAllocator();
+        const self = try allocator.create(RecordingOperation);
+        errdefer allocator.destroy(self);
+        var header_set = try cloneOperationHeaders(allocator, inner);
+        errdefer header_set.deinit(allocator);
         const inner_reader = try inner.reader();
         const attempt_headers = try cloneResponseHeaders(
-            owner.allocator,
+            allocator,
             &inner.headers,
             &inner.response_headers,
         );
-        errdefer deinitHeaderPairs(owner.allocator, attempt_headers);
+        errdefer deinitHeaderPairs(allocator, attempt_headers);
 
         self.* = .{
             .operation = undefined,
-            .allocator = owner.allocator,
+            .allocator = allocator,
             .owner = owner,
             .inner = inner,
             .ticket = ticket,
             .attempt_headers = attempt_headers,
             .response_reader = undefined,
         };
-        self.response_reader.init(owner.allocator, inner_reader, inner);
+        self.response_reader.init(allocator, inner_reader, inner);
         self.operation = .{
             .status_code = inner.status_code,
             .headers = header_set.map,
@@ -1583,6 +1720,17 @@ fn parseExchange(
         return error.InvalidRecordingJson;
     const request_url_value = object.get("request_url") orelse
         return error.InvalidRecordingJson;
+    const request_url_redaction_template: ?[]u8 =
+        if (format_version == 2 or
+        object.get("request_url_redaction_template") == null)
+            null
+        else switch (object.get("request_url_redaction_template").?) {
+            .null => null,
+            .string => |template| try allocator.dupe(u8, template),
+            else => return error.InvalidRecordingJson,
+        };
+    errdefer if (request_url_redaction_template) |template|
+        allocator.free(template);
     const request_headers_value = object.get("request_headers") orelse
         return error.InvalidRecordingJson;
     const request_body_value = object.get("request_body") orelse
@@ -1590,6 +1738,8 @@ fn parseExchange(
     const method = try parseMethod(try jsonString(method_value));
     const request_url = try allocator.dupe(u8, try jsonString(request_url_value));
     errdefer allocator.free(request_url);
+    if (request_url_redaction_template) |template|
+        try validateUrlRedactionTemplate(request_url, template);
     const request_headers = try parseHeaders(allocator, request_headers_value);
     errdefer deinitHeaderPairs(allocator, request_headers);
     const request_body = try parseOptionalBody(allocator, request_body_value);
@@ -1618,6 +1768,7 @@ fn parseExchange(
         return .{
             .request_method = method,
             .request_url = request_url,
+            .request_url_redaction_template = request_url_redaction_template,
             .request_headers = request_headers,
             .request_body = request_body,
             .response_status = 0,
@@ -1648,6 +1799,7 @@ fn parseExchange(
     return .{
         .request_method = method,
         .request_url = request_url,
+        .request_url_redaction_template = request_url_redaction_template,
         .request_headers = request_headers,
         .request_body = request_body,
         .response_status = @intCast(response_status_integer),
@@ -1692,6 +1844,8 @@ fn parseHeaders(
         for (headers[0..initialized]) |header| {
             allocator.free(header.name);
             allocator.free(header.value);
+            if (header.url_redaction_template) |template|
+                allocator.free(template);
         }
         allocator.free(headers);
     }
@@ -1709,10 +1863,25 @@ fn parseHeaders(
             .bool => |result| result,
             else => return error.InvalidRecordingJson,
         } else false;
+        const url_redaction_template: ?[]u8 =
+            if (object.get("url_redaction_template")) |template_value|
+                switch (template_value) {
+                    .null => null,
+                    .string => |template| try allocator.dupe(u8, template),
+                    else => return error.InvalidRecordingJson,
+                }
+            else
+                null;
+        errdefer if (url_redaction_template) |template|
+            allocator.free(template);
         header.name = try allocator.dupe(u8, try jsonString(name_value));
         errdefer allocator.free(header.name);
         header.value = try allocator.dupe(u8, try jsonString(field_value));
+        errdefer allocator.free(header.value);
         header.redacted = redacted;
+        header.url_redaction_template = url_redaction_template;
+        if (url_redaction_template) |template|
+            try validateUrlRedactionTemplate(header.value, template);
         initialized += 1;
     }
     return headers;
@@ -1759,6 +1928,44 @@ fn jsonString(value: std.json.Value) ![]const u8 {
     };
 }
 
+fn validateUrlRedactionTemplate(
+    visible: []const u8,
+    template: []const u8,
+) !void {
+    var template_offset: usize = 0;
+    var visible_offset: usize = 0;
+    var found_marker = false;
+    while (std.mem.indexOfScalarPos(
+        u8,
+        template,
+        template_offset,
+        0,
+    )) |marker_offset| {
+        found_marker = true;
+        const literal = template[template_offset..marker_offset];
+        if (!std.mem.startsWith(u8, visible[visible_offset..], literal))
+            return error.InvalidRecordingJson;
+        visible_offset += literal.len;
+        if (!std.mem.startsWith(
+            u8,
+            visible[visible_offset..],
+            redacted_value,
+        ))
+            return error.InvalidRecordingJson;
+        visible_offset += redacted_value.len;
+        template_offset = marker_offset + 1;
+    }
+    if (!found_marker or
+        !std.mem.eql(
+            u8,
+            visible[visible_offset..],
+            template[template_offset..],
+        ))
+    {
+        return error.InvalidRecordingJson;
+    }
+}
+
 fn parseMethod(value: []const u8) !core.http.Method {
     inline for (std.meta.fields(core.http.Method)) |field| {
         if (std.mem.eql(u8, value, field.name)) return @enumFromInt(field.value);
@@ -1772,7 +1979,12 @@ fn matchRequest(
     body: ?[]const u8,
 ) !void {
     if (exchange.request_method != request.method) return error.MethodMismatch;
-    if (!try urlMatches(request.allocator, exchange.request_url, request.url))
+    if (!try urlMatches(
+        request.allocator,
+        exchange.request_url,
+        request.url,
+        exchange.request_url_redaction_template,
+    ))
         return error.UrlMismatch;
     if ((exchange.request_body == null) != (body == null))
         return error.BodyMismatch;
@@ -1798,9 +2010,15 @@ fn headerValueMatches(
 ) !bool {
     if (expected.redacted) return true;
     if (isSanitizedUrlHeader(expected.name)) {
-        const sanitized = try sanitizeLocationUrlAlloc(allocator, actual);
+        const template = expected.url_redaction_template orelse
+            return std.mem.eql(u8, expected.value, actual);
+        const sanitized = try sanitizeLocationUrlAllocWithMarker(
+            allocator,
+            actual,
+            "\x00",
+        );
         defer allocator.free(sanitized);
-        return std.mem.eql(u8, expected.value, sanitized);
+        return std.mem.eql(u8, template, sanitized);
     }
     return std.mem.eql(u8, expected.value, actual);
 }
@@ -1809,54 +2027,17 @@ fn urlMatches(
     allocator: std.mem.Allocator,
     expected: []const u8,
     actual: []const u8,
+    redaction_template: ?[]const u8,
 ) !bool {
-    if (!try hasRedactedSensitiveQuery(allocator, expected, 0))
+    const template = redaction_template orelse
         return std.mem.eql(u8, expected, actual);
-    const sanitized = try sanitizeUrlAlloc(allocator, actual);
+    const sanitized = try sanitizeUrlAllocWithMarker(
+        allocator,
+        actual,
+        "\x00",
+    );
     defer allocator.free(sanitized);
-    return std.mem.eql(u8, expected, sanitized);
-}
-
-fn hasRedactedSensitiveQuery(
-    allocator: std.mem.Allocator,
-    url: []const u8,
-    nesting: usize,
-) !bool {
-    if (nesting > max_nested_url_depth) return false;
-    const question = std.mem.indexOfScalar(u8, url, '?') orelse return false;
-    const fragment = std.mem.indexOfScalarPos(u8, url, question + 1, '#') orelse
-        url.len;
-    var iterator = std.mem.splitScalar(u8, url[question + 1 .. fragment], '&');
-    while (iterator.next()) |parameter| {
-        const equals = std.mem.indexOfScalar(u8, parameter, '=') orelse continue;
-        if (std.mem.eql(u8, parameter[equals + 1 ..], redacted_value)) {
-            return true;
-        }
-        var decoded = try allocator.dupe(u8, parameter[equals + 1 ..]);
-        defer allocator.free(decoded);
-        var decode_count: usize = 0;
-        while (decode_count < max_url_decode_depth) : (decode_count += 1) {
-            const next = try percentDecodeAlloc(
-                allocator,
-                decoded,
-                decode_count == 0,
-            );
-            const changed = !std.mem.eql(u8, decoded, next);
-            allocator.free(decoded);
-            decoded = next;
-            if (!changed) break;
-        }
-        if (looksLikeNestedUriReference(decoded) and
-            try hasRedactedSensitiveQuery(
-                allocator,
-                decoded,
-                nesting + 1,
-            ))
-        {
-            return true;
-        }
-    }
-    return false;
+    return std.mem.eql(u8, template, sanitized);
 }
 
 fn validateRequestFraming(
@@ -1994,6 +2175,8 @@ fn deinitHeaderPairs(
     for (headers) |header| {
         allocator.free(header.name);
         allocator.free(header.value);
+        if (header.url_redaction_template) |template|
+            allocator.free(template);
     }
     allocator.free(headers);
 }
@@ -2572,6 +2755,11 @@ fn containsSensitiveLoosePayload(
     const payload = std.mem.trim(u8, raw_payload, " \t\r\n");
     if (payload.len == 0) return false;
     if (try containsSensitiveScalar(allocator, payload)) return true;
+    if (try containsSensitiveXml(allocator, payload) or
+        try containsSensitiveAssignment(allocator, payload))
+    {
+        return true;
+    }
     if (looksLikeStructuredJson(payload)) {
         const parsed = std.json.parseFromSlice(
             std.json.Value,
@@ -2585,13 +2773,11 @@ fn containsSensitiveLoosePayload(
         defer parsed.deinit();
         if (try jsonContainsSensitiveField(allocator, parsed.value))
             return true;
+        return false;
     }
-    if (looksLikeXml(payload) and
-        (try containsSensitiveXml(allocator, payload) or
-            try containsSensitiveAssignment(allocator, payload)))
-    {
-        return true;
-    }
+    if (looksLikeXml(payload)) return false;
+    if (std.mem.indexOfAny(u8, payload, "{}[]<>") != null)
+        return error.UnsupportedBodySanitization;
     return false;
 }
 
@@ -3583,6 +3769,9 @@ fn writeHeaders(
             .inspect;
         var sanitized_url: ?[]u8 = null;
         defer if (sanitized_url) |url| allocator.free(url);
+        var sanitized_template: ?[]u8 = null;
+        defer if (sanitized_template) |template|
+            allocator.free(template);
         var redact = header.redacted;
         if (!redact) switch (decision) {
             .redact => redact = true,
@@ -3596,6 +3785,21 @@ fn writeHeaders(
                     else => return err,
                 };
                 redact = sanitized_url == null;
+                if (sanitized_url) |url| {
+                    if (!std.mem.eql(u8, header.value, url)) {
+                        const template =
+                            try sanitizeLocationUrlAllocWithMarker(
+                                allocator,
+                                header.value,
+                                "\x00",
+                            );
+                        if (std.mem.indexOfScalar(u8, template, 0) != null) {
+                            sanitized_template = template;
+                        } else {
+                            allocator.free(template);
+                        }
+                    }
+                }
             } else {
                 redact = try shouldRedactHeader(
                     allocator,
@@ -3613,31 +3817,50 @@ fn writeHeaders(
             try writeJsonString(writer, header.value);
         }
         try writer.print(",\"redacted\":{}", .{redact});
+        try writer.writeAll(",\"url_redaction_template\":");
+        if (!redact) {
+            if (sanitized_template) |template|
+                try writeJsonString(writer, template)
+            else
+                try writer.writeAll("null");
+        } else {
+            try writer.writeAll("null");
+        }
         try writer.writeByte('}');
     }
     try writer.writeByte(']');
-}
-
-fn writeSanitizedUrl(
-    writer: *std.Io.Writer,
-    allocator: std.mem.Allocator,
-    url: []const u8,
-) !void {
-    const sanitized = try sanitizeUrlAlloc(allocator, url);
-    defer allocator.free(sanitized);
-    try writeJsonString(writer, sanitized);
 }
 
 fn sanitizeUrlAlloc(
     allocator: std.mem.Allocator,
     url: []const u8,
 ) ![]u8 {
-    return sanitizeUrlAllocDepth(allocator, url, 0);
+    return sanitizeUrlAllocWithMarker(allocator, url, redacted_value);
+}
+
+fn sanitizeUrlAllocWithMarker(
+    allocator: std.mem.Allocator,
+    url: []const u8,
+    marker: []const u8,
+) ![]u8 {
+    return sanitizeUrlAllocDepth(allocator, url, 0, marker);
 }
 
 fn sanitizeLocationUrlAlloc(
     allocator: std.mem.Allocator,
     url: []const u8,
+) ![]u8 {
+    return sanitizeLocationUrlAllocWithMarker(
+        allocator,
+        url,
+        redacted_value,
+    );
+}
+
+fn sanitizeLocationUrlAllocWithMarker(
+    allocator: std.mem.Allocator,
+    url: []const u8,
+    marker: []const u8,
 ) ![]u8 {
     if (std.mem.indexOfScalar(u8, url, '#')) |fragment| {
         if (try encodedComponentIsSensitive(
@@ -3647,10 +3870,14 @@ fn sanitizeLocationUrlAlloc(
             true,
             0,
         )) {
-            return sanitizeUrlAlloc(allocator, url[0..fragment]);
+            return sanitizeUrlAllocWithMarker(
+                allocator,
+                url[0..fragment],
+                marker,
+            );
         }
     }
-    return sanitizeUrlAlloc(allocator, url);
+    return sanitizeUrlAllocWithMarker(allocator, url, marker);
 }
 
 const max_url_decode_depth = 3;
@@ -3698,6 +3925,7 @@ fn sanitizeUrlAllocDepth(
     allocator: std.mem.Allocator,
     url: []const u8,
     nesting: usize,
+    marker: []const u8,
 ) anyerror![]u8 {
     if (nesting > max_nested_url_depth or
         url.len == 0 or
@@ -3802,7 +4030,7 @@ fn sanitizeUrlAllocDepth(
             )) {
                 try output.writer.writeAll(parameter);
                 try output.writer.writeAll("=");
-                try output.writer.writeAll(redacted_value);
+                try output.writer.writeAll(marker);
             } else {
                 try output.writer.writeAll(parameter);
             }
@@ -3817,12 +4045,13 @@ fn sanitizeUrlAllocDepth(
         try output.writer.writeAll(encoded_name);
         try output.writer.writeByte('=');
         if (redact_name) {
-            try output.writer.writeAll(redacted_value);
+            try output.writer.writeAll(marker);
         } else {
             const sanitized_value = try sanitizeQueryValueAlloc(
                 allocator,
                 encoded_value,
                 nesting,
+                marker,
             );
             defer allocator.free(sanitized_value);
             try output.writer.writeAll(sanitized_value);
@@ -3838,58 +4067,89 @@ fn sanitizeQueryValueAlloc(
     allocator: std.mem.Allocator,
     encoded: []const u8,
     nesting: usize,
+    marker: []const u8,
 ) ![]u8 {
     if (encoded.len > max_sanitized_url_length)
-        return allocator.dupe(u8, redacted_value);
+        return allocator.dupe(u8, marker);
     var current = try allocator.dupe(u8, encoded);
     defer allocator.free(current);
-    var decode_count: usize = 0;
-    while (decode_count < max_url_decode_depth) : (decode_count += 1) {
+    var decoded_layers: usize = 0;
+    while (true) {
+        if (looksLikeNestedUriReference(current)) {
+            if (nesting >= max_nested_url_depth)
+                return allocator.dupe(u8, marker);
+            const sanitized_nested = sanitizeUrlAllocDepth(
+                allocator,
+                current,
+                nesting + 1,
+                marker,
+            ) catch |err| switch (err) {
+                error.SensitiveUrlRequiresSanitization => {
+                    return allocator.dupe(u8, marker);
+                },
+                else => return err,
+            };
+            defer allocator.free(sanitized_nested);
+            if (std.mem.eql(u8, current, sanitized_nested))
+                return allocator.dupe(u8, encoded);
+            var result = try allocator.dupe(u8, sanitized_nested);
+            errdefer allocator.free(result);
+            for (0..decoded_layers) |_| {
+                const next = try percentEncodeQueryValueAlloc(
+                    allocator,
+                    result,
+                    marker,
+                );
+                allocator.free(result);
+                result = next;
+            }
+            return result;
+        }
+        if (decoded_layers == max_url_decode_depth) break;
         const decoded = try percentDecodeAlloc(
             allocator,
             current,
-            decode_count == 0,
+            false,
         );
         const changed = !std.mem.eql(u8, current, decoded);
         allocator.free(current);
         current = decoded;
         if (!changed) break;
+        decoded_layers += 1;
     }
     if (containsPercentEscape(current))
-        return allocator.dupe(u8, redacted_value);
-
-    if (looksLikeNestedUriReference(current)) {
-        if (nesting >= max_nested_url_depth)
-            return allocator.dupe(u8, redacted_value);
-        const sanitized_nested = sanitizeUrlAllocDepth(
-            allocator,
-            current,
-            nesting + 1,
-        ) catch |err| switch (err) {
-            error.SensitiveUrlRequiresSanitization => {
-                return allocator.dupe(u8, redacted_value);
-            },
-            else => return err,
-        };
-        defer allocator.free(sanitized_nested);
-        if (std.mem.eql(u8, current, sanitized_nested))
-            return allocator.dupe(u8, encoded);
-        return percentEncodeQueryValueAlloc(allocator, sanitized_nested);
-    }
-
+        return allocator.dupe(u8, marker);
     if (try containsSensitiveScalar(allocator, current))
-        return allocator.dupe(u8, redacted_value);
+        return allocator.dupe(u8, marker);
+    if (std.mem.indexOfScalar(u8, current, '+') != null) {
+        const form_value = try allocator.dupe(u8, current);
+        defer allocator.free(form_value);
+        std.mem.replaceScalar(u8, form_value, '+', ' ');
+        if (try containsSensitiveScalar(allocator, form_value))
+            return allocator.dupe(u8, marker);
+    }
     return allocator.dupe(u8, encoded);
 }
 
 fn percentEncodeQueryValueAlloc(
     allocator: std.mem.Allocator,
     value: []const u8,
+    marker: []const u8,
 ) ![]u8 {
     var output: std.Io.Writer.Allocating = .init(allocator);
     errdefer output.deinit();
     const hex = "0123456789ABCDEF";
-    for (value) |byte| {
+    var index: usize = 0;
+    while (index < value.len) {
+        if (marker.len != 0 and
+            std.mem.startsWith(u8, value[index..], marker))
+        {
+            try output.writer.writeAll(marker);
+            index += marker.len;
+            continue;
+        }
+        const byte = value[index];
+        index += 1;
         if (std.ascii.isAlphanumeric(byte) or
             byte == '-' or byte == '.' or byte == '_' or byte == '~')
         {
@@ -3976,6 +4236,7 @@ fn encodedComponentIsSensitive(
                 allocator,
                 current,
                 nesting + 1,
+                redacted_value,
             ) catch |err| switch (err) {
                 error.SensitiveUrlRequiresSanitization => return true,
                 else => return err,
@@ -4212,6 +4473,136 @@ const BufferedOnlyTransport = struct {
         const self: *BufferedOnlyTransport = @ptrCast(@alignCast(context));
         const transport = self.inner.asTransport();
         return transport.vtable.send(transport.context, request);
+    }
+};
+
+const GuardedAllocator = struct {
+    child: std.mem.Allocator,
+    active: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    overlap: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    const vtable: std.mem.Allocator.VTable = .{
+        .alloc = &alloc,
+        .resize = &resize,
+        .remap = &remap,
+        .free = &free,
+    };
+
+    fn allocator(self: *GuardedAllocator) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+
+    fn enter(self: *GuardedAllocator) void {
+        if (self.active.swap(true, .acquire))
+            self.overlap.store(true, .release);
+        for (0..10_000) |_| std.atomic.spinLoopHint();
+    }
+
+    fn leave(self: *GuardedAllocator) void {
+        self.active.store(false, .release);
+    }
+
+    fn alloc(
+        context: *anyopaque,
+        len: usize,
+        alignment: std.mem.Alignment,
+        return_address: usize,
+    ) ?[*]u8 {
+        const self: *GuardedAllocator = @ptrCast(@alignCast(context));
+        self.enter();
+        defer self.leave();
+        return self.child.rawAlloc(len, alignment, return_address);
+    }
+
+    fn resize(
+        context: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        return_address: usize,
+    ) bool {
+        const self: *GuardedAllocator = @ptrCast(@alignCast(context));
+        self.enter();
+        defer self.leave();
+        return self.child.rawResize(
+            memory,
+            alignment,
+            new_len,
+            return_address,
+        );
+    }
+
+    fn remap(
+        context: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        return_address: usize,
+    ) ?[*]u8 {
+        const self: *GuardedAllocator = @ptrCast(@alignCast(context));
+        self.enter();
+        defer self.leave();
+        return self.child.rawRemap(
+            memory,
+            alignment,
+            new_len,
+            return_address,
+        );
+    }
+
+    fn free(
+        context: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        return_address: usize,
+    ) void {
+        const self: *GuardedAllocator = @ptrCast(@alignCast(context));
+        self.enter();
+        defer self.leave();
+        self.child.rawFree(memory, alignment, return_address);
+    }
+};
+
+const ThreadSafeEmptyTransport = struct {
+    const vtable: core.http.HttpTransport.VTable = .{ .send = &send };
+
+    fn asTransport(self: *ThreadSafeEmptyTransport) core.http.HttpTransport {
+        return .{ .context = self, .vtable = &vtable };
+    }
+
+    fn send(
+        _: *anyopaque,
+        request: *core.http.Request,
+    ) !core.http.Response {
+        const body = try request.allocator.alloc(u8, 0);
+        return .{
+            .status_code = 200,
+            .headers = std.StringHashMap([]const u8).init(request.allocator),
+            .body = body,
+            .allocator = request.allocator,
+            .response_headers = core.http.ResponseHeaders.init(request.allocator),
+        };
+    }
+};
+
+const ConcurrentRecorderWorker = struct {
+    recorder: *RecordingTransport,
+    start: *std.atomic.Value(bool),
+    failed: *std.atomic.Value(bool),
+
+    fn run(self: *ConcurrentRecorderWorker) void {
+        while (!self.start.load(.acquire)) std.atomic.spinLoopHint();
+        var request = core.http.Request.init(
+            std.heap.page_allocator,
+            .GET,
+            "https://example.test/concurrent",
+        );
+        defer request.deinit();
+        var response = self.recorder.asTransport().send(&request) catch {
+            self.failed.store(true, .release);
+            return;
+        };
+        response.deinit();
     }
 };
 
@@ -5065,6 +5456,51 @@ test "overlapping attempts retain dispatch order and block serialization" {
         request_c.url,
         parsed.asSlice()[2].request_url,
     );
+}
+
+test "recorder serializes backing allocator across threads" {
+    const worker_count = 12;
+    var guarded = GuardedAllocator{ .child = std.heap.page_allocator };
+    var inner = ThreadSafeEmptyTransport{};
+    var recorder = RecordingTransport.init(
+        guarded.allocator(),
+        inner.asTransport(),
+    );
+    var recorder_owned = true;
+    errdefer if (recorder_owned) recorder.deinit();
+    var start = std.atomic.Value(bool).init(false);
+    var failed = std.atomic.Value(bool).init(false);
+    var workers: [worker_count]ConcurrentRecorderWorker = undefined;
+    var threads: [worker_count]std.Thread = undefined;
+    var spawned: usize = 0;
+    errdefer {
+        start.store(true, .release);
+        for (threads[0..spawned]) |thread| thread.join();
+    }
+    for (&workers, &threads) |*worker, *thread| {
+        worker.* = .{
+            .recorder = &recorder,
+            .start = &start,
+            .failed = &failed,
+        };
+        thread.* = try std.Thread.spawn(.{}, ConcurrentRecorderWorker.run, .{
+            worker,
+        });
+        spawned += 1;
+    }
+    start.store(true, .release);
+    for (threads) |thread| thread.join();
+    spawned = 0;
+
+    try std.testing.expect(!failed.load(.acquire));
+    try std.testing.expect(recorder.isComplete());
+    try std.testing.expectEqual(
+        @as(usize, worker_count),
+        recorder.getExchanges().len,
+    );
+    recorder.deinit();
+    recorder_owned = false;
+    try std.testing.expect(!guarded.overlap.load(.acquire));
 }
 
 test "recording preserves buffered open fallback" {
@@ -6969,6 +7405,202 @@ test "nested signed URI preserves exact host path and nonsensitive fields" {
             std.testing.allocator,
             .GET,
             mismatch_url,
+        );
+        defer mismatch.deinit();
+        try std.testing.expectError(
+            error.UrlMismatch,
+            mismatch_playback.asTransport().send(&mismatch),
+        );
+    }
+}
+
+test "nested URI redaction preserves outer encoding depth" {
+    const recorded =
+        "https://example.test/callback?return=" ++
+        "https%3A%2F%2Fstorage.example%2Fa%25252Fb%3F" ++
+        "sig%3Drecorded-secret";
+    var mock = core.http.MockTransport.init(
+        std.testing.allocator,
+        200,
+        "",
+    );
+    defer mock.deinit();
+    var recorder = RecordingTransport.init(
+        std.testing.allocator,
+        mock.asTransport(),
+    );
+    defer recorder.deinit();
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        recorded,
+    );
+    defer request.deinit();
+    var response = try recorder.asTransport().send(&request);
+    response.deinit();
+    const json = try recorder.toJson(std.testing.allocator);
+    defer std.testing.allocator.free(json);
+    var parsed = try parseJson(std.testing.allocator, json);
+    defer parsed.deinit();
+
+    var playback = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    var rotated = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://example.test/callback?return=" ++
+            "https%3A%2F%2Fstorage.example%2Fa%25252Fb%3F" ++
+            "sig%3Drotated-secret",
+    );
+    defer rotated.deinit();
+    var replayed = try playback.asTransport().send(&rotated);
+    replayed.deinit();
+
+    var mismatch_playback = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    var mismatch = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://example.test/callback?return=" ++
+            "https%3A%2F%2Fstorage.example%2Fa%252Fb%3F" ++
+            "sig%3Drotated-secret",
+    );
+    defer mismatch.deinit();
+    try std.testing.expectError(
+        error.UrlMismatch,
+        mismatch_playback.asTransport().send(&mismatch),
+    );
+}
+
+test "literal redaction marker remains exact beside credential wildcard" {
+    var mock = core.http.MockTransport.init(
+        std.testing.allocator,
+        200,
+        "",
+    );
+    defer mock.deinit();
+    var recorder = RecordingTransport.init(
+        std.testing.allocator,
+        mock.asTransport(),
+    );
+    defer recorder.deinit();
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://example.test/item?mode=REDACTED&sig=recorded-secret",
+    );
+    defer request.deinit();
+    try request.setHeader(
+        "Operation-Location",
+        "https://next.example/item?mode=REDACTED&sig=recorded-header",
+    );
+    var response = try recorder.asTransport().send(&request);
+    response.deinit();
+    const json = try recorder.toJson(std.testing.allocator);
+    defer std.testing.allocator.free(json);
+    var parsed = try parseJson(std.testing.allocator, json);
+    defer parsed.deinit();
+
+    var playback = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    var rotated = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://example.test/item?mode=REDACTED&sig=rotated-secret",
+    );
+    defer rotated.deinit();
+    try rotated.setHeader(
+        "Operation-Location",
+        "https://next.example/item?mode=REDACTED&sig=rotated-header",
+    );
+    var replayed = try playback.asTransport().send(&rotated);
+    replayed.deinit();
+
+    var mismatch_playback = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    var mismatch = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://example.test/item?mode=Bearer%20live-secret&sig=rotated-secret",
+    );
+    defer mismatch.deinit();
+    try mismatch.setHeader(
+        "Operation-Location",
+        "https://next.example/item?mode=Bearer%20live-secret&sig=rotated-header",
+    );
+    try std.testing.expectError(
+        error.UrlMismatch,
+        mismatch_playback.asTransport().send(&mismatch),
+    );
+
+    var header_mismatch_playback = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    var header_mismatch = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://example.test/item?mode=REDACTED&sig=rotated-secret",
+    );
+    defer header_mismatch.deinit();
+    try header_mismatch.setHeader(
+        "Operation-Location",
+        "https://next.example/item?mode=Bearer%20live-secret&sig=rotated-header",
+    );
+    try std.testing.expectError(
+        error.HeaderMismatch,
+        header_mismatch_playback.asTransport().send(&header_mismatch),
+    );
+}
+
+test "legacy recordings never infer URL wildcards from marker text" {
+    const recordings = [_][]const u8{
+        "{\"version\":2,\"exchanges\":[{" ++
+            "\"request_method\":\"GET\"," ++
+            "\"request_url\":\"https://example.test/item?mode=REDACTED\"," ++
+            "\"request_headers\":[],\"request_body\":null," ++
+            "\"response_status\":200,\"response_headers\":[]," ++
+            "\"response_body\":{\"encoding\":\"base64\",\"data\":\"\"}}]}",
+        "{\"version\":3,\"exchanges\":[{" ++
+            "\"request_method\":\"GET\"," ++
+            "\"request_url\":\"https://example.test/item?mode=REDACTED\"," ++
+            "\"request_headers\":[],\"request_body\":null," ++
+            "\"outcome\":\"response\",\"response_status\":200," ++
+            "\"response_headers\":[]," ++
+            "\"response_body\":{\"encoding\":\"base64\",\"data\":\"\"}}]}",
+    };
+    for (recordings) |json| {
+        var parsed = try parseJson(std.testing.allocator, json);
+        defer parsed.deinit();
+        var exact_playback = PlaybackTransport.init(
+            std.testing.allocator,
+            parsed.asSlice(),
+        );
+        var exact = core.http.Request.init(
+            std.testing.allocator,
+            .GET,
+            "https://example.test/item?mode=REDACTED",
+        );
+        defer exact.deinit();
+        var response = try exact_playback.asTransport().send(&exact);
+        response.deinit();
+
+        var mismatch_playback = PlaybackTransport.init(
+            std.testing.allocator,
+            parsed.asSlice(),
+        );
+        var mismatch = core.http.Request.init(
+            std.testing.allocator,
+            .GET,
+            "https://example.test/item?mode=Bearer%20live-secret",
         );
         defer mismatch.deinit();
         try std.testing.expectError(
@@ -9132,6 +9764,62 @@ test "multipart application http credentials cannot bypass allow opaque" {
     }
 }
 
+test "multipart preamble and epilogue structures fail closed" {
+    const cases = [_]struct {
+        body: []const u8,
+        secret: []const u8,
+        expected_error: anyerror,
+    }{
+        .{
+            .body = "notice\r\n{\"clientSecret\":\"preamble-secret\"}\r\n" ++
+                "--batch\r\nContent-Type: text/plain\r\n\r\nsafe\r\n" ++
+                "--batch--\r\n",
+            .secret = "preamble-secret",
+            .expected_error = error.SensitiveBodyRequiresSanitization,
+        },
+        .{
+            .body = "--batch\r\nContent-Type: text/plain\r\n\r\nsafe\r\n" ++
+                "--batch--\r\nnotice\r\n" ++
+                "<add key=\"Password\" value=\"epilogue-secret\"/>",
+            .secret = "epilogue-secret",
+            .expected_error = error.SensitiveBodyRequiresSanitization,
+        },
+    };
+    for (cases) |case| {
+        var mock = core.http.MockTransport.init(
+            std.testing.allocator,
+            200,
+            case.body,
+        );
+        defer mock.deinit();
+        mock.response_headers_list = &.{
+            .{
+                .name = "Content-Type",
+                .value = "multipart/mixed; boundary=batch",
+            },
+        };
+        var recorder = RecordingTransport.initWithOptions(
+            std.testing.allocator,
+            mock.asTransport(),
+            .{ .bodyPolicyFn = &allowOpaqueBody },
+        );
+        defer recorder.deinit();
+        var request = core.http.Request.init(
+            std.testing.allocator,
+            .GET,
+            "https://example.test/multipart-envelope",
+        );
+        defer request.deinit();
+        var response = try recorder.asTransport().send(&request);
+        response.deinit();
+        try expectRejectedSerializationExcludes(
+            &recorder,
+            case.expected_error,
+            &.{case.secret},
+        );
+    }
+}
+
 test "safe multipart application http batch roundtrips explicitly" {
     const body =
         "legal MIME preamble\r\n" ++
@@ -9863,13 +10551,42 @@ fn parsingAllocationFixture(allocator: std.mem.Allocator) !void {
 
 const failure_allocation_fixture_json =
     \\{"version":3,"exchanges":[
-    \\{"request_method":"GET","request_url":"https://example.com/open","request_headers":[],"request_body":null,"outcome":"open_error","error_category":"connection"},
-    \\{"request_method":"GET","request_url":"https://example.com/body","request_headers":[],"request_body":null,"outcome":"body_error","error_category":"io","response_status":200,"response_headers":[],"response_body":{"encoding":"base64","data":"cGFydGlhbA=="}}
+    \\{"request_method":"GET","request_url":"https://example.com/open","request_url_redacted":false,"request_headers":[],"request_body":null,"outcome":"open_error","error_category":"connection"},
+    \\{"request_method":"GET","request_url":"https://example.com/body","request_url_redacted":false,"request_headers":[],"request_body":null,"outcome":"body_error","error_category":"io","response_status":200,"response_headers":[],"response_body":{"encoding":"base64","data":"cGFydGlhbA=="}}
     \\]}
 ;
 
 fn failureParsingAllocationFixture(allocator: std.mem.Allocator) !void {
     var parsed = try parseJson(allocator, failure_allocation_fixture_json);
+    parsed.deinit();
+}
+
+const redaction_template_allocation_fixture_json =
+    \\{"version":3,"exchanges":[{
+    \\"request_method":"GET",
+    \\"request_url":"https://example.test/item?sig=REDACTED",
+    \\"request_url_redaction_template":"https://example.test/item?sig=\u0000",
+    \\"request_headers":[{
+    \\"name":"Operation-Location",
+    \\"value":"https://next.example/item?sig=REDACTED",
+    \\"redacted":false,
+    \\"url_redaction_template":"https://next.example/item?sig=\u0000"
+    \\}],
+    \\"request_body":null,
+    \\"outcome":"response",
+    \\"response_status":200,
+    \\"response_headers":[],
+    \\"response_body":{"encoding":"base64","data":""}
+    \\}]}
+;
+
+fn redactionTemplateParsingAllocationFixture(
+    allocator: std.mem.Allocator,
+) !void {
+    var parsed = try parseJson(
+        allocator,
+        redaction_template_allocation_fixture_json,
+    );
     parsed.deinit();
 }
 
@@ -9922,6 +10639,11 @@ test "transport allocation failures clean up" {
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
         failureParsingAllocationFixture,
+        .{},
+    );
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        redactionTemplateParsingAllocationFixture,
         .{},
     );
 }
@@ -10083,21 +10805,21 @@ test "recording parser reports version encoding and base64 errors" {
         error.InvalidRecordingOutcome,
         parseJson(
             std.testing.allocator,
-            "{\"version\":3,\"exchanges\":[{\"request_method\":\"GET\",\"request_url\":\"https://example.com\",\"request_headers\":[],\"request_body\":null,\"outcome\":\"backend_specific\"}]}",
+            "{\"version\":3,\"exchanges\":[{\"request_method\":\"GET\",\"request_url\":\"https://example.com\",\"request_url_redacted\":false,\"request_headers\":[],\"request_body\":null,\"outcome\":\"backend_specific\"}]}",
         ),
     );
     try std.testing.expectError(
         error.InvalidRecordingJson,
         parseJson(
             std.testing.allocator,
-            "{\"version\":3,\"exchanges\":[{\"request_method\":\"GET\",\"request_url\":\"https://example.com\",\"request_headers\":[],\"request_body\":null,\"outcome\":\"transport_error\"}]}",
+            "{\"version\":3,\"exchanges\":[{\"request_method\":\"GET\",\"request_url\":\"https://example.com\",\"request_url_redacted\":false,\"request_headers\":[],\"request_body\":null,\"outcome\":\"transport_error\"}]}",
         ),
     );
     try std.testing.expectError(
         error.InvalidRecordingJson,
         parseJson(
             std.testing.allocator,
-            "{\"version\":3,\"exchanges\":[{\"request_method\":\"GET\",\"request_url\":\"https://example.com\",\"request_headers\":[],\"request_body\":null,\"outcome\":\"response\",\"error_category\":\"unknown\",\"response_status\":200,\"response_headers\":[],\"response_body\":{\"encoding\":\"base64\",\"data\":\"\"}}]}",
+            "{\"version\":3,\"exchanges\":[{\"request_method\":\"GET\",\"request_url\":\"https://example.com\",\"request_url_redacted\":false,\"request_headers\":[],\"request_body\":null,\"outcome\":\"response\",\"error_category\":\"unknown\",\"response_status\":200,\"response_headers\":[],\"response_body\":{\"encoding\":\"base64\",\"data\":\"\"}}]}",
         ),
     );
 }
