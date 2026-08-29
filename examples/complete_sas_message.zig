@@ -17,10 +17,15 @@ pub fn main(init: std.process.Init) !void {
 
     var transport = core.http.StdHttpTransport.init(allocator, init.io);
     defer transport.deinit();
+    var crypto_provider = core.crypto.StdCryptoProvider.init(init.io);
+    const runtime = core.http.HttpRuntime.init(
+        transport.asTransport(),
+        crypto_provider.asProvider(),
+    );
     var client = try queues.SasQueueClient.init(
         allocator,
         sas_url,
-        transport.asTransport(),
+        runtime,
     );
     defer client.deinit();
 
