@@ -364,9 +364,9 @@ pub fn getEventHubPropertiesWithRetry(
                 self.hub_name,
                 self.security_token,
                 self.deadline_ms,
-            ) catch |e| {
-                recordCondition(self.mgmt, attempt);
-                return e;
+            ) catch |err| {
+                recordFailure(self.mgmt, attempt, err);
+                return err;
             };
         }
     };
@@ -407,9 +407,9 @@ pub fn getPartitionPropertiesWithRetry(
                 self.partition_id,
                 self.security_token,
                 self.deadline_ms,
-            ) catch |e| {
-                recordCondition(self.mgmt, attempt);
-                return e;
+            ) catch |err| {
+                recordFailure(self.mgmt, attempt, err);
+                return err;
             };
         }
     };
@@ -431,7 +431,12 @@ pub fn getPartitionPropertiesWithRetry(
 /// A management failure carries an HTTP-shaped status code rather than an AMQP
 /// error condition, so the mapping has to be made explicitly. Go does the same
 /// in `TransformError`.
-fn recordCondition(mgmt: *amqp.Management, attempt: *errors.Attempt) void {
+pub fn recordFailure(
+    mgmt: *amqp.Management,
+    attempt: *errors.Attempt,
+    err: anyerror,
+) void {
+    if (err != error.RequestFailed and err != error.Unauthorized) return;
     const status = mgmt.last_error orelse return;
     attempt.description = status.description;
     attempt.condition = switch (status.code) {

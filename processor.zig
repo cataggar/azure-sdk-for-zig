@@ -308,6 +308,11 @@ pub const Processor = struct {
     /// One balancing cycle: claim, renew, open, and release.
     pub fn runOnce(self: *Processor) !void {
         if (self.closing or self.deinitialized) return error.ProcessorClosed;
+        // A receiver can be what invalidated the shared connection. Release
+        // it first so its production opener can rebuild the generation before
+        // partition discovery touches the cached `$management` client.
+        try self.releaseFailedReaders();
+
         const partition_ids = try self.opener.partitionIds(self.allocator);
         defer freePartitionIds(self.allocator, partition_ids);
 
@@ -330,6 +335,21 @@ pub const Processor = struct {
                 self.suppressed.contains(ownership.partition_id)) continue;
             try self.openPartition(ownership.partition_id, checkpoints);
         }
+    }
+
+    fn releaseFailedReaders(self: *Processor) !void {
+        var dropped: std.ArrayList([]const u8) = .empty;
+        defer dropped.deinit(self.allocator);
+
+        for (self.clients.keys(), self.clients.values()) |id, client| {
+            if (!client.link_closed) client.observeClientState();
+            if (!client.ownership_lost and !client.recoverable_failure) continue;
+            if (client.ownership_lost) try self.suppress(id);
+            if (client.geo_replication_fallback) try self.markGeoFallback(id);
+            try dropped.append(self.allocator, id);
+        }
+
+        for (dropped.items) |id| try self.releasePartition(id);
     }
 
     /// Close readers for partitions this cycle did not keep.

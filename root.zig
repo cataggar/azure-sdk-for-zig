@@ -379,6 +379,54 @@ pub const LinkTransport = struct {
         }
     };
 
+    const HubPropertiesOp = struct {
+        connection: *RecoverableConnection,
+        allocator: std.mem.Allocator,
+        hub_name: []const u8,
+        security_token: ?[]const u8,
+        timeout_ms: i64,
+
+        pub fn call(op: *const @This(), attempt: *errors.Attempt) anyerror!EventHubProperties {
+            const client = try op.connection.managementClient();
+            const deadline_ms = receiving.deadlineAfter(client.rpc_link.session, op.timeout_ms);
+            return management.getEventHubProperties(
+                op.allocator,
+                client,
+                op.hub_name,
+                op.security_token,
+                deadline_ms,
+            ) catch |err| {
+                management.recordFailure(client, attempt, err);
+                return err;
+            };
+        }
+    };
+
+    const PartitionPropertiesOp = struct {
+        connection: *RecoverableConnection,
+        allocator: std.mem.Allocator,
+        hub_name: []const u8,
+        partition_id: []const u8,
+        security_token: ?[]const u8,
+        timeout_ms: i64,
+
+        pub fn call(op: *const @This(), attempt: *errors.Attempt) anyerror!PartitionProperties {
+            const client = try op.connection.managementClient();
+            const deadline_ms = receiving.deadlineAfter(client.rpc_link.session, op.timeout_ms);
+            return management.getPartitionProperties(
+                op.allocator,
+                client,
+                op.hub_name,
+                op.partition_id,
+                op.security_token,
+                deadline_ms,
+            ) catch |err| {
+                management.recordFailure(client, attempt, err);
+                return err;
+            };
+        }
+    };
+
     fn maxMessageSizeImpl(t: *AmqpTransport, address: []const u8) !?u64 {
         const self: *LinkTransport = @fieldParentPtr("transport", t);
         const pool = self.senderPool() catch return null;
@@ -418,6 +466,27 @@ pub const LinkTransport = struct {
 
     fn getHubPropsImpl(t: *AmqpTransport, allocator: std.mem.Allocator, hub_name: []const u8) !EventHubProperties {
         const self: *LinkTransport = @fieldParentPtr("transport", t);
+        if (self.connection) |conn| {
+            const config = self.retry orelse return error.Unimplemented;
+            var op = HubPropertiesOp{
+                .connection = conn,
+                .allocator = allocator,
+                .hub_name = hub_name,
+                .security_token = self.security_token,
+                .timeout_ms = self.timeout_ms,
+            };
+            return switch (recovery.runWithRecovery(
+                EventHubProperties,
+                conn,
+                null,
+                &op,
+                config,
+            )) {
+                .ok => |props| props,
+                .failed => |failure| failure.err,
+            };
+        }
+
         const client = try self.managementClient();
         const deadline_ms = receiving.deadlineAfter(client.rpc_link.session, self.timeout_ms);
         if (self.retry) |config| {
@@ -444,6 +513,28 @@ pub const LinkTransport = struct {
 
     fn getPartitionPropsImpl(t: *AmqpTransport, allocator: std.mem.Allocator, hub_name: []const u8, partition_id: []const u8) !PartitionProperties {
         const self: *LinkTransport = @fieldParentPtr("transport", t);
+        if (self.connection) |conn| {
+            const config = self.retry orelse return error.Unimplemented;
+            var op = PartitionPropertiesOp{
+                .connection = conn,
+                .allocator = allocator,
+                .hub_name = hub_name,
+                .partition_id = partition_id,
+                .security_token = self.security_token,
+                .timeout_ms = self.timeout_ms,
+            };
+            return switch (recovery.runWithRecovery(
+                PartitionProperties,
+                conn,
+                null,
+                &op,
+                config,
+            )) {
+                .ok => |props| props,
+                .failed => |failure| failure.err,
+            };
+        }
+
         const client = try self.managementClient();
         const deadline_ms = receiving.deadlineAfter(client.rpc_link.session, self.timeout_ms);
         if (self.retry) |config| {
@@ -1434,6 +1525,266 @@ fn testRuntimeWithCrypto(
         .{ .context = &unused_http_context, .vtable = &unused_http_vtable },
         provider,
     );
+}
+
+const TestTransportSequence = struct {
+    memories: []const *amqp.MemoryTransport,
+    next: usize = 0,
+
+    fn hook(self: *TestTransportSequence) connection_options.WebSocketHook {
+        return .{
+            .context = self,
+            .connectFn = connect,
+            .closeFn = close,
+        };
+    }
+
+    fn connect(
+        context: *anyopaque,
+        _: std.mem.Allocator,
+        _: []const u8,
+    ) anyerror!amqp.Transport {
+        const self: *TestTransportSequence = @ptrCast(@alignCast(context));
+        if (self.next >= self.memories.len) return error.NoMoreConnections;
+        const mem = self.memories[self.next];
+        self.next += 1;
+        return mem.transport();
+    }
+
+    fn close(_: *anyopaque, _: amqp.Transport) void {}
+};
+
+fn testNoSleep(_: *errors.Sleeper, _: u64) errors.SleepError!void {}
+
+fn scriptManagementAndPartition(
+    allocator: std.mem.Allocator,
+    peer: amqp.test_peer.Peer,
+    event_body: []const u8,
+    close_ack: bool,
+) !void {
+    try amqp.test_peer.scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "$management-sender-eh",
+        .handle = 0,
+        .role = .receiver,
+        .initial_delivery_count = 0,
+    } });
+    try peer.push(0, .{ .attach = .{
+        .name = "$management-receiver-eh",
+        .handle = 1,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 1000,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+        .handle = 0,
+        .delivery_count = 0,
+        .link_credit = 10,
+    } });
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 0,
+        .last = 0,
+        .settled = true,
+        .state = .accepted,
+    } });
+
+    var partition_ids = [_]amqp.AmqpValue{.{ .string = "0" }};
+    var body_map = [_]amqp.MapEntry{
+        .{ .key = .{ .string = management.reply.name }, .value = .{ .string = "my-hub" } },
+        .{
+            .key = .{ .string = management.reply.partition_ids },
+            .value = .{ .array = &partition_ids },
+        },
+        .{
+            .key = .{ .string = management.reply.created_at },
+            .value = .{ .timestamp = 1_700_000_000_000 },
+        },
+        .{
+            .key = .{ .string = management.reply.georeplication_factor },
+            .value = .{ .int = 1 },
+        },
+    };
+    const response_properties = [_]amqp.MapEntry{
+        .{
+            .key = .{ .string = amqp.rpc.status_code_key },
+            .value = .{ .int = 200 },
+        },
+        .{
+            .key = .{ .string = amqp.rpc.status_description_key },
+            .value = .{ .string = "OK" },
+        },
+    };
+    const response = try amqp.encodeMessageAlloc(allocator, .{
+        .properties = .{
+            .correlation_id = .{ .string = "management-reply-to-eh:1" },
+        },
+        .application_properties = &response_properties,
+        .body = .{ .value = .{ .map = &body_map } },
+    });
+    defer allocator.free(response);
+    try peer.pushTransfer(0, .{
+        .handle = 1,
+        .delivery_id = 0,
+        .delivery_tag = "r",
+        .message_format = 0,
+        .settled = true,
+        .more = false,
+    }, response);
+
+    const receiver_name =
+        "my-hub/ConsumerGroups/$Default/Partitions/0-receiver-eventhubs";
+    try peer.push(0, .{ .attach = .{
+        .name = receiver_name,
+        .handle = 2,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+
+    var annotations = [_]amqp.MapEntry{
+        .{
+            .key = .{ .symbol = event_data.sequence_number_annotation },
+            .value = .{ .long = 1 },
+        },
+        .{
+            .key = .{ .symbol = event_data.offset_annotation },
+            .value = .{ .string = "100" },
+        },
+    };
+    const bodies = [_][]const u8{event_body};
+    const event = try amqp.encodeMessageAlloc(allocator, .{
+        .message_annotations = &annotations,
+        .body = .{ .data = &bodies },
+    });
+    defer allocator.free(event);
+    const tag = [_]u8{1};
+    try peer.pushTransfer(0, .{
+        .handle = 2,
+        .delivery_id = 1,
+        .delivery_tag = &tag,
+        .message_format = 0,
+        .settled = false,
+        .more = false,
+    }, event);
+
+    if (close_ack) {
+        try peer.push(0, .{ .detach = .{ .handle = 2, .closed = true } });
+    }
+}
+
+test "processor recovers terminal receiver and cached management generations" {
+    const allocator = std.testing.allocator;
+    var first_mem = amqp.MemoryTransport.init(allocator);
+    defer first_mem.deinit();
+    var second_mem = amqp.MemoryTransport.init(allocator);
+    defer second_mem.deinit();
+    var third_mem = amqp.MemoryTransport.init(allocator);
+    defer third_mem.deinit();
+
+    try scriptManagementAndPartition(
+        allocator,
+        .{ .allocator = allocator, .mem = &first_mem },
+        "first",
+        false,
+    );
+    try scriptManagementAndPartition(
+        allocator,
+        .{ .allocator = allocator, .mem = &second_mem },
+        "first replay",
+        false,
+    );
+    try scriptManagementAndPartition(
+        allocator,
+        .{ .allocator = allocator, .mem = &third_mem },
+        "metadata replay",
+        true,
+    );
+
+    var transports = TestTransportSequence{
+        .memories = &.{ &first_mem, &second_mem, &third_mem },
+    };
+    var wire_clock = amqp.connection_driver.ManualClock{};
+    var factory = connection_options.AmqpConnectionFactory{
+        .allocator = allocator,
+        .fully_qualified_namespace = "ns.servicebus.windows.net",
+        .container_id = "processor-recovery-test",
+        .options = .{ .web_socket = transports.hook() },
+        .clock = wire_clock.clock(),
+        .sasl = .none,
+    };
+    var connection = recovery.RecoverableConnection.init(allocator, .{
+        .factory = &factory.factory,
+        .deadline_ms = 10_000,
+    });
+    defer connection.deinit();
+    connection.management_link_id = "eh";
+
+    var sleeper = errors.Sleeper{ .sleepFn = testNoSleep };
+    var retry_random = std.Random.DefaultPrng.init(53);
+    var link_transport = LinkTransport.initRecoverable(
+        &connection,
+        .{ .sleeper = &sleeper, .random = retry_random.random() },
+        .{ .deadline_ms = 10_000 },
+    );
+    var credential = ScopeRecordingCredential.init();
+    var consumer = ConsumerClient.init(.{
+        .runtime = testRuntime(),
+        .fully_qualified_namespace = "ns.servicebus.windows.net",
+        .event_hub_name = "my-hub",
+    }, credential.asCredential(), link_transport.asTransport());
+    defer consumer.deinit();
+
+    var opener = consumer.partitionOpener(&connection, 10_000);
+    var balance_clock = ManualClock{};
+    var store = InMemoryCheckpointStore{
+        .allocator = allocator,
+        .clock = &balance_clock.clock,
+    };
+    defer store.deinit();
+    var balance_random = std.Random.DefaultPrng.init(59);
+    var processor = consumer.newProcessor(
+        allocator,
+        &store.store,
+        opener.asOpener(),
+        .{ .load_balancing_strategy = .greedy },
+        &balance_clock.clock,
+        balance_random.random(),
+    );
+    defer processor.deinit();
+
+    try processor.runOnce();
+    const first = processor.nextPartitionClient().?;
+    first_mem.fail_write = true;
+    const returned = try first.receiveEvents(allocator, 1);
+    defer freeReceivedEvents(allocator, returned);
+    try std.testing.expectEqualStrings("first", returned[0].body());
+    try std.testing.expect(first.recoverable_failure);
+
+    // Preflight releases the failed reader and invalidates its generation
+    // before partition discovery touches that generation's management client.
+    try processor.runOnce();
+    try std.testing.expectEqual(@as(u64, 1), connection.recoveries);
+    const first_replay = processor.nextPartitionClient().?;
+    const replayed = try first_replay.receiveEvents(allocator, 1);
+    defer freeReceivedEvents(allocator, replayed);
+    try std.testing.expectEqualStrings("first replay", replayed[0].body());
+
+    // This time the reader is healthy and the cached management request itself
+    // fails. Its recovery wrapper must rebuild and refetch the client before
+    // the cycle can invalidate and replace the now-stale reader.
+    second_mem.fail_write = true;
+    try processor.runOnce();
+    try std.testing.expectEqual(@as(u64, 2), connection.recoveries);
+    try std.testing.expectEqual(@as(usize, 3), transports.next);
+    const metadata_replay = processor.nextPartitionClient().?;
+    const final = try metadata_replay.receiveEvents(allocator, 1);
+    defer freeReceivedEvents(allocator, final);
+    try std.testing.expectEqualStrings("metadata replay", final[0].body());
+
+    try processor.close();
 }
 
 const TestCryptoProvider = struct {

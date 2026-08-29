@@ -284,6 +284,10 @@ Failures carry the broker's status and description, which a Zig error cannot,
 on `Management.last_error`. Both operations optionally run under the Event Hubs
 retry schedule, which classifies a management status into the AMQP condition it
 corresponds to — a 404 is fatal and is not retried, a 503 is not.
+On a recoverable transport, each attempt refetches the generation's management
+client. Read, write, remote-close, or settlement failure rebuilds the
+connection and session before retrying instead of repeatedly using the cached
+failed `$management` links.
 
 ## Event models
 
@@ -504,6 +508,9 @@ dereference the native receivers the connection already destroyed. Processor
 readers also carry the recoverable connection generation, so a rebuild between
 cycles invalidates stale native pointers before receive or close and reopens
 the partition from its unchanged checkpoint.
+Each cycle releases terminal readers before partition discovery, allowing a
+receiver that failed the shared connection to rebuild it before metadata uses
+that generation's cached management client.
 Closing one `ProcessorPartitionClient` removes it from `ownedPartitions`
 immediately after a confirmed detach; if storage still assigns the partition
 to this processor, the next balancing cycle opens a fresh reader.
