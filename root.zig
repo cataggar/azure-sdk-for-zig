@@ -16,8 +16,10 @@ pub const HeaderPair = struct {
 ///
 /// Method, URL, and body are matched exactly, including whether a body is
 /// present. Every request header listed here must occur with the same value;
-/// additional live headers are allowed. Response headers retain wire order
-/// and duplicate values.
+/// additional live headers are allowed. `REDACTED` values produced by
+/// `toJson` wildcard only recognized sensitive header values and sensitive
+/// URL query values; nonsensitive fields remain exact. Response headers retain
+/// wire order and duplicate values.
 pub const RecordedExchange = struct {
     request_method: core.http.Method,
     request_url: []const u8,
@@ -47,6 +49,90 @@ pub const OwnedExchange = struct {
         self.* = undefined;
     }
 };
+
+/// Allocator-owned recordings parsed from `RecordingTransport.toJson`.
+///
+/// `asSlice` borrows this value. Keep it alive until playback and all open
+/// playback operations are finished.
+pub const ParsedRecordings = struct {
+    allocator: std.mem.Allocator,
+    owned: []OwnedExchange,
+    recordings: []RecordedExchange,
+
+    pub fn asSlice(self: *const ParsedRecordings) []const RecordedExchange {
+        return self.recordings;
+    }
+
+    pub fn deinit(self: *ParsedRecordings) void {
+        for (self.owned) |*exchange| exchange.deinit(self.allocator);
+        self.allocator.free(self.owned);
+        self.allocator.free(self.recordings);
+        self.* = undefined;
+    }
+};
+
+/// Parse the versioned, lossless JSON format emitted by `toJson`.
+///
+/// All returned strings and decoded bodies are allocator-owned. Invalid JSON,
+/// unsupported versions or encodings, and invalid base64 are distinct errors.
+pub fn parseJson(
+    allocator: std.mem.Allocator,
+    json: []const u8,
+) !ParsedRecordings {
+    const parsed = std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        json,
+        .{},
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return error.InvalidRecordingJson,
+    };
+    defer parsed.deinit();
+
+    const root = switch (parsed.value) {
+        .object => |value| value,
+        else => return error.InvalidRecordingJson,
+    };
+    const version = root.get("version") orelse return error.InvalidRecordingJson;
+    if (version != .integer or version.integer != recording_format_version)
+        return error.UnsupportedRecordingVersion;
+    const exchanges_value = root.get("exchanges") orelse
+        return error.InvalidRecordingJson;
+    const exchange_values = switch (exchanges_value) {
+        .array => |value| value.items,
+        else => return error.InvalidRecordingJson,
+    };
+
+    const owned = try allocator.alloc(OwnedExchange, exchange_values.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (owned[0..initialized]) |*exchange| exchange.deinit(allocator);
+        allocator.free(owned);
+    }
+    for (exchange_values, owned) |value, *exchange| {
+        exchange.* = try parseExchange(allocator, value);
+        initialized += 1;
+    }
+
+    const recordings = try allocator.alloc(RecordedExchange, owned.len);
+    for (owned, recordings) |exchange, *recording| {
+        recording.* = .{
+            .request_method = exchange.request_method,
+            .request_url = exchange.request_url,
+            .request_headers = exchange.request_headers,
+            .request_body = exchange.request_body,
+            .response_status = exchange.response_status,
+            .response_body = exchange.response_body,
+            .response_headers = exchange.response_headers,
+        };
+    }
+    return .{
+        .allocator = allocator,
+        .owned = owned,
+        .recordings = recordings,
+    };
+}
 
 /// Construct the canonical Core runtime while selecting transport and crypto
 /// independently. Both descriptors are copied and borrow their contexts.
@@ -253,8 +339,8 @@ pub const RecordingTransport = struct {
         return self.exchanges.items;
     }
 
-    /// Serialize recordings while redacting sensitive header values and
-    /// sensitive URL query parameters.
+    /// Serialize version 2 recordings with lossless base64 bodies while
+    /// redacting sensitive header values and sensitive URL query parameters.
     ///
     /// Recognized credential-bearing body fields cause
     /// `error.SensitiveBodyRequiresSanitization`; bodies are never silently
@@ -266,7 +352,22 @@ pub const RecordingTransport = struct {
         var output: std.Io.Writer.Allocating = .init(allocator);
         errdefer output.deinit();
         const writer = &output.writer;
-        try writer.writeAll("[");
+        self.writeJson(writer, allocator) catch |err| switch (err) {
+            error.WriteFailed => return error.OutOfMemory,
+            else => return err,
+        };
+        return output.toOwnedSlice();
+    }
+
+    fn writeJson(
+        self: *const RecordingTransport,
+        writer: *std.Io.Writer,
+        allocator: std.mem.Allocator,
+    ) !void {
+        try writer.print(
+            "{{\"version\":{d},\"exchanges\":[",
+            .{recording_format_version},
+        );
         for (self.exchanges.items, 0..) |exchange, index| {
             try ensureBodySafe(exchange.request_body);
             try ensureBodySafe(exchange.response_body);
@@ -276,19 +377,18 @@ pub const RecordingTransport = struct {
             try writer.writeAll(",\"request_url\":");
             try writeSanitizedUrl(writer, allocator, exchange.request_url);
             try writer.writeAll(",\"request_headers\":");
-            try writeHeaders(writer, exchange.request_headers);
+            try writeHeaders(writer, allocator, exchange.request_headers);
             try writer.writeAll(",\"request_body\":");
-            try writeOptionalJsonString(writer, exchange.request_body);
+            try writeOptionalBody(writer, allocator, exchange.request_body);
             try writer.writeAll(",\"response_status\":");
             try writer.print("{d}", .{exchange.response_status});
             try writer.writeAll(",\"response_headers\":");
-            try writeHeaders(writer, exchange.response_headers);
+            try writeHeaders(writer, allocator, exchange.response_headers);
             try writer.writeAll(",\"response_body\":");
-            try writeJsonString(writer, exchange.response_body);
+            try writeBody(writer, allocator, exchange.response_body);
             try writer.writeAll("}");
         }
-        try writer.writeAll("\n]\n");
-        return output.toOwnedSlice();
+        try writer.writeAll("\n]}\n");
     }
 
     fn sendImpl(
@@ -769,13 +869,148 @@ fn ownedExchangeFromResponse(
     };
 }
 
+fn parseExchange(
+    allocator: std.mem.Allocator,
+    value: std.json.Value,
+) !OwnedExchange {
+    const object = switch (value) {
+        .object => |result| result,
+        else => return error.InvalidRecordingJson,
+    };
+    const method_value = object.get("request_method") orelse
+        return error.InvalidRecordingJson;
+    const request_url_value = object.get("request_url") orelse
+        return error.InvalidRecordingJson;
+    const request_headers_value = object.get("request_headers") orelse
+        return error.InvalidRecordingJson;
+    const request_body_value = object.get("request_body") orelse
+        return error.InvalidRecordingJson;
+    const response_status_value = object.get("response_status") orelse
+        return error.InvalidRecordingJson;
+    const response_headers_value = object.get("response_headers") orelse
+        return error.InvalidRecordingJson;
+    const response_body_value = object.get("response_body") orelse
+        return error.InvalidRecordingJson;
+
+    const method = try parseMethod(try jsonString(method_value));
+    const request_url = try allocator.dupe(u8, try jsonString(request_url_value));
+    errdefer allocator.free(request_url);
+    const request_headers = try parseHeaders(allocator, request_headers_value);
+    errdefer deinitHeaderPairs(allocator, request_headers);
+    const request_body = try parseOptionalBody(allocator, request_body_value);
+    errdefer if (request_body) |body| allocator.free(body);
+
+    const response_status_integer = switch (response_status_value) {
+        .integer => |result| result,
+        else => return error.InvalidRecordingJson,
+    };
+    if (response_status_integer < 0 or response_status_integer > 65535)
+        return error.InvalidRecordingJson;
+    const response_headers = try parseHeaders(allocator, response_headers_value);
+    errdefer deinitHeaderPairs(allocator, response_headers);
+    const response_body = try parseBody(allocator, response_body_value);
+    errdefer allocator.free(response_body);
+
+    return .{
+        .request_method = method,
+        .request_url = request_url,
+        .request_headers = request_headers,
+        .request_body = request_body,
+        .response_status = @intCast(response_status_integer),
+        .response_body = response_body,
+        .response_headers = response_headers,
+    };
+}
+
+fn parseHeaders(
+    allocator: std.mem.Allocator,
+    value: std.json.Value,
+) ![]HeaderPair {
+    const values = switch (value) {
+        .array => |result| result.items,
+        else => return error.InvalidRecordingJson,
+    };
+    const headers = try allocator.alloc(HeaderPair, values.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (headers[0..initialized]) |header| {
+            allocator.free(header.name);
+            allocator.free(header.value);
+        }
+        allocator.free(headers);
+    }
+    for (values, headers) |header_value, *header| {
+        const object = switch (header_value) {
+            .object => |result| result,
+            else => return error.InvalidRecordingJson,
+        };
+        const name_value = object.get("name") orelse
+            return error.InvalidRecordingJson;
+        const field_value = object.get("value") orelse
+            return error.InvalidRecordingJson;
+        header.name = try allocator.dupe(u8, try jsonString(name_value));
+        errdefer allocator.free(header.name);
+        header.value = try allocator.dupe(u8, try jsonString(field_value));
+        initialized += 1;
+    }
+    return headers;
+}
+
+fn parseOptionalBody(
+    allocator: std.mem.Allocator,
+    value: std.json.Value,
+) !?[]u8 {
+    return switch (value) {
+        .null => null,
+        else => try parseBody(allocator, value),
+    };
+}
+
+fn parseBody(
+    allocator: std.mem.Allocator,
+    value: std.json.Value,
+) ![]u8 {
+    const object = switch (value) {
+        .object => |result| result,
+        else => return error.InvalidRecordingJson,
+    };
+    const encoding_value = object.get("encoding") orelse
+        return error.InvalidRecordingJson;
+    const data_value = object.get("data") orelse
+        return error.InvalidRecordingJson;
+    if (!std.mem.eql(u8, try jsonString(encoding_value), "base64"))
+        return error.UnsupportedBodyEncoding;
+    const encoded = try jsonString(data_value);
+    const length = std.base64.standard.Decoder.calcSizeForSlice(encoded) catch
+        return error.InvalidRecordingBody;
+    const decoded = try allocator.alloc(u8, length);
+    errdefer allocator.free(decoded);
+    std.base64.standard.Decoder.decode(decoded, encoded) catch
+        return error.InvalidRecordingBody;
+    return decoded;
+}
+
+fn jsonString(value: std.json.Value) ![]const u8 {
+    return switch (value) {
+        .string => |result| result,
+        else => error.InvalidRecordingJson,
+    };
+}
+
+fn parseMethod(value: []const u8) !core.http.Method {
+    inline for (std.meta.fields(core.http.Method)) |field| {
+        if (std.mem.eql(u8, value, field.name)) return @enumFromInt(field.value);
+    }
+    return error.InvalidRecordingMethod;
+}
+
 fn matchRequest(
     exchange: RecordedExchange,
     request: *const core.http.Request,
     body: ?[]const u8,
 ) !void {
     if (exchange.request_method != request.method) return error.MethodMismatch;
-    if (!std.mem.eql(u8, exchange.request_url, request.url))
+    if (!try urlMatches(request.allocator, exchange.request_url, request.url))
         return error.UrlMismatch;
     if ((exchange.request_body == null) != (body == null))
         return error.BodyMismatch;
@@ -785,9 +1020,59 @@ fn matchRequest(
     for (exchange.request_headers) |expected| {
         const actual = getHeader(&request.headers, expected.name) orelse
             return error.HeaderMismatch;
-        if (!std.mem.eql(u8, expected.value, actual))
+        if (!try headerValueMatches(
+            request.allocator,
+            expected.name,
+            expected.value,
+            actual,
+        ))
             return error.HeaderMismatch;
     }
+}
+
+fn headerValueMatches(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    expected: []const u8,
+    actual: []const u8,
+) !bool {
+    if (isSensitiveHeader(name) and
+        std.mem.eql(u8, expected, redacted_value))
+    {
+        return true;
+    }
+    if (isSanitizedUrlHeader(name)) {
+        return urlMatches(allocator, expected, actual);
+    }
+    return std.mem.eql(u8, expected, actual);
+}
+
+fn urlMatches(
+    allocator: std.mem.Allocator,
+    expected: []const u8,
+    actual: []const u8,
+) !bool {
+    if (!hasRedactedSensitiveQuery(expected))
+        return std.mem.eql(u8, expected, actual);
+    const sanitized = try sanitizeUrlAlloc(allocator, actual);
+    defer allocator.free(sanitized);
+    return std.mem.eql(u8, expected, sanitized);
+}
+
+fn hasRedactedSensitiveQuery(url: []const u8) bool {
+    const question = std.mem.indexOfScalar(u8, url, '?') orelse return false;
+    const fragment = std.mem.indexOfScalarPos(u8, url, question + 1, '#') orelse
+        url.len;
+    var iterator = std.mem.splitScalar(u8, url[question + 1 .. fragment], '&');
+    while (iterator.next()) |parameter| {
+        const equals = std.mem.indexOfScalar(u8, parameter, '=') orelse continue;
+        if (isSensitiveQueryField(parameter[0..equals]) and
+            std.mem.eql(u8, parameter[equals + 1 ..], redacted_value))
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 fn validateRequestFraming(
@@ -966,14 +1251,41 @@ fn deinitResponseStorage(
     deinitOwnedHeaderMap(allocator, headers);
 }
 
-const sensitive_headers = [_][]const u8{
+pub const redacted_value = "REDACTED";
+const recording_format_version = 2;
+
+const explicitly_sensitive_headers = [_][]const u8{
     "authorization",
     "proxy-authorization",
+    "x-ms-authorization-auxiliary",
+    "x-ms-copy-source-authorization",
+    "x-ms-source-authorization",
     "cookie",
     "set-cookie",
     "x-ms-client-secret",
+    "x-ms-client-principal",
+    "x-ms-encryption-key",
+    "x-ms-encryption-key-sha256",
+    "x-ms-sas-token",
     "ocp-apim-subscription-key",
     "api-key",
+    "x-api-key",
+    "x-functions-key",
+    "subscription-key",
+    "x-subscription-key",
+};
+
+const fully_redacted_url_headers = [_][]const u8{
+    "x-ms-copy-source",
+    "x-ms-copy-source-url",
+};
+
+const sanitized_url_headers = [_][]const u8{
+    "location",
+    "content-location",
+    "operation-location",
+    "azure-asyncoperation",
+    "x-ms-rename-source",
 };
 
 const sensitive_body_fields = [_][]const u8{
@@ -995,16 +1307,40 @@ const sensitive_query_fields = [_][]const u8{
     "signature",
     "token",
     "access_token",
+    "refresh_token",
+    "client_secret",
+    "client_assertion",
+    "password",
+    "api_key",
+    "subscription-key",
     "key",
     "secret",
     "code",
 };
 
 pub fn isSensitiveHeader(name: []const u8) bool {
-    for (sensitive_headers) |sensitive| {
+    for (explicitly_sensitive_headers) |sensitive| {
         if (std.ascii.eqlIgnoreCase(name, sensitive)) return true;
     }
-    return false;
+    if (containsIgnoreCase(name, "authorization") or
+        containsIgnoreCase(name, "authentication") or
+        containsIgnoreCase(name, "credential") or
+        containsIgnoreCase(name, "secret") or
+        containsIgnoreCase(name, "signature") or
+        containsIgnoreCase(name, "token") or
+        containsIgnoreCase(name, "encryption-key") or
+        containsIgnoreCase(name, "api-key") or
+        containsIgnoreCase(name, "apikey") or
+        containsIgnoreCase(name, "subscription-key") or
+        containsIgnoreCase(name, "functions-key") or
+        containsIgnoreCase(name, "account-key") or
+        containsIgnoreCase(name, "access-key") or
+        containsIgnoreCase(name, "secret-key") or
+        containsIgnoreCase(name, "shared-key"))
+    {
+        return true;
+    }
+    return isFullyRedactedUrlHeader(name);
 }
 
 fn ensureBodySafe(body: ?[]const u8) !void {
@@ -1017,6 +1353,7 @@ fn ensureBodySafe(body: ?[]const u8) !void {
 
 fn writeHeaders(
     writer: *std.Io.Writer,
+    allocator: std.mem.Allocator,
     headers: []const HeaderPair,
 ) !void {
     try writer.writeByte('[');
@@ -1025,10 +1362,13 @@ fn writeHeaders(
         try writer.writeAll("{\"name\":");
         try writeJsonString(writer, header.name);
         try writer.writeAll(",\"value\":");
-        try writeJsonString(
-            writer,
-            if (isSensitiveHeader(header.name)) "REDACTED" else header.value,
-        );
+        if (isSensitiveHeader(header.name)) {
+            try writeJsonString(writer, redacted_value);
+        } else if (isSanitizedUrlHeader(header.name)) {
+            try writeSanitizedUrl(writer, allocator, header.value);
+        } else {
+            try writeJsonString(writer, header.value);
+        }
         try writer.writeByte('}');
     }
     try writer.writeByte(']');
@@ -1039,6 +1379,15 @@ fn writeSanitizedUrl(
     allocator: std.mem.Allocator,
     url: []const u8,
 ) !void {
+    const sanitized = try sanitizeUrlAlloc(allocator, url);
+    defer allocator.free(sanitized);
+    try writeJsonString(writer, sanitized);
+}
+
+fn sanitizeUrlAlloc(
+    allocator: std.mem.Allocator,
+    url: []const u8,
+) ![]u8 {
     const scheme = std.mem.indexOf(u8, url, "://");
     if (scheme) |index| {
         const authority_start = index + 3;
@@ -1061,9 +1410,9 @@ fn writeSanitizedUrl(
     }
 
     var output: std.Io.Writer.Allocating = .init(allocator);
-    defer output.deinit();
+    errdefer output.deinit();
     const question = std.mem.indexOfScalar(u8, url, '?') orelse {
-        return writeJsonString(writer, url);
+        return allocator.dupe(u8, url);
     };
     try output.writer.writeAll(url[0 .. question + 1]);
     const fragment = std.mem.indexOfScalarPos(u8, url, question + 1, '#') orelse
@@ -1082,18 +1431,32 @@ fn writeSanitizedUrl(
         try output.writer.writeByte('=');
         try output.writer.writeAll(
             if (isSensitiveQueryField(name))
-                "REDACTED"
+                redacted_value
             else
                 parameter[equals + 1 ..],
         );
     }
     try output.writer.writeAll(url[fragment..]);
-    try writeJsonString(writer, output.writer.buffered());
+    return output.toOwnedSlice();
 }
 
 fn isSensitiveQueryField(name: []const u8) bool {
     for (sensitive_query_fields) |sensitive| {
         if (std.ascii.eqlIgnoreCase(name, sensitive)) return true;
+    }
+    return false;
+}
+
+fn isFullyRedactedUrlHeader(name: []const u8) bool {
+    for (fully_redacted_url_headers) |header| {
+        if (std.ascii.eqlIgnoreCase(name, header)) return true;
+    }
+    return false;
+}
+
+fn isSanitizedUrlHeader(name: []const u8) bool {
+    for (sanitized_url_headers) |header| {
+        if (std.ascii.eqlIgnoreCase(name, header)) return true;
     }
     return false;
 }
@@ -1122,15 +1485,30 @@ fn methodToString(method: core.http.Method) []const u8 {
     };
 }
 
-fn writeOptionalJsonString(
+fn writeOptionalBody(
     writer: *std.Io.Writer,
+    allocator: std.mem.Allocator,
     value: ?[]const u8,
 ) !void {
     if (value) |bytes| {
-        try writeJsonString(writer, bytes);
+        try writeBody(writer, allocator, bytes);
     } else {
         try writer.writeAll("null");
     }
+}
+
+fn writeBody(
+    writer: *std.Io.Writer,
+    allocator: std.mem.Allocator,
+    value: []const u8,
+) !void {
+    const encoded_length = std.base64.standard.Encoder.calcSize(value.len);
+    const encoded = try allocator.alloc(u8, encoded_length);
+    defer allocator.free(encoded);
+    const result = std.base64.standard.Encoder.encode(encoded, value);
+    try writer.writeAll("{\"encoding\":\"base64\",\"data\":");
+    try writeJsonString(writer, result);
+    try writer.writeByte('}');
 }
 
 fn writeJsonString(writer: *std.Io.Writer, value: []const u8) !void {
@@ -1554,6 +1932,253 @@ test "recording JSON redacts headers and URL query credentials" {
     try std.testing.expect(std.mem.indexOf(u8, json, "sig=secret") == null);
 }
 
+test "sensitive Azure headers are classified case-insensitively" {
+    for ([_][]const u8{
+        "Authorization",
+        "X-MS-AUTHORIZATION-AUXILIARY",
+        "x-ms-copy-source-authorization",
+        "X-MS-SOURCE-AUTHORIZATION",
+        "x-ms-encryption-key",
+        "X-MS-SOURCE-ENCRYPTION-KEY-SHA256",
+        "X-MS-COPY-SOURCE",
+        "OCP-APIM-SUBSCRIPTION-KEY",
+        "x-functions-key",
+        "X-Auth-Token",
+        "Set-Cookie",
+    }) |name| {
+        try std.testing.expect(isSensitiveHeader(name));
+    }
+    try std.testing.expect(!isSensitiveHeader("Content-Type"));
+    try std.testing.expect(!isSensitiveHeader("x-opt-partition-key"));
+    try std.testing.expect(!isSensitiveHeader("x-ms-documentdb-partitionkey"));
+}
+
+test "authenticated recording JSON roundtrips with structured redactions" {
+    var mock = core.http.MockTransport.init(
+        std.testing.allocator,
+        200,
+        "response",
+    );
+    defer mock.deinit();
+    mock.response_headers_list = &.{
+        .{ .name = "Set-Cookie", .value = "session=response-cookie-secret" },
+        .{ .name = "X-MS-ENCRYPTION-KEY", .value = "response-key-secret" },
+        .{
+            .name = "x-ms-copy-source-authorization",
+            .value = "Bearer response-copy-auth-secret",
+        },
+        .{
+            .name = "Location",
+            .value = "https://example.com/next?sig=response-sas-secret&next=1",
+        },
+        .{
+            .name = "x-ms-copy-source",
+            .value = "https://storage.example/source?sig=response-copy-secret",
+        },
+    };
+    var recorder = RecordingTransport.init(
+        std.testing.allocator,
+        mock.asTransport(),
+    );
+    defer recorder.deinit();
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .POST,
+        "https://example.com/items?sig=request-sas-secret&version=1",
+    );
+    defer request.deinit();
+    request.body = "safe request";
+    try request.setHeader("Authorization", "Bearer bearer-secret");
+    try request.setHeader("X-MS-ENCRYPTION-KEY", "encryption-secret");
+    try request.setHeader(
+        "x-ms-source-encryption-key",
+        "source-encryption-secret",
+    );
+    try request.setHeader(
+        "x-ms-source-encryption-key-sha256",
+        "source-encryption-hash",
+    );
+    try request.setHeader(
+        "x-ms-source-authorization",
+        "Bearer source-auth-secret",
+    );
+    try request.setHeader(
+        "x-Ms-CoPy-SoUrCe-AuThOrIzAtIoN",
+        "Bearer copy-auth-secret",
+    );
+    try request.setHeader(
+        "X-MS-COPY-SOURCE",
+        "https://storage.example/source?sig=copy-sas-secret&sp=r",
+    );
+    try request.setHeader(
+        "Ocp-Apim-Subscription-Key",
+        "subscription-secret",
+    );
+    try request.setHeader("x-functions-key", "function-secret");
+    try request.setHeader("X-Stable", "stable-value");
+    var response = try recorder.asTransport().send(&request);
+    response.deinit();
+
+    const json = try recorder.toJson(std.testing.allocator);
+    defer std.testing.allocator.free(json);
+    for ([_][]const u8{
+        "request-sas-secret",
+        "bearer-secret",
+        "encryption-secret",
+        "copy-auth-secret",
+        "copy-sas-secret",
+        "subscription-secret",
+        "function-secret",
+        "response-cookie-secret",
+        "response-key-secret",
+        "response-copy-auth-secret",
+        "response-sas-secret",
+        "response-copy-secret",
+        "source-encryption-secret",
+        "source-encryption-hash",
+        "source-auth-secret",
+    }) |secret| {
+        try std.testing.expect(std.mem.indexOf(u8, json, secret) == null);
+    }
+    try std.testing.expect(
+        std.mem.indexOf(u8, json, "https://storage.example/source") == null,
+    );
+    try std.testing.expect(std.mem.indexOf(u8, json, "sp=r") == null);
+
+    var parsed = try parseJson(std.testing.allocator, json);
+    defer parsed.deinit();
+    var playback = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    var live = core.http.Request.init(
+        std.testing.allocator,
+        .POST,
+        "https://example.com/items?sig=different-sas&version=1",
+    );
+    defer live.deinit();
+    live.body = "safe request";
+    try live.setHeader("Authorization", "Bearer different-bearer");
+    try live.setHeader("x-ms-encryption-key", "different-key");
+    try live.setHeader(
+        "X-MS-SOURCE-ENCRYPTION-KEY",
+        "different-source-key",
+    );
+    try live.setHeader(
+        "X-MS-SOURCE-ENCRYPTION-KEY-SHA256",
+        "different-source-key-hash",
+    );
+    try live.setHeader(
+        "X-MS-SOURCE-AUTHORIZATION",
+        "Bearer different-source-auth",
+    );
+    try live.setHeader(
+        "X-MS-COPY-SOURCE-AUTHORIZATION",
+        "Bearer different-copy-auth",
+    );
+    try live.setHeader(
+        "x-ms-copy-source",
+        "https://elsewhere.example/object?sig=different-copy-sas",
+    );
+    try live.setHeader("ocp-apim-subscription-key", "different-subscription");
+    try live.setHeader("X-FUNCTIONS-KEY", "different-function-key");
+    try live.setHeader("X-Stable", "stable-value");
+    var replayed = try playback.asTransport().send(&live);
+    replayed.deinit();
+
+    var header_mismatch = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    try live.setHeader("X-Stable", "changed");
+    try std.testing.expectError(
+        error.HeaderMismatch,
+        header_mismatch.asTransport().send(&live),
+    );
+
+    var url_mismatch = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    try live.setHeader("X-Stable", "stable-value");
+    live.url = "https://example.com/items?sig=different-sas&version=2";
+    try std.testing.expectError(
+        error.UrlMismatch,
+        url_mismatch.asTransport().send(&live),
+    );
+
+    var body_mismatch = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    live.url = "https://example.com/items?sig=different-sas&version=1";
+    live.body = "changed request";
+    try std.testing.expectError(
+        error.BodyMismatch,
+        body_mismatch.asTransport().send(&live),
+    );
+}
+
+test "recording JSON base64 bodies roundtrip arbitrary bytes" {
+    const urls = [_][]const u8{
+        "https://example.com/invalid",
+        "https://example.com/nul",
+        "https://example.com/empty",
+        "https://example.com/utf8",
+    };
+    const request_bodies = [_][]const u8{
+        "\xff\xfe\x80",
+        "\x00request\x00",
+        "",
+        "snowman: \xe2\x98\x83",
+    };
+    const response_bodies = [_][]const u8{
+        "\x80\xff\x00",
+        "response\x00body",
+        "",
+        "lambda: \xce\xbb",
+    };
+    var sequence = core.http.SequenceMockTransport.init(
+        std.testing.allocator,
+        &.{
+            .{ .status = 200, .body = response_bodies[0] },
+            .{ .status = 200, .body = response_bodies[1] },
+            .{ .status = 200, .body = response_bodies[2] },
+            .{ .status = 200, .body = response_bodies[3] },
+        },
+    );
+    var recorder = RecordingTransport.init(
+        std.testing.allocator,
+        sequence.asTransport(),
+    );
+    defer recorder.deinit();
+    for (urls, request_bodies) |url, body| {
+        var request = core.http.Request.init(std.testing.allocator, .POST, url);
+        defer request.deinit();
+        request.body = body;
+        var response = try recorder.asTransport().send(&request);
+        response.deinit();
+    }
+
+    const json = try recorder.toJson(std.testing.allocator);
+    defer std.testing.allocator.free(json);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(json));
+    var parsed = try parseJson(std.testing.allocator, json);
+    defer parsed.deinit();
+    var playback = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    for (urls, request_bodies, response_bodies) |url, request_body, expected| {
+        var request = core.http.Request.init(std.testing.allocator, .POST, url);
+        defer request.deinit();
+        request.body = request_body;
+        var response = try playback.asTransport().send(&request);
+        defer response.deinit();
+        try std.testing.expectEqualSlices(u8, expected, response.body);
+    }
+}
+
 test "recording JSON refuses recognized credential bodies" {
     var mock = core.http.MockTransport.init(
         std.testing.allocator,
@@ -1644,6 +2269,41 @@ fn recordingRedirectAllocationFixture(allocator: std.mem.Allocator) !void {
     try operation.finish();
 }
 
+fn serializationAllocationFixture(allocator: std.mem.Allocator) !void {
+    var mock = core.http.MockTransport.init(
+        std.testing.allocator,
+        200,
+        "\x00response\xff",
+    );
+    defer mock.deinit();
+    var recorder = RecordingTransport.init(
+        std.testing.allocator,
+        mock.asTransport(),
+    );
+    defer recorder.deinit();
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .POST,
+        "https://example.com/items?sig=secret&version=1",
+    );
+    defer request.deinit();
+    request.body = "\xffrequest\x00";
+    try request.setHeader("Authorization", "Bearer secret");
+    var response = try recorder.asTransport().send(&request);
+    response.deinit();
+    const json = try recorder.toJson(allocator);
+    allocator.free(json);
+}
+
+const allocation_fixture_json =
+    \\{"version":2,"exchanges":[{"request_method":"POST","request_url":"https://example.com","request_headers":[],"request_body":{"encoding":"base64","data":"cmVxdWVzdA=="},"response_status":200,"response_headers":[],"response_body":{"encoding":"base64","data":"cmVzcG9uc2U="}}]}
+;
+
+fn parsingAllocationFixture(allocator: std.mem.Allocator) !void {
+    var parsed = try parseJson(allocator, allocation_fixture_json);
+    parsed.deinit();
+}
+
 test "transport allocation failures clean up" {
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
@@ -1659,6 +2319,40 @@ test "transport allocation failures clean up" {
         std.testing.allocator,
         recordingRedirectAllocationFixture,
         .{},
+    );
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        serializationAllocationFixture,
+        .{},
+    );
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        parsingAllocationFixture,
+        .{},
+    );
+}
+
+test "recording parser reports version encoding and base64 errors" {
+    try std.testing.expectError(
+        error.UnsupportedRecordingVersion,
+        parseJson(
+            std.testing.allocator,
+            "{\"version\":1,\"exchanges\":[]}",
+        ),
+    );
+    try std.testing.expectError(
+        error.UnsupportedBodyEncoding,
+        parseJson(
+            std.testing.allocator,
+            "{\"version\":2,\"exchanges\":[{\"request_method\":\"GET\",\"request_url\":\"https://example.com\",\"request_headers\":[],\"request_body\":null,\"response_status\":200,\"response_headers\":[],\"response_body\":{\"encoding\":\"raw\",\"data\":\"value\"}}]}",
+        ),
+    );
+    try std.testing.expectError(
+        error.InvalidRecordingBody,
+        parseJson(
+            std.testing.allocator,
+            "{\"version\":2,\"exchanges\":[{\"request_method\":\"GET\",\"request_url\":\"https://example.com\",\"request_headers\":[],\"request_body\":null,\"response_status\":200,\"response_headers\":[],\"response_body\":{\"encoding\":\"base64\",\"data\":\"***\"}}]}",
+        ),
     );
 }
 

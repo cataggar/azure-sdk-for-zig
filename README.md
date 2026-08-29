@@ -26,9 +26,27 @@ const runtime = testing.initHttpRuntime(
 Playback validates method, exact URL, body presence/content, and every
 recorded request header. Additional live request headers are allowed so
 volatile telemetry can be omitted from recordings. Response header order and
-duplicates are preserved. Recording JSON redacts recognized sensitive headers
-and URL query values, and refuses to serialize bodies containing recognized
-credential fields rather than emitting them unsanitized.
+duplicates are preserved.
+
+`RecordingTransport.toJson` emits version 2 recordings. Request and response
+bodies are always represented as base64 with an explicit encoding field, so
+empty, NUL-containing, non-UTF-8, and normal UTF-8 bodies round-trip losslessly
+through `parseJson`. Parsed recordings can be passed directly to playback:
+
+```zig
+var parsed = try testing.parseJson(allocator, json);
+defer parsed.deinit();
+var playback = testing.PlaybackTransport.init(allocator, parsed.asSlice());
+```
+
+Recording JSON replaces recognized authorization, token, secret, key, cookie,
+and SAS-bearing header values with `REDACTED`. Credential URL headers such as
+`x-ms-copy-source` are fully redacted; recognized secret query parameters in
+request URLs and location-style headers are value-redacted. During playback,
+those structured redactions match a caller-supplied live credential, while
+all nonsensitive URL components, headers, and bodies remain exact-match
+requirements. Credential-bearing bodies are rejected instead of being emitted
+under a false sanitization guarantee.
 
 Run its independent tests from this directory:
 
