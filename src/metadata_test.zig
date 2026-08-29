@@ -56,7 +56,7 @@ test "repository pager follows a relative Link anonymously" {
         allocator,
         "https://registry.example",
         .{
-            .transport = transport.asTransport(),
+            .runtime = @import("test_runtime.zig").init(transport.asTransport()),
             .authentication = .anonymous,
         },
     );
@@ -116,7 +116,7 @@ test "Link pager accepts valueless extensions and quoted-pair escapes" {
         allocator,
         "https://registry.example",
         .{
-            .transport = transport.asTransport(),
+            .runtime = @import("test_runtime.zig").init(transport.asTransport()),
             .authentication = .anonymous,
         },
     );
@@ -160,7 +160,7 @@ test "anonymous metadata reads use challenge authentication" {
         allocator,
         "https://registry.example",
         .{
-            .transport = transport.asTransport(),
+            .runtime = @import("test_runtime.zig").init(transport.asTransport()),
             .authentication = .anonymous,
         },
     );
@@ -206,7 +206,7 @@ test "manifest pager follows an absolute same-origin Link" {
         allocator,
         "https://registry.example",
         .{
-            .transport = transport.asTransport(),
+            .runtime = @import("test_runtime.zig").init(transport.asTransport()),
             .authentication = .anonymous,
         },
     );
@@ -278,7 +278,7 @@ test "tag pager follows a query-relative Link" {
         allocator,
         "https://registry.example",
         .{
-            .transport = transport.asTransport(),
+            .runtime = @import("test_runtime.zig").init(transport.asTransport()),
             .authentication = .anonymous,
         },
     );
@@ -378,7 +378,7 @@ test "Link pager rejects unsafe and malformed continuations before sending" {
             std.testing.allocator,
             "https://registry.example",
             .{
-                .transport = transport.asTransport(),
+                .runtime = @import("test_runtime.zig").init(transport.asTransport()),
                 .authentication = .anonymous,
             },
         );
@@ -420,7 +420,7 @@ test "Link pager never sends credentials to an additionally trusted origin" {
         allocator,
         "https://registry.example",
         .{
-            .transport = transport.asTransport(),
+            .runtime = @import("test_runtime.zig").init(transport.asTransport()),
             .authentication = .anonymous,
             .authentication_options = .{
                 .expected_hosts = &.{"evil.example"},
@@ -454,7 +454,7 @@ test "metadata deletes return idempotent outcomes on every surface" {
         allocator,
         "https://registry.example",
         .{
-            .transport = transport.asTransport(),
+            .runtime = @import("test_runtime.zig").init(transport.asTransport()),
             .authentication = .anonymous,
         },
     );
@@ -526,7 +526,7 @@ test "metadata CRUD preserves flags paths and structured not-found errors" {
         allocator,
         "https://registry.example",
         .{
-            .transport = transport.asTransport(),
+            .runtime = @import("test_runtime.zig").init(transport.asTransport()),
             .authentication = .anonymous,
         },
     );
@@ -671,7 +671,7 @@ test "authenticated metadata writes use challenge authentication" {
         allocator,
         "https://registry.example",
         .{
-            .transport = transport.asTransport(),
+            .runtime = @import("test_runtime.zig").init(transport.asTransport()),
             .authentication = .{ .credential = &credential.credential },
         },
     );
@@ -710,7 +710,7 @@ test "malformed ACR errors retain status and raw body" {
         std.testing.allocator,
         "https://registry.example",
         .{
-            .transport = transport.asTransport(),
+            .runtime = @import("test_runtime.zig").init(transport.asTransport()),
             .authentication = .anonymous,
         },
     );
@@ -806,6 +806,7 @@ const TestCredential = struct {
         credential: *core.credentials.TokenCredential,
         _: core.credentials.TokenRequestContext,
         _: core.context.Context,
+        _: core.http.HttpRuntime,
     ) anyerror!core.credentials.AccessToken {
         const self: *TestCredential =
             @alignCast(@fieldParentPtr("credential", credential));

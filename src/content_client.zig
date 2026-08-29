@@ -154,7 +154,10 @@ pub const ContainerRegistryContentClient = struct {
     ) !UploadManifestResponse {
         if (manifest.len > max_manifest_size) return error.ManifestTooLarge;
 
-        const computed = digest_mod.computeSha256Digest(manifest);
+        const computed = try digest_mod.computeSha256Digest(
+            self.pipeline().runtime.crypto,
+            manifest,
+        );
         const reference = options.reference orelse computed[0..];
         const reference_kind = try validateManifestReference(reference);
         if (reference_kind == .digest and
@@ -253,6 +256,7 @@ pub const ContainerRegistryContentClient = struct {
 
         const buffered = try readManifestBody(
             self.allocator,
+            self.pipeline().runtime.crypto,
             operation,
             capacity_hint,
             expected_length,
@@ -352,7 +356,7 @@ pub const ContainerRegistryContentClient = struct {
         return self.uploadBlob(&reader, options);
     }
 
-    fn pipeline(self: *ContainerRegistryContentClient) *core.pipeline.HttpPipeline {
+    fn pipeline(self: *ContainerRegistryContentClient) *core.http.HttpPipeline {
         return &self.registry_client.protocolClient().pipeline;
     }
 
@@ -549,6 +553,7 @@ const BufferedManifest = struct {
 
 fn readManifestBody(
     allocator: std.mem.Allocator,
+    provider: core.crypto.CryptoProvider,
     operation: *core.http.HttpOperation,
     capacity_hint: usize,
     expected_length: ?usize,
@@ -559,7 +564,8 @@ fn readManifestBody(
         try body.ensureTotalCapacityPrecise(allocator, capacity_hint);
     }
 
-    var digest = digest_mod.Sha256Digest{};
+    var digest = try digest_mod.Sha256Digest.init(allocator, provider);
+    defer digest.deinit();
     const reader = try operation.reader();
     var buffer: [16 * 1024]u8 = undefined;
     var total: usize = 0;
@@ -574,16 +580,17 @@ fn readManifestBody(
             if (count > length -| total) return error.ContentLengthMismatch;
         }
         try body.appendSlice(allocator, buffer[0..count]);
-        digest.update(buffer[0..count]);
+        try digest.update(buffer[0..count]);
         total += count;
     }
     if (expected_length) |length| {
         if (total != length) return error.ContentLengthMismatch;
     }
 
+    const computed_digest = try digest.final();
     return .{
         .bytes = try body.toOwnedSlice(allocator),
-        .digest = digest.final(),
+        .digest = computed_digest,
     };
 }
 
@@ -596,14 +603,14 @@ fn hasPayloadDeinit(comptime T: type) bool {
 
 fn testClient(
     allocator: std.mem.Allocator,
-    transport: *core.http.HttpTransport,
+    transport: core.http.HttpTransport,
 ) !ContainerRegistryContentClient {
     return ContainerRegistryContentClient.init(
         allocator,
         "https://registry.example",
         "team/app",
         .{
-            .transport = transport,
+            .runtime = @import("test_runtime.zig").init(transport),
             .authentication = .anonymous,
         },
     );
@@ -621,10 +628,70 @@ fn capturedHeader(
     return null;
 }
 
+test "manifest upload uses selected runtime crypto provider" {
+    const allocator = std.testing.allocator;
+    const manifest = "{\"schemaVersion\":2}\n";
+    var spy = @import("crypto_test_provider.zig").Spy.init(std.testing.io);
+    const expected_digest = try digest_mod.computeSha256Digest(
+        @import("test_runtime.zig").crypto(),
+        manifest,
+    );
+    const headers = [_]core.http.MockTransport.HeaderPair{
+        .{ .name = "Docker-Content-Digest", .value = &expected_digest },
+    };
+    var transport = core.http.MockTransport.init(allocator, 201, "");
+    defer transport.deinit();
+    transport.response_headers_list = &headers;
+    var client = try ContainerRegistryContentClient.init(
+        allocator,
+        "https://registry.example",
+        "team/app",
+        .{
+            .runtime = .init(transport.asTransport(), spy.asProvider()),
+            .authentication = .anonymous,
+        },
+    );
+    defer client.deinit();
+
+    var result = try client.uploadManifest(manifest, .{ .reference = "v1" });
+    defer result.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), spy.sha256_calls);
+    try std.testing.expectEqual(@as(usize, 0), spy.sha256_init_calls);
+    try std.testing.expectEqual(@as(usize, 1), transport.call_count);
+}
+
+test "manifest crypto failure happens before transport" {
+    const allocator = std.testing.allocator;
+    var spy = @import("crypto_test_provider.zig").Spy.init(std.testing.io);
+    spy.failure = .sha256;
+    var transport = core.http.MockTransport.init(allocator, 201, "");
+    defer transport.deinit();
+    var client = try ContainerRegistryContentClient.init(
+        allocator,
+        "https://registry.example",
+        "team/app",
+        .{
+            .runtime = .init(transport.asTransport(), spy.asProvider()),
+            .authentication = .anonymous,
+        },
+    );
+    defer client.deinit();
+
+    try std.testing.expectError(
+        error.InjectedCryptoFailure,
+        client.uploadManifest("{\"schemaVersion\":2}", .{ .reference = "v1" }),
+    );
+    try std.testing.expectEqual(@as(usize, 1), spy.sha256_calls);
+    try std.testing.expectEqual(@as(usize, 0), transport.call_count);
+}
+
 test "upload preserves exact bytes with OCI default and tag reference" {
     const allocator = std.testing.allocator;
     const manifest = "{\"schemaVersion\":2, \"layers\":[]}\n";
-    const expected_digest = digest_mod.computeSha256Digest(manifest);
+    const expected_digest = try digest_mod.computeSha256Digest(
+        @import("test_runtime.zig").crypto(),
+        manifest,
+    );
     const headers = [_]core.http.MockTransport.HeaderPair{
         .{ .name = "Docker-Content-Digest", .value = &expected_digest },
     };
@@ -652,7 +719,10 @@ test "upload preserves exact bytes with OCI default and tag reference" {
 test "upload supports Docker media type and digest reference" {
     const allocator = std.testing.allocator;
     const manifest = "{\"schemaVersion\":2,\"mediaType\":\"docker\"}";
-    const expected_digest = digest_mod.computeSha256Digest(manifest);
+    const expected_digest = try digest_mod.computeSha256Digest(
+        @import("test_runtime.zig").crypto(),
+        manifest,
+    );
     const headers = [_]core.http.MockTransport.HeaderPair{
         .{ .name = "Docker-Content-Digest", .value = &expected_digest },
     };
@@ -681,8 +751,14 @@ test "upload supports Docker media type and digest reference" {
 test "upload validates references and returned digest" {
     const allocator = std.testing.allocator;
     const manifest = "{\"schemaVersion\":2}";
-    const expected_digest = digest_mod.computeSha256Digest(manifest);
-    const other_digest = digest_mod.computeSha256Digest("{\"schemaVersion\":1}");
+    const expected_digest = try digest_mod.computeSha256Digest(
+        @import("test_runtime.zig").crypto(),
+        manifest,
+    );
+    const other_digest = try digest_mod.computeSha256Digest(
+        @import("test_runtime.zig").crypto(),
+        "{\"schemaVersion\":1}",
+    );
     var returned_digest: []const u8 = &other_digest;
     var headers = [_]core.http.MockTransport.HeaderPair{
         .{ .name = "Docker-Content-Digest", .value = returned_digest },
@@ -729,7 +805,10 @@ test "upload validates references and returned digest" {
 test "download sends mature Accept list and preserves owned metadata" {
     const allocator = std.testing.allocator;
     const manifest = "{\"schemaVersion\":2}\n";
-    const expected_digest = digest_mod.computeSha256Digest(manifest);
+    const expected_digest = try digest_mod.computeSha256Digest(
+        @import("test_runtime.zig").crypto(),
+        manifest,
+    );
     const content_length = "20";
     const headers = [_]core.http.MockTransport.HeaderPair{
         .{ .name = "Content-Length", .value = content_length },
@@ -771,8 +850,14 @@ test "download sends mature Accept list and preserves owned metadata" {
 test "download validates reference returned digest and required headers" {
     const allocator = std.testing.allocator;
     const manifest = "{\"schemaVersion\":2}";
-    const expected_digest = digest_mod.computeSha256Digest(manifest);
-    const other_digest = digest_mod.computeSha256Digest("{\"schemaVersion\":1}");
+    const expected_digest = try digest_mod.computeSha256Digest(
+        @import("test_runtime.zig").crypto(),
+        manifest,
+    );
+    const other_digest = try digest_mod.computeSha256Digest(
+        @import("test_runtime.zig").crypto(),
+        "{\"schemaVersion\":1}",
+    );
     const valid_headers = [_]core.http.MockTransport.HeaderPair{
         .{ .name = "Content-Length", .value = "19" },
         .{ .name = "Docker-Content-Digest", .value = &expected_digest },
@@ -874,7 +959,10 @@ test "download validates reference returned digest and required headers" {
 test "download treats compressed content length as an encoded hint" {
     const allocator = std.testing.allocator;
     const manifest = "{\"schemaVersion\":2}";
-    const expected_digest = digest_mod.computeSha256Digest(manifest);
+    const expected_digest = try digest_mod.computeSha256Digest(
+        @import("test_runtime.zig").crypto(),
+        manifest,
+    );
     const gzip_headers = [_]core.http.MockTransport.HeaderPair{
         .{ .name = "Content-Encoding", .value = "gzip" },
         .{ .name = "Content-Length", .value = "11" },
@@ -927,7 +1015,10 @@ test "manifest size limit allows boundary and rejects declared and streamed exce
     const boundary = try allocator.alloc(u8, max_manifest_size);
     defer allocator.free(boundary);
     @memset(boundary, 'x');
-    const boundary_digest = digest_mod.computeSha256Digest(boundary);
+    const boundary_digest = try digest_mod.computeSha256Digest(
+        @import("test_runtime.zig").crypto(),
+        boundary,
+    );
     const boundary_headers = [_]core.http.MockTransport.HeaderPair{
         .{ .name = "Content-Length", .value = "4194304" },
         .{ .name = "Docker-Content-Digest", .value = &boundary_digest },
@@ -1013,7 +1104,10 @@ test "manifest size limit allows boundary and rejects declared and streamed exce
 
 test "delete requires digest and treats missing manifests as success" {
     const allocator = std.testing.allocator;
-    const digest = digest_mod.computeSha256Digest("manifest");
+    const digest = try digest_mod.computeSha256Digest(
+        @import("test_runtime.zig").crypto(),
+        "manifest",
+    );
     var transport = core.http.MockTransport.init(allocator, 202, "");
     defer transport.deinit();
     var client = try testClient(allocator, transport.asTransport());
@@ -1152,7 +1246,10 @@ test "streaming manifest operations expose shared structured ACR errors" {
 test "replayable upload integrates challenge auth and same-origin redirects" {
     const allocator = std.testing.allocator;
     const manifest = "{\"schemaVersion\":2,\"redirected\":true}";
-    const expected_digest = digest_mod.computeSha256Digest(manifest);
+    const expected_digest = try digest_mod.computeSha256Digest(
+        @import("test_runtime.zig").crypto(),
+        manifest,
+    );
     const redirect_headers = [_]core.http.MockTransport.HeaderPair{
         .{
             .name = "Location",
@@ -1204,7 +1301,10 @@ test "replayable upload integrates challenge auth and same-origin redirects" {
 
 fn uploadAllocationTest(allocator: std.mem.Allocator) !void {
     const manifest = "{\"schemaVersion\":2}";
-    const expected_digest = digest_mod.computeSha256Digest(manifest);
+    const expected_digest = try digest_mod.computeSha256Digest(
+        @import("test_runtime.zig").crypto(),
+        manifest,
+    );
     const headers = [_]core.http.MockTransport.HeaderPair{
         .{ .name = "Docker-Content-Digest", .value = &expected_digest },
     };
@@ -1227,7 +1327,10 @@ test "manifest upload is leak free across allocation failures" {
 
 fn downloadAllocationTest(allocator: std.mem.Allocator) !void {
     const manifest = "{\"schemaVersion\":2}";
-    const expected_digest = digest_mod.computeSha256Digest(manifest);
+    const expected_digest = try digest_mod.computeSha256Digest(
+        @import("test_runtime.zig").crypto(),
+        manifest,
+    );
     const headers = [_]core.http.MockTransport.HeaderPair{
         .{ .name = "Content-Length", .value = "19" },
         .{ .name = "Docker-Content-Digest", .value = &expected_digest },

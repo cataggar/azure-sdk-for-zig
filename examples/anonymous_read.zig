@@ -19,12 +19,13 @@ pub fn main(init: std.process.Init) !void {
 
     var transport = core.http.StdHttpTransport.init(init.gpa, init.io);
     defer transport.deinit();
+    var crypto = core.crypto.StdCryptoProvider.init(init.io);
     var content = try acr.ContainerRegistryContentClient.init(
         init.gpa,
         endpoint,
         repository,
         .{
-            .transport = transport.asTransport(),
+            .runtime = .init(transport.asTransport(), crypto.asProvider()),
             .authentication = .anonymous,
         },
     );

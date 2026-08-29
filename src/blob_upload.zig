@@ -35,7 +35,7 @@ pub const BlobUploadResponse = service_error.Result(BlobUploadResult);
 
 pub const UploadContext = struct {
     allocator: std.mem.Allocator,
-    pipeline: *core.pipeline.HttpPipeline,
+    pipeline: *core.http.HttpPipeline,
     endpoint: []const u8,
     api_version: []const u8,
     repository_name: []const u8,
@@ -52,6 +52,12 @@ pub fn upload(
     const buffer = try context.allocator.alloc(u8, options.chunk_size);
     defer context.allocator.free(buffer);
 
+    var digest = try digest_mod.Sha256Digest.init(
+        context.allocator,
+        context.pipeline.runtime.crypto,
+    );
+    defer digest.deinit();
+
     var start_result = try startUpload(context, options);
     switch (start_result) {
         .err => |failure| return .{ .err = failure },
@@ -60,7 +66,6 @@ pub fn upload(
             start_result = undefined;
             defer session.deinit();
 
-            var digest = digest_mod.Sha256Digest{};
             var total: u64 = 0;
             while (true) {
                 checkCancelled(options.cancellation) catch |err| {
@@ -104,7 +109,9 @@ pub fn upload(
                 total += count;
             }
 
-            const computed_digest = digest.final();
+            const computed_digest = digest.final() catch |err| {
+                return failAfterCleanup(context, &session, err);
+            };
             const completion_result = completeUpload(
                 context,
                 &session,
@@ -286,10 +293,6 @@ fn uploadChunk(
             attempt_start,
             @as(u64, @intCast(attempt.len)),
         ) catch return error.BlobUploadTooLarge;
-        const digest_snapshot = digest.*;
-        const cursor_snapshot = cursor;
-        digest.update(attempt);
-
         const request_url = try buildContinuationUrl(
             context,
             session.location,
@@ -328,8 +331,6 @@ fn uploadChunk(
                 .cancellation = options.cancellation,
             },
         ) catch |err| {
-            digest.* = digest_snapshot;
-            cursor = cursor_snapshot;
             if (err == error.OperationCancelled) return err;
             if (!request.transport_started) {
                 if (!isRetryablePreTransportError(err) or
@@ -394,6 +395,7 @@ fn uploadChunk(
                 request_url,
             );
             errdefer context.allocator.free(next_location);
+            try digest.update(attempt);
             try operation.finish();
             session.replaceLocation(next_location);
             session.confirmed_offset = response_offset;
@@ -401,8 +403,6 @@ fn uploadChunk(
             return .{ .ok = {} };
         }
 
-        digest.* = digest_snapshot;
-        cursor = cursor_snapshot;
         if (operation.status_code == 416) {
             const range = try requiredHeader(
                 context.allocator,
@@ -510,7 +510,7 @@ fn applyRecoveredOffset(
         return error.ServerUploadOffsetDiverged;
     const delta: usize = @intCast(recovered_offset - current_offset);
     if (delta > 0) {
-        digest.update(chunk[cursor.* .. cursor.* + delta]);
+        try digest.update(chunk[cursor.* .. cursor.* + delta]);
         cursor.* += delta;
     }
     session.confirmed_offset = recovered_offset;
@@ -1191,10 +1191,11 @@ test "cleanup uses standard bodiless DELETE framing and reports its own failure"
     defer session.deinit();
     var transport = core.http.StdHttpTransport.init(allocator, io);
     defer transport.deinit();
-    var pipeline = core.pipeline.HttpPipeline{
-        .policies = &.{},
-        .transport_impl = transport.asTransport(),
-    };
+    var crypto = core.crypto.StdCryptoProvider.init(io);
+    var pipeline = core.http.HttpPipeline.init(
+        .init(transport.asTransport(), crypto.asProvider()),
+        &.{},
+    );
 
     const thread = try std.Thread.spawn(.{}, CleanupTestServer.run, .{&server_context});
     const cleanup_result = cleanupUpload(.{

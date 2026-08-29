@@ -1,36 +1,51 @@
 const std = @import("std");
+const core = @import("azure_sdk_core");
 
-const Sha256 = std.crypto.hash.sha2.Sha256;
-
-pub const sha256_digest_length = Sha256.digest_length;
+pub const sha256_digest_length = @sizeOf(core.crypto.Sha256Digest);
 pub const sha256_formatted_length = "sha256:".len + (sha256_digest_length * 2);
 
-/// Incremental SHA-256 computation with canonical OCI/Docker digest formatting.
+/// Single-owner incremental SHA-256 computation using the selected runtime
+/// crypto provider. Call `deinit` exactly once.
 pub const Sha256Digest = struct {
-    hasher: Sha256 = Sha256.init(.{}),
+    operation: core.crypto.Sha256Operation,
 
-    pub fn update(self: *Sha256Digest, bytes: []const u8) void {
-        self.hasher.update(bytes);
+    pub fn init(
+        allocator: std.mem.Allocator,
+        provider: core.crypto.CryptoProvider,
+    ) !Sha256Digest {
+        return .{ .operation = try provider.sha256Init(allocator) };
     }
 
-    pub fn finalBytes(self: *Sha256Digest) [sha256_digest_length]u8 {
-        return self.hasher.finalResult();
+    pub fn deinit(self: *Sha256Digest) void {
+        self.operation.deinit();
+        self.* = undefined;
     }
 
-    pub fn final(self: *Sha256Digest) [sha256_formatted_length]u8 {
-        return formatSha256Digest(self.finalBytes());
+    pub fn update(self: *Sha256Digest, bytes: []const u8) !void {
+        try self.operation.update(bytes);
+    }
+
+    pub fn finalBytes(self: *Sha256Digest) !core.crypto.Sha256Digest {
+        return self.operation.final();
+    }
+
+    pub fn final(self: *Sha256Digest) ![sha256_formatted_length]u8 {
+        return formatSha256Digest(try self.finalBytes());
     }
 };
 
 /// Computes the canonical lowercase `sha256:<hex>` digest for exact bytes.
-pub fn computeSha256Digest(bytes: []const u8) [sha256_formatted_length]u8 {
-    var digest = Sha256Digest{};
-    digest.update(bytes);
-    return digest.final();
+pub fn computeSha256Digest(
+    provider: core.crypto.CryptoProvider,
+    bytes: []const u8,
+) ![sha256_formatted_length]u8 {
+    return formatSha256Digest(try provider.sha256(bytes));
 }
 
 /// Formats a SHA-256 hash as canonical lowercase `sha256:<hex>`.
-pub fn formatSha256Digest(hash: [sha256_digest_length]u8) [sha256_formatted_length]u8 {
+pub fn formatSha256Digest(
+    hash: core.crypto.Sha256Digest,
+) [sha256_formatted_length]u8 {
     const hex = "0123456789abcdef";
     var formatted: [sha256_formatted_length]u8 = undefined;
     @memcpy(formatted[0.."sha256:".len], "sha256:");
@@ -67,21 +82,25 @@ pub fn sha256DigestsEqual(left: []const u8, right: []const u8) !bool {
     return std.ascii.eqlIgnoreCase(left, right);
 }
 
-test "incremental digest preserves exact bytes" {
-    var incremental = Sha256Digest{};
-    incremental.update("{\"schemaVersion\":");
-    incremental.update("2}\n");
-    const actual = incremental.final();
+test "incremental digest preserves exact bytes through provider" {
+    var provider_impl = core.crypto.StdCryptoProvider.init(std.testing.io);
+    const provider = provider_impl.asProvider();
+    var incremental = try Sha256Digest.init(std.testing.allocator, provider);
+    defer incremental.deinit();
+    try incremental.update("{\"schemaVersion\":");
+    try incremental.update("2}\n");
+    const actual = try incremental.final();
 
-    const expected = computeSha256Digest("{\"schemaVersion\":2}\n");
+    const expected = try computeSha256Digest(provider, "{\"schemaVersion\":2}\n");
     try std.testing.expectEqualSlices(u8, &expected, &actual);
 
-    const without_newline = computeSha256Digest("{\"schemaVersion\":2}");
+    const without_newline = try computeSha256Digest(provider, "{\"schemaVersion\":2}");
     try std.testing.expect(!std.mem.eql(u8, &expected, &without_newline));
 }
 
 test "digest formatting is canonical and validation is case insensitive" {
-    const digest = computeSha256Digest("");
+    var provider_impl = core.crypto.StdCryptoProvider.init(std.testing.io);
+    const digest = try computeSha256Digest(provider_impl.asProvider(), "");
     try std.testing.expectEqualStrings(
         "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         &digest,

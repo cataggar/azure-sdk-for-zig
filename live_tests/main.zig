@@ -39,6 +39,7 @@ const Config = struct {
 const LiveSession = struct {
     allocator: std.mem.Allocator,
     transport: ObservingTransport,
+    crypto: core.crypto.StdCryptoProvider,
     credential: core.identity.DefaultAzureCredential,
 
     fn create(
@@ -52,10 +53,10 @@ const LiveSession = struct {
         self.allocator = allocator;
         self.transport = try ObservingTransport.init(allocator, io, endpoint);
         errdefer self.transport.deinit();
+        self.crypto = core.crypto.StdCryptoProvider.init(io);
         self.credential = try core.identity.DefaultAzureCredential.init(
             allocator,
             io,
-            self.transport.asTransport(),
             env,
         );
         return self;
@@ -63,7 +64,10 @@ const LiveSession = struct {
 
     fn options(self: *LiveSession) acr.ContainerRegistryClientOptions {
         return .{
-            .transport = self.transport.asTransport(),
+            .runtime = .init(
+                self.transport.asTransport(),
+                self.crypto.asProvider(),
+            ),
             .authentication = .{ .credential = self.credential.asCredential() },
         };
     }
@@ -424,7 +428,6 @@ const ObservingTransport = struct {
     allocator: std.mem.Allocator,
     endpoint: []u8,
     standard: core.http.StdHttpTransport,
-    transport: core.http.HttpTransport,
     redirect_count: usize = 0,
     inject_range_failure: bool = false,
     range_failure_injected: bool = false,
@@ -440,12 +443,14 @@ const ObservingTransport = struct {
             .allocator = allocator,
             .endpoint = try allocator.dupe(u8, endpoint),
             .standard = core.http.StdHttpTransport.init(allocator, io),
-            .transport = .{ .sendFn = &send, .openFn = &open },
         };
     }
 
-    fn asTransport(self: *ObservingTransport) *core.http.HttpTransport {
-        return &self.transport;
+    fn asTransport(self: *ObservingTransport) core.http.HttpTransport {
+        return .{
+            .context = self,
+            .vtable = &.{ .send = &send, .open = &open },
+        };
     }
 
     fn deinit(self: *ObservingTransport) void {
@@ -455,22 +460,20 @@ const ObservingTransport = struct {
     }
 
     fn send(
-        transport: *core.http.HttpTransport,
+        context: *anyopaque,
         request: *core.http.Request,
     ) !core.http.Response {
-        const self: *ObservingTransport =
-            @alignCast(@fieldParentPtr("transport", transport));
+        const self: *ObservingTransport = @ptrCast(@alignCast(context));
         const base = self.standard.asTransport();
-        return base.sendFn(base, request);
+        return base.vtable.send(base.context, request);
     }
 
     fn open(
-        transport: *core.http.HttpTransport,
+        context: *anyopaque,
         request: *core.http.Request,
         options: core.http.OpenOptions,
     ) !*core.http.HttpOperation {
-        const self: *ObservingTransport =
-            @alignCast(@fieldParentPtr("transport", transport));
+        const self: *ObservingTransport = @ptrCast(@alignCast(context));
         const range = request.getHeader("Range");
         if (range != null and self.isRegistryUrl(request.url) and
             self.range_request_count < self.range_starts.len)
@@ -479,7 +482,7 @@ const ObservingTransport = struct {
             self.range_request_count += 1;
         }
         const base = self.standard.asTransport();
-        const operation = try base.openFn.?(base, request, options);
+        const operation = try base.vtable.open.?(base.context, request, options);
         if (operation.status_code == 307 and self.isRegistryUrl(request.url))
             self.redirect_count += 1;
         if (self.inject_range_failure and !self.range_failure_injected and

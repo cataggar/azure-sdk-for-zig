@@ -8,6 +8,7 @@ pub const repository_environment = "AZURE_CONTAINER_REGISTRY_REPOSITORY";
 pub const AuthenticatedSession = struct {
     allocator: std.mem.Allocator,
     transport: core.http.StdHttpTransport,
+    crypto: core.crypto.StdCryptoProvider,
     credential: core.identity.DefaultAzureCredential,
 
     pub fn create(
@@ -20,10 +21,10 @@ pub const AuthenticatedSession = struct {
         self.allocator = allocator;
         self.transport = core.http.StdHttpTransport.init(allocator, io);
         errdefer self.transport.deinit();
+        self.crypto = core.crypto.StdCryptoProvider.init(io);
         self.credential = try core.identity.DefaultAzureCredential.init(
             allocator,
             io,
-            self.transport.asTransport(),
             env,
         );
         return self;
@@ -33,9 +34,13 @@ pub const AuthenticatedSession = struct {
         self: *AuthenticatedSession,
     ) acr.ContainerRegistryClientOptions {
         return .{
-            .transport = self.transport.asTransport(),
+            .runtime = self.runtime(),
             .authentication = .{ .credential = self.credential.asCredential() },
         };
+    }
+
+    pub fn runtime(self: *AuthenticatedSession) core.http.HttpRuntime {
+        return .init(self.transport.asTransport(), self.crypto.asProvider());
     }
 
     pub fn deinit(self: *AuthenticatedSession) void {
