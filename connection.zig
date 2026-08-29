@@ -529,6 +529,10 @@ pub const Driver = struct {
     /// Send `close` and wait for the peer's `close`.
     pub fn close(self: *Driver, err: ?perf.AmqpError, deadline_ms: i64) ConnectionError!void {
         if (self.state == .closed) return;
+        if (self.state == .close_sent) {
+            self.terminate();
+            return error.ConnectionClosed;
+        }
         try self.sendPerformative(.amqp, 0, .{ .close = .{ .err = err } });
         self.state = .close_sent;
 
@@ -537,7 +541,10 @@ pub const Driver = struct {
                 self.terminate();
                 return;
             },
-            else => return e,
+            else => {
+                self.terminate();
+                return e;
+            },
         };
         var processed = false;
         defer if (!processed) self.invalidate();
@@ -588,11 +595,7 @@ pub const Driver = struct {
     pub fn pump(self: *Driver, deadline_ms: i64) ConnectionError!?InboundFrame {
         try self.doWork();
         const inbound = try self.receiveFrame(deadline_ms);
-        if (self.handlers.get(inbound.header.channel)) |handler| {
-            handler.onFrame(inbound.header, inbound.body);
-            return null;
-        }
-        if (inbound.header.channel == 0 and isClose(inbound.body)) {
+        if (isClose(inbound.body)) {
             var processed = false;
             defer if (!processed) self.invalidate();
             var decoded = try self.decodeBody(inbound.body);
@@ -600,6 +603,10 @@ pub const Driver = struct {
             try self.respondToRemoteClose(decoded.performative.close.err);
             processed = true;
             return error.RemoteClosed;
+        }
+        if (self.handlers.get(inbound.header.channel)) |handler| {
+            handler.onFrame(inbound.header, inbound.body);
+            return null;
         }
         return inbound;
     }
@@ -636,7 +643,8 @@ pub const Driver = struct {
         channel: u16,
         performative: perf.Performative,
     ) ConnectionError!void {
-        if (self.state == .err or self.state == .closed) return error.ConnectionClosed;
+        if (self.state == .err or self.state == .closed or self.state == .close_sent)
+            return error.ConnectionClosed;
         var buf = uamqp.encoder.Buffer.initDynamic(self.allocator);
         defer buf.deinit();
         try perf.encode(self.allocator, performative, &buf);
@@ -650,10 +658,11 @@ pub const Driver = struct {
         channel: u16,
         body: []const u8,
     ) ConnectionError!void {
-        if (self.state == .err or self.state == .closed) return error.ConnectionClosed;
+        if (self.state == .err or self.state == .closed or self.state == .close_sent)
+            return error.ConnectionClosed;
         const total = frame.frame_header_size + body.len;
         // Before `open` the peer has only guaranteed the spec minimum.
-        const limit: usize = if (self.state == .opened or self.state == .close_sent)
+        const limit: usize = if (self.state == .opened)
             self.remote_max_frame_size
         else
             @max(self.remote_max_frame_size, frame.min_max_frame_size);
@@ -700,7 +709,8 @@ pub const Driver = struct {
     /// Emit bytes that form one indivisible protocol unit, such as the
     /// eight-byte SASL or AMQP protocol header.
     fn emitRaw(self: *Driver, bytes: []const u8) ConnectionError!void {
-        if (self.state == .err or self.state == .closed) return error.ConnectionClosed;
+        if (self.state == .err or self.state == .closed or self.state == .close_sent)
+            return error.ConnectionClosed;
         self.writeBytes(bytes) catch |err| {
             self.invalidate();
             return err;
@@ -1130,6 +1140,78 @@ test "a mid-session close is surfaced by pump" {
     try testing.expectError(error.RemoteClosed, driver.pump(10_000));
     try testing.expectEqualStrings("amqp:connection:forced", driver.remoteError().?.condition);
     try testing.expectEqual(State.closed, driver.state);
+}
+
+test "Close is recognized globally before registered channel routing" {
+    const Sink = struct {
+        called: bool = false,
+
+        fn handler(self: *@This()) FrameHandler {
+            return .{ .ptr = self, .onFrameFn = onFrame };
+        }
+
+        fn onFrame(ptr: *anyopaque, _: FrameHeader, _: []const u8) void {
+            const self: *@This() = @ptrCast(@alignCast(ptr));
+            self.called = true;
+        }
+    };
+
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try peer.pushHeader(&frame.amqp_header);
+    try peer.push(.amqp, 0, .{ .open = .{
+        .container_id = "service-bus",
+        .channel_max = 16,
+    } });
+    try peer.push(.amqp, 4, .{ .close = .{} });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    try driver.open(10_000);
+    var sink = Sink{};
+    try driver.registerChannel(4, sink.handler());
+
+    mem.clearWritten();
+    try testing.expectError(error.RemoteClosed, driver.pump(10_000));
+    try testing.expect(!sink.called);
+    try testing.expectEqual(State.closed, driver.state);
+    try testing.expect(mem.closed);
+
+    const written = mem.written().len;
+    try testing.expectError(error.ConnectionClosed, driver.sendEmptyFrame());
+    try testing.expectEqual(written, mem.written().len);
+}
+
+test "Close acknowledgement timeout closes transport and cannot emit twice" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try peer.pushHeader(&frame.amqp_header);
+    try peer.push(.amqp, 0, .{ .open = .{ .container_id = "service-bus" } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    try driver.open(10_000);
+
+    mem.clearWritten();
+    mem.starve = true;
+    try testing.expectError(error.Timeout, driver.close(null, 0));
+    try testing.expectEqual(State.closed, driver.state);
+    try testing.expect(mem.closed);
+    const written = mem.written().len;
+    try testing.expect(written > 0);
+
+    try driver.close(null, 10_000);
+    try testing.expectEqual(written, mem.written().len);
+    try testing.expectError(error.ConnectionClosed, driver.sendEmptyFrame());
+    try testing.expectEqual(written, mem.written().len);
 }
 
 test "an inbound frame past max-frame-size is rejected" {

@@ -162,11 +162,9 @@ pub const Session = struct {
 
     /// End the session on the wire.
     pub fn end(self: *Session, deadline_ms: i64) LinkError!void {
-        self.driver.endSession(self.channel, deadline_ms) catch |err| {
-            if (self.driver.state == .err) self.terminate();
-            return err;
-        };
+        if (self.ended) return error.LinkDetached;
         self.terminate();
+        try self.driver.endSession(self.channel, deadline_ms);
     }
 
     /// Detach one sender and drop it from the session.
@@ -202,9 +200,7 @@ pub const Session = struct {
             if (self.driver.state == .err) self.terminate();
             return err;
         };
-        if (inbound.header.channel == 0 and
-            perf.peekDescriptor(inbound.body) == perf.descriptor.close)
-        {
+        if (perf.peekDescriptor(inbound.body) == perf.descriptor.close) {
             const decoded = self.driver.decodeBodyReusing(inbound.body) catch |err|
                 return self.failConsumedFrame(err);
             const c = decoded.performative.close;
@@ -472,7 +468,7 @@ pub const Session = struct {
             try s.recordDetach(d.err);
             if (respond) {
                 try self.driver.sendPerformative(.amqp, self.channel, .{
-                    .detach = .{ .handle = s.handle, .closed = d.closed },
+                    .detach = .{ .handle = s.handle, .closed = true },
                 });
             }
             return;
@@ -489,7 +485,7 @@ pub const Session = struct {
             try r.recordDetach(d.err);
             if (respond) {
                 try self.driver.sendPerformative(.amqp, self.channel, .{
-                    .detach = .{ .handle = r.handle, .closed = d.closed },
+                    .detach = .{ .handle = r.handle, .closed = true },
                 });
             }
         }
@@ -790,11 +786,18 @@ pub const Sender = struct {
     /// the link is detached either way, and reporting an error would make a
     /// caller tearing down think it had to retry.
     pub fn detach(self: *Sender, deadline_ms: i64) LinkError!void {
-        if (self.poisoned or !self.attached or self.session.ended) return error.LinkDetached;
-        self.detach_sent = true;
-        try self.session.driver.sendPerformative(.amqp, self.session.channel, .{
+        if (self.poisoned or !self.attached or self.detach_sent or self.session.ended)
+            return error.LinkDetached;
+        self.session.driver.sendPerformative(.amqp, self.session.channel, .{
             .detach = .{ .handle = self.handle, .closed = true },
-        });
+        }) catch |err| {
+            if (self.session.driver.state == .err) {
+                self.attached = false;
+                self.poisoned = true;
+            }
+            return err;
+        };
+        self.detach_sent = true;
         while (self.attached) {
             _ = self.session.pump(deadline_ms) catch |e| switch (e) {
                 error.RemoteClosed, error.ConnectionClosed => return,
@@ -902,7 +905,8 @@ pub const Sender = struct {
         options: SendOptions,
         deadline_ms: i64,
     ) LinkError!void {
-        if (self.poisoned or !self.attached) return error.LinkDetached;
+        if (self.poisoned or !self.attached or self.detach_sent or self.session.ended)
+            return error.LinkDetached;
         const payload = try message.encodeAlloc(self.allocator, msg);
         defer self.allocator.free(payload);
         try self.sendBytesWithOptions(payload, options, deadline_ms);
@@ -921,7 +925,8 @@ pub const Sender = struct {
         options: SendOptions,
         deadline_ms: i64,
     ) LinkError!void {
-        if (self.poisoned or !self.attached) return error.LinkDetached;
+        if (self.poisoned or !self.attached or self.detach_sent or self.session.ended)
+            return error.LinkDetached;
         // This call waits for the oldest delivery, so it is only waiting for
         // its own if nothing else is outstanding. Mixing it with
         // `sendBytesAsync` would either report another delivery's verdict as
@@ -976,7 +981,8 @@ pub const Sender = struct {
         options: SendOptions,
         deadline_ms: i64,
     ) LinkError!DeliveryToken {
-        if (self.poisoned or !self.attached) return error.LinkDetached;
+        if (self.poisoned or !self.attached or self.detach_sent or self.session.ended)
+            return error.LinkDetached;
         if (self.maxMessageSize()) |limit| {
             if (payload.len > limit) return error.MessageTooLarge;
         }
@@ -1591,6 +1597,15 @@ pub const Receiver = struct {
                     return error.MalformedFrame;
                 }
             }
+            // Settlement may be asserted on any transfer in the delivery.
+            // Once true it is terminal and remains true when later frames
+            // omit the field.
+            if (t.settled orelse false) {
+                if (!self.partial_settled) {
+                    self.partial_settled = true;
+                    self.session.releaseIncomingDelivery(self, partial_id);
+                }
+            }
             if (t.aborted) {
                 self.clearPartialAndFree();
                 return;
@@ -1759,7 +1774,8 @@ pub const Receiver = struct {
     /// this one, so credit stays a running authorisation rather than resetting
     /// and forgiving the overrun.
     pub fn issueCredit(self: *Receiver, count: u32) LinkError!void {
-        if (self.poisoned or !self.attached) return error.LinkDetached;
+        if (self.poisoned or !self.attached or self.detach_sent or self.session.ended)
+            return error.LinkDetached;
         try self.reserveIncomingCapacity(count);
         self.deferred_credit +|= count;
         self.grantDeferredCredit();
@@ -1956,7 +1972,7 @@ pub const Receiver = struct {
     ///
     /// The returned slices stay valid until the next `receive`.
     pub fn receive(self: *Receiver, deadline_ms: i64) LinkError!Delivery {
-        if (self.session.ended) return error.LinkDetached;
+        if (self.session.ended or self.detach_sent) return error.LinkDetached;
         while (self.ready.items.len == self.ready_head) {
             if (!self.attached) return error.LinkDetached;
             try self.replenish();
@@ -2008,7 +2024,8 @@ pub const Receiver = struct {
         last: u32,
         state: perf.DeliveryState,
     ) LinkError!void {
-        if (self.session.ended or self.poisoned or !self.attached) return error.LinkDetached;
+        if (self.session.ended or self.poisoned or !self.attached or self.detach_sent)
+            return error.LinkDetached;
         try self.session.driver.sendPerformative(.amqp, self.session.channel, .{
             .disposition = .{
                 .role = .receiver,
@@ -2031,7 +2048,8 @@ pub const Receiver = struct {
 
     /// Drain outstanding credit so the peer reports what it has left.
     pub fn drainCredit(self: *Receiver, deadline_ms: i64) LinkError!void {
-        if (self.session.ended or self.poisoned or !self.attached) return error.LinkDetached;
+        if (self.session.ended or self.poisoned or !self.attached or self.detach_sent)
+            return error.LinkDetached;
         self.drain = true;
         try self.session.sendFlow(self);
         // The sender answers a drain by advancing its delivery count over the
@@ -2048,11 +2066,18 @@ pub const Receiver = struct {
 
     /// Detach the link, waiting for the peer's detach.
     pub fn detach(self: *Receiver, deadline_ms: i64) LinkError!void {
-        if (self.session.ended or self.poisoned or !self.attached) return error.LinkDetached;
-        self.detach_sent = true;
-        try self.session.driver.sendPerformative(.amqp, self.session.channel, .{
+        if (self.session.ended or self.poisoned or !self.attached or self.detach_sent)
+            return error.LinkDetached;
+        self.session.driver.sendPerformative(.amqp, self.session.channel, .{
             .detach = .{ .handle = self.handle, .closed = true },
-        });
+        }) catch |err| {
+            if (self.session.driver.state == .err) {
+                self.attached = false;
+                self.poisoned = true;
+            }
+            return err;
+        };
+        self.detach_sent = true;
         while (self.attached) {
             _ = self.session.pump(deadline_ms) catch |e| switch (e) {
                 error.RemoteClosed, error.ConnectionClosed => return,
@@ -2662,7 +2687,7 @@ test "remote End and Close terminalize the session before returning" {
         } });
         switch (case) {
             .end => try peer.push(0, .{ .end = .{} }),
-            .close => try peer.push(0, .{ .close = .{} }),
+            .close => try peer.push(7, .{ .close = .{} }),
         }
 
         var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
@@ -2741,6 +2766,121 @@ test "a malformed consumed End response terminalizes the local session" {
     const writes = mem.write_count;
     try testing.expectError(error.LinkDetached, sender.sendBytes("blocked", 10_000));
     try testing.expectEqual(writes, mem.write_count);
+}
+
+test "End acknowledgement timeout leaves the session terminal without duplicate output" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptSenderAttach(peer, 1);
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+    }, 10_000);
+    _ = try fixture.session.pump(10_000); // sender flow
+
+    mem.clearWritten();
+    mem.starve = true;
+    try testing.expectError(error.Timeout, fixture.session.end(0));
+    try testing.expect(fixture.session.ended);
+    try testing.expect(sender.poisoned);
+    const written = mem.written().len;
+    try testing.expect(written > 0);
+
+    try testing.expectError(error.LinkDetached, fixture.session.end(10_000));
+    try testing.expectError(error.LinkDetached, sender.sendBytes("blocked", 10_000));
+    try testing.expectEqual(written, mem.written().len);
+}
+
+test "Detach acknowledgement timeout blocks transfer flow disposition and retry output" {
+    const Case = enum { sender, receiver };
+    inline for (std.meta.tags(Case)) |case| {
+        const allocator = testing.allocator;
+        var mem = MemoryTransport.init(allocator);
+        defer mem.deinit();
+        var clock: connection.ManualClock = .{};
+        const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+        try scriptHandshake(peer, 65536);
+        switch (case) {
+            .sender => {
+                try peer.push(0, .{ .attach = .{
+                    .name = "link",
+                    .handle = 0,
+                    .role = .receiver,
+                    .initial_delivery_count = 0,
+                } });
+                try peer.push(0, .{ .flow = .{
+                    .next_incoming_id = 0,
+                    .incoming_window = 1000,
+                    .next_outgoing_id = 1,
+                    .outgoing_window = 1000,
+                    .handle = 0,
+                    .delivery_count = 0,
+                    .link_credit = 1,
+                } });
+            },
+            .receiver => try peer.push(0, .{ .attach = .{
+                .name = "link",
+                .handle = 0,
+                .role = .sender,
+                .initial_delivery_count = 0,
+            } }),
+        }
+
+        var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+        defer driver.deinit();
+        var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+        defer fixture.deinit();
+
+        mem.clearWritten();
+        mem.starve = true;
+        switch (case) {
+            .sender => {
+                const sender = try openSender(&fixture.session, .{
+                    .name = "link",
+                    .target_address = "entity",
+                }, 10_000);
+                _ = try fixture.session.pump(10_000); // sender flow
+                mem.clearWritten();
+                try testing.expectError(error.Timeout, sender.detach(0));
+                try testing.expect(sender.detach_sent);
+                const written = mem.written().len;
+                try testing.expect(written > 0);
+                try testing.expectError(error.LinkDetached, sender.detach(10_000));
+                try testing.expectError(error.LinkDetached, sender.sendBytes("blocked", 10_000));
+                try testing.expectEqual(written, mem.written().len);
+            },
+            .receiver => {
+                const receiver = try openReceiver(&fixture.session, .{
+                    .name = "link",
+                    .source_address = "entity",
+                    .prefetch = 0,
+                }, 10_000);
+                mem.clearWritten();
+                try testing.expectError(error.Timeout, receiver.detach(0));
+                try testing.expect(receiver.detach_sent);
+                const written = mem.written().len;
+                try testing.expect(written > 0);
+                try testing.expectError(error.LinkDetached, receiver.detach(10_000));
+                try testing.expectError(error.LinkDetached, receiver.issueCredit(1));
+                try testing.expectError(
+                    error.LinkDetached,
+                    receiver.settleRange(0, 0, .accepted),
+                );
+                try testing.expectEqual(written, mem.written().len);
+            },
+        }
+    }
 }
 
 test "a delivery carries the requested message format" {
@@ -7679,12 +7819,72 @@ test "continuations may repeat the original delivery id without consuming credit
     try testing.expectEqual(@as(u32, 1), receiver.delivery_count);
     try testing.expectEqual(@as(u32, 0), receiver.credit);
     try expectReceiverAccounting(receiver);
-    try testing.expect(fixture.session.incoming_deliveries.contains(7));
+    try testing.expect(!fixture.session.incoming_deliveries.contains(7));
 
     const delivery = try receiver.receive(10_000);
     try testing.expectEqual(@as(u32, 7), delivery.id);
     try testing.expectEqualStrings("first-second-third", delivery.payload);
     try testing.expectEqualStrings("tag", delivery.tag);
+    try testing.expect(delivery.settled);
+}
+
+test "continuation settlement accumulates true and omission preserves state" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 20,
+        .delivery_tag = "a",
+        .more = true,
+    }, "a");
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .settled = true,
+        .more = true,
+    }, "b");
+    try peer.pushTransfer(0, .{ .handle = 0 }, "c");
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 21,
+        .delivery_tag = "b",
+        .more = true,
+    }, "x");
+    try peer.pushTransfer(0, .{ .handle = 0 }, "y");
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "partition/0",
+        .prefetch = 2,
+        .max_message_size = 16,
+        .max_buffered_bytes = 32,
+    }, 10_000);
+
+    for (0..5) |_| _ = try fixture.session.pump(10_000);
+    try testing.expect(!fixture.session.incoming_deliveries.contains(20));
+    try testing.expect(fixture.session.incoming_deliveries.contains(21));
+
+    const settled = try receiver.receive(10_000);
+    try testing.expectEqualStrings("abc", settled.payload);
+    try testing.expect(settled.settled);
+    const unsettled = try receiver.receive(10_000);
+    try testing.expectEqualStrings("xy", unsettled.payload);
+    try testing.expect(!unsettled.settled);
 }
 
 test "an aborted continuation may repeat the original delivery id" {
@@ -8118,6 +8318,75 @@ test "a remote detach releases an in-progress delivery's budget" {
     const detaches = try frames.of(allocator, perf.descriptor.detach);
     defer allocator.free(detaches);
     try testing.expectEqual(@as(usize, 1), detaches.len);
+}
+
+test "a remote non-closing Detach is answered closed and cannot resume the poisoned link" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 4,
+        .delivery_tag = "t",
+        .more = true,
+    }, "prefix");
+    try peer.push(0, .{ .detach = .{
+        .handle = 0,
+        .closed = false,
+    } });
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 2,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "partition/0",
+        .prefetch = 1,
+        .max_message_size = 16,
+        .max_buffered_bytes = 16,
+    }, 10_000);
+
+    _ = try fixture.session.pump(10_000);
+    try testing.expect(fixture.session.incoming_deliveries.contains(4));
+    mem.clearWritten();
+    _ = try fixture.session.pump(10_000);
+    try testing.expect(receiver.poisoned);
+    try testing.expect(!fixture.session.incoming_deliveries.contains(4));
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const detaches = try frames.of(allocator, perf.descriptor.detach);
+    defer allocator.free(detaches);
+    try testing.expectEqual(@as(usize, 1), detaches.len);
+    var decoded = try perf.decode(allocator, detaches[0]);
+    defer decoded.deinit();
+    try testing.expect(decoded.performative.detach.closed);
+
+    _ = try fixture.session.pump(10_000); // late attach is ignored
+    try testing.expect(receiver.poisoned);
+    try testing.expect(!receiver.attached);
+    try testing.expectEqual(@as(u32, 0), receiver.remote_handle);
+    const written = mem.written().len;
+    try testing.expectError(error.LinkDetached, receiver.issueCredit(1));
+    try testing.expectEqual(written, mem.written().len);
 }
 
 test "one receiver exhausting its budget does not block another link" {

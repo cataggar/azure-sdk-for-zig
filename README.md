@@ -211,10 +211,13 @@ requested prefetch window under that ceiling.
 
 Credit and delivery count are charged on the initial transfer, exactly once.
 A continuation may omit `delivery-id` or repeat the initial value without
-being charged again. An aborted multi-frame delivery, including one that
-repeats the id, releases its partial bytes without entering the ready queue,
-while a different delivery id arriving before the current delivery ends is a
-protocol error that terminally detaches the receiver. Any allocation
+being charged again. Settlement is cumulative across the transfer sequence:
+`settled = true` on any continuation remains true when later frames omit it,
+releases the active delivery id, and is reported on the completed delivery. An
+aborted multi-frame delivery, including one that repeats the id, releases its
+partial bytes without entering the ready queue, while a different delivery id
+arriving before the current delivery ends is a protocol error that terminally
+detaches the receiver. Any allocation
 failure after a transfer has been consumed does the same: the missing frame
 cannot be replayed, so keeping its old prefix for a later continuation would
 surface truncated data.
@@ -239,9 +242,14 @@ Consumed SASL, Open, Begin, End, Close, and connection-pump controls are guarded
 the same way: decode or apply failure invalidates the driver and closes the
 transport before retry is possible. A valid remote End terminalizes its session
 and links and emits the End response; a valid remote Close responds, then
-terminalizes the connection and transport. Later sender and receiver operations
-fail without emission. Remote Detach is acknowledged and terminally poisons
-only the named link.
+terminalizes the connection and transport. Close is recognized globally before
+channel routing, on any negotiated channel. Locally emitted Close, End, and
+closing Detach enter terminal output state immediately; acknowledgement timeout
+cannot leave the connection, session, or link writable, and teardown retry does
+not emit a duplicate terminal frame. Later sender and receiver operations fail
+without emission. Remote Detach is acknowledged with `closed = true` and
+terminally poisons only the named link, even when the peer requested suspension
+with `closed = false`; resumable link state is not retained.
 
 Settling one delivery at a time costs a frame per message, which at a 300-deep
 prefetch is 300 frames of bookkeeping. A disposition can name a `first`..`last`
