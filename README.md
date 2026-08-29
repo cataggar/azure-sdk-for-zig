@@ -148,9 +148,11 @@ const delivery = try receiver.receive(deadline_ms);
 try receiver.accept(delivery);
 ```
 
-If a peer rejects `openSender` or `openReceiver`, the call still returns
-`error.LinkDetached`. The session retains the peer's service-defined AMQP
-condition, description, and info map after the temporary link is removed:
+If a peer rejects `openSender` or `openReceiver` with the protocol-defined
+null target/source Attach followed by Detach, the call keeps pumping through
+the Detach and still returns `error.LinkDetached`. The session retains the
+peer's service-defined AMQP condition, description, and info map after the
+temporary link is removed:
 
 ```zig
 const receiver = amqp.openReceiver(&session, options, deadline_ms) catch |err| {

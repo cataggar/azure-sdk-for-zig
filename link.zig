@@ -426,6 +426,28 @@ pub const Session = struct {
         return null;
     }
 
+    fn senderForDetach(self: *Session, handle: u32) ?*Sender {
+        for (self.senders.items) |s| {
+            if ((s.attached or (s.awaiting_attach and s.attach_refused)) and
+                s.remote_handle == handle)
+            {
+                return s;
+            }
+        }
+        return null;
+    }
+
+    fn receiverForDetach(self: *Session, handle: u32) ?*Receiver {
+        for (self.receivers.items) |r| {
+            if ((r.attached or (r.awaiting_attach and r.attach_refused)) and
+                r.remote_handle == handle)
+            {
+                return r;
+            }
+        }
+        return null;
+    }
+
     /// A receiver this endpoint has detached but the peer may not have.
     fn detachedReceiverFor(self: *Session, handle: u32) ?*Receiver {
         for (self.receivers.items) |r| {
@@ -621,11 +643,23 @@ pub const Session = struct {
     fn applyAttach(self: *Session, a: perf.Attach) LinkError!void {
         // Match by link name: the peer echoes it and picks its own handle.
         for (self.senders.items) |s| {
-            if (s.awaiting_attach and !s.poisoned and std.mem.eql(u8, s.name, a.name)) {
+            if (s.awaiting_attach and
+                !s.poisoned and
+                a.role == .receiver and
+                std.mem.eql(u8, s.name, a.name))
+            {
+                if (s.attach_refused) return error.MalformedFrame;
+                s.remote_handle = a.handle;
+                if (a.target == null) {
+                    // A receiver answers a locally initiated sender Attach
+                    // with a null target when it cannot create the terminus.
+                    // The required Detach carries the useful remote error.
+                    s.attach_refused = true;
+                    return;
+                }
                 // `openSender` initiated this link, so its Attach declared the
                 // actual mode. The receiver's response is advisory even when
                 // it expresses the opposite fixed preference.
-                s.remote_handle = a.handle;
                 s.max_message_size = a.max_message_size;
                 s.rcv_settle_mode = a.rcv_settle_mode;
                 if (a.initial_delivery_count) |c| s.delivery_count = c;
@@ -635,18 +669,46 @@ pub const Session = struct {
             }
         }
         for (self.receivers.items) |r| {
-            if (r.awaiting_attach and !r.poisoned and std.mem.eql(u8, r.name, a.name)) {
+            if (r.awaiting_attach and
+                !r.poisoned and
+                a.role == .sender and
+                std.mem.eql(u8, r.name, a.name))
+            {
+                if (r.attach_refused) return error.MalformedFrame;
                 r.remote_handle = a.handle;
+                if (a.source == null) {
+                    // A sender answers a locally initiated receiver Attach
+                    // with a null source when it cannot create the terminus.
+                    // Keep pumping until its required Detach supplies detail.
+                    r.attach_refused = true;
+                    return;
+                }
                 r.peer_max_message_size = a.max_message_size;
                 r.attached = true;
                 r.awaiting_attach = false;
                 return;
             }
         }
+        for (self.senders.items) |s| {
+            if (s.awaiting_attach and
+                !s.poisoned and
+                std.mem.eql(u8, s.name, a.name))
+            {
+                return error.MalformedFrame;
+            }
+        }
+        for (self.receivers.items) |r| {
+            if (r.awaiting_attach and
+                !r.poisoned and
+                std.mem.eql(u8, r.name, a.name))
+            {
+                return error.MalformedFrame;
+            }
+        }
     }
 
     fn applyDetach(self: *Session, d: perf.Detach) LinkError!void {
-        if (self.senderFor(d.handle)) |s| {
+        if (self.senderForDetach(d.handle)) |s| {
             const respond = !s.detach_sent;
             s.attached = false;
             s.awaiting_attach = false;
@@ -660,7 +722,7 @@ pub const Session = struct {
             }
             return;
         }
-        if (self.receiverFor(d.handle)) |r| {
+        if (self.receiverForDetach(d.handle)) |r| {
             const respond = !r.detach_sent;
             r.attached = false;
             r.awaiting_attach = false;
@@ -882,6 +944,7 @@ pub const Sender = struct {
     remote_handle: u32 = std.math.maxInt(u32),
     attached: bool = false,
     awaiting_attach: bool = true,
+    attach_refused: bool = false,
     poisoned: bool = false,
     detach_sent: bool = false,
 
@@ -1504,6 +1567,7 @@ pub fn openSender(
     deadline_ms: i64,
 ) LinkError!*Sender {
     session.clearFailedLinkOpen();
+    var opening_resolved = false;
 
     for (session.senders.items) |sender| {
         if (std.mem.eql(u8, sender.name, options.name)) return error.LinkNameInUse;
@@ -1548,17 +1612,21 @@ pub fn openSender(
         .properties = options.properties,
     } });
     errdefer {
-        session.driver.invalidate();
-        session.terminate();
+        if (!opening_resolved) {
+            session.driver.invalidate();
+            session.terminate();
+        }
     }
 
-    while (!sender.attached) {
-        if (sender.detach_error != null) {
-            session.preserveFailedLinkOpen(&sender.detach_error);
-            return error.LinkDetached;
-        }
+    while (sender.awaiting_attach) {
         _ = try session.pump(deadline_ms);
     }
+    if (!sender.attached) {
+        opening_resolved = true;
+        session.preserveFailedLinkOpen(&sender.detach_error);
+        return error.LinkDetached;
+    }
+    opening_resolved = true;
     session.clearFailedLinkOpen();
     return sender;
 }
@@ -1692,6 +1760,7 @@ pub const Receiver = struct {
     remote_handle: u32 = std.math.maxInt(u32),
     attached: bool = false,
     awaiting_attach: bool = true,
+    attach_refused: bool = false,
     poisoned: bool = false,
     detach_sent: bool = false,
 
@@ -2784,6 +2853,7 @@ pub fn openReceiver(
     deadline_ms: i64,
 ) LinkError!*Receiver {
     session.clearFailedLinkOpen();
+    var opening_resolved = false;
 
     for (session.receivers.items) |receiver| {
         if (std.mem.eql(u8, receiver.name, options.name)) return error.LinkNameInUse;
@@ -2835,19 +2905,23 @@ pub fn openReceiver(
         .properties = options.properties,
     } });
     errdefer {
-        session.driver.invalidate();
-        session.terminate();
+        if (!opening_resolved) {
+            session.driver.invalidate();
+            session.terminate();
+        }
     }
 
-    while (!receiver.attached) {
-        if (receiver.detach_error != null) {
-            session.preserveFailedLinkOpen(&receiver.detach_error);
-            return error.LinkDetached;
-        }
+    while (receiver.awaiting_attach) {
         _ = try session.pump(deadline_ms);
+    }
+    if (!receiver.attached) {
+        opening_resolved = true;
+        session.preserveFailedLinkOpen(&receiver.detach_error);
+        return error.LinkDetached;
     }
 
     if (options.prefetch > 0) try receiver.issueCredit(options.prefetch);
+    opening_resolved = true;
     session.clearFailedLinkOpen();
     return receiver;
 }
@@ -3000,6 +3074,288 @@ test "link open allocation failure cannot expose stale diagnostics" {
         .source_address = "source",
     }, 10_000));
     try testing.expect(session.failedLinkOpen() == null);
+}
+
+const RefusedLinkKind = enum { sender, receiver };
+
+fn pushRefusedAttach(
+    peer: Peer,
+    kind: RefusedLinkKind,
+    name: []const u8,
+    handle: u32,
+) !void {
+    try peer.pushExact(0, .{ .attach = .{
+        .name = name,
+        .handle = handle,
+        .role = if (kind == .sender) .receiver else .sender,
+        .source = if (kind == .sender) .{} else null,
+        .target = if (kind == .receiver) .{} else null,
+        .initial_delivery_count = if (kind == .receiver) 0 else null,
+    } });
+}
+
+test "sender and receiver refused Attach wait for Detach and preserve diagnostics" {
+    inline for (std.meta.tags(RefusedLinkKind)) |kind| {
+        const allocator = testing.allocator;
+        var mem = MemoryTransport.init(allocator);
+        defer mem.deinit();
+        var clock: connection.ManualClock = .{};
+        const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+        try scriptHandshake(peer, 65536);
+        try pushRefusedAttach(peer, kind, "refused", 40);
+        // Refusal is not complete at the Attach. Keep pumping even when an
+        // unrelated session frame separates it from the required Detach.
+        try peer.push(0, .{ .flow = .{
+            .next_incoming_id = 0,
+            .incoming_window = 1000,
+            .next_outgoing_id = 1,
+            .outgoing_window = 1000,
+        } });
+        const info = [_]uamqp.MapEntry{.{
+            .key = .{ .symbol = "tracking-id" },
+            .value = .{ .string = if (kind == .sender) "sender-id" else "receiver-id" },
+        }};
+        try peer.push(0, .{ .detach = .{
+            .handle = 40,
+            .closed = true,
+            .err = .{
+                .condition = if (kind == .sender)
+                    "amqp:unauthorized-access"
+                else
+                    "com.microsoft:georeplication:invalid-offset",
+                .description = if (kind == .sender)
+                    "sender refused"
+                else
+                    "receiver refused",
+                .info = &info,
+            },
+        } });
+
+        var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+        defer driver.deinit();
+        var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+        defer fixture.deinit();
+
+        switch (kind) {
+            .sender => try testing.expectError(error.LinkDetached, openSender(&fixture.session, .{
+                .name = "refused",
+                .target_address = "entity",
+            }, 10_000)),
+            .receiver => try testing.expectError(error.LinkDetached, openReceiver(&fixture.session, .{
+                .name = "refused",
+                .source_address = "entity",
+            }, 10_000)),
+        }
+
+        try testing.expect(!fixture.session.ended);
+        try testing.expectEqual(connection.State.opened, driver.state);
+        try testing.expectEqual(@as(usize, 0), fixture.session.senders.items.len);
+        try testing.expectEqual(@as(usize, 0), fixture.session.receivers.items.len);
+
+        var diagnostic = fixture.session.takeFailedLinkOpen().?;
+        defer diagnostic.deinit();
+        try testing.expectEqualStrings(
+            if (kind == .sender)
+                "amqp:unauthorized-access"
+            else
+                "com.microsoft:georeplication:invalid-offset",
+            diagnostic.condition(),
+        );
+        try testing.expectEqualStrings(
+            if (kind == .sender) "sender refused" else "receiver refused",
+            diagnostic.description().?,
+        );
+        try testing.expectEqualStrings(
+            if (kind == .sender) "sender-id" else "receiver-id",
+            diagnostic.info().?[0].value.string,
+        );
+
+        // The completed refusal is link-scoped. A replacement can open on the
+        // same live session, while the taken diagnostics remain independently
+        // owned across the next performative decode.
+        try peer.push(0, .{ .attach = .{
+            .name = "replacement",
+            .handle = 41,
+            .role = if (kind == .sender) .receiver else .sender,
+            .initial_delivery_count = if (kind == .receiver) 1 else null,
+        } });
+        switch (kind) {
+            .sender => _ = try openSender(&fixture.session, .{
+                .name = "replacement",
+                .target_address = "entity",
+            }, 10_000),
+            .receiver => _ = try openReceiver(&fixture.session, .{
+                .name = "replacement",
+                .source_address = "entity",
+            }, 10_000),
+        }
+        try testing.expectEqualStrings(
+            if (kind == .sender) "sender refused" else "receiver refused",
+            diagnostic.description().?,
+        );
+    }
+}
+
+test "refused Attach without Detach times out and terminalizes opening" {
+    inline for (std.meta.tags(RefusedLinkKind)) |kind| {
+        const allocator = testing.allocator;
+        var mem = MemoryTransport.init(allocator);
+        defer mem.deinit();
+        var clock: connection.ManualClock = .{ .auto_advance_ms = 1 };
+        const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+        try scriptHandshake(peer, 65536);
+        try pushRefusedAttach(peer, kind, "refused", 40);
+        mem.starve = true;
+
+        var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+        defer driver.deinit();
+        var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+        defer fixture.deinit();
+
+        const deadline = clock.millis + 10;
+        switch (kind) {
+            .sender => try testing.expectError(error.Timeout, openSender(&fixture.session, .{
+                .name = "refused",
+                .target_address = "entity",
+            }, deadline)),
+            .receiver => try testing.expectError(error.Timeout, openReceiver(&fixture.session, .{
+                .name = "refused",
+                .source_address = "entity",
+            }, deadline)),
+        }
+        try testing.expect(fixture.session.ended);
+        try testing.expectEqual(connection.State.err, driver.state);
+        try testing.expect(mem.closed);
+        try testing.expect(fixture.session.failedLinkOpen() == null);
+        const written = mem.written().len;
+        switch (kind) {
+            .sender => try testing.expectError(error.ConnectionClosed, openSender(&fixture.session, .{
+                .name = "retry",
+                .target_address = "entity",
+            }, deadline + 10)),
+            .receiver => try testing.expectError(error.ConnectionClosed, openReceiver(&fixture.session, .{
+                .name = "retry",
+                .source_address = "entity",
+            }, deadline + 10)),
+        }
+        try testing.expectEqual(written, mem.written().len);
+    }
+}
+
+test "malformed Detach after refused Attach terminalizes opening" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try pushRefusedAttach(peer, .receiver, "refused", 40);
+    // Detach descriptor with a string where its uint handle must be.
+    try peer.pushRaw(0, &.{ 0x00, 0x53, 0x16, 0xc0, 0x04, 0x01, 0xa1, 0x01, 'x' });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    try testing.expectError(error.MalformedFrame, openReceiver(&fixture.session, .{
+        .name = "refused",
+        .source_address = "entity",
+    }, 10_000));
+    try testing.expect(fixture.session.ended);
+    try testing.expectEqual(connection.State.err, driver.state);
+    try testing.expect(mem.closed);
+    try testing.expect(fixture.session.failedLinkOpen() == null);
+    const written = mem.written().len;
+    try testing.expectError(error.ConnectionClosed, openReceiver(&fixture.session, .{
+        .name = "retry",
+        .source_address = "entity",
+    }, 10_000));
+    try testing.expectEqual(written, mem.written().len);
+}
+
+test "Attach response role is validated before accepting a link" {
+    inline for (std.meta.tags(RefusedLinkKind)) |kind| {
+        const allocator = testing.allocator;
+        var mem = MemoryTransport.init(allocator);
+        defer mem.deinit();
+        var clock: connection.ManualClock = .{};
+        const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+        try scriptHandshake(peer, 65536);
+        try peer.pushExact(0, .{ .attach = .{
+            .name = "link",
+            .handle = 40,
+            .role = if (kind == .sender) .sender else .receiver,
+            .source = .{},
+            .target = .{},
+            .initial_delivery_count = 0,
+        } });
+
+        var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+        defer driver.deinit();
+        var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+        defer fixture.deinit();
+
+        switch (kind) {
+            .sender => try testing.expectError(error.MalformedFrame, openSender(&fixture.session, .{
+                .name = "link",
+                .target_address = "entity",
+            }, 10_000)),
+            .receiver => try testing.expectError(error.MalformedFrame, openReceiver(&fixture.session, .{
+                .name = "link",
+                .source_address = "entity",
+            }, 10_000)),
+        }
+        try testing.expect(fixture.session.ended);
+        try testing.expectEqual(connection.State.err, driver.state);
+    }
+}
+
+test "only the peer role's authoritative terminus decides Attach refusal" {
+    const Kind = enum { sender_with_null_source, receiver_with_null_target };
+    inline for (std.meta.tags(Kind)) |kind| {
+        const allocator = testing.allocator;
+        var mem = MemoryTransport.init(allocator);
+        defer mem.deinit();
+        var clock: connection.ManualClock = .{};
+        const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+        try scriptHandshake(peer, 65536);
+        try peer.pushExact(0, .{ .attach = .{
+            .name = "link",
+            .handle = 40,
+            .role = if (kind == .sender_with_null_source) .receiver else .sender,
+            .source = if (kind == .sender_with_null_source) null else .{},
+            .target = if (kind == .receiver_with_null_target) null else .{},
+            .initial_delivery_count = if (kind == .receiver_with_null_target) 0 else null,
+        } });
+
+        var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+        defer driver.deinit();
+        var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+        defer fixture.deinit();
+
+        switch (kind) {
+            .sender_with_null_source => {
+                const sender = try openSender(&fixture.session, .{
+                    .name = "link",
+                    .target_address = "entity",
+                }, 10_000);
+                try testing.expect(sender.attached);
+            },
+            .receiver_with_null_target => {
+                const receiver = try openReceiver(&fixture.session, .{
+                    .name = "link",
+                    .source_address = "entity",
+                }, 10_000);
+                try testing.expect(receiver.attached);
+            },
+        }
+    }
 }
 
 const scriptHandshake = harness.scriptHandshake;

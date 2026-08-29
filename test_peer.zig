@@ -29,6 +29,27 @@ pub const Peer = struct {
     }
 
     pub fn push(self: Peer, channel: u16, p: perf.Performative) !void {
+        var normalized = p;
+        switch (normalized) {
+            .attach => |*attach| switch (attach.role) {
+                // An accepted sender Attach has a source, and an accepted
+                // receiver Attach has a target. Most tests only care about
+                // another field, so fill the mandatory terminus shorthand.
+                .sender => if (attach.source == null) {
+                    attach.source = .{};
+                },
+                .receiver => if (attach.target == null) {
+                    attach.target = .{};
+                },
+            },
+            else => {},
+        }
+        try self.pushExact(channel, normalized);
+    }
+
+    /// Push exactly the supplied performative without accepted-Attach
+    /// normalization. Used for protocol refusal and malformed-state tests.
+    pub fn pushExact(self: Peer, channel: u16, p: perf.Performative) !void {
         var buf = uamqp.encoder.Buffer.initDynamic(self.allocator);
         defer buf.deinit();
         try perf.encode(self.allocator, p, &buf);
