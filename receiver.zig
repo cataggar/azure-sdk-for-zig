@@ -103,12 +103,18 @@ pub const PartitionClient = struct {
     /// The selector the link was attached with, advanced past the last event
     /// delivered so a reattach resumes rather than replaying. Owned.
     filter_expression: []u8,
+    /// The receiver pool swapped this selector into its preallocated position
+    /// slot. Set once so a failed detach retry cannot swap the old value back.
+    pool_position_saved: bool = false,
     /// As configured, before `default_prefetch` is substituted for zero.
     prefetch: i32,
     owner_level: ?i64,
     /// Per-receive duration converted to a fresh absolute AMQP deadline for
     /// every operation.
     receive_timeout_ms: i64,
+    /// The service rejected an integer offset on a geo-replicated namespace.
+    /// A processor consumes this flag and reopens at earliest, inclusive.
+    geo_replication_fallback: bool = false,
     /// Set when the broker detached the link; a stolen link reports
     /// `amqp:link:stolen` here. The detail slices point into the fixed buffers
     /// below, so they remain valid after the AMQP receiver is destroyed.
@@ -389,7 +395,10 @@ pub const PartitionClient = struct {
         // So a settle write that does not land is never worth the events that
         // did arrive — least of all on the break above, where the link that
         // would carry it is the one that just failed.
-        settleDeliveries(receiver, delivery_ids[0..result.len]);
+        if (settleDeliveries(receiver, delivery_ids[0..result.len])) |err| {
+            self.recordDetach();
+            self.observeTerminal(receiver, err);
+        }
 
         const previous = self.filter_expression;
         self.filter_expression = advanced;
@@ -408,10 +417,9 @@ pub const PartitionClient = struct {
             self.terminal = true;
             return;
         }
-        self.terminal = switch (err) {
-            error.LinkDetached, error.ConnectionClosed, error.RemoteClosed => true,
-            else => self.terminal,
-        };
+        self.terminal = err == error.LinkDetached or
+            isTerminalConnectionError(err) or
+            self.terminal;
     }
 
     fn captureDetachError(self: *PartitionClient, receiver: *const amqp.Receiver) void {
@@ -427,6 +435,13 @@ pub const PartitionClient = struct {
             self.last_condition.?,
             self.last_description,
         );
+        if (std.mem.eql(
+            u8,
+            remote.condition,
+            errors.condition.georeplication_invalid_offset,
+        )) {
+            self.geo_replication_fallback = true;
+        }
     }
 
     /// Stop a link whose caller-visible batch can no longer be completed.
@@ -438,7 +453,11 @@ pub const PartitionClient = struct {
     fn abandonConsumedBatch(self: *PartitionClient) void {
         self.terminal = true;
         const session = self.session orelse return;
-        self.detachReceiver(deadlineAfter(session, self.receive_timeout_ms)) catch {};
+        self.detachReceiver(deadlineAfter(session, self.receive_timeout_ms)) catch |err| {
+            const receiver = self.receiver orelse return;
+            self.recordDetach();
+            self.observeTerminal(receiver, err);
+        };
     }
 
     /// Complete a two-phase receiver close using AMQP's public state.
@@ -499,6 +518,17 @@ pub fn deadlineAfter(session: *const amqp.Session, timeout_ms: i64) i64 {
     return session.driver.clock.nowMillis() +| @max(timeout_ms, 0);
 }
 
+pub fn isTerminalConnectionError(err: anyerror) bool {
+    return switch (err) {
+        error.ConnectionClosed,
+        error.RemoteClosed,
+        error.ReadFailed,
+        error.WriteFailed,
+        => true,
+        else => false,
+    };
+}
+
 fn copyInto(buffer: []u8, bytes: []const u8) usize {
     const len = @min(buffer.len, bytes.len);
     @memcpy(buffer[0..len], bytes[0..len]);
@@ -520,13 +550,14 @@ fn manualCreditOutstanding(receiver: *const amqp.Receiver) u32 {
     return receiver.credit +| receiver.deferred_credit;
 }
 
-fn settleDeliveries(receiver: *amqp.Receiver, delivery_ids: []const u32) void {
+fn settleDeliveries(receiver: *amqp.Receiver, delivery_ids: []const u32) ?anyerror {
     // One disposition per message meant a frame on the wire per event.
     // `SettleBatch` coalesces contiguous ids and splits only around deliveries
     // owned by another link on the session.
     var settling = amqp.SettleBatch.init(receiver, .accepted);
-    for (delivery_ids) |id| settling.addId(id) catch {};
-    settling.flush() catch {};
+    for (delivery_ids) |id| settling.addId(id) catch |err| return err;
+    settling.flush() catch |err| return err;
+    return null;
 }
 
 fn rawFrom(message: *const amqp.message_codec.Message) event_data.RawMessage {
@@ -601,9 +632,11 @@ pub const ReceiverPool = struct {
     pub fn drop(self: *ReceiverPool, source_address: []const u8, detach: bool) void {
         const client = self.clients.get(source_address) orelse return;
 
-        // Remembered before the client is torn down, so the reattach resumes
-        // rather than replaying everything already delivered.
-        self.remember(source_address, client.filterExpression()) catch {};
+        // The position slot and its previous value were allocated before the
+        // link attached. Swapping makes generation teardown infallible: even
+        // an allocator that now fails cannot leave this client pointing at a
+        // session the connection is about to destroy.
+        self.savePosition(source_address, client);
 
         if (detach)
             client.closeAfter(self.timeout_ms) catch return
@@ -617,12 +650,16 @@ pub const ReceiverPool = struct {
 
     /// Forget every client, remembering where each had read to.
     pub fn dropAll(self: *ReceiverPool, detach: bool) void {
-        var addresses: std.ArrayList([]const u8) = .empty;
-        defer addresses.deinit(self.allocator);
-
-        var it = self.clients.keyIterator();
-        while (it.next()) |key| addresses.append(self.allocator, key.*) catch return;
-        for (addresses.items) |address| self.drop(address, detach);
+        while (self.clients.count() > 0) {
+            var it = self.clients.keyIterator();
+            const address = (it.next() orelse unreachable).*;
+            const before = self.clients.count();
+            self.drop(address, detach);
+            // An ambiguous live detach deliberately retains its wrapper. The
+            // generation-invalidating `detach == false` path always removes,
+            // so it can never stop here.
+            if (self.clients.count() == before) return;
+        }
     }
 
     /// Point the pool at a rebuilt session.
@@ -632,23 +669,19 @@ pub const ReceiverPool = struct {
     /// clients resume.
     pub fn rebind(self: *ReceiverPool, session: *amqp.Session) void {
         self.dropAll(false);
+        std.debug.assert(self.clients.count() == 0);
         self.session = session;
     }
 
-    fn remember(self: *ReceiverPool, source_address: []const u8, expression: []const u8) !void {
-        const owned = try self.allocator.dupe(u8, expression);
-        errdefer self.allocator.free(owned);
-
-        const gop = try self.positions.getOrPut(self.allocator, source_address);
-        if (gop.found_existing) {
-            self.allocator.free(gop.value_ptr.*);
-        } else {
-            gop.key_ptr.* = self.allocator.dupe(u8, source_address) catch |err| {
-                _ = self.positions.remove(source_address);
-                return err;
-            };
-        }
-        gop.value_ptr.* = owned;
+    fn savePosition(
+        self: *ReceiverPool,
+        source_address: []const u8,
+        client: *PartitionClient,
+    ) void {
+        if (client.pool_position_saved) return;
+        const remembered = self.positions.getPtr(source_address) orelse unreachable;
+        std.mem.swap([]u8, remembered, &client.filter_expression);
+        client.pool_position_saved = true;
     }
 
     /// The client for `source_address`, attaching one if this is the first
@@ -663,24 +696,41 @@ pub const ReceiverPool = struct {
 
         // A remembered position wins: reapplying the original filter after a
         // recovery would replay every event already delivered.
-        const resume_from: ?[]const u8 = if (self.positions.get(source_address)) |remembered|
-            remembered
-        else
-            filter_expression;
+        const remembered = self.positions.get(source_address);
+        var new_position_key: ?[]u8 = null;
+        errdefer if (new_position_key) |key| self.allocator.free(key);
+        var new_position: ?[]u8 = null;
+        errdefer if (new_position) |selector| self.allocator.free(selector);
+
+        if (remembered == null) {
+            new_position_key = try self.allocator.dupe(u8, source_address);
+            new_position = if (filter_expression) |expression|
+                try self.allocator.dupe(u8, expression)
+            else
+                try self.options.start_position.toFilterExpression(self.allocator);
+            try self.positions.ensureUnusedCapacity(self.allocator, 1);
+        }
+        const resume_from: []const u8 = remembered orelse new_position.?;
 
         const client = try self.allocator.create(PartitionClient);
         errdefer self.allocator.destroy(client);
+        const key = try self.allocator.dupe(u8, source_address);
+        errdefer self.allocator.free(key);
+        try self.clients.ensureUnusedCapacity(self.allocator, 1);
+
         try client.open(self.allocator, self.session, .{
             .source_address = source_address,
             .instance_id = self.instance_id,
             .deadline_ms = self.timeout_ms,
             .filter_expression = resume_from,
         }, self.options);
-        errdefer client.deinit();
 
-        const key = try self.allocator.dupe(u8, source_address);
-        errdefer self.allocator.free(key);
-        try self.clients.put(self.allocator, key, client);
+        if (new_position_key) |position_key| {
+            self.positions.putAssumeCapacityNoClobber(position_key, new_position.?);
+            new_position_key = null;
+            new_position = null;
+        }
+        self.clients.putAssumeCapacityNoClobber(key, client);
         return client;
     }
 

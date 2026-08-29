@@ -795,6 +795,16 @@ fn scriptReceiverAttach(peer: Peer, handle: u32) !void {
     } });
 }
 
+fn scriptReceiverOnly(_: Allocator, peer: Peer) anyerror!void {
+    try harness.scriptHandshake(peer, 512);
+    try scriptReceiverAttach(peer, 0);
+}
+
+fn scriptReceiverOneEvent(allocator: Allocator, peer: Peer) anyerror!void {
+    try scriptReceiverOnly(allocator, peer);
+    try pushEvent(allocator, peer, 0, 0, 50, "before recovery");
+}
+
 fn pushEvent(allocator: Allocator, peer: Peer, handle: u32, id: u32, sequence_number: i64, body: []const u8) !void {
     var annotations = [_]amqp.MapEntry{.{
         .key = .{ .symbol = event_data.sequence_number_annotation },
@@ -967,6 +977,45 @@ test "a reattached receiver resumes from the last sequence number" {
     // Reattaching with the original filter would replay event 40, which the
     // caller has already been given.
     try testing.expectEqualStrings("amqp.annotation.x-opt-sequence-number > '40'", filters[1]);
+}
+
+test "connection invalidation drops receiver wrappers without allocation" {
+    const allocator = testing.allocator;
+    var factory = ScriptedFactory{
+        .allocator = allocator,
+        .scripts = &.{ &scriptReceiverOneEvent, &scriptReceiverOnly },
+    };
+    defer factory.deinit();
+
+    var connection = RecoverableConnection.init(allocator, .{
+        .factory = &factory.factory,
+        .deadline_ms = 10_000,
+    });
+    defer connection.deinit();
+
+    const generation = try connection.ensureOpen();
+    const first_pool = try connection.receiverPool();
+    const first = try first_pool.receive(allocator, test_source, null, 1);
+    defer event_data.freeReceivedEvents(allocator, first);
+    try testing.expectEqual(@as(i64, 50), first[0].sequence_number);
+    try testing.expectEqual(@as(usize, 1), first_pool.clients.count());
+
+    var failing = testing.FailingAllocator.init(allocator, .{ .fail_index = 0 });
+    connection.receivers.allocator = failing.allocator();
+    connection.invalidateGeneration(generation);
+    try testing.expectEqual(@as(usize, 0), connection.receivers.clients.count());
+
+    connection.receivers.allocator = allocator;
+    _ = try connection.ensureOpen();
+    const rebound = try connection.receiverPool();
+    try testing.expect(rebound.session == factory.current().session);
+    _ = try rebound.clientFor(test_source, null);
+    try testing.expectEqual(@as(usize, 1), rebound.clients.count());
+
+    const filters = try attachedFilters(allocator, factory.current().mem);
+    defer freeFilters(allocator, filters);
+    try testing.expectEqual(@as(usize, 1), filters.len);
+    try testing.expectEqualStrings("amqp.annotation.x-opt-sequence-number > '50'", filters[0]);
 }
 
 test "the client's window reaches the sender links it is meant to size" {

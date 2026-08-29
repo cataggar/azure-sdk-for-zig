@@ -1198,38 +1198,24 @@ pub const ConsumerPartitionOpener = struct {
                 .isCurrentFn = generationIsCurrent,
             },
         }, with_position) catch |err| {
-            // A replicated namespace refuses an offset carried over from
-            // before a failover. Say so in the error so the processor can
-            // restart the partition rather than abandon it.
-            const geo_rejected =
-                err == error.LinkDetached and sawGeoReplicationRejection(session);
             self.connection.invalidateGeneration(generation);
-            if (geo_rejected) {
-                return error.GeoReplicationOffsetRejected;
-            }
             return err;
         };
         return client;
-    }
-
-    /// Whether the attach that just failed was refused for a geo-replicated
-    /// offset. The link never attached, so the condition is only readable
-    /// from the detached receiver the session still holds.
-    fn sawGeoReplicationRejection(session: *amqp.Session) bool {
-        for (session.receivers.items) |receiver| {
-            const remote = receiver.detach_error orelse continue;
-            if (load_balancing.isGeoReplicationOffsetError(remote.condition)) return true;
-        }
-        return false;
     }
 
     fn closePartition(o: *PartitionOpener, client: *PartitionClient) anyerror!void {
         const self: *ConsumerPartitionOpener = @fieldParentPtr("opener", o);
         const generation = client.generation();
         client.closeAfter(self.timeout_ms) catch |err| {
-            if (err != error.DetachUnconfirmed) return err;
-            if (generation) |value| self.connection.invalidateGeneration(value);
-            client.deinit();
+            if (err == error.DetachUnconfirmed or
+                receiving.isTerminalConnectionError(err))
+            {
+                if (generation) |value| self.connection.invalidateGeneration(value);
+                client.deinit();
+            } else {
+                return err;
+            }
         };
         client.allocator.destroy(client);
     }
@@ -1314,7 +1300,7 @@ pub const CbsAuthorizer = struct {
             },
             .refreshable = credential.isRefreshable(),
         }, deadline_ms);
-        client.close(deadline_ms) catch {};
+        try client.close(deadline_ms);
     }
 };
 

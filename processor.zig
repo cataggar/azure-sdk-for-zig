@@ -98,6 +98,10 @@ pub const ProcessorPartitionClient = struct {
     /// advancing its selector. The next balancing cycle replaces this reader
     /// so the broker can replay from the checkpoint.
     recoverable_failure: bool = false,
+    /// The service cannot interpret the stored integer offset after a
+    /// geo-replication failover. The replacement starts at earliest,
+    /// inclusive, rather than retrying the same rejected checkpoint forever.
+    geo_replication_fallback: bool = false,
 
     pub fn partitionId(self: *const ProcessorPartitionClient) []const u8 {
         return self.partition_id;
@@ -126,6 +130,9 @@ pub const ProcessorPartitionClient = struct {
         _ = self.client.refreshGeneration();
         if (self.client.last_error) |info| {
             if (info.code == .ownership_lost) self.ownership_lost = true;
+        }
+        if (self.client.geo_replication_fallback) {
+            self.geo_replication_fallback = true;
         }
         if (!self.ownership_lost and self.client.terminal) {
             self.recoverable_failure = true;
@@ -189,6 +196,10 @@ pub const Processor = struct {
     /// reopened while the store still claims them for this processor; seeing
     /// a cycle where another owner holds them clears the suppression.
     suppressed: std.StringHashMapUnmanaged(void) = .empty,
+    /// Partitions whose stored integer offset was rejected after a
+    /// geo-replication failover. Keys are owned and survive removal of the
+    /// failed reader until its replacement is fully registered.
+    geo_fallbacks: std.StringHashMapUnmanaged(void) = .empty,
     closing: bool = false,
     relinquished: bool = false,
     deinitialized: bool = false,
@@ -269,6 +280,9 @@ pub const Processor = struct {
         var suppressed = self.suppressed.keyIterator();
         while (suppressed.next()) |id| self.allocator.free(id.*);
         self.suppressed.deinit(self.allocator);
+        var fallbacks = self.geo_fallbacks.keyIterator();
+        while (fallbacks.next()) |id| self.allocator.free(id.*);
+        self.geo_fallbacks.deinit(self.allocator);
         self.deinitialized = true;
     }
 
@@ -280,6 +294,12 @@ pub const Processor = struct {
         var suppressed = self.suppressed.keyIterator();
         while (suppressed.next()) |id| {
             if (!self.clients.contains(id.*)) held.append(self.allocator, id.*) catch {};
+        }
+        var fallbacks = self.geo_fallbacks.keyIterator();
+        while (fallbacks.next()) |id| {
+            if (!self.clients.contains(id.*) and !self.suppressed.contains(id.*)) {
+                held.append(self.allocator, id.*) catch {};
+            }
         }
         self.balancer.relinquish(held.items) catch {};
         self.relinquished = true;
@@ -332,6 +352,7 @@ pub const Processor = struct {
             }
             if (kept and !client.ownership_lost and !client.recoverable_failure) continue;
             if (client.ownership_lost) try self.suppress(id);
+            if (client.geo_replication_fallback) try self.markGeoFallback(id);
             try dropped.append(self.allocator, id);
         }
 
@@ -343,6 +364,18 @@ pub const Processor = struct {
         const owned = try self.allocator.dupe(u8, partition_id);
         errdefer self.allocator.free(owned);
         try self.suppressed.put(self.allocator, owned, {});
+    }
+
+    fn markGeoFallback(self: *Processor, partition_id: []const u8) !void {
+        if (self.geo_fallbacks.contains(partition_id)) return;
+        const owned = try self.allocator.dupe(u8, partition_id);
+        errdefer self.allocator.free(owned);
+        try self.geo_fallbacks.put(self.allocator, owned, {});
+    }
+
+    fn clearGeoFallback(self: *Processor, partition_id: []const u8) void {
+        const removed = self.geo_fallbacks.fetchRemove(partition_id) orelse return;
+        self.allocator.free(removed.key);
     }
 
     fn clearUnclaimedSuppressions(
@@ -394,11 +427,15 @@ pub const Processor = struct {
             if (std.mem.eql(u8, c.partition_id, partition_id)) stored = c;
         }
 
-        const position = try balancing.resolveStartPosition(
-            self.options.start_positions,
-            partition_id,
-            stored,
-        );
+        const use_geo_fallback = self.geo_fallbacks.contains(partition_id);
+        const position = if (use_geo_fallback)
+            balancing.geo_replication_fallback
+        else
+            try balancing.resolveStartPosition(
+                self.options.start_positions,
+                partition_id,
+                stored,
+            );
 
         const options: PartitionClientOptions = .{ .prefetch = self.options.prefetch };
         const client = blk: {
@@ -436,6 +473,7 @@ pub const Processor = struct {
         try self.clients.put(self.allocator, owned_id, wrapper);
         errdefer _ = self.clients.orderedRemove(owned_id);
         try self.pending.append(self.allocator, wrapper);
+        if (use_geo_fallback) self.clearGeoFallback(partition_id);
     }
 
     /// The next newly claimed partition, or null when there is none.
@@ -644,7 +682,10 @@ const AmqpTestOpener = struct {
 
     fn close(o: *PartitionOpener, client: *PartitionClient) anyerror!void {
         const self: *AmqpTestOpener = @fieldParentPtr("opener", o);
-        try client.closeAfter(10_000);
+        client.closeAfter(10_000) catch |err| {
+            if (!receiving.isTerminalConnectionError(err)) return err;
+            client.deinit();
+        };
         client.allocator.destroy(client);
         self.closes += 1;
     }
@@ -1218,7 +1259,7 @@ test "remote detach after a short batch is replaced next cycle" {
     try processor.close();
 }
 
-test "manual credit observes a detach pumped before receive and replaces the link" {
+test "manual credit preserves ownership loss observed before receive" {
     const allocator = testing.allocator;
     var mem = amqp.MemoryTransport.init(allocator);
     defer mem.deinit();
@@ -1238,13 +1279,10 @@ test "manual credit observes a detach pumped before receive and replaces the lin
         .handle = 0,
         .closed = true,
         .err = .{
-            .condition = errors.condition.detach_forced,
-            .description = "move",
+            .condition = errors.condition.link_stolen,
+            .description = "new owner",
         },
     } });
-    try scriptProcessorAttach(peer, 1);
-    try pushProcessorEvent(allocator, peer, 1, 0, 1, "replacement");
-    try peer.push(0, .{ .detach = .{ .handle = 1, .closed = true } });
 
     var fixture = try amqp.test_peer.Fixture.init(allocator, &mem, &amqp_clock, &conn);
     defer fixture.deinit();
@@ -1272,15 +1310,176 @@ test "manual credit observes a detach pumped before receive and replaces the lin
     // the dead link so the processor does not retain it forever.
     _ = try fixture.session.pump(receiving.deadlineAfter(&fixture.session, 10_000));
     try testing.expectError(error.LinkDetached, first.receiveEvents(allocator, 1));
-    try testing.expect(first.recoverable_failure);
-    try testing.expect(!first.ownership_lost);
+    try testing.expect(!first.recoverable_failure);
+    try testing.expect(first.ownership_lost);
 
+    try processor.runOnce();
+    try testing.expectEqual(@as(usize, 1), opener.opens);
+    try testing.expectEqual(@as(usize, 0), processor.ownedPartitions().len);
+    try testing.expect(processor.suppressed.contains("0"));
+
+    try processor.close();
+}
+
+test "manual credit write failure is terminal and replaced next cycle" {
+    const allocator = testing.allocator;
+    var first_mem = amqp.MemoryTransport.init(allocator);
+    defer first_mem.deinit();
+    var first_clock = amqp.connection_driver.ManualClock{};
+    var first_conn = try amqp.connection_driver.Driver.init(
+        allocator,
+        first_mem.transport(),
+        first_clock.clock(),
+        amqp.test_peer.driver_options,
+    );
+    defer first_conn.deinit();
+    const first_peer = amqp.test_peer.Peer{ .allocator = allocator, .mem = &first_mem };
+    try amqp.test_peer.scriptHandshake(first_peer, 512);
+    try scriptProcessorAttach(first_peer, 0);
+    var first_fixture = try amqp.test_peer.Fixture.init(
+        allocator,
+        &first_mem,
+        &first_clock,
+        &first_conn,
+    );
+    defer first_fixture.deinit();
+
+    var next_mem = amqp.MemoryTransport.init(allocator);
+    defer next_mem.deinit();
+    var next_clock = amqp.connection_driver.ManualClock{};
+    var next_conn = try amqp.connection_driver.Driver.init(
+        allocator,
+        next_mem.transport(),
+        next_clock.clock(),
+        amqp.test_peer.driver_options,
+    );
+    defer next_conn.deinit();
+    const next_peer = amqp.test_peer.Peer{ .allocator = allocator, .mem = &next_mem };
+    try amqp.test_peer.scriptHandshake(next_peer, 512);
+    try scriptProcessorAttach(next_peer, 0);
+    try pushProcessorEvent(allocator, next_peer, 0, 0, 1, "replacement");
+    try next_peer.push(0, .{ .detach = .{ .handle = 0, .closed = true } });
+    var next_fixture = try amqp.test_peer.Fixture.init(
+        allocator,
+        &next_mem,
+        &next_clock,
+        &next_conn,
+    );
+    defer next_fixture.deinit();
+
+    var opener = AmqpTestOpener{ .session = &first_fixture.session };
+    var clock = ManualClock{};
+    var store = InMemoryCheckpointStore{ .allocator = allocator, .clock = &clock.clock };
+    defer store.deinit();
+    var random = std.Random.DefaultPrng.init(49);
+    var processor = Processor.init(
+        allocator,
+        &store.store,
+        &opener.opener,
+        test_details,
+        .{ .load_balancing_strategy = .greedy, .prefetch = -1 },
+        &clock.clock,
+        random.random(),
+    );
+    defer processor.deinit();
+
+    try processor.runOnce();
+    const failed = processor.nextPartitionClient().?;
+    first_mem.fail_write = true;
+    try testing.expectError(error.WriteFailed, failed.receiveEvents(allocator, 1));
+    try testing.expect(failed.recoverable_failure);
+    try testing.expect(!failed.ownership_lost);
+
+    opener.session = &next_fixture.session;
     try processor.runOnce();
     try testing.expectEqual(@as(usize, 2), opener.opens);
     const replacement = processor.nextPartitionClient().?;
     const events = try replacement.receiveEvents(allocator, 1);
     defer event_data.freeReceivedEvents(allocator, events);
     try testing.expectEqualStrings("replacement", events[0].body());
+
+    try processor.close();
+}
+
+test "settlement write failure returns the batch and replaces the link" {
+    const allocator = testing.allocator;
+    var first_mem = amqp.MemoryTransport.init(allocator);
+    defer first_mem.deinit();
+    var first_clock = amqp.connection_driver.ManualClock{};
+    var first_conn = try amqp.connection_driver.Driver.init(
+        allocator,
+        first_mem.transport(),
+        first_clock.clock(),
+        amqp.test_peer.driver_options,
+    );
+    defer first_conn.deinit();
+    const first_peer = amqp.test_peer.Peer{ .allocator = allocator, .mem = &first_mem };
+    try amqp.test_peer.scriptHandshake(first_peer, 512);
+    try scriptProcessorAttach(first_peer, 0);
+    try pushProcessorEvent(allocator, first_peer, 0, 0, 1, "returned");
+    var first_fixture = try amqp.test_peer.Fixture.init(
+        allocator,
+        &first_mem,
+        &first_clock,
+        &first_conn,
+    );
+    defer first_fixture.deinit();
+
+    var next_mem = amqp.MemoryTransport.init(allocator);
+    defer next_mem.deinit();
+    var next_clock = amqp.connection_driver.ManualClock{};
+    var next_conn = try amqp.connection_driver.Driver.init(
+        allocator,
+        next_mem.transport(),
+        next_clock.clock(),
+        amqp.test_peer.driver_options,
+    );
+    defer next_conn.deinit();
+    const next_peer = amqp.test_peer.Peer{ .allocator = allocator, .mem = &next_mem };
+    try amqp.test_peer.scriptHandshake(next_peer, 512);
+    try scriptProcessorAttach(next_peer, 0);
+    try pushProcessorEvent(allocator, next_peer, 0, 0, 1, "replayed");
+    try next_peer.push(0, .{ .detach = .{ .handle = 0, .closed = true } });
+    var next_fixture = try amqp.test_peer.Fixture.init(
+        allocator,
+        &next_mem,
+        &next_clock,
+        &next_conn,
+    );
+    defer next_fixture.deinit();
+
+    var opener = AmqpTestOpener{ .session = &first_fixture.session };
+    var clock = ManualClock{};
+    var store = InMemoryCheckpointStore{ .allocator = allocator, .clock = &clock.clock };
+    defer store.deinit();
+    var random = std.Random.DefaultPrng.init(51);
+    var processor = Processor.init(
+        allocator,
+        &store.store,
+        &opener.opener,
+        test_details,
+        .{ .load_balancing_strategy = .greedy },
+        &clock.clock,
+        random.random(),
+    );
+    defer processor.deinit();
+
+    try processor.runOnce();
+    const failed = processor.nextPartitionClient().?;
+    first_mem.fail_write = true;
+    const returned = try failed.receiveEvents(allocator, 1);
+    defer event_data.freeReceivedEvents(allocator, returned);
+    try testing.expectEqual(@as(usize, 1), returned.len);
+    try testing.expectEqualStrings("returned", returned[0].body());
+    try testing.expect(failed.recoverable_failure);
+
+    opener.session = &next_fixture.session;
+    try processor.runOnce();
+    try testing.expectEqual(@as(usize, 2), opener.opens);
+    const replacement = processor.nextPartitionClient().?;
+    const replayed = try replacement.receiveEvents(allocator, 1);
+    defer event_data.freeReceivedEvents(allocator, replayed);
+    try testing.expectEqualStrings("replayed", replayed[0].body());
 
     try processor.close();
 }
@@ -1513,6 +1712,85 @@ test "a rejected offset reopens at earliest, inclusive" {
     try testing.expectEqual(start_position_types.StartLocation.earliest, retried.location);
     try testing.expect(retried.is_inclusive);
     try testing.expectEqual(@as(usize, 1), processor.ownedPartitions().len);
+}
+
+test "a live invalid-offset detach reopens at earliest" {
+    const allocator = testing.allocator;
+    var mem = amqp.MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var amqp_clock = amqp.connection_driver.ManualClock{};
+    var conn = try amqp.connection_driver.Driver.init(
+        allocator,
+        mem.transport(),
+        amqp_clock.clock(),
+        amqp.test_peer.driver_options,
+    );
+    defer conn.deinit();
+
+    const peer = amqp.test_peer.Peer{ .allocator = allocator, .mem = &mem };
+    try amqp.test_peer.scriptHandshake(peer, 512);
+    try scriptProcessorAttach(peer, 0);
+    try peer.push(0, .{ .detach = .{
+        .handle = 0,
+        .closed = true,
+        .err = .{
+            .condition = errors.condition.georeplication_invalid_offset,
+            .description = "integer offsets are not valid after failover",
+        },
+    } });
+    try scriptProcessorAttach(peer, 1);
+    try pushProcessorEvent(allocator, peer, 1, 0, 1, "earliest");
+    try peer.push(0, .{ .detach = .{ .handle = 1, .closed = true } });
+
+    var fixture = try amqp.test_peer.Fixture.init(allocator, &mem, &amqp_clock, &conn);
+    defer fixture.deinit();
+    var opener = AmqpTestOpener{ .session = &fixture.session };
+    var clock = ManualClock{};
+    var store = InMemoryCheckpointStore{ .allocator = allocator, .clock = &clock.clock };
+    defer store.deinit();
+    try store.store.updateCheckpoint(allocator, .{
+        .fully_qualified_namespace = test_details.fully_qualified_namespace,
+        .event_hub_name = test_details.event_hub_name,
+        .consumer_group = test_details.consumer_group,
+        .partition_id = "0",
+        .offset = "12345",
+    });
+    var random = std.Random.DefaultPrng.init(47);
+    var processor = Processor.init(
+        allocator,
+        &store.store,
+        &opener.opener,
+        test_details,
+        .{ .load_balancing_strategy = .greedy },
+        &clock.clock,
+        random.random(),
+    );
+    defer processor.deinit();
+
+    try processor.runOnce();
+    const rejected = processor.nextPartitionClient().?;
+    try testing.expectError(error.LinkDetached, rejected.receiveEvents(allocator, 1));
+    try testing.expect(rejected.geo_replication_fallback);
+    try testing.expect(rejected.recoverable_failure);
+
+    try processor.runOnce();
+    try testing.expectEqual(@as(usize, 2), opener.opens);
+    try testing.expectEqualStrings(
+        "amqp.annotation.x-opt-offset > '12345'",
+        opener.filterAt(0),
+    );
+    try testing.expectEqualStrings(
+        "amqp.annotation.x-opt-offset > '-1'",
+        opener.filterAt(1),
+    );
+    try testing.expect(!processor.geo_fallbacks.contains("0"));
+
+    const replacement = processor.nextPartitionClient().?;
+    const events = try replacement.receiveEvents(allocator, 1);
+    defer event_data.freeReceivedEvents(allocator, events);
+    try testing.expectEqualStrings("earliest", events[0].body());
+
+    try processor.close();
 }
 
 test "the checkpoint decides where a reader starts" {

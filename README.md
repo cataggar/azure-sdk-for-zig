@@ -449,12 +449,21 @@ rebuild would discard the first's healthy connection.
 Reattached receivers resume where they left off. The pool remembers each
 partition's selector when it drops a client, so a reattach continues past
 the last sequence number handed to the caller instead of replaying from the
-configured start position. For the same reason, a receive that fails partway
-through a batch returns the events that did arrive rather than discarding
-them when the wire fails. A local decode or allocation failure cannot return a
-valid batch, so it terminally detaches without advancing the selector; the
-next processor cycle reopens from the unchanged checkpoint and replays those
-sequences.
+configured start position. Its position slot is allocated before the link
+attaches; generation teardown swaps the current selector into that slot and
+removes every old wrapper without allocating, so allocator failure cannot
+leave a client pointing at a destroyed session.
+
+For the same reason, a receive that fails partway through a batch returns the
+events that did arrive rather than discarding them when the wire fails. A
+settlement write failure also returns the completed batch, but marks the link
+terminal so the next processor cycle replaces the failed connection. A local
+decode or allocation failure cannot return a valid batch, so it terminally
+detaches without advancing the selector; the next processor cycle reopens from
+the unchanged checkpoint and replays those sequences. If the service rejects
+a stored integer offset with `com.microsoft:georeplication:invalid-offset`,
+the replacement starts at earliest, inclusive, instead of retrying the
+unreadable offset.
 
 ## Distributed consumption
 
