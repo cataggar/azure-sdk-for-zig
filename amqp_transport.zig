@@ -860,15 +860,12 @@ pub const AmqpTransport = struct {
         const deadline_ms = self.deadlineFrom(current);
         const receiver = try self.receiverFor(current, entity, mode, deadline_ms);
 
-        // Manual credit may be partly live and partly deferred behind the
-        // receiver's byte or settlement bounds. Both are still outstanding
-        // demand; asking from live credit alone duplicates the deferred part
-        // on every short receive. Charged deliveries, including aborted ones,
-        // reduce these public AMQP counters, and a replacement link starts
-        // them at zero.
+        // AMQP owns manual demand, including restoring a request consumed by
+        // a hidden aborted delivery. Live plus deferred credit is therefore
+        // the authoritative outstanding count: top up only its delta across
+        // short receives, while a replacement link naturally starts at zero.
         if (self.options.prefetch == 0) {
-            const outstanding =
-                (receiver.credit +| receiver.deferred_credit) -| receiver.overrun;
+            const outstanding = receiver.credit +| receiver.deferred_credit;
             if (outstanding < max_count) {
                 try receiver.issueCredit(max_count - outstanding);
             }
@@ -3301,46 +3298,59 @@ test "manual credit does not duplicate deferred demand across short maximum batc
     }
 }
 
-test "manual demand accounts for an aborted delivery before the next call" {
+test "manual receive replaces an aborted delivery before returning" {
     const allocator = testing.allocator;
     var h = try Harness.init(allocator);
     defer h.deinit();
 
     try scriptEntityReceiver(&h, allocator, "orders");
-    h.mem.starve = true;
-    try h.start(.{ .prefetch = 0, .deadline_ms = 1_000 });
-    h.clock.auto_advance_ms = 5;
-
     try pushAborted(h.peer(), 2, first_incoming_id);
-    try pushMessage(h.peer(), allocator, 2, first_incoming_id + 1, "t", "first", 1);
-    var first = try h.transport.receiveMessages(
+    try pushMessage(
+        h.peer(),
         allocator,
-        "orders",
-        max_receive_count,
-        .peek_lock,
+        2,
+        first_incoming_id + 1,
+        "t",
+        "replacement",
+        1,
     );
-    defer first.deinit();
-    try testing.expectEqual(@as(usize, 1), first.count());
+    try h.start(.{ .prefetch = 0 });
+    _ = try h.transport.receiverFor(
+        h.session,
+        "orders",
+        .peek_lock,
+        10_000,
+    );
+    h.mem.clearWritten();
+
+    var batch = try h.transport.receiveMessages(allocator, "orders", 1, .peek_lock);
+    defer batch.deinit();
+    try testing.expectEqual(@as(usize, 1), batch.count());
+    try testing.expectEqualStrings("replacement", batch.messages[0].body);
+
+    // The peer's valid delivery follows an aborted one. AMQP must replace the
+    // consumed manual request with a second Flow before reading that delivery;
+    // its delivery-count proves the abort was charged first.
+    const flows = try emittedFlows(allocator, h.mem.written());
+    defer allocator.free(flows);
+    try testing.expectEqual(@as(usize, 2), flows.len);
+
+    var initial = try amqp.performative.decode(allocator, flows[0]);
+    defer initial.deinit();
+    try testing.expectEqual(@as(?u32, 0), initial.performative.flow.delivery_count);
+    try testing.expectEqual(@as(?u32, 1), initial.performative.flow.link_credit);
+
+    var replacement = try amqp.performative.decode(allocator, flows[1]);
+    defer replacement.deinit();
+    try testing.expectEqual(@as(?u32, 1), replacement.performative.flow.delivery_count);
+    try testing.expectEqual(@as(?u32, 1), replacement.performative.flow.link_credit);
 
     const receiver = h.transport.receivers.get("orders").?.receiver;
     try testing.expectEqual(
-        max_receive_count - 2,
+        @as(u32, 0),
         receiver.credit + receiver.deferred_credit,
     );
-
-    try pushMessage(h.peer(), allocator, 2, first_incoming_id + 2, "t", "second", 2);
-    var second = try h.transport.receiveMessages(
-        allocator,
-        "orders",
-        max_receive_count,
-        .peek_lock,
-    );
-    defer second.deinit();
-    try testing.expectEqual(@as(usize, 1), second.count());
-    try testing.expectEqual(
-        max_receive_count - 1,
-        receiver.credit + receiver.deferred_credit,
-    );
+    try testing.expectEqual(@as(usize, 0), h.mem.reads_with_pending_writes);
 }
 
 test "manual deferred demand is discarded with a replaced receiver link" {
