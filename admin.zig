@@ -45,24 +45,189 @@ pub const AdministrationClientOptions = struct {
     api_version: []const u8 = "2021-05",
 };
 
+const token_scope = "https://servicebus.azure.net/.default";
+
+const SpinLock = struct {
+    held: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    fn lock(self: *SpinLock) void {
+        while (self.held.cmpxchgWeak(false, true, .acquire, .monotonic) != null) {
+            while (self.held.load(.monotonic)) {
+                std.Thread.yield() catch {};
+            }
+        }
+    }
+
+    fn unlock(self: *SpinLock) void {
+        self.held.store(false, .release);
+    }
+};
+
+/// A bearer policy whose shared cache is safe for every pipeline use,
+/// including pagers or derived clients that retain a copy of the pipeline.
+///
+/// Credential acquisition and transport dispatch happen outside the cache
+/// lock, so callbacks may re-enter the same client without deadlocking.
+const SynchronizedBearerAuthPolicy = struct {
+    allocator: std.mem.Allocator,
+    credential: *core.credentials.TokenCredential,
+    cached_auth_value: ?[]u8 = null,
+    cached_expires_on: i64 = 0,
+    cache_lock: SpinLock = .{},
+    policy: core.http.HttpPolicy,
+
+    fn init(
+        allocator: std.mem.Allocator,
+        credential: *core.credentials.TokenCredential,
+    ) SynchronizedBearerAuthPolicy {
+        return .{
+            .allocator = allocator,
+            .credential = credential,
+            .policy = .{
+                .processFn = &processImpl,
+                .prepareFn = &prepareImpl,
+            },
+        };
+    }
+
+    fn asPolicy(self: *SynchronizedBearerAuthPolicy) *core.http.HttpPolicy {
+        return &self.policy;
+    }
+
+    fn deinit(self: *SynchronizedBearerAuthPolicy) void {
+        if (self.cached_auth_value) |value| self.allocator.free(value);
+    }
+
+    fn processImpl(
+        policy: *core.http.HttpPolicy,
+        request: *core.http.Request,
+        next: []*core.http.HttpPolicy,
+        runtime: core.http.HttpRuntime,
+    ) !core.http.Response {
+        try prepareImpl(policy, request, runtime);
+        if (next.len == 0) return runtime.transport.send(request);
+        return next[0].process(request, next[1..], runtime);
+    }
+
+    fn prepareImpl(
+        policy: *core.http.HttpPolicy,
+        request: *core.http.Request,
+        runtime: core.http.HttpRuntime,
+    ) !void {
+        const self: *SynchronizedBearerAuthPolicy = @alignCast(
+            @fieldParentPtr("policy", policy),
+        );
+        const refresh_buffer_secs: i64 = 300;
+
+        self.cache_lock.lock();
+        if (self.cached_auth_value) |auth_value| {
+            if (unixTimestampSeconds() < self.cached_expires_on - refresh_buffer_secs) {
+                const result = request.setHeader("Authorization", auth_value);
+                self.cache_lock.unlock();
+                return result;
+            }
+        }
+        self.cache_lock.unlock();
+
+        var fresh = try self.credential.getToken(
+            .{ .scopes = &.{token_scope} },
+            .none,
+            runtime,
+        );
+        defer fresh.deinit();
+
+        self.cache_lock.lock();
+        defer self.cache_lock.unlock();
+        if (self.cached_auth_value) |auth_value| {
+            if (unixTimestampSeconds() < self.cached_expires_on - refresh_buffer_secs) {
+                return request.setHeader("Authorization", auth_value);
+            }
+        }
+
+        const replacement = try std.fmt.allocPrint(
+            self.allocator,
+            "Bearer {s}",
+            .{fresh.token},
+        );
+        errdefer self.allocator.free(replacement);
+        try request.setHeader("Authorization", replacement);
+
+        const old_auth_value = self.cached_auth_value;
+        self.cached_auth_value = replacement;
+        self.cached_expires_on = fresh.expires_on;
+        // Request headers own their copies, and no cache reader can retain this
+        // slice after releasing the lock. Free under the same lock as the swap
+        // because the cache allocator need not be thread-safe.
+        if (old_auth_value) |value| self.allocator.free(value);
+    }
+};
+
+fn unixTimestampSeconds() i64 {
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    return std.Io.Timestamp.now(threaded.io(), .real).toSeconds();
+}
+
+const PipelineState = struct {
+    allocator: std.mem.Allocator,
+    auth_policy: SynchronizedBearerAuthPolicy,
+    policies: [1]*core.http.HttpPolicy,
+    pipeline: core.http.HttpPipeline,
+
+    fn create(
+        allocator: std.mem.Allocator,
+        credential: *core.credentials.TokenCredential,
+        runtime: core.http.HttpRuntime,
+    ) !*PipelineState {
+        const state = try allocator.create(PipelineState);
+        state.allocator = allocator;
+        state.auth_policy = SynchronizedBearerAuthPolicy.init(allocator, credential);
+        state.policies[0] = state.auth_policy.asPolicy();
+        state.pipeline = core.http.HttpPipeline.init(runtime, &state.policies);
+        return state;
+    }
+
+    fn deinit(self: *PipelineState) void {
+        const allocator = self.allocator;
+        self.auth_policy.deinit();
+        allocator.destroy(self);
+    }
+};
+
 /// Manages Service Bus queues, topics, and subscriptions via REST API.
+///
+/// The credential and runtime backend contexts are borrowed and must outlive
+/// the client and every in-flight operation. The runtime descriptors are
+/// copied by value into the pipeline state. Administration calls may run
+/// concurrently when the selected runtime backends and credential allow it;
+/// the shared bearer-token cache is synchronized by the pipeline policy.
+/// Credential and transport callbacks run without that cache lock and may
+/// re-enter the client. Call `deinit` only after all operations have finished.
 pub const ServiceBusAdministrationClient = struct {
     fully_qualified_namespace: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline_state: *PipelineState,
 
     pub fn init(
+        allocator: std.mem.Allocator,
         fully_qualified_namespace: []const u8,
         credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
+        runtime: core.http.HttpRuntime,
         options: AdministrationClientOptions,
-    ) ServiceBusAdministrationClient {
-        _ = credential;
+    ) !ServiceBusAdministrationClient {
         return .{
             .fully_qualified_namespace = fully_qualified_namespace,
             .api_version = options.api_version,
-            .pipeline = .{ .policies = &.{}, .transport_impl = transport },
+            .pipeline_state = try PipelineState.create(
+                allocator,
+                credential,
+                runtime,
+            ),
         };
+    }
+
+    pub fn deinit(self: *ServiceBusAdministrationClient) void {
+        self.pipeline_state.deinit();
+        self.* = undefined;
     }
 
     // ── Queue operations ──
@@ -91,7 +256,7 @@ pub const ServiceBusAdministrationClient = struct {
         try req.setHeader("Content-Type", "application/atom+xml;type=entry;charset=utf-8");
         req.body = body;
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (resp.isSuccess()) return .{ .ok = {} };
@@ -114,7 +279,7 @@ pub const ServiceBusAdministrationClient = struct {
         var req = core.http.Request.init(allocator, .DELETE, url);
         defer req.deinit();
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (resp.isSuccess()) return .{ .ok = {} };
@@ -137,7 +302,7 @@ pub const ServiceBusAdministrationClient = struct {
         var req = core.http.Request.init(allocator, .GET, url);
         defer req.deinit();
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
@@ -176,7 +341,7 @@ pub const ServiceBusAdministrationClient = struct {
         try req.setHeader("Content-Type", "application/atom+xml;type=entry;charset=utf-8");
         req.body = body;
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (resp.isSuccess()) return .{ .ok = {} };
@@ -199,7 +364,7 @@ pub const ServiceBusAdministrationClient = struct {
         var req = core.http.Request.init(allocator, .DELETE, url);
         defer req.deinit();
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (resp.isSuccess()) return .{ .ok = {} };
@@ -222,7 +387,7 @@ pub const ServiceBusAdministrationClient = struct {
         var req = core.http.Request.init(allocator, .GET, url);
         defer req.deinit();
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
@@ -261,7 +426,7 @@ pub const ServiceBusAdministrationClient = struct {
         try req.setHeader("Content-Type", "application/atom+xml;type=entry;charset=utf-8");
         req.body = body;
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (resp.isSuccess()) return .{ .ok = {} };
@@ -284,7 +449,7 @@ pub const ServiceBusAdministrationClient = struct {
         var req = core.http.Request.init(allocator, .DELETE, url);
         defer req.deinit();
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (resp.isSuccess()) return .{ .ok = {} };
@@ -307,7 +472,7 @@ pub const ServiceBusAdministrationClient = struct {
         var req = core.http.Request.init(allocator, .GET, url);
         defer req.deinit();
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
@@ -389,33 +554,335 @@ fn parseSubscriptionNames(allocator: std.mem.Allocator, body: []const u8, topic_
 
 // ───────────────────── Tests ─────────────────────
 
+const StubCredential = struct {
+    credential: core.credentials.TokenCredential = .{ .getTokenFn = getToken },
+    calls: usize = 0,
+    use_runtime_crypto: bool = false,
+
+    fn asCredential(self: *StubCredential) *core.credentials.TokenCredential {
+        return &self.credential;
+    }
+
+    fn getToken(
+        credential: *core.credentials.TokenCredential,
+        _: core.credentials.TokenRequestContext,
+        _: core.context.Context,
+        runtime: core.http.HttpRuntime,
+    ) !core.credentials.AccessToken {
+        const self: *StubCredential = @alignCast(
+            @fieldParentPtr("credential", credential),
+        );
+        self.calls += 1;
+        if (self.use_runtime_crypto) {
+            var byte: [1]u8 = undefined;
+            try runtime.crypto.randomBytes(&byte);
+        }
+        return .{
+            .token = "test-token",
+            .expires_on = 7_258_118_400,
+        };
+    }
+};
+
+fn testRuntime(
+    transport: core.http.HttpTransport,
+    crypto: core.crypto.CryptoProvider,
+) core.http.HttpRuntime {
+    return .init(transport, crypto);
+}
+
+const FailingCryptoProvider = struct {
+    random_calls: usize = 0,
+
+    const vtable: core.crypto.CryptoProvider.VTable = .{
+        .random_bytes = &randomBytes,
+        .md5 = &md5,
+        .sha256 = &sha256,
+        .hmac_sha256 = &hmacSha256,
+        .sha256_init = &sha256Init,
+    };
+
+    fn asProvider(self: *FailingCryptoProvider) core.crypto.CryptoProvider {
+        return .{ .context = self, .vtable = &vtable };
+    }
+
+    fn randomBytes(context: *anyopaque, out: []u8) !void {
+        const self: *FailingCryptoProvider = @ptrCast(@alignCast(context));
+        self.random_calls += 1;
+        @memset(out, 0xa5);
+        return error.SelectedCryptoFailure;
+    }
+
+    fn md5(_: *anyopaque, _: []const u8, _: *core.crypto.Md5Digest) !void {
+        return error.UnexpectedCryptoOperation;
+    }
+
+    fn sha256(_: *anyopaque, _: []const u8, _: *core.crypto.Sha256Digest) !void {
+        return error.UnexpectedCryptoOperation;
+    }
+
+    fn hmacSha256(
+        _: *anyopaque,
+        _: []const u8,
+        _: []const u8,
+        _: *core.crypto.HmacSha256Digest,
+    ) !void {
+        return error.UnexpectedCryptoOperation;
+    }
+
+    fn sha256Init(
+        _: *anyopaque,
+        _: std.mem.Allocator,
+    ) !core.crypto.Sha256Operation {
+        return error.UnexpectedCryptoOperation;
+    }
+};
+
+const BarrierCredential = struct {
+    allocator: std.mem.Allocator,
+    expected_calls: usize,
+    entered: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+    credential: core.credentials.TokenCredential = .{ .getTokenFn = getToken },
+
+    fn asCredential(self: *BarrierCredential) *core.credentials.TokenCredential {
+        return &self.credential;
+    }
+
+    fn getToken(
+        credential: *core.credentials.TokenCredential,
+        _: core.credentials.TokenRequestContext,
+        _: core.context.Context,
+        _: core.http.HttpRuntime,
+    ) !core.credentials.AccessToken {
+        const self: *BarrierCredential = @alignCast(
+            @fieldParentPtr("credential", credential),
+        );
+        const call_index = self.entered.fetchAdd(1, .acq_rel);
+        while (self.entered.load(.acquire) < self.expected_calls) {
+            std.Thread.yield() catch {};
+        }
+        return .{
+            .token = try std.fmt.allocPrint(
+                self.allocator,
+                "concurrent-token-{d}",
+                .{call_index},
+            ),
+            .expires_on = 7_258_118_400,
+            .allocator = self.allocator,
+        };
+    }
+};
+
+const ConcurrentTransport = struct {
+    calls: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+    missing_auth: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    const vtable: core.http.HttpTransport.VTable = .{ .send = &send };
+
+    fn asTransport(self: *ConcurrentTransport) core.http.HttpTransport {
+        return .{ .context = self, .vtable = &vtable };
+    }
+
+    fn send(context: *anyopaque, request: *core.http.Request) !core.http.Response {
+        const self: *ConcurrentTransport = @ptrCast(@alignCast(context));
+        const auth = request.getHeader("Authorization");
+        if (auth == null or !std.mem.startsWith(u8, auth.?, "Bearer concurrent-token-")) {
+            self.missing_auth.store(true, .release);
+        }
+        _ = self.calls.fetchAdd(1, .acq_rel);
+        return .{
+            .status_code = 200,
+            .headers = std.StringHashMap([]const u8).init(request.allocator),
+            .body = try request.allocator.dupe(
+                u8,
+                "<feed xmlns=\"http://www.w3.org/2005/Atom\"></feed>",
+            ),
+            .allocator = request.allocator,
+        };
+    }
+};
+
+const ConcurrentWorker = struct {
+    client: *ServiceBusAdministrationClient,
+    allocator: std.mem.Allocator,
+    index: usize,
+    start: *std.atomic.Value(bool),
+    failed: *std.atomic.Value(bool),
+
+    fn run(self: ConcurrentWorker) void {
+        while (!self.start.load(.acquire)) {
+            std.Thread.yield() catch {};
+        }
+
+        if (self.index % 2 == 0) {
+            self.client.deleteSubscription(
+                self.allocator,
+                "topic",
+                "subscription",
+            ) catch {
+                self.failed.store(true, .release);
+            };
+        } else {
+            const subscriptions = self.client.listSubscriptions(
+                self.allocator,
+                "topic",
+            ) catch {
+                self.failed.store(true, .release);
+                return;
+            };
+            for (subscriptions) |subscription| self.allocator.free(subscription.name);
+            self.allocator.free(subscriptions);
+        }
+    }
+};
+
+const GuardedAllocator = struct {
+    parent: std.mem.Allocator,
+    active: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+    overlapped: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    const vtable: std.mem.Allocator.VTable = .{
+        .alloc = alloc,
+        .resize = resize,
+        .remap = remap,
+        .free = free,
+    };
+
+    fn allocator(self: *GuardedAllocator) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+
+    fn enter(self: *GuardedAllocator) void {
+        if (self.active.fetchAdd(1, .acq_rel) != 0) {
+            self.overlapped.store(true, .release);
+        }
+        for (0..128) |_| std.Thread.yield() catch {};
+    }
+
+    fn leave(self: *GuardedAllocator) void {
+        _ = self.active.fetchSub(1, .acq_rel);
+    }
+
+    fn alloc(
+        context: *anyopaque,
+        len: usize,
+        alignment: std.mem.Alignment,
+        return_address: usize,
+    ) ?[*]u8 {
+        const self: *GuardedAllocator = @ptrCast(@alignCast(context));
+        self.enter();
+        defer self.leave();
+        return self.parent.rawAlloc(len, alignment, return_address);
+    }
+
+    fn resize(
+        context: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        return_address: usize,
+    ) bool {
+        const self: *GuardedAllocator = @ptrCast(@alignCast(context));
+        self.enter();
+        defer self.leave();
+        return self.parent.rawResize(memory, alignment, new_len, return_address);
+    }
+
+    fn remap(
+        context: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        return_address: usize,
+    ) ?[*]u8 {
+        const self: *GuardedAllocator = @ptrCast(@alignCast(context));
+        self.enter();
+        defer self.leave();
+        return self.parent.rawRemap(memory, alignment, new_len, return_address);
+    }
+
+    fn free(
+        context: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        return_address: usize,
+    ) void {
+        const self: *GuardedAllocator = @ptrCast(@alignCast(context));
+        self.enter();
+        defer self.leave();
+        self.parent.rawFree(memory, alignment, return_address);
+    }
+};
+
+test "AdministrationClient preserves runtime and provider failures are atomic" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200, "");
+    defer mock.deinit();
+    var crypto = FailingCryptoProvider{};
+    const runtime = testRuntime(mock.asTransport(), crypto.asProvider());
+    var credential = StubCredential{ .use_runtime_crypto = true };
+    var admin = try ServiceBusAdministrationClient.init(
+        allocator,
+        "ns.servicebus.windows.net",
+        credential.asCredential(),
+        runtime,
+        .{},
+    );
+    defer admin.deinit();
+
+    try std.testing.expectEqual(
+        runtime.transport.context,
+        admin.pipeline_state.pipeline.runtime.transport.context,
+    );
+    try std.testing.expectEqual(
+        runtime.crypto.context,
+        admin.pipeline_state.pipeline.runtime.crypto.context,
+    );
+    try std.testing.expectError(
+        error.SelectedCryptoFailure,
+        admin.createQueue(allocator, "testqueue"),
+    );
+    try std.testing.expectEqual(@as(usize, 1), credential.calls);
+    try std.testing.expectEqual(@as(usize, 1), crypto.random_calls);
+    try std.testing.expectEqual(@as(usize, 0), mock.call_count);
+    try std.testing.expect(mock.last_headers.get("Authorization") == null);
+}
+
 test "AdministrationClient createQueue" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 201, "<entry/>");
     defer mock.deinit();
-    const identity = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    var credential = StubCredential{};
+    var admin = try ServiceBusAdministrationClient.init(
+        allocator,
+        "ns.servicebus.windows.net",
+        credential.asCredential(),
+        testRuntime(mock.asTransport(), crypto.asProvider()),
+        .{},
     );
-    defer cred_mock.deinit();
-    var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
-    var admin = ServiceBusAdministrationClient.init("ns.servicebus.windows.net", cred.asCredential(), mock.asTransport(), .{});
+    defer admin.deinit();
     try admin.createQueue(allocator, "testqueue");
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "testqueue") != null);
     try std.testing.expectEqual(core.http.Method.PUT, mock.last_method.?);
+    try std.testing.expect(mock.last_headers.get("Authorization") != null);
+    try std.testing.expectEqual(@as(usize, 1), credential.calls);
 }
 
 test "AdministrationClient deleteQueue" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 200, "");
     defer mock.deinit();
-    const identity = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    var credential = StubCredential{};
+    var admin = try ServiceBusAdministrationClient.init(
+        allocator,
+        "ns.servicebus.windows.net",
+        credential.asCredential(),
+        testRuntime(mock.asTransport(), crypto.asProvider()),
+        .{},
     );
-    defer cred_mock.deinit();
-    var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
-    var admin = ServiceBusAdministrationClient.init("ns.servicebus.windows.net", cred.asCredential(), mock.asTransport(), .{});
+    defer admin.deinit();
     try admin.deleteQueue(allocator, "testqueue");
     try std.testing.expectEqual(core.http.Method.DELETE, mock.last_method.?);
 }
@@ -427,13 +894,16 @@ test "AdministrationClient listQueues" {
     ;
     var mock = core.http.MockTransport.init(allocator, 200, body);
     defer mock.deinit();
-    const identity = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    var credential = StubCredential{};
+    var admin = try ServiceBusAdministrationClient.init(
+        allocator,
+        "ns.servicebus.windows.net",
+        credential.asCredential(),
+        testRuntime(mock.asTransport(), crypto.asProvider()),
+        .{},
     );
-    defer cred_mock.deinit();
-    var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
-    var admin = ServiceBusAdministrationClient.init("ns.servicebus.windows.net", cred.asCredential(), mock.asTransport(), .{});
+    defer admin.deinit();
     const queues = try admin.listQueues(allocator);
     defer {
         for (queues) |q| allocator.free(q.name);
@@ -448,13 +918,151 @@ test "AdministrationClient createSubscription" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 201, "<entry/>");
     defer mock.deinit();
-    const identity = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    var credential = StubCredential{};
+    var admin = try ServiceBusAdministrationClient.init(
+        allocator,
+        "ns.servicebus.windows.net",
+        credential.asCredential(),
+        testRuntime(mock.asTransport(), crypto.asProvider()),
+        .{},
     );
-    defer cred_mock.deinit();
-    var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
-    var admin = ServiceBusAdministrationClient.init("ns.servicebus.windows.net", cred.asCredential(), mock.asTransport(), .{});
+    defer admin.deinit();
     try admin.createSubscription(allocator, "mytopic", "mysub");
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "mytopic/subscriptions/mysub") != null);
+}
+
+test "AdministrationClient deleteSubscription" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200, "");
+    defer mock.deinit();
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    var credential = StubCredential{};
+    var admin = try ServiceBusAdministrationClient.init(
+        allocator,
+        "ns.servicebus.windows.net",
+        credential.asCredential(),
+        testRuntime(mock.asTransport(), crypto.asProvider()),
+        .{},
+    );
+    defer admin.deinit();
+
+    try admin.deleteSubscription(allocator, "mytopic", "mysub");
+    try std.testing.expectEqual(core.http.Method.DELETE, mock.last_method.?);
+    try std.testing.expect(
+        std.mem.find(u8, mock.last_url.?, "mytopic/subscriptions/mysub") != null,
+    );
+}
+
+test "AdministrationClient listSubscriptions" {
+    const allocator = std.testing.allocator;
+    const body =
+        \\<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>sub1</title></entry><entry><title>sub2</title></entry></feed>
+    ;
+    var mock = core.http.MockTransport.init(allocator, 200, body);
+    defer mock.deinit();
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    var credential = StubCredential{};
+    var admin = try ServiceBusAdministrationClient.init(
+        allocator,
+        "ns.servicebus.windows.net",
+        credential.asCredential(),
+        testRuntime(mock.asTransport(), crypto.asProvider()),
+        .{},
+    );
+    defer admin.deinit();
+
+    const subscriptions = try admin.listSubscriptions(allocator, "mytopic");
+    defer {
+        for (subscriptions) |subscription| allocator.free(subscription.name);
+        allocator.free(subscriptions);
+    }
+    try std.testing.expectEqual(@as(usize, 2), subscriptions.len);
+    try std.testing.expectEqualStrings("sub1", subscriptions[0].name);
+    try std.testing.expectEqualStrings("sub2", subscriptions[1].name);
+    try std.testing.expectEqualStrings("mytopic", subscriptions[0].topic_name);
+}
+
+test "AdministrationClient synchronizes shared authentication cache" {
+    const allocator = std.testing.allocator;
+    const worker_count = 8;
+    var transport = ConcurrentTransport{};
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    var credential = BarrierCredential{
+        .allocator = allocator,
+        .expected_calls = worker_count,
+    };
+    var admin = try ServiceBusAdministrationClient.init(
+        allocator,
+        "ns.servicebus.windows.net",
+        credential.asCredential(),
+        testRuntime(transport.asTransport(), crypto.asProvider()),
+        .{},
+    );
+    defer admin.deinit();
+
+    var start = std.atomic.Value(bool).init(false);
+    var failed = std.atomic.Value(bool).init(false);
+    var threads: [worker_count]std.Thread = undefined;
+    for (&threads, 0..) |*thread, index| {
+        thread.* = try std.Thread.spawn(.{}, ConcurrentWorker.run, .{ConcurrentWorker{
+            .client = &admin,
+            .allocator = allocator,
+            .index = index,
+            .start = &start,
+            .failed = &failed,
+        }});
+    }
+    start.store(true, .release);
+    for (threads) |thread| thread.join();
+
+    try std.testing.expect(!failed.load(.acquire));
+    try std.testing.expect(!transport.missing_auth.load(.acquire));
+    try std.testing.expectEqual(worker_count, transport.calls.load(.acquire));
+    try std.testing.expectEqual(worker_count, credential.entered.load(.acquire));
+}
+
+test "AdministrationClient serializes cache allocator operations during concurrent refresh" {
+    const worker_allocator = std.testing.allocator;
+    const worker_count = 8;
+    var guarded = GuardedAllocator{ .parent = std.heap.page_allocator };
+    const cache_allocator = guarded.allocator();
+    var transport = ConcurrentTransport{};
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    var credential = BarrierCredential{
+        .allocator = worker_allocator,
+        .expected_calls = worker_count,
+    };
+    var admin = try ServiceBusAdministrationClient.init(
+        cache_allocator,
+        "ns.servicebus.windows.net",
+        credential.asCredential(),
+        testRuntime(transport.asTransport(), crypto.asProvider()),
+        .{},
+    );
+    defer admin.deinit();
+
+    admin.pipeline_state.auth_policy.cached_auth_value =
+        try cache_allocator.dupe(u8, "expired");
+    admin.pipeline_state.auth_policy.cached_expires_on = 0;
+
+    var start = std.atomic.Value(bool).init(false);
+    var failed = std.atomic.Value(bool).init(false);
+    var threads: [worker_count]std.Thread = undefined;
+    for (&threads, 0..) |*thread, index| {
+        thread.* = try std.Thread.spawn(.{}, ConcurrentWorker.run, .{ConcurrentWorker{
+            .client = &admin,
+            .allocator = worker_allocator,
+            .index = index,
+            .start = &start,
+            .failed = &failed,
+        }});
+    }
+    start.store(true, .release);
+    for (threads) |thread| thread.join();
+
+    try std.testing.expect(!failed.load(.acquire));
+    try std.testing.expect(!guarded.overlapped.load(.acquire));
+    try std.testing.expectEqual(@as(usize, 0), guarded.active.load(.acquire));
+    try std.testing.expectEqual(worker_count, credential.entered.load(.acquire));
 }

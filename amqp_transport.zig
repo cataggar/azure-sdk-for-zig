@@ -27,8 +27,26 @@ const management = @import("management.zig");
 
 const Allocator = std.mem.Allocator;
 
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+var testing_http_context: u8 = 0;
+
+const testing_http_vtable: core.http.HttpTransport.VTable = .{
+    .send = struct {
+        fn send(_: *anyopaque, _: *core.http.Request) !core.http.Response {
+            return error.UnexpectedHttpRequest;
+        }
+    }.send,
+};
+
+fn testingRuntime() core.http.HttpRuntime {
+    return .init(
+        .{ .context = &testing_http_context, .vtable = &testing_http_vtable },
+        testing_crypto_provider.asProvider(),
+    );
+}
+
 /// Version reported to the service in the `open` properties.
-pub const sdk_version = "0.1.0";
+pub const sdk_version = "0.2.0";
 
 /// The product half of the user agent, matching the other SDKs' shape.
 pub const user_agent_product = "azsdk-zig-servicebus";
@@ -75,8 +93,16 @@ pub const Credential = union(enum) {
         };
     }
 
-    pub fn getToken(self: *Credential, ctx: core.context.Context) !core.credentials.AccessToken {
-        return self.tokenCredential().getToken(.{ .scopes = &.{token_scope} }, ctx);
+    pub fn getToken(
+        self: *Credential,
+        ctx: core.context.Context,
+        runtime: core.http.HttpRuntime,
+    ) !core.credentials.AccessToken {
+        return self.tokenCredential().getToken(
+            .{ .scopes = &.{token_scope} },
+            ctx,
+            runtime,
+        );
     }
 };
 
@@ -89,6 +115,7 @@ pub const Credential = union(enum) {
 /// still outlives the borrow.
 const TokenSource = struct {
     credential: *Credential,
+    runtime: core.http.HttpRuntime,
     ctx: core.context.Context = .none,
     held: ?core.credentials.AccessToken = null,
 
@@ -103,7 +130,7 @@ const TokenSource = struct {
         _ = audience;
 
         self.release();
-        var token = try self.credential.getToken(self.ctx);
+        var token = try self.credential.getToken(self.ctx, self.runtime);
         errdefer token.deinit();
         self.held = token;
 
@@ -140,6 +167,12 @@ pub const TlsSettings = struct {
     bundle: ?*std.crypto.Certificate.Bundle = null,
 };
 
+const receiver_prefetch_limit: u32 = 8;
+const receiver_max_message_size: u64 = 128 * 1024 * 1024;
+const receiver_max_buffered_bytes: u64 = 1024 * 1024 * 1024;
+const receive_and_delete_settlement_batch: u32 =
+    amqp.default_max_unsettled_deliveries;
+
 pub const ConnectionOptions = struct {
     /// Prefixed to the user agent so the service can attribute traffic to the
     /// calling application. Borrowed; must outlive the transport.
@@ -166,10 +199,12 @@ pub const ConnectionOptions = struct {
     ///
     /// A receiver holding credit lets the broker stream messages ahead of the
     /// call that asks for them, so a batch is one round trip rather than one
-    /// per message. Zero disables the window and makes each `receiveMessages`
-    /// ask for exactly the count it was given, which is the right shape for a
-    /// consumer that must not hold locks it is not about to work through.
-    prefetch: u32 = 300,
+    /// per message. Service Bus caps this at eight deliveries to keep every
+    /// grant within the receiver's one-GiB aggregate byte budget. Zero
+    /// disables the window and makes each `receiveMessages` ask for exactly
+    /// the count it was given, which is the right shape for a consumer that
+    /// must not hold locks it is not about to work through.
+    prefetch: u32 = receiver_prefetch_limit,
     session: amqp.SessionOptions = .{},
     /// Service Bus expects an anonymous SASL layer and then CBS. Cleared for
     /// a peer that negotiates no SASL layer at all.
@@ -295,7 +330,9 @@ const dead_letter_condition = "com.microsoft:dead-letter";
 ///
 /// The same ceiling `azure_sdk_eventhubs` puts on a receive, and for the same
 /// reason: the count becomes both a credit grant and a precise reservation, so
-/// it has to be the caller's intent rather than whatever number arrived.
+/// it has to be the caller's intent rather than whatever number arrived. The
+/// receiver retains at most this many unsettled ids; payload buffering remains
+/// independently bounded by the eight-credit, one-GiB window above.
 pub const max_receive_count: u32 = 5000;
 
 /// How much of a management call's remaining deadline is kept back from the
@@ -309,6 +346,9 @@ const server_timeout_buffer_ms: i64 = 1000;
 /// so initialise it in place and never copy it afterwards.
 pub const AmqpTransport = struct {
     allocator: Allocator,
+    /// Copied by value. Its HTTP and crypto backend contexts are borrowed and
+    /// must outlive this transport and every operation.
+    runtime: core.http.HttpRuntime,
     /// Required to dial. Unused when a session is supplied instead.
     io: ?std.Io = null,
     fully_qualified_namespace: []const u8,
@@ -357,6 +397,7 @@ pub const AmqpTransport = struct {
 
     pub const Options = struct {
         allocator: Allocator,
+        runtime: core.http.HttpRuntime,
         io: ?std.Io = null,
         fully_qualified_namespace: []const u8,
         credential: Credential,
@@ -369,6 +410,7 @@ pub const AmqpTransport = struct {
     pub fn init(self: *AmqpTransport, options: Options) void {
         self.* = .{
             .allocator = options.allocator,
+            .runtime = options.runtime,
             .io = options.io,
             .fully_qualified_namespace = options.fully_qualified_namespace,
             .credential = options.credential,
@@ -377,7 +419,10 @@ pub const AmqpTransport = struct {
         };
         self.encode_buf = amqp.encoder.Buffer.initDynamic(options.allocator);
         self.scratch = .init(options.allocator);
-        self.token_source = .{ .credential = &self.credential };
+        self.token_source = .{
+            .credential = &self.credential,
+            .runtime = options.runtime,
+        };
     }
 
     /// Initialise from a connection string, parsing it exactly once.
@@ -393,6 +438,7 @@ pub const AmqpTransport = struct {
         allocator: Allocator,
         io: ?std.Io,
         connection_string: []const u8,
+        runtime: core.http.HttpRuntime,
         options: ConnectionOptions,
     ) !?[]const u8 {
         const properties = try sb.ConnectionStringProperties.parse(connection_string);
@@ -423,6 +469,7 @@ pub const AmqpTransport = struct {
 
         self.init(.{
             .allocator = allocator,
+            .runtime = runtime,
             .io = io,
             .fully_qualified_namespace = properties.fully_qualified_namespace,
             .credential = .{ .sas = sas },
@@ -698,7 +745,10 @@ pub const AmqpTransport = struct {
         const receiver = try amqp.openReceiver(current, .{
             .name = name,
             .source_address = entity,
-            .prefetch = self.options.prefetch,
+            .prefetch = @min(self.options.prefetch, receiver_prefetch_limit),
+            .max_message_size = receiver_max_message_size,
+            .max_buffered_bytes = receiver_max_buffered_bytes,
+            .max_unsettled_deliveries = max_receive_count,
         }, deadline_ms);
         errdefer current.closeReceiver(receiver, 0);
 
@@ -810,10 +860,15 @@ pub const AmqpTransport = struct {
         const deadline_ms = self.deadlineFrom(current);
         const receiver = try self.receiverFor(current, entity, mode, deadline_ms);
 
-        // Without a prefetch window the link holds no credit at all, so ask
-        // for exactly what this call needs on top of anything outstanding.
-        if (self.options.prefetch == 0 and receiver.credit < max_count) {
-            try receiver.issueCredit(max_count - receiver.credit);
+        // AMQP owns manual demand, including restoring a request consumed by
+        // a hidden aborted delivery. Live plus deferred credit is therefore
+        // the authoritative outstanding count: top up only its delta across
+        // short receives, while a replacement link naturally starts at zero.
+        if (self.options.prefetch == 0) {
+            const outstanding = receiver.credit +| receiver.deferred_credit;
+            if (outstanding < max_count) {
+                try receiver.issueCredit(max_count - outstanding);
+            }
         }
 
         // Nothing is allocated until a message actually arrives. A consumer on
@@ -834,6 +889,7 @@ pub const AmqpTransport = struct {
         // where the broker's own mode is at-most-once: a disposition lost in
         // flight means redelivery rather than a silently dropped message.
         var settling = amqp.SettleBatch.init(receiver, .accepted);
+        var settlements_since_flush: u32 = 0;
 
         while (messages.items.len < max_count) {
             const delivery = receiver.receive(deadline_ms) catch |err| {
@@ -863,7 +919,12 @@ pub const AmqpTransport = struct {
                 // Settling is advisory: a message that could not be settled
                 // is redelivered, and failing here would throw away messages
                 // the caller has already been given.
-                settling.add(delivery) catch {};
+                settling.add(delivery) catch continue;
+                settlements_since_flush += 1;
+                if (settlements_since_flush >= receive_and_delete_settlement_batch) {
+                    settling.flush() catch {};
+                    settlements_since_flush = 0;
+                }
             }
         }
 
@@ -1507,8 +1568,9 @@ const StubCredential = struct {
         c: *core.credentials.TokenCredential,
         request_context: core.credentials.TokenRequestContext,
         ctx: core.context.Context,
+        runtime: core.http.HttpRuntime,
     ) anyerror!core.credentials.AccessToken {
-        _ = .{ request_context, ctx };
+        _ = .{ request_context, ctx, runtime };
         const self: *StubCredential = @alignCast(@fieldParentPtr("credential", c));
         self.calls += 1;
         // Borrowed, so `deinit` frees nothing — the transport must not assume
@@ -1533,8 +1595,9 @@ const OwningStubCredential = struct {
         c: *core.credentials.TokenCredential,
         request_context: core.credentials.TokenRequestContext,
         ctx: core.context.Context,
+        runtime: core.http.HttpRuntime,
     ) anyerror!core.credentials.AccessToken {
-        _ = .{ request_context, ctx };
+        _ = .{ request_context, ctx, runtime };
         const self: *OwningStubCredential = @alignCast(@fieldParentPtr("credential", c));
         self.calls += 1;
         return .{
@@ -1542,6 +1605,54 @@ const OwningStubCredential = struct {
             .expires_on = stub_token_expires_on,
             .allocator = self.allocator,
         };
+    }
+};
+
+const CryptoSpy = struct {
+    hmac_calls: usize = 0,
+    fail_hmac: bool = false,
+
+    const vtable: core.crypto.CryptoProvider.VTable = .{
+        .random_bytes = &randomBytes,
+        .md5 = &md5,
+        .sha256 = &sha256,
+        .hmac_sha256 = &hmacSha256,
+        .sha256_init = &sha256Init,
+    };
+
+    fn asProvider(self: *CryptoSpy) core.crypto.CryptoProvider {
+        return .{ .context = self, .vtable = &vtable };
+    }
+
+    fn randomBytes(_: *anyopaque, _: []u8) !void {
+        return error.UnexpectedCryptoOperation;
+    }
+
+    fn md5(_: *anyopaque, _: []const u8, _: *core.crypto.Md5Digest) !void {
+        return error.UnexpectedCryptoOperation;
+    }
+
+    fn sha256(_: *anyopaque, _: []const u8, _: *core.crypto.Sha256Digest) !void {
+        return error.UnexpectedCryptoOperation;
+    }
+
+    fn hmacSha256(
+        context: *anyopaque,
+        _: []const u8,
+        _: []const u8,
+        out: *core.crypto.HmacSha256Digest,
+    ) !void {
+        const self: *CryptoSpy = @ptrCast(@alignCast(context));
+        self.hmac_calls += 1;
+        @memset(out, 0xa5);
+        if (self.fail_hmac) return error.SelectedCryptoFailure;
+    }
+
+    fn sha256Init(
+        _: *anyopaque,
+        _: std.mem.Allocator,
+    ) !core.crypto.Sha256Operation {
+        return error.UnexpectedCryptoOperation;
     }
 };
 
@@ -1749,6 +1860,7 @@ const Harness = struct {
         }, 10_000);
         self.transport.init(.{
             .allocator = self.allocator,
+            .runtime = testingRuntime(),
             .fully_qualified_namespace = "ns.servicebus.windows.net",
             .credential = .{ .token = &self.credential.credential },
             .connection = options,
@@ -2059,7 +2171,13 @@ test "a connection string is parsed once and yields its entity path" {
         "SharedAccessKey=c2VjcmV0;EntityPath=orders";
 
     var t: AmqpTransport = undefined;
-    const entity = try t.initFromConnectionString(allocator, null, cs, .{});
+    const entity = try t.initFromConnectionString(
+        allocator,
+        null,
+        cs,
+        testingRuntime(),
+        .{},
+    );
     defer t.deinit();
 
     try testing.expectEqualStrings("orders", entity.?);
@@ -2068,13 +2186,58 @@ test "a connection string is parsed once and yields its entity path" {
     try testing.expect(t.options.use_tls);
 }
 
+test "connection string SAS preserves the runtime and provider failures are atomic" {
+    const allocator = testing.allocator;
+    const cs = "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=root;" ++
+        "SharedAccessKey=c2VjcmV0;EntityPath=orders";
+    var crypto = CryptoSpy{};
+    const runtime = core.http.HttpRuntime.init(
+        .{ .context = &testing_http_context, .vtable = &testing_http_vtable },
+        crypto.asProvider(),
+    );
+
+    var transport: AmqpTransport = undefined;
+    _ = try transport.initFromConnectionString(
+        allocator,
+        null,
+        cs,
+        runtime,
+        .{},
+    );
+    defer transport.deinit();
+
+    try testing.expectEqual(runtime.transport.context, transport.runtime.transport.context);
+    try testing.expectEqual(runtime.transport.vtable, transport.runtime.transport.vtable);
+    try testing.expectEqual(runtime.crypto.context, transport.runtime.crypto.context);
+    try testing.expectEqual(runtime.crypto.vtable, transport.runtime.crypto.vtable);
+
+    const provider = transport.token_source.provider();
+    _ = try provider.getToken(transport.owned_audience.?);
+    try testing.expectEqual(@as(usize, 1), crypto.hmac_calls);
+    try testing.expect(transport.token_source.held != null);
+
+    crypto.fail_hmac = true;
+    try testing.expectError(
+        error.SelectedCryptoFailure,
+        provider.getToken(transport.owned_audience.?),
+    );
+    try testing.expectEqual(@as(usize, 2), crypto.hmac_calls);
+    try testing.expect(transport.token_source.held == null);
+}
+
 test "the emulator's connection string turns TLS off" {
     const allocator = testing.allocator;
     const cs = "Endpoint=sb://localhost;SharedAccessKeyName=root;" ++
         "SharedAccessKey=c2VjcmV0;UseDevelopmentEmulator=true";
 
     var t: AmqpTransport = undefined;
-    _ = try t.initFromConnectionString(allocator, null, cs, .{});
+    _ = try t.initFromConnectionString(
+        allocator,
+        null,
+        cs,
+        testingRuntime(),
+        .{},
+    );
     defer t.deinit();
 
     try testing.expect(!t.options.use_tls);
@@ -2087,6 +2250,7 @@ test "dialling without an io implementation is refused, not crashed" {
     var t: AmqpTransport = undefined;
     t.init(.{
         .allocator = allocator,
+        .runtime = testingRuntime(),
         .fully_qualified_namespace = "ns.servicebus.windows.net",
         .credential = .{ .token = &credential.credential },
     });
@@ -2428,6 +2592,7 @@ test "the emulator's audience names plaintext AMQP" {
         allocator,
         null,
         "Endpoint=sb://localhost;SharedAccessKeyName=root;SharedAccessKey=c2VjcmV0;UseDevelopmentEmulator=true;EntityPath=orders",
+        testingRuntime(),
         .{},
     );
     defer transport.deinit();
@@ -2517,6 +2682,19 @@ fn pushMessage(
         .settled = false,
         .more = false,
     }, payload);
+}
+
+/// Consume one delivery and its credit without producing a message.
+fn pushAborted(peer: Peer, handle: u32, delivery_id: u32) !void {
+    try peer.pushTransfer(0, .{
+        .handle = handle,
+        .delivery_id = delivery_id,
+        .delivery_tag = "aborted",
+        .message_format = 0,
+        .settled = false,
+        .more = false,
+        .aborted = true,
+    }, "");
 }
 
 /// Every disposition body the client emitted.
@@ -3083,6 +3261,229 @@ test "max_count is honoured and leaves the rest for the next call" {
     try testing.expectEqual(@as(i64, 2), rest.messages[0].sequence_number.?);
 }
 
+test "manual credit does not duplicate deferred demand across short maximum batches" {
+    const allocator = testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    try scriptEntityReceiver(&h, allocator, "orders");
+    h.mem.starve = true;
+    try h.start(.{ .prefetch = 0, .deadline_ms = 1_000 });
+    h.clock.auto_advance_ms = 5;
+
+    for (0..3) |i| {
+        try pushMessage(
+            h.peer(),
+            allocator,
+            2,
+            first_incoming_id + @as(u32, @intCast(i)),
+            "t",
+            "m",
+            @intCast(i),
+        );
+        var batch = try h.transport.receiveMessages(
+            allocator,
+            "orders",
+            max_receive_count,
+            .peek_lock,
+        );
+        defer batch.deinit();
+        try testing.expectEqual(@as(usize, 1), batch.count());
+
+        const receiver = h.transport.receivers.get("orders").?.receiver;
+        try testing.expectEqual(
+            max_receive_count - 1,
+            receiver.credit + receiver.deferred_credit,
+        );
+    }
+}
+
+test "manual receive replaces an aborted delivery before returning" {
+    const allocator = testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    try scriptEntityReceiver(&h, allocator, "orders");
+    try pushAborted(h.peer(), 2, first_incoming_id);
+    try pushMessage(
+        h.peer(),
+        allocator,
+        2,
+        first_incoming_id + 1,
+        "t",
+        "replacement",
+        1,
+    );
+    try h.start(.{ .prefetch = 0 });
+    _ = try h.transport.receiverFor(
+        h.session,
+        "orders",
+        .peek_lock,
+        10_000,
+    );
+    h.mem.clearWritten();
+
+    var batch = try h.transport.receiveMessages(allocator, "orders", 1, .peek_lock);
+    defer batch.deinit();
+    try testing.expectEqual(@as(usize, 1), batch.count());
+    try testing.expectEqualStrings("replacement", batch.messages[0].body);
+
+    // The peer's valid delivery follows an aborted one. AMQP must replace the
+    // consumed manual request with a second Flow before reading that delivery;
+    // its delivery-count proves the abort was charged first.
+    const flows = try emittedFlows(allocator, h.mem.written());
+    defer allocator.free(flows);
+    try testing.expectEqual(@as(usize, 2), flows.len);
+
+    var initial = try amqp.performative.decode(allocator, flows[0]);
+    defer initial.deinit();
+    try testing.expectEqual(@as(?u32, 0), initial.performative.flow.delivery_count);
+    try testing.expectEqual(@as(?u32, 1), initial.performative.flow.link_credit);
+
+    var replacement = try amqp.performative.decode(allocator, flows[1]);
+    defer replacement.deinit();
+    try testing.expectEqual(@as(?u32, 1), replacement.performative.flow.delivery_count);
+    try testing.expectEqual(@as(?u32, 1), replacement.performative.flow.link_credit);
+
+    const receiver = h.transport.receivers.get("orders").?.receiver;
+    try testing.expectEqual(
+        @as(u32, 0),
+        receiver.credit + receiver.deferred_credit,
+    );
+    try testing.expectEqual(@as(usize, 0), h.mem.reads_with_pending_writes);
+}
+
+test "manual deferred demand is discarded with a replaced receiver link" {
+    const allocator = testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    try scriptEntityReceiver(&h, allocator, "orders");
+    try pushMessage(h.peer(), allocator, 2, first_incoming_id, "t", "first", 1);
+    try h.peer().push(0, .{ .detach = .{ .handle = 2, .closed = true } });
+    try scriptReceiverAttach(h.peer(), 3, "servicebus-receiver-orders");
+    try pushMessage(h.peer(), allocator, 3, first_incoming_id + 1, "t", "second", 2);
+    try h.start(.{ .prefetch = 0 });
+
+    var first = try h.transport.receiveMessages(
+        allocator,
+        "orders",
+        max_receive_count,
+        .peek_lock,
+    );
+    defer first.deinit();
+    try testing.expectEqual(@as(usize, 1), first.count());
+    try testing.expect(!h.transport.receivers.get("orders").?.receiver.attached);
+    try testing.expect(
+        h.transport.receivers.get("orders").?.receiver.deferred_credit > 0,
+    );
+
+    h.mem.clearWritten();
+    var second = try h.transport.receiveMessages(allocator, "orders", 1, .peek_lock);
+    defer second.deinit();
+    try testing.expectEqualStrings("second", second.messages[0].body);
+    try testing.expectEqual(
+        @as(?u32, 1),
+        try creditFor(allocator, h.mem.written(), 3),
+    );
+}
+
+test "peek lock receives beyond AMQP's default unsettled limit" {
+    const allocator = testing.allocator;
+    const count: u32 = amqp.default_max_unsettled_deliveries + 1;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    try scriptEntityReceiver(&h, allocator, "orders");
+    for (0..count) |i| {
+        try pushMessage(
+            h.peer(),
+            allocator,
+            2,
+            first_incoming_id + @as(u32, @intCast(i)),
+            "t",
+            "m",
+            @intCast(i),
+        );
+    }
+    try h.start(.{});
+
+    var batch = try h.transport.receiveMessages(allocator, "orders", count, .peek_lock);
+    defer batch.deinit();
+    try testing.expectEqual(@as(usize, count), batch.count());
+
+    const receiver = h.transport.receivers.get("orders").?.receiver;
+    try testing.expectEqual(max_receive_count, receiver.max_unsettled_deliveries);
+    try testing.expectEqual(@as(usize, count), receiver.unsettled_ids.items.len);
+}
+
+test "receive and delete periodically settles beyond the default unsettled limit" {
+    const allocator = testing.allocator;
+    const count: u32 = amqp.default_max_unsettled_deliveries + 1;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    try scriptEntityReceiver(&h, allocator, "orders");
+    for (0..count) |i| {
+        try pushMessage(
+            h.peer(),
+            allocator,
+            2,
+            first_incoming_id + @as(u32, @intCast(i)),
+            "t",
+            "m",
+            @intCast(i),
+        );
+    }
+    try h.start(.{});
+    _ = try h.transport.receiverFor(
+        h.session,
+        "orders",
+        .receive_and_delete,
+        10_000,
+    );
+    h.mem.clearWritten();
+
+    var batch = try h.transport.receiveMessages(
+        allocator,
+        "orders",
+        count,
+        .receive_and_delete,
+    );
+    defer batch.deinit();
+    try testing.expectEqual(@as(usize, count), batch.count());
+    try testing.expectEqual(
+        @as(usize, 0),
+        h.transport.receivers.get("orders").?.receiver.unsettled_ids.items.len,
+    );
+
+    const dispositions = try emittedDispositions(allocator, h.mem.written());
+    defer allocator.free(dispositions);
+    try testing.expectEqual(@as(usize, 2), dispositions.len);
+
+    var first = try amqp.performative.decode(allocator, dispositions[0]);
+    defer first.deinit();
+    try testing.expectEqual(
+        first_incoming_id,
+        first.performative.disposition.first,
+    );
+    try testing.expectEqual(
+        first_incoming_id + receive_and_delete_settlement_batch - 1,
+        first.performative.disposition.last.?,
+    );
+
+    var last = try amqp.performative.decode(allocator, dispositions[1]);
+    defer last.deinit();
+    try testing.expectEqual(
+        first_incoming_id + receive_and_delete_settlement_batch,
+        last.performative.disposition.first,
+    );
+    try testing.expectEqual(
+        first_incoming_id + receive_and_delete_settlement_batch,
+        last.performative.disposition.last.?,
+    );
+}
+
 test "a prefetch window grants credit up front, and no window grants exactly what is asked" {
     const allocator = testing.allocator;
 
@@ -3097,9 +3498,13 @@ test "a prefetch window grants credit up front, and no window grants exactly wha
         var batch = try h.transport.receiveMessages(allocator, "orders", 1, .peek_lock);
         defer batch.deinit();
 
-        // The default window is granted on attach, so the broker may stream
-        // ahead of the call that asks for the messages.
-        try testing.expectEqual(@as(u32, 300), (try creditFor(allocator, h.mem.written(), 2)).?);
+        // The bounded default window is granted on attach, so the broker may
+        // stream ahead of the call that asks for the messages.
+        try testing.expectEqual(receiver_prefetch_limit, (try creditFor(allocator, h.mem.written(), 2)).?);
+        const receiver = h.transport.receivers.get("orders").?.receiver;
+        try testing.expectEqual(@as(?u64, receiver_max_message_size), receiver.max_message_size);
+        try testing.expectEqual(@as(?u64, receiver_max_buffered_bytes), receiver.max_buffered_bytes);
+        try testing.expectEqual(max_receive_count, receiver.max_unsettled_deliveries);
     }
 
     {
@@ -3150,6 +3555,9 @@ test "settling a message with no entity is refused rather than guessed at" {
 /// this package hands to the caller.
 const amqp_receive_allocs_per_delivery = 2;
 
+/// Encoding a replenishment Flow currently needs two temporary allocations.
+const amqp_allocs_per_refill = 2;
+
 /// What a batch costs beyond those per-delivery copies: the arena struct, its
 /// first page, and the one copy of the entity name every message shares. The
 /// message list and the delivery tags come out of the arena page.
@@ -3195,40 +3603,65 @@ test "a received message costs a bounded number of allocations, whatever the bat
     var warm = try h.transport.receiveMessages(allocator, "orders", 1, .peek_lock);
     warm.deinit();
 
+    // AMQP 0.5 tracks unsettled ids both on the receiver and session-wide.
+    // Reserve those dependency-owned tables up front so allocator-specific
+    // growth policy is not mistaken for Service Bus's per-message cost.
+    const tracked: usize = 1 + small + large;
+    const receiver = h.transport.receivers.get("orders").?.receiver;
+    try receiver.unsettled_ids.ensureTotalCapacityPrecise(allocator, tracked);
+    try h.session.incoming_deliveries.ensureUnusedCapacity(
+        allocator,
+        @intCast(tracked - h.session.incoming_deliveries.count()),
+    );
+
+    h.mem.clearWritten();
     counting.reset();
     var first = try h.transport.receiveMessages(allocator, "orders", small, .peek_lock);
     const cost_small = counting.count;
+    const small_refills = blk: {
+        const flows = try emittedFlows(testing.allocator, h.mem.written());
+        defer testing.allocator.free(flows);
+        break :blk flows.len;
+    };
     try testing.expectEqual(@as(usize, small), first.count());
     first.deinit();
 
+    h.mem.clearWritten();
     counting.reset();
     var rest = try h.transport.receiveMessages(allocator, "orders", large, .peek_lock);
     const cost_large = counting.count;
+    const large_refills = blk: {
+        const flows = try emittedFlows(testing.allocator, h.mem.written());
+        defer testing.allocator.free(flows);
+        break :blk flows.len;
+    };
     try testing.expectEqual(@as(usize, large), rest.count());
     rest.deinit();
 
-    // Never more than the dependency's own two copies per message, so this
-    // package adds no backing allocation that scales with the batch: the
-    // arena, the message list and the entity copy are all paid for once.
-    // It comes in a little under, because the receiver's ready queue has
-    // finished growing by the time the larger batch runs.
-    // Both bounds below sit at zero or one allocation of slack, which is what
-    // makes them worth having — but it also means a std growth-policy change
-    // or a different arena page split will trip them while nothing here has
-    // regressed. Check what moved before assuming it was this package.
+    // AMQP 0.5's bounded eight-delivery window is replenished as it drains.
+    // Account for those emitted Flows explicitly rather than weakening the
+    // per-delivery bound: this package still adds no backing allocation that
+    // scales with the batch.
     const marginal = cost_large - cost_small;
-    try testing.expect(marginal <= (large - small) * amqp_receive_allocs_per_delivery);
+    const refill_growth =
+        (large_refills - small_refills) * amqp_allocs_per_refill;
+    try testing.expect(marginal <=
+        (large - small) * amqp_receive_allocs_per_delivery +
+            refill_growth);
 
     // The other half of the claim, and the discriminating half: what is left
-    // once the dependency's per-delivery copies are taken out is the batch's
-    // own overhead, and it is paid once rather than per message. A second
-    // arena, a second reservation or a per-message entity copy all land here.
+    // once the dependency's per-delivery copies and replenishment Flows are
+    // taken out is the batch's own overhead, paid once rather than per
+    // message. A second arena, reservation, or per-message entity copy lands
+    // here.
     //
     // No matching lower bound on `marginal`: `azure_sdk_amqp` dupes the
     // payload and the tag itself, so a lower bound of one per message would
     // be satisfied by the dependency alone whatever this code did. That the
     // messages really are copied is the lifetime test's job, not this one's.
-    const fixed = cost_small - small * amqp_receive_allocs_per_delivery;
+    const fixed = cost_small -
+        small * amqp_receive_allocs_per_delivery -
+        small_refills * amqp_allocs_per_refill;
     try testing.expect(fixed <= max_receive_fixed_allocs);
 }
 
@@ -3297,7 +3730,7 @@ test "a settle run stops at the entity boundary, whichever entity comes first" {
     try pushMessage(h.peer(), allocator, 2, first_incoming_id, "t", "o", 1);
     // A second audience means a second claim, but the connection and the
     // `$cbs` link pair are already up.
-    try scriptCbsReply(h.peer(), allocator, 2);
+    try scriptCbsReplyAt(h.peer(), allocator, 2, 1, 2);
     try scriptReceiverAttach(h.peer(), 3, "servicebus-receiver-audit");
     try pushMessage(h.peer(), allocator, 3, first_incoming_id + 2, "t", "a", 2);
 
