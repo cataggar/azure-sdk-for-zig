@@ -3305,10 +3305,6 @@ const amqp_receive_allocs_per_delivery = 2;
 /// Encoding a replenishment Flow currently needs two temporary allocations.
 const amqp_allocs_per_refill = 2;
 
-/// AMQP 0.5 tracks each unsettled id both on the receiver and session-wide.
-/// Across the batch sizes below their backing storage moves at most twice.
-const max_receive_tracking_growth_allocs = 2;
-
 /// What a batch costs beyond those per-delivery copies: the arena struct, its
 /// first page, and the one copy of the entity name every message shares. The
 /// message list and the delivery tags come out of the arena page.
@@ -3354,6 +3350,17 @@ test "a received message costs a bounded number of allocations, whatever the bat
     var warm = try h.transport.receiveMessages(allocator, "orders", 1, .peek_lock);
     warm.deinit();
 
+    // AMQP 0.5 tracks unsettled ids both on the receiver and session-wide.
+    // Reserve those dependency-owned tables up front so allocator-specific
+    // growth policy is not mistaken for Service Bus's per-message cost.
+    const tracked: usize = 1 + small + large;
+    const receiver = h.transport.receivers.get("orders").?.receiver;
+    try receiver.unsettled_ids.ensureTotalCapacityPrecise(allocator, tracked);
+    try h.session.incoming_deliveries.ensureUnusedCapacity(
+        allocator,
+        @intCast(tracked - h.session.incoming_deliveries.count()),
+    );
+
     h.mem.clearWritten();
     counting.reset();
     var first = try h.transport.receiveMessages(allocator, "orders", small, .peek_lock);
@@ -3387,8 +3394,7 @@ test "a received message costs a bounded number of allocations, whatever the bat
         (large_refills - small_refills) * amqp_allocs_per_refill;
     try testing.expect(marginal <=
         (large - small) * amqp_receive_allocs_per_delivery +
-            refill_growth +
-            max_receive_tracking_growth_allocs);
+            refill_growth);
 
     // The other half of the claim, and the discriminating half: what is left
     // once the dependency's per-delivery copies and replenishment Flows are
