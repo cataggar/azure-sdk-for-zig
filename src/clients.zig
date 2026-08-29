@@ -20,74 +20,28 @@ fn responseStatusExpected(status: u16, expected: []const u16) bool {
     return false;
 }
 const default_api_version = "2026-06-06";
-const auth_scopes: []const []const u8 = &.{"https://storage.azure.com/.default"};
-
 pub const BlobClient = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
-    allocator: std.mem.Allocator,
-    auth_policy: ?*core.pipeline.BearerTokenAuthPolicy,
-    policy_ptrs: []*core.pipeline.HttpPolicy,
+    pipeline: core.http.HttpPipeline,
 
     pub const InitOptions = struct {
-        credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
         endpoint: []const u8,
         api_version: []const u8 = default_api_version,
     };
 
-    pub const PipelineOptions = struct {
-        endpoint: []const u8,
-        api_version: []const u8 = default_api_version,
-    };
-
-    pub fn init(allocator: std.mem.Allocator, options: InitOptions) !BlobClient {
-        const auth_policy = try allocator.create(core.pipeline.BearerTokenAuthPolicy);
-        errdefer allocator.destroy(auth_policy);
-        auth_policy.* = core.pipeline.BearerTokenAuthPolicy.init(
-            allocator,
-            options.credential,
-            auth_scopes,
-        );
-
-        const policy_ptrs = try allocator.alloc(*core.pipeline.HttpPolicy, 1);
-        errdefer allocator.free(policy_ptrs);
-        policy_ptrs[0] = auth_policy.asPolicy();
-
-        return .{
-            .allocator = allocator,
-            .endpoint = options.endpoint,
-            .api_version = options.api_version,
-            .auth_policy = auth_policy,
-            .policy_ptrs = policy_ptrs,
-            .pipeline = .{
-                .policies = policy_ptrs,
-                .transport_impl = options.transport,
-            },
-        };
-    }
-    pub fn initWithPipeline(
-        allocator: std.mem.Allocator,
-        pipeline: core.pipeline.HttpPipeline,
-        options: PipelineOptions,
+    /// The pipeline and its runtime descriptors are copied by value. Their
+    /// borrowed transport, crypto, policy, and credential contexts must
+    /// outlive this client and every client derived from it.
+    pub fn init(
+        pipeline: core.http.HttpPipeline,
+        options: InitOptions,
     ) BlobClient {
         return .{
-            .allocator = allocator,
             .endpoint = options.endpoint,
             .api_version = options.api_version,
-            .auth_policy = null,
-            .policy_ptrs = &.{},
             .pipeline = pipeline,
         };
-    }
-
-    pub fn deinit(self: *@This()) void {
-        if (self.auth_policy) |auth_policy| {
-            auth_policy.deinit();
-            self.allocator.destroy(auth_policy);
-            self.allocator.free(self.policy_ptrs);
-        }
     }
 
     pub fn service(self: *@This()) Service {
@@ -142,7 +96,7 @@ pub const BlobClient = struct {
 pub const Service = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const SetPropertiesResult = union(enum) {
         status_202: struct {
@@ -799,7 +753,7 @@ pub const Service = struct {
 pub const Container = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const CreateResult = union(enum) {
         status_201: struct {
@@ -2474,7 +2428,7 @@ pub const Container = struct {
 pub const Blob = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const DownloadResult = union(enum) {
         status_200: struct {
@@ -5804,7 +5758,7 @@ pub const Blob = struct {
 pub const AppendBlob = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const CreateResult = union(enum) {
         status_201: struct {
@@ -6414,7 +6368,7 @@ pub const AppendBlob = struct {
 pub const BlockBlob = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const UploadResult = union(enum) {
         status_201: struct {
@@ -7839,7 +7793,7 @@ pub const BlockBlob = struct {
 pub const PageBlob = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const CreateResult = union(enum) {
         status_201: struct {

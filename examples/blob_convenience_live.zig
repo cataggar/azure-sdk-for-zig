@@ -45,6 +45,19 @@ pub fn main(init: std.process.Init) !void {
 
     var transport = core.http.StdHttpTransport.init(allocator, init.io);
     defer transport.deinit();
+    var crypto_provider = core.crypto.StdCryptoProvider.init(init.io);
+    const runtime = core.http.HttpRuntime.init(
+        transport.asTransport(),
+        crypto_provider.asProvider(),
+    );
+    var auth_policy = core.http.BearerTokenAuthPolicy.init(
+        allocator,
+        env_cred.asCredential(),
+        blobs.auth_scopes,
+    );
+    defer auth_policy.deinit();
+    var policies = [_]*core.http.HttpPolicy{auth_policy.asPolicy()};
+    const pipeline = core.http.HttpPipeline.init(runtime, &policies);
 
     var stdout_file = std.Io.File.stdout();
     var buffer: [4096]u8 = undefined;
@@ -59,12 +72,9 @@ pub fn main(init: std.process.Init) !void {
     );
     defer allocator.free(blob_endpoint);
 
-    var client = try blobs.BlobClient.init(allocator, .{
-        .credential = env_cred.asCredential(),
-        .transport = transport.asTransport(),
+    var client = blobs.BlobClient.init(pipeline, .{
         .endpoint = blob_endpoint,
     });
-    defer client.deinit();
 
     var blob = client.blob();
     var block_blob = client.blockBlob();

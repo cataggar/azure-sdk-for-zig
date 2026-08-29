@@ -180,57 +180,22 @@ pub const BlobContainerClient = struct {
     endpoint: []const u8,
     container_name: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
-    auth_policy: ?*core.pipeline.BearerTokenAuthPolicy = null,
-    policy_ptrs: []*core.pipeline.HttpPolicy = &.{},
-    allocator: ?std.mem.Allocator = null,
+    pipeline: core.http.HttpPipeline,
 
     pub const InitOptions = struct {
-        credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
         endpoint: []const u8,
         container_name: []const u8,
         api_version: []const u8 = default_api_version,
     };
 
-    pub const PipelineOptions = struct {
-        endpoint: []const u8,
-        container_name: []const u8,
-        api_version: []const u8 = default_api_version,
-    };
-
-    /// Build a client that authenticates every request with `options.credential`.
+    /// Build a client over a caller-owned pipeline.
     ///
-    /// Call `deinit` to release the authentication policy.
-    pub fn init(allocator: std.mem.Allocator, options: InitOptions) !BlobContainerClient {
-        const auth_policy = try allocator.create(core.pipeline.BearerTokenAuthPolicy);
-        errdefer allocator.destroy(auth_policy);
-        auth_policy.* = core.pipeline.BearerTokenAuthPolicy.init(
-            allocator,
-            options.credential,
-            auth_scopes,
-        );
-
-        const policy_ptrs = try allocator.alloc(*core.pipeline.HttpPolicy, 1);
-        errdefer allocator.free(policy_ptrs);
-        policy_ptrs[0] = auth_policy.asPolicy();
-
-        return .{
-            .endpoint = options.endpoint,
-            .container_name = options.container_name,
-            .api_version = options.api_version,
-            .auth_policy = auth_policy,
-            .policy_ptrs = policy_ptrs,
-            .allocator = allocator,
-            .pipeline = .{ .policies = policy_ptrs, .transport_impl = options.transport },
-        };
-    }
-
-    /// Build a client over a caller-owned pipeline, for example one that
-    /// already carries a shared key or SAS policy.
-    pub fn initWithPipeline(
-        pipeline: core.pipeline.HttpPipeline,
-        options: PipelineOptions,
+    /// The pipeline and its runtime descriptors are copied by value. Their
+    /// borrowed transport, crypto, policy, and credential contexts must
+    /// outlive this client and every blob client derived from it.
+    pub fn init(
+        pipeline: core.http.HttpPipeline,
+        options: InitOptions,
     ) BlobContainerClient {
         return .{
             .endpoint = options.endpoint,
@@ -238,19 +203,6 @@ pub const BlobContainerClient = struct {
             .api_version = options.api_version,
             .pipeline = pipeline,
         };
-    }
-
-    pub fn deinit(self: *BlobContainerClient) void {
-        const allocator = self.allocator orelse return;
-        if (self.auth_policy) |auth_policy| {
-            auth_policy.deinit();
-            allocator.destroy(auth_policy);
-            self.auth_policy = null;
-        }
-        if (self.policy_ptrs.len > 0) {
-            allocator.free(self.policy_ptrs);
-            self.policy_ptrs = &.{};
-        }
     }
 
     /// PUT /container?restype=container
@@ -471,7 +423,7 @@ pub const BlobClient = struct {
     container_name: []const u8,
     blob_name: []const u8,
     api_version: []const u8 = default_api_version,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     /// GET /container/blob
     pub fn download(self: *BlobClient, allocator: std.mem.Allocator) ![]const u8 {
@@ -952,10 +904,18 @@ fn decodeXmlText(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
 // ─────────────────────────── Tests ────────────────────────────
 
 const testing = std.testing;
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
 
-fn testContainer(transport: *core.http.HttpTransport) BlobContainerClient {
-    return BlobContainerClient.initWithPipeline(
-        .{ .policies = &.{}, .transport_impl = transport },
+fn testRuntime(transport: core.http.HttpTransport) core.http.HttpRuntime {
+    return core.http.HttpRuntime.init(
+        transport,
+        testing_crypto_provider.asProvider(),
+    );
+}
+
+fn testContainer(transport: core.http.HttpTransport) BlobContainerClient {
+    return BlobContainerClient.init(
+        core.http.HttpPipeline.init(testRuntime(transport), &.{}),
         .{
             .endpoint = "https://myaccount.blob.core.windows.net",
             .container_name = "checkpoints",
@@ -974,6 +934,22 @@ test "isValidMetadataName accepts C# identifiers and rejects the rest" {
     try testing.expect(!isValidMetadataName("has-dash"));
     try testing.expect(!isValidMetadataName("has space"));
     try testing.expect(!isValidMetadataName("dot.name"));
+}
+
+test "derived blob client preserves the container runtime" {
+    var mock = core.http.MockTransport.init(testing.allocator, 200, "");
+    defer mock.deinit();
+    var container = testContainer(mock.asTransport());
+    const blob = container.getBlobClient("blob");
+
+    try testing.expectEqual(
+        container.pipeline.runtime.transport.context,
+        blob.pipeline.runtime.transport.context,
+    );
+    try testing.expectEqual(
+        container.pipeline.runtime.crypto.context,
+        blob.pipeline.runtime.crypto.context,
+    );
 }
 
 test "uploadConditional emits one x-ms-meta header per entry" {
@@ -1144,7 +1120,7 @@ test "metadata round-trips from upload through getProperties" {
     var read_mock = core.http.MockTransport.init(allocator, 200, "");
     defer read_mock.deinit();
     read_mock.response_headers_list = &echoed;
-    blob.pipeline = .{ .policies = &.{}, .transport_impl = read_mock.asTransport() };
+    blob.pipeline = core.http.HttpPipeline.init(testRuntime(read_mock.asTransport()), &.{});
 
     const properties = try blob.getProperties(allocator);
     defer properties.deinit(allocator);
@@ -1225,7 +1201,7 @@ test "container create and delete target restype=container" {
 
     var delete_mock = core.http.MockTransport.init(allocator, 202, "");
     defer delete_mock.deinit();
-    container.pipeline = .{ .policies = &.{}, .transport_impl = delete_mock.asTransport() };
+    container.pipeline = core.http.HttpPipeline.init(testRuntime(delete_mock.asTransport()), &.{});
     try container.deleteContainer(allocator);
     try testing.expectEqual(core.http.Method.DELETE, delete_mock.last_method.?);
 }
@@ -1243,7 +1219,7 @@ test "download and upload round trip through the container client" {
 
     var download_mock = core.http.MockTransport.init(allocator, 200, "hello");
     defer download_mock.deinit();
-    blob.pipeline = .{ .policies = &.{}, .transport_impl = download_mock.asTransport() };
+    blob.pipeline = core.http.HttpPipeline.init(testRuntime(download_mock.asTransport()), &.{});
     const data = try blob.download(allocator);
     defer allocator.free(data);
     try testing.expectEqualStrings("hello", data);
@@ -1317,7 +1293,10 @@ const ScriptedTransport = struct {
     bodies: []const []const u8,
     index: usize = 0,
     urls: std.ArrayList([]u8) = .empty,
-    transport: core.http.HttpTransport = .{ .sendFn = &sendImpl },
+
+    const vtable: core.http.HttpTransport.VTable = .{
+        .send = &sendImpl,
+    };
 
     fn init(allocator: std.mem.Allocator, bodies: []const []const u8) ScriptedTransport {
         return .{ .allocator = allocator, .bodies = bodies };
@@ -1328,15 +1307,15 @@ const ScriptedTransport = struct {
         self.urls.deinit(self.allocator);
     }
 
-    fn asTransport(self: *ScriptedTransport) *core.http.HttpTransport {
-        return &self.transport;
+    fn asTransport(self: *ScriptedTransport) core.http.HttpTransport {
+        return .{ .context = self, .vtable = &vtable };
     }
 
     fn sendImpl(
-        transport: *core.http.HttpTransport,
+        context: *anyopaque,
         request: *core.http.Request,
     ) anyerror!core.http.Response {
-        const self: *ScriptedTransport = @alignCast(@fieldParentPtr("transport", transport));
+        const self: *ScriptedTransport = @ptrCast(@alignCast(context));
         try self.urls.append(self.allocator, try self.allocator.dupe(u8, request.url));
         const body = self.bodies[@min(self.index, self.bodies.len - 1)];
         self.index += 1;
