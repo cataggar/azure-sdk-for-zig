@@ -14,6 +14,7 @@ Construct `CosmosClient` with an allocator, borrowed token credential, and
 `core.http.HttpRuntime`, then call `deinit`. Database and container clients
 borrow the parent client's heap-stable pipeline state and must not outlive it.
 The runtime's transport and crypto backend contexts are also borrowed.
+Authenticated endpoints must use HTTPS.
 
 ## Development
 
