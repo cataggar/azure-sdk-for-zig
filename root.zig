@@ -6,6 +6,9 @@ const std = @import("std");
 const core = @import("azure_sdk_core");
 const serde = @import("serde");
 
+pub const cosmos_scope = "https://cosmos.azure.com/.default";
+pub const user_agent = "azsdk-zig-data-cosmos/0.2.0";
+
 // ─────────────────────── Enums ───────────────────────
 
 pub const ConsistencyLevel = enum {
@@ -69,6 +72,13 @@ pub const CosmosItem = struct {
 pub const QueryResult = struct {
     documents: []const []const u8,
     continuation_token: ?[]const u8 = null,
+
+    pub fn deinit(self: *QueryResult, allocator: std.mem.Allocator) void {
+        for (self.documents) |document| allocator.free(document);
+        allocator.free(self.documents);
+        if (self.continuation_token) |token| allocator.free(token);
+        self.* = undefined;
+    }
 };
 
 pub const ThroughputProperties = struct {
@@ -80,28 +90,49 @@ pub const ThroughputProperties = struct {
 pub const CosmosClientOptions = struct {
     api_version: []const u8 = "2018-12-31",
     consistency_level: ?ConsistencyLevel = null,
+    policies: []const *core.http.HttpPolicy = &.{},
 };
 
 /// Account-level client for Azure Cosmos DB.
+///
+/// The endpoint, credential, caller policies, and runtime backend contexts are
+/// borrowed and must outlive the client and in-flight calls. Runtime
+/// descriptors are copied by value. Derived database and container clients
+/// borrow heap-stable policy state and must not outlive this client. Calls
+/// sharing this client must be serialized because the bearer-token cache and
+/// the standard transport are mutable.
 pub const CosmosClient = struct {
     endpoint: []const u8,
     api_version: []const u8,
     consistency_level: ?ConsistencyLevel,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
+    pipeline_state: *PipelineState,
 
     pub fn init(
+        allocator: std.mem.Allocator,
         endpoint: []const u8,
         credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
+        runtime: core.http.HttpRuntime,
         options: CosmosClientOptions,
-    ) CosmosClient {
-        _ = credential;
+    ) !CosmosClient {
+        const state = try PipelineState.create(
+            allocator,
+            credential,
+            runtime,
+            options.policies,
+        );
         return .{
             .endpoint = endpoint,
             .api_version = options.api_version,
             .consistency_level = options.consistency_level,
-            .pipeline = .{ .policies = &.{}, .transport_impl = transport },
+            .pipeline = state.pipeline,
+            .pipeline_state = state,
         };
+    }
+
+    pub fn deinit(self: *CosmosClient) void {
+        self.pipeline_state.deinit();
+        self.* = undefined;
     }
 
     /// Get a DatabaseClient for a specific database.
@@ -209,6 +240,165 @@ pub const CosmosClient = struct {
     }
 };
 
+const PipelineState = struct {
+    allocator: std.mem.Allocator,
+    request_id: core.http.RequestIdPolicy,
+    telemetry: core.http.TelemetryPolicy,
+    retry: core.http.RetryPolicy,
+    authentication: CosmosAuthorizationPolicy,
+    policy_ptrs: []*core.http.HttpPolicy,
+    pipeline: core.http.HttpPipeline,
+
+    fn create(
+        allocator: std.mem.Allocator,
+        credential: *core.credentials.TokenCredential,
+        runtime: core.http.HttpRuntime,
+        custom_policies: []const *core.http.HttpPolicy,
+    ) !*PipelineState {
+        const state = try allocator.create(PipelineState);
+        errdefer allocator.destroy(state);
+        const policy_ptrs = try allocator.alloc(
+            *core.http.HttpPolicy,
+            4 + custom_policies.len,
+        );
+        errdefer allocator.free(policy_ptrs);
+
+        state.* = .{
+            .allocator = allocator,
+            .request_id = core.http.RequestIdPolicy.init(),
+            .telemetry = core.http.TelemetryPolicy.init(user_agent),
+            .retry = core.http.RetryPolicy.init(),
+            .authentication = CosmosAuthorizationPolicy.init(
+                allocator,
+                credential,
+            ),
+            .policy_ptrs = policy_ptrs,
+            .pipeline = undefined,
+        };
+        policy_ptrs[0] = state.request_id.asPolicy();
+        policy_ptrs[1] = state.telemetry.asPolicy();
+        policy_ptrs[2] = state.retry.asPolicy();
+        policy_ptrs[3] = state.authentication.asPolicy();
+        @memcpy(policy_ptrs[4..], custom_policies);
+        state.pipeline = core.http.HttpPipeline.init(runtime, policy_ptrs);
+        return state;
+    }
+
+    fn deinit(self: *PipelineState) void {
+        const allocator = self.allocator;
+        self.authentication.deinit();
+        allocator.free(self.policy_ptrs);
+        allocator.destroy(self);
+    }
+};
+
+/// Applies Cosmos DB's percent-encoded Microsoft Entra authorization value.
+///
+/// The credential and runtime contexts are borrowed. Cached token state is
+/// owned by this policy and calls must be serialized.
+const CosmosAuthorizationPolicy = struct {
+    allocator: std.mem.Allocator,
+    credential: *core.credentials.TokenCredential,
+    cached_token: ?[]u8 = null,
+    cached_expires_on: i64 = 0,
+    policy: core.http.HttpPolicy,
+
+    fn init(
+        allocator: std.mem.Allocator,
+        credential: *core.credentials.TokenCredential,
+    ) CosmosAuthorizationPolicy {
+        return .{
+            .allocator = allocator,
+            .credential = credential,
+            .policy = .{
+                .processFn = &process,
+                .prepareFn = &prepare,
+            },
+        };
+    }
+
+    fn asPolicy(self: *CosmosAuthorizationPolicy) *core.http.HttpPolicy {
+        return &self.policy;
+    }
+
+    fn deinit(self: *CosmosAuthorizationPolicy) void {
+        if (self.cached_token) |token| {
+            wipe(token);
+            self.allocator.free(token);
+        }
+    }
+
+    fn process(
+        policy: *core.http.HttpPolicy,
+        request: *core.http.Request,
+        next: []*core.http.HttpPolicy,
+        runtime: core.http.HttpRuntime,
+    ) anyerror!core.http.Response {
+        try prepare(policy, request, runtime);
+        return callNext(request, next, runtime);
+    }
+
+    fn prepare(
+        policy: *core.http.HttpPolicy,
+        request: *core.http.Request,
+        runtime: core.http.HttpRuntime,
+    ) anyerror!void {
+        const self: *CosmosAuthorizationPolicy =
+            @alignCast(@fieldParentPtr("policy", policy));
+        const now = unixTimestampSeconds();
+        if (self.cached_token == null or now >= self.cached_expires_on - 300) {
+            var fresh = try self.credential.getToken(
+                .{ .scopes = &.{cosmos_scope} },
+                core.context.Context.none,
+                runtime,
+            );
+            defer fresh.deinit();
+            const replacement = try self.allocator.dupe(u8, fresh.token);
+            if (self.cached_token) |old| {
+                wipe(old);
+                self.allocator.free(old);
+            }
+            self.cached_token = replacement;
+            self.cached_expires_on = fresh.expires_on;
+        }
+
+        const raw = try std.fmt.allocPrint(
+            self.allocator,
+            "type=aad&ver=1.0&sig={s}",
+            .{self.cached_token.?},
+        );
+        defer {
+            wipe(raw);
+            self.allocator.free(raw);
+        }
+        const encoded = try core.url.percentEncode(self.allocator, raw);
+        defer {
+            wipe(encoded);
+            self.allocator.free(encoded);
+        }
+        try request.setHeader("Authorization", encoded);
+    }
+};
+
+fn wipe(bytes: []u8) void {
+    const volatile_bytes: []volatile u8 = bytes;
+    @memset(volatile_bytes, 0);
+}
+
+fn callNext(
+    request: *core.http.Request,
+    next: []*core.http.HttpPolicy,
+    runtime: core.http.HttpRuntime,
+) !core.http.Response {
+    if (next.len == 0) return runtime.transport.send(request);
+    return next[0].process(request, next[1..], runtime);
+}
+
+fn unixTimestampSeconds() i64 {
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    return std.Io.Timestamp.now(threaded.io(), .real).toSeconds();
+}
+
 // ─────────────────── DatabaseClient ──────────────────
 
 /// Database-level client for container operations.
@@ -217,7 +407,7 @@ pub const DatabaseClient = struct {
     database_id: []const u8,
     api_version: []const u8,
     consistency_level: ?ConsistencyLevel,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     /// Get a ContainerClient for a specific container.
     pub fn container(self: *DatabaseClient, container_id: []const u8) ContainerClient {
@@ -364,7 +554,7 @@ pub const ContainerClient = struct {
     container_id: []const u8,
     api_version: []const u8,
     consistency_level: ?ConsistencyLevel,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     /// Create (insert) an item.
     pub fn createItem(self: *ContainerClient, allocator: std.mem.Allocator, item: CosmosItem) !void {
@@ -538,7 +728,13 @@ pub const ContainerClient = struct {
             return error.AzureRequestFailed;
         }
 
-        return .{ .ok = try parseQueryResult(allocator, resp.body) };
+        var result = try parseQueryResult(allocator, resp.body);
+        errdefer result.deinit(allocator);
+        if (resp.getHeader("x-ms-continuation")) |token| {
+            if (result.continuation_token) |body_token| allocator.free(body_token);
+            result.continuation_token = try allocator.dupe(u8, token);
+        }
+        return .{ .ok = result };
     }
 
     fn buildDocsUrl(self: *ContainerClient, allocator: std.mem.Allocator) ![]u8 {
@@ -652,10 +848,10 @@ fn parseQueryResult(allocator: std.mem.Allocator, body: []const u8) !QueryResult
     errdefer docs.deinit(allocator);
 
     const docs_start = std.mem.find(u8, body, "\"Documents\":[") orelse
-        return .{ .documents = &.{} };
+        return .{ .documents = try allocator.alloc([]const u8, 0) };
     const array_start = docs_start + "\"Documents\":[".len;
     const array_end = std.mem.findScalarPos(u8, body, array_start, ']') orelse
-        return .{ .documents = &.{} };
+        return .{ .documents = try allocator.alloc([]const u8, 0) };
     const array_content = body[array_start..array_end];
 
     var depth: u32 = 0;
@@ -697,17 +893,33 @@ test "ConsistencyLevel toString" {
     try std.testing.expectEqualStrings("Eventual", ConsistencyLevel.eventual.toString());
 }
 
-fn createTestClient(mock: *core.http.MockTransport) CosmosClient {
-    const identity = @import("azure_sdk_core").identity;
-    // Use a stack-allocated mock for credential — not actually called in tests.
-    var cred_mock = core.http.MockTransport.init(mock.allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
-    );
-    var cred = identity.ClientSecretCredential.init(mock.allocator, cred_mock.asTransport(), "t", "c", "s");
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+fn testGetToken(
+    _: *core.credentials.TokenCredential,
+    request_context: core.credentials.TokenRequestContext,
+    _: core.context.Context,
+    _: core.http.HttpRuntime,
+) anyerror!core.credentials.AccessToken {
+    try std.testing.expectEqual(@as(usize, 1), request_context.scopes.len);
+    try std.testing.expectEqualStrings(cosmos_scope, request_context.scopes[0]);
+    return .{ .token = "test-token", .expires_on = 4_102_444_800 };
+}
+
+var testing_credential = core.credentials.TokenCredential{
+    .getTokenFn = &testGetToken,
+};
+
+fn testingRuntime(transport: core.http.HttpTransport) core.http.HttpRuntime {
+    return .init(transport, testing_crypto_provider.asProvider());
+}
+
+fn createTestClient(mock: *core.http.MockTransport) !CosmosClient {
     return CosmosClient.init(
+        mock.allocator,
         "https://myaccount.documents.azure.com",
-        cred.asCredential(),
-        mock.asTransport(),
+        &testing_credential,
+        testingRuntime(mock.asTransport()),
         .{},
     );
 }
@@ -718,7 +930,8 @@ test "CosmosClient createDatabase" {
         \\{"id":"testdb","_rid":"abc","_etag":"\"00000000-0000-0000-0000-000000000000\""}
     );
     defer mock.deinit();
-    var client = createTestClient(&mock);
+    var client = try createTestClient(&mock);
+    defer client.deinit();
     const db = try client.createDatabase(allocator, "testdb");
     defer db.deinit(allocator, false);
     try std.testing.expectEqualStrings("testdb", db.id);
@@ -730,7 +943,8 @@ test "CosmosClient deleteDatabase" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 204, "");
     defer mock.deinit();
-    var client = createTestClient(&mock);
+    var client = try createTestClient(&mock);
+    defer client.deinit();
     try client.deleteDatabase(allocator, "testdb");
     try std.testing.expectEqual(core.http.Method.DELETE, mock.last_method.?);
     try std.testing.expect(std.mem.endsWith(u8, mock.last_url.?, "/dbs/testdb"));
@@ -742,7 +956,8 @@ test "CosmosClient listDatabases" {
         \\{"Databases":[{"id":"db1"},{"id":"db2"}],"_count":2}
     );
     defer mock.deinit();
-    var client = createTestClient(&mock);
+    var client = try createTestClient(&mock);
+    defer client.deinit();
     const dbs = try client.listDatabases(allocator);
     defer {
         for (dbs) |db| allocator.free(db.id);
@@ -757,7 +972,8 @@ test "CosmosClient database returns DatabaseClient" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 200, "");
     defer mock.deinit();
-    var client = createTestClient(&mock);
+    var client = try createTestClient(&mock);
+    defer client.deinit();
     var db_client = client.database("mydb");
     try std.testing.expectEqualStrings("mydb", db_client.database_id);
 
@@ -773,7 +989,8 @@ test "DatabaseClient createContainer" {
         \\{"id":"myctr","_rid":"xyz"}
     );
     defer mock.deinit();
-    var client = createTestClient(&mock);
+    var client = try createTestClient(&mock);
+    defer client.deinit();
     var db = client.database("mydb");
     const ctr = try db.createContainer(allocator, "myctr", "/pk");
     // createContainer assembles the struct locally from the inputs — no
@@ -788,7 +1005,8 @@ test "DatabaseClient listContainers" {
         \\{"DocumentCollections":[{"id":"c1"},{"id":"c2"},{"id":"c3"}],"_count":3}
     );
     defer mock.deinit();
-    var client = createTestClient(&mock);
+    var client = try createTestClient(&mock);
+    defer client.deinit();
     var db = client.database("mydb");
     const containers = try db.listContainers(allocator);
     defer {
@@ -805,7 +1023,8 @@ test "ContainerClient createItem" {
         \\{"id":"item1"}
     );
     defer mock.deinit();
-    var client = createTestClient(&mock);
+    var client = try createTestClient(&mock);
+    defer client.deinit();
     var db = client.database("mydb");
     var ctr = db.container("myctr");
     try ctr.createItem(allocator, .{
@@ -825,7 +1044,8 @@ test "ContainerClient readItem" {
         \\{"id":"item1","pk":"pk1","name":"test"}
     );
     defer mock.deinit();
-    var client = createTestClient(&mock);
+    var client = try createTestClient(&mock);
+    defer client.deinit();
     var db = client.database("mydb");
     var ctr = db.container("myctr");
     const body = try ctr.readItem(allocator, "item1", "[\"pk1\"]");
@@ -839,7 +1059,8 @@ test "ContainerClient upsertItem" {
         \\{"id":"item1"}
     );
     defer mock.deinit();
-    var client = createTestClient(&mock);
+    var client = try createTestClient(&mock);
+    defer client.deinit();
     var db = client.database("mydb");
     var ctr = db.container("myctr");
     try ctr.upsertItem(allocator, .{
@@ -856,7 +1077,8 @@ test "ContainerClient deleteItem" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 204, "");
     defer mock.deinit();
-    var client = createTestClient(&mock);
+    var client = try createTestClient(&mock);
+    defer client.deinit();
     var db = client.database("mydb");
     var ctr = db.container("myctr");
     try ctr.deleteItem(allocator, "item1", "[\"pk1\"]");
@@ -870,14 +1092,12 @@ test "ContainerClient queryItems" {
         \\{"Documents":[{"id":"a","val":1},{"id":"b","val":2}],"_count":2}
     );
     defer mock.deinit();
-    var client = createTestClient(&mock);
+    var client = try createTestClient(&mock);
+    defer client.deinit();
     var db = client.database("mydb");
     var ctr = db.container("myctr");
-    const result = try ctr.queryItems(allocator, "SELECT * FROM c");
-    defer {
-        for (result.documents) |d| allocator.free(d);
-        allocator.free(result.documents);
-    }
+    var result = try ctr.queryItems(allocator, "SELECT * FROM c");
+    defer result.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 2), result.documents.len);
     try std.testing.expect(std.mem.find(u8, result.documents[0], "\"id\":\"a\"") != null);
 }
@@ -888,7 +1108,8 @@ test "ContainerClient readItem 404" {
         \\{"code":"NotFound","message":"Entity not found"}
     );
     defer mock.deinit();
-    var client = createTestClient(&mock);
+    var client = try createTestClient(&mock);
+    defer client.deinit();
     var db = client.database("mydb");
     var ctr = db.container("myctr");
     const result = ctr.readItem(allocator, "missing", "[\"pk\"]");
@@ -901,19 +1122,207 @@ test "CosmosClient with consistency level" {
         \\{"Databases":[],"_count":0}
     );
     defer mock.deinit();
-    const identity = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
-    );
-    defer cred_mock.deinit();
-    var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
-    var client = CosmosClient.init(
+    var client = try CosmosClient.init(
+        allocator,
         "https://myaccount.documents.azure.com",
-        cred.asCredential(),
-        mock.asTransport(),
+        &testing_credential,
+        testingRuntime(mock.asTransport()),
         .{ .consistency_level = .session },
     );
+    defer client.deinit();
     const dbs = try client.listDatabases(allocator);
     defer allocator.free(dbs);
     try std.testing.expectEqual(@as(usize, 0), dbs.len);
+    try std.testing.expectEqualStrings(
+        "Session",
+        mock.last_headers.get("x-ms-consistency-level").?,
+    );
+}
+
+const RuntimeCredentialSpy = struct {
+    credential: core.credentials.TokenCredential,
+    expected_transport_context: *anyopaque,
+    expected_crypto_context: *anyopaque,
+    calls: usize = 0,
+
+    fn init(runtime: core.http.HttpRuntime) RuntimeCredentialSpy {
+        return .{
+            .credential = .{ .getTokenFn = &getToken },
+            .expected_transport_context = runtime.transport.context,
+            .expected_crypto_context = runtime.crypto.context,
+        };
+    }
+
+    fn asCredential(self: *RuntimeCredentialSpy) *core.credentials.TokenCredential {
+        return &self.credential;
+    }
+
+    fn getToken(
+        credential: *core.credentials.TokenCredential,
+        request_context: core.credentials.TokenRequestContext,
+        _: core.context.Context,
+        runtime: core.http.HttpRuntime,
+    ) anyerror!core.credentials.AccessToken {
+        const self: *RuntimeCredentialSpy =
+            @alignCast(@fieldParentPtr("credential", credential));
+        self.calls += 1;
+        try std.testing.expectEqual(@as(usize, 1), request_context.scopes.len);
+        try std.testing.expectEqualStrings(cosmos_scope, request_context.scopes[0]);
+        try std.testing.expectEqual(
+            self.expected_transport_context,
+            runtime.transport.context,
+        );
+        try std.testing.expectEqual(
+            self.expected_crypto_context,
+            runtime.crypto.context,
+        );
+        return .{ .token = "runtime-token", .expires_on = 4_102_444_800 };
+    }
+};
+
+const CryptoProviderSpy = struct {
+    random_calls: usize = 0,
+    fail_random: bool = false,
+
+    const vtable: core.crypto.CryptoProvider.VTable = .{
+        .random_bytes = &randomBytes,
+        .md5 = &md5,
+        .sha256 = &sha256,
+        .hmac_sha256 = &hmacSha256,
+        .sha256_init = &sha256Init,
+    };
+
+    fn asProvider(self: *CryptoProviderSpy) core.crypto.CryptoProvider {
+        return .{ .context = self, .vtable = &vtable };
+    }
+
+    fn randomBytes(context: *anyopaque, out: []u8) !void {
+        const self: *CryptoProviderSpy = @ptrCast(@alignCast(context));
+        self.random_calls += 1;
+        if (self.fail_random) return error.InjectedCryptoFailure;
+        @memset(out, 0xa5);
+    }
+
+    fn md5(_: *anyopaque, _: []const u8, out: *core.crypto.Md5Digest) !void {
+        @memset(out, 0);
+    }
+
+    fn sha256(_: *anyopaque, _: []const u8, out: *core.crypto.Sha256Digest) !void {
+        @memset(out, 0);
+    }
+
+    fn hmacSha256(
+        _: *anyopaque,
+        _: []const u8,
+        _: []const u8,
+        out: *core.crypto.HmacSha256Digest,
+    ) !void {
+        @memset(out, 0);
+    }
+
+    fn sha256Init(
+        _: *anyopaque,
+        _: std.mem.Allocator,
+    ) !core.crypto.Sha256Operation {
+        return error.Unused;
+    }
+};
+
+test "derived clients preserve the selected runtime and authentication" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 200,
+        \\{"DocumentCollections":[],"_count":0}
+    );
+    defer transport.deinit();
+    var crypto = CryptoProviderSpy{};
+    const runtime = core.http.HttpRuntime.init(
+        transport.asTransport(),
+        crypto.asProvider(),
+    );
+    var credential = RuntimeCredentialSpy.init(runtime);
+    var client = try CosmosClient.init(
+        allocator,
+        "https://myaccount.documents.azure.com",
+        credential.asCredential(),
+        runtime,
+        .{},
+    );
+    defer client.deinit();
+
+    var database = client.database("mydb");
+    const container = database.container("mycontainer");
+    try std.testing.expectEqual(
+        runtime.transport.context,
+        database.pipeline.runtime.transport.context,
+    );
+    try std.testing.expectEqual(
+        runtime.crypto.context,
+        container.pipeline.runtime.crypto.context,
+    );
+
+    const containers = try database.listContainers(allocator);
+    defer allocator.free(containers);
+    try std.testing.expectEqual(@as(usize, 1), crypto.random_calls);
+    try std.testing.expectEqual(@as(usize, 1), credential.calls);
+    try std.testing.expectEqual(@as(usize, 1), transport.call_count);
+    try std.testing.expect(
+        transport.last_headers.get("x-ms-client-request-id") != null,
+    );
+    try std.testing.expectEqualStrings(
+        "type%3Daad%26ver%3D1.0%26sig%3Druntime-token",
+        transport.last_headers.get("Authorization").?,
+    );
+}
+
+test "crypto provider failure is atomic before authentication and send" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 200,
+        \\{"Databases":[],"_count":0}
+    );
+    defer transport.deinit();
+    var crypto = CryptoProviderSpy{ .fail_random = true };
+    const runtime = core.http.HttpRuntime.init(
+        transport.asTransport(),
+        crypto.asProvider(),
+    );
+    var credential = RuntimeCredentialSpy.init(runtime);
+    var client = try CosmosClient.init(
+        allocator,
+        "https://myaccount.documents.azure.com",
+        credential.asCredential(),
+        runtime,
+        .{},
+    );
+    defer client.deinit();
+
+    try std.testing.expectError(
+        error.InjectedCryptoFailure,
+        client.listDatabases(allocator),
+    );
+    try std.testing.expectEqual(@as(usize, 1), crypto.random_calls);
+    try std.testing.expectEqual(@as(usize, 0), credential.calls);
+    try std.testing.expectEqual(@as(usize, 0), transport.call_count);
+}
+
+test "query continuation comes from the response header" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 200,
+        \\{"Documents":[{"id":"a"}],"_continuation":"body-token"}
+    );
+    defer transport.deinit();
+    const headers = [_]core.http.MockTransport.HeaderPair{
+        .{ .name = "x-ms-continuation", .value = "header-token" },
+    };
+    transport.response_headers_list = &headers;
+    var client = try createTestClient(&transport);
+    defer client.deinit();
+    var database = client.database("mydb");
+    var container = database.container("mycontainer");
+
+    var result = try container.queryItems(allocator, "SELECT * FROM c");
+    defer result.deinit(allocator);
+    try std.testing.expectEqualStrings(
+        "header-token",
+        result.continuation_token.?,
+    );
 }
