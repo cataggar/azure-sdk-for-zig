@@ -53,6 +53,12 @@ nonsensitive query fields such as App Configuration's `key` filter and all
 other nonsensitive URL components, headers, and bodies remain exact-match
 requirements.
 
+`Location`, `Content-Location`, `Operation-Location`, and
+`Azure-AsyncOperation` retain their origin/path and nonsensitive query fields;
+only recognized credential query values are replaced. This keeps redirect and
+LRO URLs replayable. Malformed or unsafe location values are fully redacted.
+Credential source URL headers such as `x-ms-copy-source` remain fully redacted.
+
 Header names are checked case-insensitively. The default preserves only a
 known-safe standard/Azure header allowlist, after inspecting every value for
 signed URLs, JWTs, connection strings, and other recognized credentials.
@@ -61,6 +67,11 @@ including metadata suffixes such as `password`, `pwd`, `private-key`, and
 `connection-string`, are also redacted. Applications can add redactions or
 explicitly preserve a known-safe false positive with an exchange-aware header
 policy:
+
+Volatile request headers—including request/correlation IDs, `date`,
+`x-ms-date`, `traceparent`, and `tracestate`—are structurally redacted by
+default so freshly generated Core pipeline values wildcard during playback.
+Returning `preserve` from the header policy makes a selected value exact.
 
 ```zig
 fn headerPolicy(
@@ -130,7 +141,10 @@ the built-in checks, and playback continues to match request bodies exactly.
 `reject_sensitive` rejects application-specific schemas. Private-key markers
 and detectable plaintext credentials cannot be bypassed by `allow_opaque`;
 callers that approve otherwise opaque encodings take responsibility for their
-decoded contents. Policy contexts are borrowed through `toJson`.
+decoded contents. Multipart bodies are also scanned before opaque allowance,
+including form-data names, embedded HTTP authorization headers, signed URLs,
+JWTs, and parseable structured part payloads. Policy contexts are borrowed
+through `toJson`.
 
 Run its independent tests from this directory:
 
