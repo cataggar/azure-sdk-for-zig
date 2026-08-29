@@ -485,7 +485,11 @@ pub fn submitResult(
     var batch_boundary: [38]u8 = undefined;
     var changeset_boundary: [42]u8 = undefined;
     const boundaries = transaction_options.boundaries orelse
-        try randomBoundaries(&batch_boundary, &changeset_boundary);
+        try randomBoundaries(
+            protocol.pipeline.runtime.crypto,
+            &batch_boundary,
+            &changeset_boundary,
+        );
     var serialized = try serializeWithEndpoint(
         builder,
         allocator,
@@ -555,10 +559,13 @@ pub fn submitResult(
     ) catch return error.TransactionOutcomeUnknown;
 }
 
-fn randomBoundaries(batch: *[38]u8, changeset: *[42]u8) !Boundaries {
+fn randomBoundaries(
+    crypto_provider: core.crypto.CryptoProvider,
+    batch: *[38]u8,
+    changeset: *[42]u8,
+) !Boundaries {
     var bytes: [32]u8 = undefined;
-    var threaded: std.Io.Threaded = .init_single_threaded;
-    try threaded.io().randomSecure(&bytes);
+    try crypto_provider.randomBytes(&bytes);
     const batch_slice = std.fmt.bufPrint(batch, "batch_{x}", .{bytes[0..16]}) catch unreachable;
     const changeset_slice = std.fmt.bufPrint(
         changeset,
@@ -568,10 +575,64 @@ fn randomBoundaries(batch: *[38]u8, changeset: *[42]u8) !Boundaries {
     return .{ .batch = batch_slice, .changeset = changeset_slice };
 }
 
+const BoundaryCryptoProvider = struct {
+    random_calls: usize = 0,
+    fail: bool = false,
+
+    const vtable: core.crypto.CryptoProvider.VTable = .{
+        .random_bytes = &randomBytes,
+        .md5 = &md5,
+        .sha256 = &sha256,
+        .hmac_sha256 = &hmacSha256,
+        .sha256_init = &sha256Init,
+    };
+
+    fn provider(self: *@This()) core.crypto.CryptoProvider {
+        return .{ .context = self, .vtable = &vtable };
+    }
+
+    fn randomBytes(context: *anyopaque, out: []u8) !void {
+        const self: *@This() = @ptrCast(@alignCast(context));
+        self.random_calls += 1;
+        if (self.fail) return error.ProviderFailure;
+        for (out, 0..) |*byte, index| byte.* = @truncate(index);
+    }
+
+    fn md5(_: *anyopaque, _: []const u8, _: *core.crypto.Md5Digest) !void {
+        return error.Unused;
+    }
+
+    fn sha256(_: *anyopaque, _: []const u8, _: *core.crypto.Sha256Digest) !void {
+        return error.Unused;
+    }
+
+    fn hmacSha256(
+        _: *anyopaque,
+        _: []const u8,
+        _: []const u8,
+        _: *core.crypto.HmacSha256Digest,
+    ) !void {
+        return error.Unused;
+    }
+
+    fn sha256Init(
+        _: *anyopaque,
+        _: std.mem.Allocator,
+    ) !core.crypto.Sha256Operation {
+        return error.Unused;
+    }
+};
+
 test "generated multipart boundaries are valid and distinct" {
     var batch: [38]u8 = undefined;
     var changeset: [42]u8 = undefined;
-    const boundaries = try randomBoundaries(&batch, &changeset);
+    var provider = BoundaryCryptoProvider{};
+    const boundaries = try randomBoundaries(
+        provider.provider(),
+        &batch,
+        &changeset,
+    );
+    try std.testing.expectEqual(@as(usize, 1), provider.random_calls);
     try std.testing.expectEqual(@as(usize, 38), boundaries.batch.len);
     try std.testing.expectEqual(@as(usize, 42), boundaries.changeset.len);
     try std.testing.expect(!std.mem.eql(u8, boundaries.batch, boundaries.changeset));
@@ -1131,6 +1192,94 @@ const transaction_response_headers = &[_]core.http.MockTransport.HeaderPair{
     .{ .name = "Content-Type", .value = "multipart/mixed; boundary=batchresponse" },
     .{ .name = "x-ms-request-id", .value = "outer-request" },
 };
+
+test "automatic transaction boundaries use the selected runtime provider" {
+    const client_mod = @import("client.zig");
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 202, one_success_body);
+    defer mock.deinit();
+    mock.response_headers_list = transaction_response_headers;
+    var crypto = BoundaryCryptoProvider{};
+    const runtime = core.http.HttpRuntime.init(
+        mock.asTransport(),
+        crypto.provider(),
+    );
+    var client = try client_mod.TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=SECRET&sp=a",
+        "People",
+        runtime,
+        .{},
+    );
+    defer client.deinit();
+    var builder = TransactionBuilder.init(allocator);
+    defer builder.deinit();
+    try builder.delete("p", "r", "*");
+
+    var result = try client.submitTransactionResult(allocator, &builder, .{
+        .protocol = .{ .client_request_id = "automatic-boundary-test" },
+    });
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), crypto.random_calls);
+    try std.testing.expectEqual(@as(usize, 1), mock.call_count);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        mock.last_body.?,
+        "batch_000102030405060708090a0b0c0d0e0f",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        mock.last_body.?,
+        "changeset_101112131415161718191a1b1c1d1e1f",
+    ) != null);
+}
+
+test "boundary provider failure prevents send and explicit boundaries bypass it" {
+    const client_mod = @import("client.zig");
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 202, one_success_body);
+    defer mock.deinit();
+    mock.response_headers_list = transaction_response_headers;
+    var crypto = BoundaryCryptoProvider{ .fail = true };
+    const runtime = core.http.HttpRuntime.init(
+        mock.asTransport(),
+        crypto.provider(),
+    );
+    var client = try client_mod.TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=SECRET&sp=a",
+        "People",
+        runtime,
+        .{},
+    );
+    defer client.deinit();
+    var builder = TransactionBuilder.init(allocator);
+    defer builder.deinit();
+    try builder.delete("p", "r", "*");
+
+    try std.testing.expectError(
+        error.ProviderFailure,
+        client.submitTransactionResult(allocator, &builder, .{
+            .protocol = .{ .client_request_id = "boundary-failure-test" },
+        }),
+    );
+    try std.testing.expectEqual(@as(usize, 1), crypto.random_calls);
+    try std.testing.expectEqual(@as(usize, 0), mock.call_count);
+
+    var result = try client.submitTransactionResult(allocator, &builder, .{
+        .protocol = .{ .client_request_id = "explicit-boundary-test" },
+        .boundaries = .{ .batch = "batch", .changeset = "changeset" },
+    });
+    defer result.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), crypto.random_calls);
+    try std.testing.expectEqual(@as(usize, 1), mock.call_count);
+    try std.testing.expect(std.mem.startsWith(
+        u8,
+        mock.last_body.?,
+        "--batch\r\nContent-Type: multipart/mixed; boundary=changeset\r\n",
+    ));
+}
 
 fn expectIndeterminateTransactionResponse(
     status: u16,

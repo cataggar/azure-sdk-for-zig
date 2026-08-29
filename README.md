@@ -240,7 +240,10 @@ outcome-unknown.
 serialize immediately; matching `*Dynamic` methods accept `DynamicEntity`.
 `delete` accepts keys and a required `If-Match` value. Submission validates a
 nonempty group of at most 100 unique targets in one partition and enforces the
-4 MiB complete MIME payload limit before transport.
+4 MiB complete MIME payload limit before transport. Automatic multipart
+boundaries use `HttpRuntime.crypto`; a provider error is returned before
+transport dispatch. Explicit `TransactionOptions.boundaries` remain available
+for deterministic fixtures and bypass provider randomness.
 
 `TableClient.submitTransactionResult` returns ordered inner status/ETag
 results or a `TableError` whose `operation_index` is zero-based. Batch POSTs
