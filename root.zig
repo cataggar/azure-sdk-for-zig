@@ -463,8 +463,13 @@ fn sendNonIdempotent(
     max_retries: u32,
 ) !core.http.Response {
     const old_retryable = request.retryable;
+    const old_redirect_policy = request.redirect_policy;
     request.retryable = false;
-    defer request.retryable = old_retryable;
+    request.redirect_policy = .not_allowed;
+    defer {
+        request.retryable = old_retryable;
+        request.redirect_policy = old_redirect_policy;
+    }
 
     var attempt: u32 = 0;
     while (true) {
@@ -1575,6 +1580,52 @@ test "non-idempotent creates are not replayed after transport starts" {
         client.createDatabase(allocator, "testdb"),
     );
     try std.testing.expectEqual(@as(usize, 1), transport.calls);
+}
+
+test "non-idempotent creates do not follow 307 or 308 redirects" {
+    const allocator = std.testing.allocator;
+    for ([_]u16{ 307, 308 }) |status| {
+        const redirect_headers = [_]core.http.MockTransport.HeaderPair{
+            .{
+                .name = "Location",
+                .value = "https://myaccount.documents.azure.com/redirected",
+            },
+        };
+        const responses = [_]core.http.SequenceMockTransport.CannedResponse{
+            .{
+                .status = status,
+                .body = "{\"code\":\"Redirect\",\"message\":\"not followed\"}",
+                .headers = &redirect_headers,
+            },
+        };
+        var transport = core.http.SequenceMockTransport.init(
+            allocator,
+            &responses,
+        );
+        var client = try CosmosClient.init(
+            allocator,
+            "https://myaccount.documents.azure.com",
+            &testing_credential,
+            testingRuntime(transport.asTransport()),
+            .{},
+        );
+        defer client.deinit();
+
+        var result = try client.createDatabaseResult(allocator, "testdb");
+        defer result.deinit(allocator);
+        switch (result) {
+            .err => |failure| try std.testing.expectEqual(
+                status,
+                failure.status_code,
+            ),
+            .ok => return error.ExpectedRedirectFailure,
+        }
+        try std.testing.expectEqual(@as(usize, 1), transport.call_count);
+        try std.testing.expectEqual(
+            core.http.Method.POST,
+            transport.captured_methods[0].?,
+        );
+    }
 }
 
 test "derived clients preserve the selected runtime and authentication" {
