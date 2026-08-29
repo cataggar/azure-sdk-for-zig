@@ -246,14 +246,13 @@ pub const PlaybackTransport = struct {
         return self.recordings[self.index];
     }
 
-    fn matchAndAdvance(
+    fn matchNext(
         self: *PlaybackTransport,
         request: *const core.http.Request,
         body: ?[]const u8,
     ) !RecordedExchange {
         const exchange = try self.next();
         try matchRequest(exchange, request, body);
-        self.index += 1;
         return exchange;
     }
 
@@ -262,8 +261,10 @@ pub const PlaybackTransport = struct {
         request: *core.http.Request,
     ) !core.http.Response {
         const self: *PlaybackTransport = @ptrCast(@alignCast(context));
-        const exchange = try self.matchAndAdvance(request, request.body);
-        return responseFromExchange(self.allocator, exchange);
+        const exchange = try self.matchNext(request, request.body);
+        const response = try responseFromExchange(self.allocator, exchange);
+        self.index += 1;
+        return response;
     }
 
     fn openImpl(
@@ -288,8 +289,9 @@ pub const PlaybackTransport = struct {
             break :blk captured.?;
         } else request.body;
 
-        const exchange = try self.matchAndAdvance(request, body);
+        const exchange = try self.matchNext(request, body);
         const operation = try PlaybackOperation.create(self, exchange);
+        self.index += 1;
         self.open_count += 1;
         return operation;
     }
@@ -1229,9 +1231,7 @@ fn hasRedactedSensitiveQuery(url: []const u8) bool {
     var iterator = std.mem.splitScalar(u8, url[question + 1 .. fragment], '&');
     while (iterator.next()) |parameter| {
         const equals = std.mem.indexOfScalar(u8, parameter, '=') orelse continue;
-        if (isSensitiveQueryField(parameter[0..equals]) and
-            std.mem.eql(u8, parameter[equals + 1 ..], redacted_value))
-        {
+        if (std.mem.eql(u8, parameter[equals + 1 ..], redacted_value)) {
             return true;
         }
     }
@@ -1477,6 +1477,10 @@ const sensitive_body_fields = [_][]const u8{
     "secondaryconnectionstring",
     "primarykey",
     "secondarykey",
+    "primarymasterkey",
+    "secondarymasterkey",
+    "primaryreadonlymasterkey",
+    "secondaryreadonlymasterkey",
     "accountkey",
     "sharedaccesskey",
     "sharedaccesssignature",
@@ -1519,6 +1523,9 @@ const sensitive_query_fields = [_][]const u8{
     "signature",
     "access_token",
     "refresh_token",
+    "id_token",
+    "identity_token",
+    "sas_token",
     "client_secret",
     "client_assertion",
     "password",
@@ -1704,7 +1711,12 @@ fn ensureBodySafe(
         (containsIgnoreCase(bytes, "content-disposition:") and
             containsIgnoreCase(bytes, "form-data"));
     if (multipart) {
-        if (try containsSensitiveMultipartContent(allocator, bytes))
+        if (try containsSensitiveMultipartContent(
+            allocator,
+            content_type,
+            bytes,
+            0,
+        ))
             return error.SensitiveBodyRequiresSanitization;
         if (!allow_opaque) return error.UnsupportedBodySanitization;
         return;
@@ -1811,32 +1823,78 @@ fn containsSensitiveMultipartField(body: []const u8) bool {
 
 fn containsSensitiveMultipartContent(
     allocator: std.mem.Allocator,
+    content_type: []const u8,
     body: []const u8,
+    depth: usize,
 ) !bool {
+    if (depth >= 8) return error.UnsupportedBodySanitization;
     if (containsSensitiveMultipartField(body)) return true;
     if (try containsSensitiveHttpHeaderLine(allocator, body)) return true;
 
-    const first_line_end = std.mem.indexOfAny(u8, body, "\r\n") orelse
-        return false;
-    const delimiter = std.mem.trim(u8, body[0..first_line_end], " \t");
-    if (!std.mem.startsWith(u8, delimiter, "--") or delimiter.len <= 2)
-        return false;
+    const boundary = try multipartBoundary(content_type);
+    const delimiter = try std.fmt.allocPrint(allocator, "--{s}", .{boundary});
+    defer allocator.free(delimiter);
+    var delimiter_start: ?usize = null;
+    var search_start: usize = 0;
+    while (std.mem.indexOfPos(u8, body, search_start, delimiter)) |index| {
+        if (index == 0 or body[index - 1] == '\n') {
+            delimiter_start = index;
+            break;
+        }
+        search_start = index + delimiter.len;
+    }
+    const first_delimiter = delimiter_start orelse
+        return error.UnsupportedBodySanitization;
 
-    var parts = std.mem.splitSequence(u8, body, delimiter);
+    var parts = std.mem.splitSequence(u8, body[first_delimiter..], delimiter);
+    _ = parts.next();
+    var saw_part = false;
+    var saw_close = false;
     while (parts.next()) |raw_part| {
         const part = std.mem.trim(u8, raw_part, " \t\r\n");
-        if (part.len == 0 or std.mem.eql(u8, part, "--")) continue;
-        const outer_separator = findHeaderSeparator(part) orelse continue;
+        if (std.mem.startsWith(u8, part, "--")) {
+            saw_close = true;
+            break;
+        }
+        if (part.len == 0) continue;
+        saw_part = true;
+        const outer_separator = findHeaderSeparator(part) orelse
+            return error.UnsupportedBodySanitization;
+        const outer_headers = part[0..outer_separator.start];
         var payload = part[outer_separator.end..];
+        var payload_content_type = headerValueFromBlock(
+            outer_headers,
+            "Content-Type",
+        );
         if (looksLikeHttpMessage(payload)) {
             const inner_separator = findHeaderSeparator(payload) orelse
-                continue;
+                return error.UnsupportedBodySanitization;
+            const inner_headers = payload[0..inner_separator.start];
+            payload_content_type = headerValueFromBlock(
+                inner_headers,
+                "Content-Type",
+            );
             payload = payload[inner_separator.end..];
         }
         payload = std.mem.trim(u8, payload, " \t\r\n");
         if (payload.len == 0) continue;
+        if (payload_content_type) |part_type| {
+            if (containsIgnoreCase(part_type, "multipart/")) {
+                if (try containsSensitiveMultipartContent(
+                    allocator,
+                    part_type,
+                    payload,
+                    depth + 1,
+                )) return true;
+                continue;
+            }
+        }
         if (try containsSensitiveScalar(allocator, payload)) return true;
-        if (looksLikeStructuredJson(payload)) {
+        const declared_json = if (payload_content_type) |part_type|
+            isJsonContentType(part_type)
+        else
+            false;
+        if (declared_json or looksLikeStructuredJson(payload)) {
             const parsed = std.json.parseFromSlice(
                 std.json.Value,
                 allocator,
@@ -1844,7 +1902,7 @@ fn containsSensitiveMultipartContent(
                 .{},
             ) catch |err| switch (err) {
                 error.OutOfMemory => return err,
-                else => continue,
+                else => return error.UnsupportedBodySanitization,
             };
             defer parsed.deinit();
             if (try jsonContainsSensitiveField(allocator, parsed.value))
@@ -1857,7 +1915,64 @@ fn containsSensitiveMultipartContent(
             return true;
         }
     }
+    if (!saw_part or !saw_close)
+        return error.UnsupportedBodySanitization;
     return false;
+}
+
+fn multipartBoundary(content_type: []const u8) ![]const u8 {
+    var parameters = std.mem.splitScalar(u8, content_type, ';');
+    const media_type = std.mem.trim(u8, parameters.next() orelse "", " \t");
+    if (!std.ascii.startsWithIgnoreCase(media_type, "multipart/"))
+        return error.UnsupportedBodySanitization;
+    while (parameters.next()) |raw_parameter| {
+        const parameter = std.mem.trim(u8, raw_parameter, " \t");
+        const equals = std.mem.indexOfScalar(u8, parameter, '=') orelse
+            continue;
+        const name = std.mem.trim(u8, parameter[0..equals], " \t");
+        if (!std.ascii.eqlIgnoreCase(name, "boundary")) continue;
+        const raw_value = std.mem.trim(
+            u8,
+            parameter[equals + 1 ..],
+            " \t",
+        );
+        var boundary = raw_value;
+        if (raw_value.len != 0 and
+            (raw_value[0] == '"' or raw_value[0] == '\''))
+        {
+            if (raw_value.len < 2 or
+                raw_value[raw_value.len - 1] != raw_value[0])
+            {
+                return error.UnsupportedBodySanitization;
+            }
+            boundary = raw_value[1 .. raw_value.len - 1];
+        } else if (std.mem.indexOfAny(u8, raw_value, "\"'") != null) {
+            return error.UnsupportedBodySanitization;
+        }
+        if (boundary.len == 0 or boundary.len > 70)
+            return error.UnsupportedBodySanitization;
+        for (boundary) |byte| {
+            if (byte <= 0x20 or byte >= 0x7f)
+                return error.UnsupportedBodySanitization;
+        }
+        return boundary;
+    }
+    return error.UnsupportedBodySanitization;
+}
+
+fn headerValueFromBlock(
+    headers: []const u8,
+    expected_name: []const u8,
+) ?[]const u8 {
+    var lines = std.mem.splitScalar(u8, headers, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \t\r");
+        const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
+        const name = std.mem.trim(u8, line[0..colon], " \t");
+        if (std.ascii.eqlIgnoreCase(name, expected_name))
+            return std.mem.trim(u8, line[colon + 1 ..], " \t");
+    }
+    return null;
 }
 
 fn containsSensitiveHttpHeaderLine(
@@ -1882,14 +1997,15 @@ fn containsSensitiveHttpHeaderLine(
 }
 
 const HeaderSeparator = struct {
+    start: usize,
     end: usize,
 };
 
 fn findHeaderSeparator(bytes: []const u8) ?HeaderSeparator {
     if (std.mem.indexOf(u8, bytes, "\r\n\r\n")) |index|
-        return .{ .end = index + 4 };
+        return .{ .start = index, .end = index + 4 };
     if (std.mem.indexOf(u8, bytes, "\n\n")) |index|
-        return .{ .end = index + 2 };
+        return .{ .start = index, .end = index + 2 };
     return null;
 }
 
@@ -1935,6 +2051,24 @@ fn jsonContainsExchangeSensitiveSchema(
         isAzureKeyManagementPath(target.path) and
         (jsonRootHasField(value, "key1") or
             jsonRootHasField(value, "key2")))
+    {
+        return true;
+    }
+    if (isAzureManagementHost(target.host) and
+        pathHasResource(target.path, "Microsoft.DocumentDB") and
+        (pathHasResource(target.path, "listKeys") or
+            pathHasResource(target.path, "listReadOnlyKeys")) and
+        (jsonContainsField(value, "primarymasterkey") or
+            jsonContainsField(value, "secondarymasterkey") or
+            jsonContainsField(value, "primaryreadonlymasterkey") or
+            jsonContainsField(value, "secondaryreadonlymasterkey")))
+    {
+        return true;
+    }
+    if (isAzureManagementHost(target.host) and
+        pathHasResource(target.path, "Microsoft.ContainerRegistry") and
+        pathHasResource(target.path, "listCredentials") and
+        jsonContainsField(value, "passwords"))
     {
         return true;
     }
@@ -2330,6 +2464,7 @@ fn isSensitiveBodyField(name: []const u8) bool {
         normalizedFieldEndsWith(name, "connectionstring") or
         normalizedFieldEndsWith(name, "apikey") or
         normalizedFieldEndsWith(name, "accountkey") or
+        normalizedFieldEndsWith(name, "masterkey") or
         normalizedFieldEndsWith(name, "accesskey") or
         normalizedFieldEndsWith(name, "encryptionkey") or
         normalizedFieldEndsWith(name, "privatekey") or
@@ -2564,18 +2699,14 @@ fn writeHeaders(
             .redact => redact = true,
             .preserve => {},
             .inspect => if (isSanitizedUrlHeader(header.name)) {
-                if (try canSanitizeLocationHeader(allocator, header.value)) {
-                    sanitized_url = sanitizeUrlAlloc(
-                        allocator,
-                        header.value,
-                    ) catch |err| switch (err) {
-                        error.SensitiveUrlRequiresSanitization => null,
-                        else => return err,
-                    };
-                    redact = sanitized_url == null;
-                } else {
-                    redact = true;
-                }
+                sanitized_url = sanitizeUrlAlloc(
+                    allocator,
+                    header.value,
+                ) catch |err| switch (err) {
+                    error.SensitiveUrlRequiresSanitization => null,
+                    else => return err,
+                };
+                redact = sanitized_url == null;
             } else {
                 redact = try shouldRedactHeader(
                     allocator,
@@ -2598,80 +2729,6 @@ fn writeHeaders(
     try writer.writeByte(']');
 }
 
-fn canSanitizeLocationHeader(
-    allocator: std.mem.Allocator,
-    url: []const u8,
-) !bool {
-    if (url.len == 0 or
-        std.mem.indexOfAny(u8, url, "\x00\r\n") != null)
-    {
-        return false;
-    }
-    if (std.mem.indexOf(u8, url, "://")) |scheme_end| {
-        const scheme = url[0..scheme_end];
-        if (!std.ascii.eqlIgnoreCase(scheme, "https") and
-            !std.ascii.eqlIgnoreCase(scheme, "http"))
-        {
-            return false;
-        }
-        const authority_start = scheme_end + 3;
-        const authority_end = std.mem.indexOfAnyPos(
-            u8,
-            url,
-            authority_start,
-            "/?#",
-        ) orelse url.len;
-        const authority = url[authority_start..authority_end];
-        if (authority.len == 0 or
-            std.mem.indexOfScalar(u8, authority, '@') != null)
-        {
-            return false;
-        }
-    } else if (std.mem.startsWith(u8, url, "//")) {
-        return false;
-    }
-
-    const question = std.mem.indexOfScalar(u8, url, '?') orelse {
-        return !try containsSensitiveScalar(allocator, url);
-    };
-    if (try containsSensitiveScalar(allocator, url[0..question]))
-        return false;
-    const fragment = std.mem.indexOfScalarPos(
-        u8,
-        url,
-        question + 1,
-        '#',
-    ) orelse url.len;
-    var parameters = std.mem.splitScalar(
-        u8,
-        url[question + 1 .. fragment],
-        '&',
-    );
-    while (parameters.next()) |parameter| {
-        const equals = std.mem.indexOfScalar(u8, parameter, '=') orelse {
-            if (try containsSensitiveScalar(allocator, parameter))
-                return false;
-            continue;
-        };
-        var decoded_name_buffer: [256]u8 = undefined;
-        const decoded_name = percentDecodeFieldName(
-            parameter[0..equals],
-            &decoded_name_buffer,
-        ) orelse return false;
-        if (isSensitiveQueryField(decoded_name)) continue;
-        if (try containsSensitiveScalar(
-            allocator,
-            parameter[equals + 1 ..],
-        )) return false;
-    }
-    if (fragment != url.len and
-        try containsSensitiveScalar(allocator, url[fragment + 1 ..]))
-    {
-        return false;
-    }
-    return true;
-}
-
 fn writeSanitizedUrl(
     writer: *std.Io.Writer,
     allocator: std.mem.Allocator,
@@ -2686,56 +2743,162 @@ fn sanitizeUrlAlloc(
     allocator: std.mem.Allocator,
     url: []const u8,
 ) ![]u8 {
-    const scheme = std.mem.indexOf(u8, url, "://");
-    if (scheme) |index| {
-        const authority_start = index + 3;
-        const authority_end = std.mem.indexOfScalarPos(
+    if (url.len == 0 or std.mem.indexOfAny(u8, url, "\x00\r\n") != null)
+        return error.SensitiveUrlRequiresSanitization;
+    if (std.mem.indexOfScalar(u8, url, '#') != null)
+        return error.SensitiveUrlRequiresSanitization;
+
+    const question = std.mem.indexOfScalar(u8, url, '?');
+    const reference_end = question orelse url.len;
+    var path_start: usize = 0;
+    const scheme_end_value = schemeEndAtReferenceStart(url, reference_end);
+    if (scheme_end_value) |scheme_end| {
+        const scheme = url[0..scheme_end];
+        if (!std.ascii.eqlIgnoreCase(scheme, "https") and
+            !std.ascii.eqlIgnoreCase(scheme, "http"))
+        {
+            return error.SensitiveUrlRequiresSanitization;
+        }
+        if (!std.mem.startsWith(u8, url[scheme_end + 1 ..], "//"))
+            return error.SensitiveUrlRequiresSanitization;
+        const authority_start = scheme_end + 3;
+        const slash = std.mem.indexOfScalarPos(
             u8,
             url,
             authority_start,
             '/',
-        ) orelse std.mem.indexOfScalarPos(
-            u8,
-            url,
-            authority_start,
-            '?',
-        ) orelse url.len;
-        if (std.mem.indexOfScalar(
-            u8,
-            url[authority_start..authority_end],
-            '@',
-        ) != null) return error.SensitiveUrlRequiresSanitization;
+        );
+        const authority_end = if (slash) |index|
+            @min(index, reference_end)
+        else
+            reference_end;
+        const authority = url[authority_start..authority_end];
+        if (authority.len == 0 or
+            std.mem.indexOfScalar(u8, authority, '@') != null)
+        {
+            return error.SensitiveUrlRequiresSanitization;
+        }
+        path_start = authority_end;
+    } else if (std.mem.startsWith(u8, url, "//") or
+        std.mem.indexOf(u8, url[0..reference_end], "://") != null)
+    {
+        return error.SensitiveUrlRequiresSanitization;
     }
 
+    const encoded_path = url[path_start..reference_end];
+    const decoded_path = try percentDecodeAlloc(
+        allocator,
+        encoded_path,
+        false,
+    );
+    defer allocator.free(decoded_path);
+    if (try containsSensitiveScalar(allocator, decoded_path))
+        return error.SensitiveUrlRequiresSanitization;
+
+    const query_start = question orelse return allocator.dupe(u8, url);
     var output: std.Io.Writer.Allocating = .init(allocator);
     errdefer output.deinit();
-    const question = std.mem.indexOfScalar(u8, url, '?') orelse {
-        return allocator.dupe(u8, url);
-    };
-    try output.writer.writeAll(url[0 .. question + 1]);
-    const fragment = std.mem.indexOfScalarPos(u8, url, question + 1, '#') orelse
-        url.len;
+    try output.writer.writeAll(url[0 .. query_start + 1]);
     var first = true;
-    var iterator = std.mem.splitScalar(u8, url[question + 1 .. fragment], '&');
+    var iterator = std.mem.splitScalar(u8, url[query_start + 1 ..], '&');
     while (iterator.next()) |parameter| {
         if (!first) try output.writer.writeByte('&');
         first = false;
         const equals = std.mem.indexOfScalar(u8, parameter, '=') orelse {
-            try output.writer.writeAll(parameter);
+            const decoded = try percentDecodeAlloc(
+                allocator,
+                parameter,
+                true,
+            );
+            defer allocator.free(decoded);
+            if (isSensitiveQueryField(decoded) or
+                try containsSensitiveScalar(allocator, decoded))
+            {
+                try output.writer.writeAll(parameter);
+                try output.writer.writeAll("=");
+                try output.writer.writeAll(redacted_value);
+            } else {
+                try output.writer.writeAll(parameter);
+            }
             continue;
         };
-        const name = parameter[0..equals];
-        try output.writer.writeAll(name);
-        try output.writer.writeByte('=');
-        try output.writer.writeAll(
-            if (isSensitiveQueryField(name))
-                redacted_value
-            else
-                parameter[equals + 1 ..],
+        const encoded_name = parameter[0..equals];
+        const encoded_value = parameter[equals + 1 ..];
+        const decoded_name = try percentDecodeAlloc(
+            allocator,
+            encoded_name,
+            true,
         );
+        defer allocator.free(decoded_name);
+        const decoded_value = try percentDecodeAlloc(
+            allocator,
+            encoded_value,
+            true,
+        );
+        defer allocator.free(decoded_value);
+        const redact = isSensitiveQueryField(decoded_name) or
+            try containsSensitiveScalar(allocator, decoded_value);
+        try output.writer.writeAll(encoded_name);
+        try output.writer.writeByte('=');
+        try output.writer.writeAll(if (redact) redacted_value else encoded_value);
     }
-    try output.writer.writeAll(url[fragment..]);
     return output.toOwnedSlice();
+}
+
+fn schemeEndAtReferenceStart(url: []const u8, reference_end: usize) ?usize {
+    const colon = std.mem.indexOfScalar(u8, url[0..reference_end], ':') orelse
+        return null;
+    const first_delimiter = std.mem.indexOfAny(u8, url[0..reference_end], "/") orelse
+        reference_end;
+    if (colon > first_delimiter or colon == 0 or
+        !std.ascii.isAlphabetic(url[0]))
+    {
+        return null;
+    }
+    for (url[1..colon]) |byte| {
+        if (!std.ascii.isAlphanumeric(byte) and
+            byte != '+' and byte != '-' and byte != '.')
+        {
+            return null;
+        }
+    }
+    return colon;
+}
+
+fn percentDecodeAlloc(
+    allocator: std.mem.Allocator,
+    encoded: []const u8,
+    plus_as_space: bool,
+) ![]u8 {
+    const decoded = try allocator.alloc(u8, encoded.len);
+    errdefer allocator.free(decoded);
+    var input_index: usize = 0;
+    var output_index: usize = 0;
+    while (input_index < encoded.len) {
+        if (encoded[input_index] == '%') {
+            if (input_index + 2 >= encoded.len)
+                return error.SensitiveUrlRequiresSanitization;
+            const high = std.fmt.charToDigit(
+                encoded[input_index + 1],
+                16,
+            ) catch return error.SensitiveUrlRequiresSanitization;
+            const low = std.fmt.charToDigit(
+                encoded[input_index + 2],
+                16,
+            ) catch return error.SensitiveUrlRequiresSanitization;
+            decoded[output_index] = high * 16 + low;
+            input_index += 3;
+        } else {
+            decoded[output_index] = if (plus_as_space and
+                encoded[input_index] == '+')
+                ' '
+            else
+                encoded[input_index];
+            input_index += 1;
+        }
+        output_index += 1;
+    }
+    return allocator.realloc(decoded, output_index);
 }
 
 fn isSensitiveQueryField(name: []const u8) bool {
@@ -2745,7 +2908,7 @@ fn isSensitiveQueryField(name: []const u8) bool {
     for (sensitive_query_fields) |sensitive| {
         if (std.ascii.eqlIgnoreCase(candidate, sensitive)) return true;
     }
-    return false;
+    return isSensitiveBodyField(candidate);
 }
 
 fn isFullyRedactedUrlHeader(name: []const u8) bool {
@@ -3174,6 +3337,75 @@ test "playback detects URL body and header mismatches without advancing" {
         playback.asTransport().send(&request),
     );
     try std.testing.expectEqual(@as(usize, 0), playback.index);
+}
+
+test "playback allocation failures do not consume buffered exchanges" {
+    const recordings = [_]RecordedExchange{.{
+        .request_method = .GET,
+        .request_url = "https://example.test/retry",
+        .response_status = 200,
+        .response_body = "response",
+        .response_headers = &.{
+            .{ .name = "Content-Type", .value = "text/plain" },
+        },
+    }};
+    var no_memory: [0]u8 = .{};
+    var fixed = std.heap.FixedBufferAllocator.init(&no_memory);
+    var playback = PlaybackTransport.init(fixed.allocator(), &recordings);
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://example.test/retry",
+    );
+    defer request.deinit();
+    try std.testing.expectError(
+        error.OutOfMemory,
+        playback.asTransport().send(&request),
+    );
+    try std.testing.expectEqual(@as(usize, 0), playback.index);
+
+    playback.allocator = std.testing.allocator;
+    var response = try playback.asTransport().send(&request);
+    defer response.deinit();
+    try std.testing.expectEqualStrings("response", response.body);
+    try std.testing.expectEqual(@as(usize, 1), playback.index);
+}
+
+test "playback allocation failures do not consume streaming exchanges" {
+    const recordings = [_]RecordedExchange{.{
+        .request_method = .GET,
+        .request_url = "https://example.test/retry-stream",
+        .response_status = 200,
+        .response_body = "stream-response",
+    }};
+    var no_memory: [0]u8 = .{};
+    var fixed = std.heap.FixedBufferAllocator.init(&no_memory);
+    var playback = PlaybackTransport.init(fixed.allocator(), &recordings);
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://example.test/retry-stream",
+    );
+    defer request.deinit();
+    try std.testing.expectError(
+        error.OutOfMemory,
+        playback.asTransport().open(&request, .{}),
+    );
+    try std.testing.expectEqual(@as(usize, 0), playback.index);
+    try std.testing.expectEqual(@as(usize, 0), playback.open_count);
+
+    playback.allocator = std.testing.allocator;
+    var operation = try playback.asTransport().open(&request, .{});
+    defer operation.deinit();
+    const body = try (try operation.reader()).allocRemaining(
+        std.testing.allocator,
+        .unlimited,
+    );
+    defer std.testing.allocator.free(body);
+    try std.testing.expectEqualStrings("stream-response", body);
+    try operation.finish();
+    try std.testing.expectEqual(@as(usize, 1), playback.index);
+    try std.testing.expectEqual(@as(usize, 1), playback.open_count);
 }
 
 test "recording wraps streaming operations and copies descriptor by value" {
@@ -3858,6 +4090,115 @@ test "App Configuration key query remains exact" {
     );
 }
 
+test "URL sanitization inspects decoded query path and fragment components" {
+    const recorded_jwt =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" ++
+        "." ++
+        "eyJzdWIiOiJyZWNvcmRlZCIsImV4cCI6NDEwMjQ0NDgwMH0" ++
+        "." ++
+        "c2lnbmF0dXJlLWJ5dGVzLXZhbHVl";
+    const live_jwt =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" ++
+        "." ++
+        "eyJzdWIiOiJsaXZlIiwiZXhwIjo0MTAyNDQ0ODAwfQ" ++
+        "." ++
+        "cm90YXRlZC1zaWduYXR1cmUtdmFsdWU";
+    const recorded_url = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "https://example.test/callback?token={s}&payload=Endpoint%3Dhttps%3A%2F%2Fexample%3BAccountKey%3Dquery-key&return=https%3A%2F%2Fsafe.example%2Fnext",
+        .{recorded_jwt},
+    );
+    defer std.testing.allocator.free(recorded_url);
+    var mock = core.http.MockTransport.init(
+        std.testing.allocator,
+        200,
+        "",
+    );
+    defer mock.deinit();
+    var recorder = RecordingTransport.init(
+        std.testing.allocator,
+        mock.asTransport(),
+    );
+    defer recorder.deinit();
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        recorded_url,
+    );
+    defer request.deinit();
+    var response = try recorder.asTransport().send(&request);
+    response.deinit();
+    const json = try recorder.toJson(std.testing.allocator);
+    defer std.testing.allocator.free(json);
+    try std.testing.expect(std.mem.indexOf(u8, json, recorded_jwt) == null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "query-key") == null);
+    try std.testing.expect(
+        std.mem.indexOf(u8, json, "token=REDACTED") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, json, "payload=REDACTED") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(
+            u8,
+            json,
+            "return=https%3A%2F%2Fsafe.example%2Fnext",
+        ) != null,
+    );
+
+    var parsed = try parseJson(std.testing.allocator, json);
+    defer parsed.deinit();
+    var playback = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    const live_url = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "https://example.test/callback?token={s}&payload=Endpoint%3Dhttps%3A%2F%2Fexample%3BAccountKey%3Drotated-key&return=https%3A%2F%2Fsafe.example%2Fnext",
+        .{live_jwt},
+    );
+    defer std.testing.allocator.free(live_url);
+    var live = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        live_url,
+    );
+    defer live.deinit();
+    var replayed = try playback.asTransport().send(&live);
+    replayed.deinit();
+
+    for ([_][]const u8{
+        "https://example.test/callback/Bearer%20path-secret",
+        "https://example.test/callback#access_token=fragment-secret",
+    }) |unsafe_url| {
+        var unsafe_mock = core.http.MockTransport.init(
+            std.testing.allocator,
+            200,
+            "",
+        );
+        defer unsafe_mock.deinit();
+        var unsafe_recorder = RecordingTransport.init(
+            std.testing.allocator,
+            unsafe_mock.asTransport(),
+        );
+        defer unsafe_recorder.deinit();
+        var unsafe_request = core.http.Request.init(
+            std.testing.allocator,
+            .GET,
+            unsafe_url,
+        );
+        defer unsafe_request.deinit();
+        var unsafe_response =
+            try unsafe_recorder.asTransport().send(&unsafe_request);
+        unsafe_response.deinit();
+        try expectRejectedSerializationExcludes(
+            &unsafe_recorder,
+            error.SensitiveUrlRequiresSanitization,
+            &.{ "path-secret", "fragment-secret" },
+        );
+    }
+}
+
 test "authenticated recording JSON roundtrips with structured redactions" {
     var mock = core.http.MockTransport.init(
         std.testing.allocator,
@@ -4063,6 +4404,10 @@ test "location headers preserve replayable URLs and rotated SAS next exchanges" 
                         .name = "Azure-AsyncOperation",
                         .value = "/operations/1/status?sig=async-sas&api-version=1",
                     },
+                    .{
+                        .name = "Content-Location",
+                        .value = "/callback?return=https://safe.example/next&mode=one",
+                    },
                 },
             },
             .{ .status = 200, .body = "" },
@@ -4126,6 +4471,13 @@ test "location headers preserve replayable URLs and rotated SAS next exchanges" 
         getHeaderPair(
             recordings[1].response_headers,
             "Azure-AsyncOperation",
+        ).?,
+    );
+    try std.testing.expectEqualStrings(
+        "/callback?return=https://safe.example/next&mode=one",
+        getHeaderPair(
+            recordings[1].response_headers,
+            "Content-Location",
         ).?,
     );
     for (recordings[0].response_headers) |header| {
@@ -4641,6 +4993,56 @@ test "Azure key management key1 and key2 responses are rejected" {
     }
 }
 
+test "Cosmos and Container Registry credential schemas are rejected" {
+    const cases = [_]struct {
+        url: []const u8,
+        body: []const u8,
+        secrets: []const []const u8,
+    }{
+        .{
+            .url = "https://management.azure.com/subscriptions/s/resourceGroups/r/providers/Microsoft.DocumentDB/databaseAccounts/a/listKeys?api-version=2025-04-15",
+            .body = "{\"primaryMasterKey\":\"cosmos-primary\",\"secondaryMasterKey\":\"cosmos-secondary\",\"primaryReadonlyMasterKey\":\"cosmos-read-primary\",\"secondaryReadonlyMasterKey\":\"cosmos-read-secondary\"}",
+            .secrets = &.{
+                "cosmos-primary",
+                "cosmos-secondary",
+                "cosmos-read-primary",
+                "cosmos-read-secondary",
+            },
+        },
+        .{
+            .url = "https://management.azure.com/subscriptions/s/resourceGroups/r/providers/Microsoft.ContainerRegistry/registries/a/listCredentials?api-version=2025-04-01",
+            .body = "{\"username\":\"registry-user\",\"passwords\":[{\"name\":\"password\",\"value\":\"registry-password-one\"},{\"name\":\"password2\",\"value\":\"registry-password-two\"}]}",
+            .secrets = &.{ "registry-password-one", "registry-password-two" },
+        },
+    };
+    for (cases) |case| {
+        var mock = core.http.MockTransport.init(
+            std.testing.allocator,
+            200,
+            case.body,
+        );
+        defer mock.deinit();
+        var recorder = RecordingTransport.init(
+            std.testing.allocator,
+            mock.asTransport(),
+        );
+        defer recorder.deinit();
+        var request = core.http.Request.init(
+            std.testing.allocator,
+            .POST,
+            case.url,
+        );
+        defer request.deinit();
+        var response = try recorder.asTransport().send(&request);
+        response.deinit();
+        try expectRejectedSerializationExcludes(
+            &recorder,
+            error.SensitiveBodyRequiresSanitization,
+            case.secrets,
+        );
+    }
+}
+
 test "Kusto source URIs and tabular credential scalars are rejected" {
     const jwt =
         "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" ++
@@ -4836,6 +5238,15 @@ test "multipart application http credentials cannot bypass allow opaque" {
         "--batch\r\nContent-Type: application/http\r\n\r\n" ++
             "GET https://storage.example/table?sv=1&sig=batch-sas HTTP/1.1\r\n\r\n" ++
             "--batch--\r\n",
+        "legal MIME preamble\r\n" ++
+            "--batch\r\nContent-Type: application/json\r\n\r\n" ++
+            "{\"accessToken\":\"nested-json-token\"}\r\n" ++
+            "--batch--\r\n",
+        "legal MIME preamble\r\n" ++
+            "--batch\r\nContent-Type: multipart/mixed; boundary=inner\r\n\r\n" ++
+            "--inner\r\nContent-Type: application/json\r\n\r\n" ++
+            "{\"refreshToken\":\"recursive-json-token\"}\r\n" ++
+            "--inner--\r\n--batch--\r\n",
         jwt_batch,
     }) |body| {
         var mock = core.http.MockTransport.init(
@@ -4874,6 +5285,7 @@ test "multipart application http credentials cannot bypass allow opaque" {
 
 test "safe multipart application http batch roundtrips explicitly" {
     const body =
+        "legal MIME preamble\r\n" ++
         "--batch\r\nContent-Type: application/http\r\n" ++
         "Content-Transfer-Encoding: binary\r\n\r\n" ++
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" ++
@@ -4886,7 +5298,10 @@ test "safe multipart application http batch roundtrips explicitly" {
     );
     defer mock.deinit();
     mock.response_headers_list = &.{
-        .{ .name = "Content-Type", .value = "multipart/mixed; boundary=batch" },
+        .{
+            .name = "Content-Type",
+            .value = "multipart/mixed; charset=utf-8; boundary=\"batch\"",
+        },
     };
     var recorder = RecordingTransport.initWithOptions(
         std.testing.allocator,
@@ -4911,6 +5326,54 @@ test "safe multipart application http batch roundtrips explicitly" {
         body,
         parsed.asSlice()[0].response_body,
     );
+}
+
+test "declared malformed multipart fails closed despite allow opaque" {
+    for ([_]struct {
+        content_type: []const u8,
+        body: []const u8,
+    }{
+        .{
+            .content_type = "multipart/mixed",
+            .body = "--batch\r\nContent-Type: text/plain\r\n\r\nsafe\r\n--batch--\r\n",
+        },
+        .{
+            .content_type = "multipart/mixed; boundary=batch",
+            .body = "--batch\r\nContent-Type: text/plain\r\n\r\nsafe\r\n",
+        },
+        .{
+            .content_type = "multipart/mixed; boundary=\"batch",
+            .body = "--batch\r\nContent-Type: text/plain\r\n\r\nsafe\r\n--batch--\r\n",
+        },
+    }) |case| {
+        var mock = core.http.MockTransport.init(
+            std.testing.allocator,
+            200,
+            case.body,
+        );
+        defer mock.deinit();
+        mock.response_headers_list = &.{
+            .{ .name = "Content-Type", .value = case.content_type },
+        };
+        var recorder = RecordingTransport.initWithOptions(
+            std.testing.allocator,
+            mock.asTransport(),
+            .{ .bodyPolicyFn = &allowOpaqueBody },
+        );
+        defer recorder.deinit();
+        var request = core.http.Request.init(
+            std.testing.allocator,
+            .GET,
+            "https://example.test/multipart",
+        );
+        defer request.deinit();
+        var response = try recorder.asTransport().send(&request);
+        response.deinit();
+        try std.testing.expectError(
+            error.UnsupportedBodySanitization,
+            recorder.toJson(std.testing.allocator),
+        );
+    }
 }
 
 test "opaque bodies reject by default and require an explicit safe policy" {
@@ -5146,7 +5609,7 @@ test "non-empty bodies require an explicit caller policy" {
 
 test "App Configuration dotted values are not mistaken for JWTs" {
     const body =
-        "{\"key\":\"endpoint\",\"key1\":\"configuration-label\",\"value\":\"service.production.contoso\"}";
+        "{\"key\":\"endpoint\",\"key1\":\"configuration-label\",\"value\":\"service.production.contoso\",\"passwords\":[{\"name\":\"password\",\"value\":\"ordinary-schema-example\"}]}";
     var mock = core.http.MockTransport.init(
         std.testing.allocator,
         200,

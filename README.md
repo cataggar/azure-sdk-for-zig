@@ -58,6 +58,12 @@ requirements.
 only recognized credential query values are replaced. This keeps redirect and
 LRO URLs replayable. Malformed or unsafe location values are fully redacted.
 Credential source URL headers such as `x-ms-copy-source` remain fully redacted.
+URL sanitization parses the URI reference from its start, percent-decodes path
+and query components for inspection, redacts recognized credential names and
+credential-shaped values, and rejects credential-bearing paths or fragments.
+Request URL fragments are rejected; unsafe location fragments cause full
+header redaction. Relative redirects such as `/callback?return=https://...`
+remain replayable when their decoded values are safe.
 
 Header names are checked case-insensitively. The default preserves only a
 known-safe standard/Azure header allowlist, after inspecting every value for
@@ -143,8 +149,15 @@ and detectable plaintext credentials cannot be bypassed by `allow_opaque`;
 callers that approve otherwise opaque encodings take responsibility for their
 decoded contents. Multipart bodies are also scanned before opaque allowance,
 including form-data names, embedded HTTP authorization headers, signed URLs,
-JWTs, and parseable structured part payloads. Policy contexts are borrowed
-through `toJson`.
+JWTs, and parseable structured part payloads. Declared multipart boundaries are
+parsed from `Content-Type`; legal preambles and nested multipart parts are
+supported, while malformed multipart structures fail closed. Policy contexts
+are borrowed through `toJson`.
+
+Playback matches without consuming an exchange. It advances the caller-
+serialized index only after the response or streaming operation has been
+allocated successfully, so allocation failures can be retried against the same
+recording.
 
 Run its independent tests from this directory:
 
