@@ -744,7 +744,11 @@ pub const Driver = struct {
         if (self.state == .err or self.state == .closed) return error.ConnectionClosed;
         while (true) {
             var consumed = false;
-            errdefer if (consumed) self.invalidate();
+            // A terminal transport read means the stream is gone even when no
+            // byte of this frame was buffered. Only a zero-byte deadline is
+            // retryable; once any frame byte was consumed, even timeout leaves
+            // the parser unable to resume that frame safely.
+            errdefer |err| if (consumed or err != error.Timeout) self.invalidate();
 
             var header_bytes: [frame.frame_header_size]u8 = undefined;
             try self.readExactTracked(&header_bytes, deadline_ms, &consumed);

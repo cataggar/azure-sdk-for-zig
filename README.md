@@ -209,7 +209,9 @@ frame is encoded, written, and flushed. An encode allocation failure therefore
 leaves the request retryable without a phantom local grant or double count; a
 write or flush failure leaves the local counters uncommitted and terminalizes
 the dirty connection instead. Drain intent follows the same rule and becomes
-active only after its `Flow` is emitted.
+active only after its `Flow` is emitted. A compliant drain response may omit
+`link-credit`; the remaining credit is then derived with serial arithmetic
+from the prior delivery limit and the reported `delivery-count`.
 
 The delivery already returned to the caller is outside the aggregate budget
 and remains valid until the next successful `receive`; it is still bounded by
@@ -229,7 +231,10 @@ A continuation may omit `delivery-id` or repeat the initial value without
 being charged again. Settlement is cumulative across the transfer sequence:
 `settled = true` on any continuation remains true when later frames omit it,
 releases the active delivery id, and is reported on the completed delivery. An
-aborted multi-frame delivery, including one that repeats the id, releases its
+already sender-settled delivery ignores `rcv-settle-mode`, including on the
+frame that first makes cumulative settlement true; unsettled deliveries still
+enforce the locally negotiated mode. An aborted multi-frame delivery, including
+one that repeats the id, releases its
 partial bytes without entering the ready queue, while a different delivery id
 arriving before the current delivery ends is a protocol error that terminally
 detaches the receiver. Any allocation
@@ -242,7 +247,9 @@ connection transport. A header or body may already be buffered, so allowing a
 later send to reuse that byte stream could flush a corrupt partial frame.
 Protocol-header and heartbeat writes follow the same rule. Likewise, an error
 after any inbound frame header byte is consumed closes the connection; an
-unread body can no longer be parsed from a known boundary.
+unread body can no longer be parsed from a known boundary. EOF and terminal
+transport read failures also close the driver and every session link when they
+arrive before any frame byte; only a zero-byte deadline remains retryable.
 
 An acknowledgement timeout after a successfully emitted SASL or AMQP protocol
 header, Open, Begin, or End is terminal at the corresponding connection/session
