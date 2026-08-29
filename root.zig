@@ -10,6 +10,7 @@ const core = @import("azure_sdk_core");
 pub const HeaderPair = struct {
     name: []const u8,
     value: []const u8,
+    redacted: bool = false,
 };
 
 /// A borrowed HTTP exchange used by playback.
@@ -82,6 +83,7 @@ pub const BodySafetyContext = struct {
     method: core.http.Method,
     url: []const u8,
     content_type: ?[]const u8,
+    content_encoding: ?[]const u8,
     body: []const u8,
 };
 
@@ -96,12 +98,40 @@ pub const BodyPolicyDecision = enum {
     allow_opaque,
 };
 
+/// Exchange-aware input for an optional recording header policy.
+pub const HeaderSafetyContext = struct {
+    direction: BodyDirection,
+    method: core.http.Method,
+    url: []const u8,
+    name: []const u8,
+    value: []const u8,
+};
+
+/// Header policy decisions are serialized into structured matching metadata.
+///
+/// `preserve` is an explicit escape hatch for application headers that the
+/// built-in conservative name rules classify as sensitive. The caller is
+/// responsible for proving that the value is safe to persist.
+pub const HeaderPolicyDecision = enum {
+    inspect,
+    redact,
+    preserve,
+};
+
+/// Recording safety policy callbacks and their borrowed contexts.
+///
+/// Callback contexts must outlive every `toJson` call on the transport.
 pub const RecordingOptions = struct {
     body_policy_context: ?*anyopaque = null,
     bodyPolicyFn: ?*const fn (
         context: ?*anyopaque,
         body: BodySafetyContext,
     ) BodyPolicyDecision = null,
+    header_policy_context: ?*anyopaque = null,
+    headerPolicyFn: ?*const fn (
+        context: ?*anyopaque,
+        header: HeaderSafetyContext,
+    ) HeaderPolicyDecision = null,
 };
 
 /// Parse the versioned, lossless JSON format emitted by `toJson`.
@@ -392,8 +422,8 @@ pub const RecordingTransport = struct {
     /// Structurally recognized credential-bearing JSON, form, connection
     /// string, XML, and private-key bodies cause
     /// `error.SensitiveBodyRequiresSanitization`. Malformed JSON-like bodies
-    /// cause `error.UnsupportedBodySanitization`; neither is silently emitted
-    /// under a false sanitization guarantee.
+    /// and unapproved opaque encodings cause an explicit error; neither is
+    /// silently emitted under a false sanitization guarantee.
     pub fn toJson(
         self: *const RecordingTransport,
         allocator: std.mem.Allocator,
@@ -436,13 +466,25 @@ pub const RecordingTransport = struct {
             try writer.writeAll(",\"request_url\":");
             try writeSanitizedUrl(writer, allocator, exchange.request_url);
             try writer.writeAll(",\"request_headers\":");
-            try writeHeaders(writer, allocator, exchange.request_headers);
+            try writeHeaders(
+                writer,
+                allocator,
+                self.options,
+                exchange,
+                .request,
+            );
             try writer.writeAll(",\"request_body\":");
             try writeOptionalBody(writer, allocator, exchange.request_body);
             try writer.writeAll(",\"response_status\":");
             try writer.print("{d}", .{exchange.response_status});
             try writer.writeAll(",\"response_headers\":");
-            try writeHeaders(writer, allocator, exchange.response_headers);
+            try writeHeaders(
+                writer,
+                allocator,
+                self.options,
+                exchange,
+                .response,
+            );
             try writer.writeAll(",\"response_body\":");
             try writeBody(writer, allocator, exchange.response_body);
             try writer.writeAll("}");
@@ -1059,9 +1101,15 @@ fn parseHeaders(
             return error.InvalidRecordingJson;
         const field_value = object.get("value") orelse
             return error.InvalidRecordingJson;
+        const redacted_value_json = object.get("redacted");
+        const redacted = if (redacted_value_json) |flag| switch (flag) {
+            .bool => |result| result,
+            else => return error.InvalidRecordingJson,
+        } else false;
         header.name = try allocator.dupe(u8, try jsonString(name_value));
         errdefer allocator.free(header.name);
         header.value = try allocator.dupe(u8, try jsonString(field_value));
+        header.redacted = redacted;
         initialized += 1;
     }
     return headers;
@@ -1133,8 +1181,7 @@ fn matchRequest(
             return error.HeaderMismatch;
         if (!try headerValueMatches(
             request.allocator,
-            expected.name,
-            expected.value,
+            expected,
             actual,
         ))
             return error.HeaderMismatch;
@@ -1143,19 +1190,14 @@ fn matchRequest(
 
 fn headerValueMatches(
     allocator: std.mem.Allocator,
-    name: []const u8,
-    expected: []const u8,
+    expected: HeaderPair,
     actual: []const u8,
 ) !bool {
-    if (isSensitiveHeader(name) and
-        std.mem.eql(u8, expected, redacted_value))
-    {
-        return true;
+    if (expected.redacted) return true;
+    if (isSanitizedUrlHeader(expected.name)) {
+        return urlMatches(allocator, expected.value, actual);
     }
-    if (isSanitizedUrlHeader(name)) {
-        return urlMatches(allocator, expected, actual);
-    }
-    return std.mem.eql(u8, expected, actual);
+    return std.mem.eql(u8, expected.value, actual);
 }
 
 fn urlMatches(
@@ -1413,6 +1455,7 @@ const sensitive_body_fields = [_][]const u8{
     "clientsecret",
     "clientassertion",
     "password",
+    "pwd",
     "secret",
     "credential",
     "credentials",
@@ -1500,7 +1543,11 @@ pub fn isSensitiveHeader(name: []const u8) bool {
         containsIgnoreCase(name, "account-key") or
         containsIgnoreCase(name, "access-key") or
         containsIgnoreCase(name, "secret-key") or
-        containsIgnoreCase(name, "shared-key"))
+        containsIgnoreCase(name, "shared-key") or
+        normalizedFieldEndsWith(name, "password") or
+        normalizedFieldEndsWith(name, "pwd") or
+        normalizedFieldEndsWith(name, "privatekey") or
+        normalizedFieldEndsWith(name, "connectionstring"))
     {
         return true;
     }
@@ -1528,6 +1575,7 @@ fn ensureExchangeBodySafe(
         .method = exchange.request_method,
         .url = exchange.request_url,
         .content_type = getHeaderPair(headers, "Content-Type"),
+        .content_encoding = getHeaderPair(headers, "Content-Encoding"),
         .body = bytes,
     };
     const decision = if (options.bodyPolicyFn) |policy|
@@ -1553,6 +1601,7 @@ fn ensureBodySafe(
         return error.SensitiveBodyRequiresSanitization;
 
     const content_type = context.content_type orelse "";
+    const content_encoding = context.content_encoding orelse "";
     const multipart = containsIgnoreCase(content_type, "multipart/") or
         (containsIgnoreCase(bytes, "content-disposition:") and
             containsIgnoreCase(bytes, "form-data"));
@@ -1563,7 +1612,17 @@ fn ensureBodySafe(
         return;
     }
 
-    if (!std.unicode.utf8ValidateSlice(bytes)) {
+    if (hasUnicodeBom(bytes) or
+        std.mem.indexOfScalar(u8, bytes, 0) != null or
+        declaresWideCharset(content_type) or
+        isBinaryContentType(content_type) or
+        (content_encoding.len != 0 and
+            !std.ascii.eqlIgnoreCase(
+                std.mem.trim(u8, content_encoding, " \t"),
+                "identity",
+            )) or
+        !std.unicode.utf8ValidateSlice(bytes))
+    {
         if (!allow_opaque) return error.OpaqueBodyNotAllowed;
         return;
     }
@@ -1576,7 +1635,7 @@ fn ensureBodySafe(
         return;
     }
 
-    if (looksLikeStructuredJson(bytes)) {
+    if (isJsonContentType(content_type) or looksLikeStructuredJson(bytes)) {
         const parsed = std.json.parseFromSlice(
             std.json.Value,
             allocator,
@@ -1588,8 +1647,7 @@ fn ensureBodySafe(
         };
         defer parsed.deinit();
         if (jsonContainsSensitiveField(parsed.value) or
-            (isKnownSecretEndpoint(context.url) and
-                jsonRootHasValueField(parsed.value)))
+            jsonContainsExchangeSensitiveSchema(parsed.value, context))
         {
             return error.SensitiveBodyRequiresSanitization;
         }
@@ -1651,19 +1709,168 @@ fn looksLikeXml(body: []const u8) bool {
     return trimmed.len != 0 and trimmed[0] == '<';
 }
 
-fn isKnownSecretEndpoint(url: []const u8) bool {
-    return containsIgnoreCase(url, "vault") and
-        containsIgnoreCase(url, "/secrets/");
+fn jsonContainsExchangeSensitiveSchema(
+    value: std.json.Value,
+    context: BodySafetyContext,
+) bool {
+    const target = parseUrlTarget(context.url) orelse return false;
+    if (isKeyVaultHost(target.host)) {
+        if ((pathHasResource(target.path, "secrets") or
+            pathHasResource(target.path, "certificates")) and
+            jsonRootHasField(value, "value"))
+        {
+            return true;
+        }
+        if (pathHasResource(target.path, "keys") and
+            jsonContainsJwkPrivateField(value))
+        {
+            return true;
+        }
+    }
+    if (isKustoHost(target.host) and
+        jsonContainsField(value, "sourceuri"))
+    {
+        return true;
+    }
+    return false;
 }
 
-fn jsonRootHasValueField(value: std.json.Value) bool {
+fn jsonRootHasField(value: std.json.Value, field: []const u8) bool {
     const object = switch (value) {
         .object => |result| result,
         else => return false,
     };
     var iterator = object.iterator();
     while (iterator.next()) |entry| {
-        if (normalizedFieldEquals(entry.key_ptr.*, "value")) return true;
+        if (normalizedFieldEquals(entry.key_ptr.*, field)) return true;
+    }
+    return false;
+}
+
+fn jsonContainsField(value: std.json.Value, field: []const u8) bool {
+    switch (value) {
+        .object => |object| {
+            var iterator = object.iterator();
+            while (iterator.next()) |entry| {
+                if (normalizedFieldEquals(entry.key_ptr.*, field) or
+                    jsonContainsField(entry.value_ptr.*, field))
+                {
+                    return true;
+                }
+            }
+        },
+        .array => |array| {
+            for (array.items) |item| {
+                if (jsonContainsField(item, field)) return true;
+            }
+        },
+        else => {},
+    }
+    return false;
+}
+
+fn jsonContainsJwkPrivateField(value: std.json.Value) bool {
+    switch (value) {
+        .object => |object| {
+            var iterator = object.iterator();
+            while (iterator.next()) |entry| {
+                const name = entry.key_ptr.*;
+                if (normalizedFieldEquals(name, "d") or
+                    normalizedFieldEquals(name, "p") or
+                    normalizedFieldEquals(name, "q") or
+                    normalizedFieldEquals(name, "dp") or
+                    normalizedFieldEquals(name, "dq") or
+                    normalizedFieldEquals(name, "qi") or
+                    jsonContainsJwkPrivateField(entry.value_ptr.*))
+                {
+                    return true;
+                }
+            }
+        },
+        .array => |array| {
+            for (array.items) |item| {
+                if (jsonContainsJwkPrivateField(item)) return true;
+            }
+        },
+        else => {},
+    }
+    return false;
+}
+
+const UrlTarget = struct {
+    host: []const u8,
+    path: []const u8,
+};
+
+fn parseUrlTarget(url: []const u8) ?UrlTarget {
+    const scheme = std.mem.indexOf(u8, url, "://") orelse return null;
+    if (!std.ascii.eqlIgnoreCase(url[0..scheme], "https")) return null;
+    const authority_start = scheme + 3;
+    const path_start = std.mem.indexOfAnyPos(
+        u8,
+        url,
+        authority_start,
+        "/?#",
+    ) orelse url.len;
+    var authority = url[authority_start..path_start];
+    if (std.mem.lastIndexOfScalar(u8, authority, '@')) |at| {
+        authority = authority[at + 1 ..];
+    }
+    var host = authority;
+    if (host.len != 0 and host[0] == '[') {
+        const close = std.mem.indexOfScalar(u8, host, ']') orelse return null;
+        host = host[0 .. close + 1];
+    } else if (std.mem.lastIndexOfScalar(u8, host, ':')) |colon| {
+        host = host[0..colon];
+    }
+    const path_end = std.mem.indexOfAnyPos(
+        u8,
+        url,
+        path_start,
+        "?#",
+    ) orelse url.len;
+    return .{
+        .host = host,
+        .path = if (path_start < url.len and url[path_start] == '/')
+            url[path_start..path_end]
+        else
+            "",
+    };
+}
+
+fn hostMatches(host: []const u8, suffix: []const u8) bool {
+    if (std.ascii.eqlIgnoreCase(host, suffix)) return true;
+    if (host.len <= suffix.len or host[host.len - suffix.len - 1] != '.')
+        return false;
+    return std.ascii.eqlIgnoreCase(
+        host[host.len - suffix.len ..],
+        suffix,
+    );
+}
+
+fn isKeyVaultHost(host: []const u8) bool {
+    return hostMatches(host, "vault.azure.net") or
+        hostMatches(host, "vault.azure.cn") or
+        hostMatches(host, "vault.usgovcloudapi.net") or
+        hostMatches(host, "vault.microsoftazure.de") or
+        hostMatches(host, "vaultcore.azure.net") or
+        hostMatches(host, "managedhsm.azure.net") or
+        hostMatches(host, "managedhsm.azure.cn") or
+        hostMatches(host, "managedhsm.usgovcloudapi.net");
+}
+
+fn isKustoHost(host: []const u8) bool {
+    return hostMatches(host, "kusto.windows.net") or
+        hostMatches(host, "kusto.chinacloudapi.cn") or
+        hostMatches(host, "kusto.usgovcloudapi.net") or
+        hostMatches(host, "kusto.cloudapi.de") or
+        hostMatches(host, "kusto.fabric.microsoft.com");
+}
+
+fn pathHasResource(path: []const u8, resource: []const u8) bool {
+    var segments = std.mem.splitScalar(u8, path, '/');
+    while (segments.next()) |segment| {
+        if (std.ascii.eqlIgnoreCase(segment, resource)) return true;
     }
     return false;
 }
@@ -1671,6 +1878,41 @@ fn jsonRootHasValueField(value: std.json.Value) bool {
 fn looksLikeStructuredJson(body: []const u8) bool {
     const trimmed = std.mem.trim(u8, body, " \t\r\n");
     return trimmed.len != 0 and (trimmed[0] == '{' or trimmed[0] == '[');
+}
+
+fn hasUnicodeBom(body: []const u8) bool {
+    return std.mem.startsWith(u8, body, "\xef\xbb\xbf") or
+        std.mem.startsWith(u8, body, "\xff\xfe") or
+        std.mem.startsWith(u8, body, "\xfe\xff") or
+        std.mem.startsWith(u8, body, "\xff\xfe\x00\x00") or
+        std.mem.startsWith(u8, body, "\x00\x00\xfe\xff");
+}
+
+fn declaresWideCharset(content_type: []const u8) bool {
+    return containsIgnoreCase(content_type, "charset=utf-16") or
+        containsIgnoreCase(content_type, "charset=\"utf-16") or
+        containsIgnoreCase(content_type, "charset=utf-32") or
+        containsIgnoreCase(content_type, "charset=\"utf-32");
+}
+
+fn isJsonContentType(content_type: []const u8) bool {
+    return containsIgnoreCase(content_type, "/json") or
+        containsIgnoreCase(content_type, "+json");
+}
+
+fn isBinaryContentType(content_type: []const u8) bool {
+    return containsIgnoreCase(content_type, "application/octet-stream") or
+        containsIgnoreCase(content_type, "application/pkcs12") or
+        containsIgnoreCase(content_type, "application/x-pkcs12") or
+        containsIgnoreCase(content_type, "application/pkcs8") or
+        containsIgnoreCase(content_type, "application/x-pem-file") or
+        containsIgnoreCase(content_type, "application/zip") or
+        containsIgnoreCase(content_type, "application/gzip") or
+        containsIgnoreCase(content_type, "application/x-gzip") or
+        containsIgnoreCase(content_type, "image/") or
+        containsIgnoreCase(content_type, "audio/") or
+        containsIgnoreCase(content_type, "video/") or
+        containsIgnoreCase(content_type, "font/");
 }
 
 fn jsonContainsSensitiveField(value: std.json.Value) bool {
@@ -1706,9 +1948,49 @@ fn jsonContainsSensitiveFieldInContext(
                 )) return true;
             }
         },
+        .string => |string| return containsSensitiveScalar(string),
         else => {},
     }
     return false;
+}
+
+fn containsSensitiveScalar(value: []const u8) bool {
+    return containsPrivateKeyMarker(value) or
+        containsSensitiveAssignment(value) or
+        containsSasCredential(value) or
+        looksLikeJwt(value);
+}
+
+fn containsSasCredential(value: []const u8) bool {
+    return containsIgnoreCase(value, "SharedAccessSignature") or
+        containsIgnoreCase(value, "?sig=") or
+        containsIgnoreCase(value, "&sig=") or
+        containsIgnoreCase(value, ";sig=") or
+        containsIgnoreCase(value, "&amp;sig=") or
+        containsIgnoreCase(value, "?aeg-sas-key=") or
+        containsIgnoreCase(value, "&aeg-sas-key=") or
+        containsIgnoreCase(value, "?aeg-sas-token=") or
+        containsIgnoreCase(value, "&aeg-sas-token=") or
+        containsIgnoreCase(value, "sig%3d") or
+        containsIgnoreCase(value, "sig%253d") or
+        (containsIgnoreCase(value, "&e=") and
+            containsIgnoreCase(value, "&s="));
+}
+
+fn looksLikeJwt(value: []const u8) bool {
+    const trimmed = std.mem.trim(u8, value, " \t\r\n");
+    var dots: usize = 0;
+    for (trimmed) |byte| {
+        if (byte == '.') {
+            dots += 1;
+        } else if (!std.ascii.isAlphanumeric(byte) and
+            byte != '-' and
+            byte != '_')
+        {
+            return false;
+        }
+    }
+    return dots == 2 and trimmed.len >= 24;
 }
 
 fn isSensitiveBodyContainer(name: []const u8) bool {
@@ -1929,21 +2211,44 @@ fn containsSensitiveXml(body: []const u8) bool {
 fn writeHeaders(
     writer: *std.Io.Writer,
     allocator: std.mem.Allocator,
-    headers: []const HeaderPair,
+    options: RecordingOptions,
+    exchange: OwnedExchange,
+    direction: BodyDirection,
 ) !void {
+    const headers = switch (direction) {
+        .request => exchange.request_headers,
+        .response => exchange.response_headers,
+    };
     try writer.writeByte('[');
     for (headers, 0..) |header, index| {
         if (index != 0) try writer.writeByte(',');
         try writer.writeAll("{\"name\":");
         try writeJsonString(writer, header.name);
         try writer.writeAll(",\"value\":");
-        if (isSensitiveHeader(header.name)) {
+        const context = HeaderSafetyContext{
+            .direction = direction,
+            .method = exchange.request_method,
+            .url = exchange.request_url,
+            .name = header.name,
+            .value = header.value,
+        };
+        const decision = if (options.headerPolicyFn) |policy|
+            policy(options.header_policy_context, context)
+        else
+            .inspect;
+        const redact = header.redacted or switch (decision) {
+            .redact => true,
+            .preserve => false,
+            .inspect => isSensitiveHeader(header.name),
+        };
+        if (redact) {
             try writeJsonString(writer, redacted_value);
         } else if (isSanitizedUrlHeader(header.name)) {
             try writeSanitizedUrl(writer, allocator, header.value);
         } else {
             try writeJsonString(writer, header.value);
         }
+        try writer.print(",\"redacted\":{}", .{redact});
         try writer.writeByte('}');
     }
     try writer.writeByte(']');
@@ -2154,6 +2459,35 @@ fn allowKnownSafeOpaqueBody(
         .allow_opaque
     else
         .inspect;
+}
+
+fn preserveKnownSafeMetadata(
+    _: ?*anyopaque,
+    header: HeaderSafetyContext,
+) HeaderPolicyDecision {
+    if (std.ascii.eqlIgnoreCase(header.name, "x-ms-meta-pwd"))
+        return .preserve;
+    if (std.ascii.eqlIgnoreCase(header.name, "x-application-auth-material"))
+        return .redact;
+    return .inspect;
+}
+
+fn expectRejectedSerializationExcludes(
+    recorder: *const RecordingTransport,
+    expected_error: anyerror,
+    secrets: []const []const u8,
+) !void {
+    var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer output.deinit();
+    try std.testing.expectError(
+        expected_error,
+        recorder.writeJson(&output.writer, std.testing.allocator),
+    );
+    for (secrets) |secret| {
+        try std.testing.expect(
+            std.mem.indexOf(u8, output.written(), secret) == null,
+        );
+    }
 }
 
 test "playback validates request and preserves duplicate response headers" {
@@ -2625,6 +2959,93 @@ test "sensitive Azure headers are classified case-insensitively" {
     try std.testing.expect(!isSensitiveHeader("x-ms-continuation-token"));
 }
 
+test "sensitive metadata headers redact with configurable exact overrides" {
+    var mock = core.http.MockTransport.init(
+        std.testing.allocator,
+        200,
+        "response",
+    );
+    defer mock.deinit();
+    mock.response_headers_list = &.{
+        .{ .name = "X-MS-META-PASSWORD", .value = "response-password-value" },
+        .{ .name = "x-ms-meta-private-key", .value = "cmVzcG9uc2Uta2V5" },
+    };
+    var recorder = RecordingTransport.initWithOptions(
+        std.testing.allocator,
+        mock.asTransport(),
+        .{ .headerPolicyFn = &preserveKnownSafeMetadata },
+    );
+    defer recorder.deinit();
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://storage.example/container/blob",
+    );
+    defer request.deinit();
+    try request.setHeader("x-Ms-MeTa-PaSsWoRd", "request-password-value");
+    try request.setHeader("X-MS-META-PRIVATE-KEY", "cmVxdWVzdC1rZXk=");
+    try request.setHeader(
+        "x-ms-meta-connection-string",
+        "RW5kcG9pbnQ9eDtBY2NvdW50S2V5PXk=",
+    );
+    try request.setHeader("X-MS-META-PWD", "known-safe-label");
+    try request.setHeader(
+        "X-Application-Auth-Material",
+        "custom-sensitive-value",
+    );
+    var response = try recorder.asTransport().send(&request);
+    response.deinit();
+
+    const json = try recorder.toJson(std.testing.allocator);
+    defer std.testing.allocator.free(json);
+    for ([_][]const u8{
+        "response-password-value",
+        "cmVzcG9uc2Uta2V5",
+        "request-password-value",
+        "cmVxdWVzdC1rZXk=",
+        "RW5kcG9pbnQ9eDtBY2NvdW50S2V5PXk=",
+        "custom-sensitive-value",
+    }) |secret| {
+        try std.testing.expect(std.mem.indexOf(u8, json, secret) == null);
+    }
+    try std.testing.expect(
+        std.mem.indexOf(u8, json, "known-safe-label") != null,
+    );
+
+    var parsed = try parseJson(std.testing.allocator, json);
+    defer parsed.deinit();
+    var playback = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    var live = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://storage.example/container/blob",
+    );
+    defer live.deinit();
+    try live.setHeader("x-ms-meta-password", "rotated-password");
+    try live.setHeader("x-ms-meta-private-key", "rotated-private-key");
+    try live.setHeader(
+        "x-ms-meta-connection-string",
+        "rotated-connection-string",
+    );
+    try live.setHeader("x-ms-meta-pwd", "known-safe-label");
+    try live.setHeader("x-application-auth-material", "rotated-custom-value");
+    var replayed = try playback.asTransport().send(&live);
+    replayed.deinit();
+
+    var mismatch = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    try live.setHeader("x-ms-meta-pwd", "different-safe-label");
+    try std.testing.expectError(
+        error.HeaderMismatch,
+        mismatch.asTransport().send(&live),
+    );
+}
+
 test "Event Grid key and SAS token redactions roundtrip" {
     var mock = core.http.MockTransport.init(
         std.testing.allocator,
@@ -3039,9 +3460,10 @@ fn expectSensitiveResponseBodyRejected(body: []const u8) !void {
     defer request.deinit();
     var response = try recorder.asTransport().send(&request);
     response.deinit();
-    try std.testing.expectError(
+    try expectRejectedSerializationExcludes(
+        &recorder,
         error.SensitiveBodyRequiresSanitization,
-        recorder.toJson(std.testing.allocator),
+        &.{body},
     );
 }
 
@@ -3066,9 +3488,10 @@ fn expectSensitiveRequestBodyRejected(body: []const u8) !void {
     request.body = body;
     var response = try recorder.asTransport().send(&request);
     response.deinit();
-    try std.testing.expectError(
+    try expectRejectedSerializationExcludes(
+        &recorder,
         error.SensitiveBodyRequiresSanitization,
-        recorder.toJson(std.testing.allocator),
+        &.{body},
     );
 }
 
@@ -3116,9 +3539,10 @@ test "Key Vault root value bodies are endpoint-sensitive" {
         defer request.deinit();
         var response = try recorder.asTransport().send(&request);
         response.deinit();
-        try std.testing.expectError(
+        try expectRejectedSerializationExcludes(
+            &recorder,
             error.SensitiveBodyRequiresSanitization,
-            recorder.toJson(std.testing.allocator),
+            &.{"response-key-vault-value"},
         );
     }
     {
@@ -3142,9 +3566,204 @@ test "Key Vault root value bodies are endpoint-sensitive" {
         request.body = "{\"VaLuE\":\"request-key-vault-value\"}";
         var response = try recorder.asTransport().send(&request);
         response.deinit();
-        try std.testing.expectError(
+        try expectRejectedSerializationExcludes(
+            &recorder,
             error.SensitiveBodyRequiresSanitization,
-            recorder.toJson(std.testing.allocator),
+            &.{"request-key-vault-value"},
+        );
+    }
+}
+
+test "Key Vault path text on App Configuration hosts stays recordable and exact" {
+    const body = "{\"key\":\"team/vault/secrets/name\",\"value\":\"ordinary-setting\"}";
+    var mock = core.http.MockTransport.init(
+        std.testing.allocator,
+        200,
+        body,
+    );
+    defer mock.deinit();
+    mock.response_headers_list = &.{
+        .{ .name = "Content-Type", .value = "application/json" },
+    };
+    var recorder = RecordingTransport.init(
+        std.testing.allocator,
+        mock.asTransport(),
+    );
+    defer recorder.deinit();
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://store.azconfig.io/kv/team/vault/secrets/name?api-version=1.0",
+    );
+    defer request.deinit();
+    var response = try recorder.asTransport().send(&request);
+    response.deinit();
+
+    const json = try recorder.toJson(std.testing.allocator);
+    defer std.testing.allocator.free(json);
+    try std.testing.expect(std.mem.indexOf(u8, json, "ordinary-setting") == null);
+    var parsed = try parseJson(std.testing.allocator, json);
+    defer parsed.deinit();
+    try std.testing.expectEqualSlices(
+        u8,
+        body,
+        parsed.asSlice()[0].response_body,
+    );
+
+    var playback = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    var replayed = try playback.asTransport().send(&request);
+    defer replayed.deinit();
+    try std.testing.expectEqualSlices(u8, body, replayed.body);
+
+    var mismatch = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    var different = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://store.azconfig.io/kv/team/vault/secrets/other?api-version=1.0",
+    );
+    defer different.deinit();
+    try std.testing.expectError(
+        error.UrlMismatch,
+        mismatch.asTransport().send(&different),
+    );
+}
+
+test "Key Vault exchange rules ignore untrusted origins" {
+    for ([_][]const u8{
+        "https://example.vault.azure.net.attacker.test/secrets/name",
+        "https://vault.azure.cn.attacker.test/certificates/name",
+        "http://example.vault.azure.net/secrets/name",
+    }) |url| {
+        const body = "{\"value\":\"ordinary-non-vault-value\"}";
+        var mock = core.http.MockTransport.init(
+            std.testing.allocator,
+            200,
+            body,
+        );
+        defer mock.deinit();
+        var recorder = RecordingTransport.init(
+            std.testing.allocator,
+            mock.asTransport(),
+        );
+        defer recorder.deinit();
+        var request = core.http.Request.init(
+            std.testing.allocator,
+            .GET,
+            url,
+        );
+        defer request.deinit();
+        var response = try recorder.asTransport().send(&request);
+        response.deinit();
+        const json = try recorder.toJson(std.testing.allocator);
+        defer std.testing.allocator.free(json);
+        var parsed = try parseJson(std.testing.allocator, json);
+        defer parsed.deinit();
+        try std.testing.expectEqualSlices(
+            u8,
+            body,
+            parsed.asSlice()[0].response_body,
+        );
+    }
+}
+
+test "Key Vault private JWK and certificate import schemas are rejected" {
+    {
+        var mock = core.http.MockTransport.init(
+            std.testing.allocator,
+            200,
+            "{\"key\":{\"kty\":\"RSA\",\"n\":\"public\",\"e\":\"AQAB\",\"D\":\"ZC1wcml2YXRl\",\"p\":\"cA==\",\"q\":\"cQ==\",\"dP\":\"ZHA=\",\"dq\":\"ZHE=\",\"QI\":\"cWk=\"}}",
+        );
+        defer mock.deinit();
+        var recorder = RecordingTransport.init(
+            std.testing.allocator,
+            mock.asTransport(),
+        );
+        defer recorder.deinit();
+        var request = core.http.Request.init(
+            std.testing.allocator,
+            .GET,
+            "https://example.vault.azure.net/keys/name/version?api-version=7.6",
+        );
+        defer request.deinit();
+        var response = try recorder.asTransport().send(&request);
+        response.deinit();
+        try expectRejectedSerializationExcludes(
+            &recorder,
+            error.SensitiveBodyRequiresSanitization,
+            &.{ "ZC1wcml2YXRl", "ZHA=", "cWk=" },
+        );
+    }
+    {
+        var mock = core.http.MockTransport.init(
+            std.testing.allocator,
+            200,
+            "{\"id\":\"safe\"}",
+        );
+        defer mock.deinit();
+        var recorder = RecordingTransport.init(
+            std.testing.allocator,
+            mock.asTransport(),
+        );
+        defer recorder.deinit();
+        var request = core.http.Request.init(
+            std.testing.allocator,
+            .POST,
+            "https://example.vault.azure.net/certificates/name/import?api-version=7.6",
+        );
+        defer request.deinit();
+        request.body =
+            "{\"value\":\"UEZYLUJBU0U2NC1WQUxVRQ==\",\"PwD\":\"certificate-password\"}";
+        var response = try recorder.asTransport().send(&request);
+        response.deinit();
+        try expectRejectedSerializationExcludes(
+            &recorder,
+            error.SensitiveBodyRequiresSanitization,
+            &.{ "UEZYLUJBU0U2NC1WQUxVRQ==", "certificate-password" },
+        );
+    }
+}
+
+test "Kusto source URIs and tabular credential scalars are rejected" {
+    for ([_][]const u8{
+        "{\"sourceUri\":\"https://storage.example/container?sig=kusto-source-sas\"}",
+        "{\"Tables\":[{\"Rows\":[[\"https://storage.example/blob?sig=row-sas\"]]}]}",
+        "{\"Tables\":[{\"Rows\":[[\"https%3A%2F%2Fstorage.example%2Fblob%3Fsv%3D1%26sig%3Dencoded-sas\"]]}]}",
+        "{\"Tables\":[{\"Rows\":[[\"aaaaaaaa.bbbbbbbb.cccccccc\"]]}]}",
+    }) |body| {
+        var mock = core.http.MockTransport.init(
+            std.testing.allocator,
+            200,
+            body,
+        );
+        defer mock.deinit();
+        var recorder = RecordingTransport.init(
+            std.testing.allocator,
+            mock.asTransport(),
+        );
+        defer recorder.deinit();
+        var request = core.http.Request.init(
+            std.testing.allocator,
+            .POST,
+            "https://cluster.kusto.windows.net/v2/rest/query",
+        );
+        defer request.deinit();
+        var response = try recorder.asTransport().send(&request);
+        response.deinit();
+        try expectRejectedSerializationExcludes(
+            &recorder,
+            error.SensitiveBodyRequiresSanitization,
+            &.{
+                "kusto-source-sas",
+                "row-sas",
+                "encoded-sas",
+                "aaaaaaaa.bbbbbbbb.cccccccc",
+            },
         );
     }
 }
@@ -3222,6 +3841,9 @@ test "opaque bodies reject by default and require an explicit safe policy" {
     const opaque_bodies = [_][]const u8{
         "\x30\x82\xff\x00pkcs12-like",
         "\xff\xfeP\x00a\x00s\x00s\x00w\x00o\x00r\x00d\x00",
+        "A\x00c\x00c\x00o\x00u\x00n\x00t\x00K\x00e\x00y\x00=\x00v\x00a\x00l\x00u\x00e\x00",
+        "A\x00\x00\x00c\x00\x00\x00c\x00\x00\x00o\x00\x00\x00u\x00\x00\x00n\x00\x00\x00t\x00\x00\x00K\x00\x00\x00e\x00\x00\x00y\x00\x00\x00=\x00\x00\x00v\x00\x00\x00",
+        "\xef\xbb\xbf{\"message\":\"utf8-bom\"}",
         "{\"message\":\"malformed\xff\"}",
     };
     for (opaque_bodies) |body| {
@@ -3310,6 +3932,77 @@ test "recording JSON rejects malformed structured bodies explicitly" {
         error.UnsupportedBodySanitization,
         recorder.toJson(std.testing.allocator),
     );
+}
+
+test "declared encodings and opaque MIME bodies require explicit approval" {
+    const cases = [_]struct {
+        content_type: []const u8,
+        content_encoding: ?[]const u8 = null,
+        body: []const u8,
+        expected_error: anyerror,
+    }{
+        .{
+            .content_type = "application/json",
+            .body = "not-json",
+            .expected_error = error.UnsupportedBodySanitization,
+        },
+        .{
+            .content_type = "application/json; charset=utf-16le",
+            .body = "{\x00\"\x00v\x00a\x00l\x00u\x00e\x00\"\x00:\x00\"\x00x\x00\"\x00}\x00",
+            .expected_error = error.OpaqueBodyNotAllowed,
+        },
+        .{
+            .content_type = "application/json; charset=utf-32",
+            .body = "{\x00\x00\x00}\x00\x00\x00",
+            .expected_error = error.OpaqueBodyNotAllowed,
+        },
+        .{
+            .content_type = "application/octet-stream",
+            .body = "printable-but-opaque",
+            .expected_error = error.OpaqueBodyNotAllowed,
+        },
+        .{
+            .content_type = "application/json",
+            .content_encoding = "gzip",
+            .body = "compressed-looking-body",
+            .expected_error = error.OpaqueBodyNotAllowed,
+        },
+    };
+    for (cases) |case| {
+        var mock = core.http.MockTransport.init(
+            std.testing.allocator,
+            200,
+            case.body,
+        );
+        defer mock.deinit();
+        if (case.content_encoding) |encoding| {
+            mock.response_headers_list = &.{
+                .{ .name = "Content-Type", .value = case.content_type },
+                .{ .name = "Content-Encoding", .value = encoding },
+            };
+        } else {
+            mock.response_headers_list = &.{
+                .{ .name = "Content-Type", .value = case.content_type },
+            };
+        }
+        var recorder = RecordingTransport.init(
+            std.testing.allocator,
+            mock.asTransport(),
+        );
+        defer recorder.deinit();
+        var request = core.http.Request.init(
+            std.testing.allocator,
+            .GET,
+            "https://example.test/encoding",
+        );
+        defer request.deinit();
+        var response = try recorder.asTransport().send(&request);
+        response.deinit();
+        try std.testing.expectError(
+            case.expected_error,
+            recorder.toJson(std.testing.allocator),
+        );
+    }
 }
 
 test "recording JSON decodes safe structured bodies losslessly" {
@@ -3556,6 +4249,13 @@ test "recording parser reports version encoding and base64 errors" {
         parseJson(
             std.testing.allocator,
             "{\"version\":2,\"exchanges\":[{\"request_method\":\"GET\",\"request_url\":\"https://example.com\",\"request_headers\":[],\"request_body\":null,\"response_status\":200,\"response_headers\":[],\"response_body\":{\"encoding\":\"base64\",\"data\":\"***\"}}]}",
+        ),
+    );
+    try std.testing.expectError(
+        error.InvalidRecordingJson,
+        parseJson(
+            std.testing.allocator,
+            "{\"version\":2,\"exchanges\":[{\"request_method\":\"GET\",\"request_url\":\"https://example.com\",\"request_headers\":[{\"name\":\"x-test\",\"value\":\"value\",\"redacted\":\"yes\"}],\"request_body\":null,\"response_status\":200,\"response_headers\":[],\"response_body\":{\"encoding\":\"base64\",\"data\":\"\"}}]}",
         ),
     );
 }
