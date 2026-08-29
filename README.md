@@ -28,12 +28,16 @@ recorded request header. Additional live request headers are allowed so
 volatile telemetry can be omitted from recordings. Response header order and
 duplicates are preserved.
 
-`RecordingTransport.toJson` emits version 2 recordings. Accepted request and
-response bodies are represented losslessly as base64 with an explicit encoding
-field. Every non-empty body is rejected by default and requires an explicit
-caller body-policy decision. Approved textual and binary bodies, including NUL
-and non-UTF-8 data, then round-trip exactly through `parseJson`. Parsed
-recordings can be passed directly to playback:
+`RecordingTransport.toJson` emits version 3 recordings. Version 3 records a
+stable outcome stage and error category for transport/send, open, response-body,
+and finish failures; playback reproduces the failure at that stage without
+persisting backend-specific error identities. Version 2 successful-response
+recordings remain readable. Accepted request and response bodies are
+represented losslessly as base64 with an explicit encoding field. Every
+non-empty body is rejected by default and requires an explicit caller
+body-policy decision. Approved textual and binary bodies, including NUL and
+non-UTF-8 data, then round-trip exactly through `parseJson`. Parsed recordings
+can be passed directly to playback:
 
 ```zig
 var parsed = try testing.parseJson(allocator, json);
@@ -46,7 +50,15 @@ pipeline transaction. Redirect and retry responses are recorded and replayed
 in the order observed. Buffered responses are recorded when the inner
 transport returns them. Streaming responses are recorded when the operation
 finishes, is aborted, or is cancelled, including only response body bytes
-observed before that terminal event.
+observed before that terminal event. A body failure retains its partial bytes
+and replays the error after those bytes; a finish failure replays only from
+`finish`.
+
+Request metadata and exchange capacity are allocated before dispatch.
+Bookkeeping allocation failure after dispatch or deinitializing an open
+operation without a terminal event poisons the recorder. `isComplete` then
+returns false, subsequent dispatch is rejected, and `toJson` returns
+`IncompleteRecording` rather than silently emitting a divergent sequence.
 
 A redirect allocation failure still consumed a real transport attempt. A
 later caller retry therefore requires the next recorded attempt, just as live
@@ -71,15 +83,18 @@ requirements.
 `Location`, `Content-Location`, `Operation-Location`, and
 `Azure-AsyncOperation` retain their origin/path and nonsensitive query fields;
 only recognized credential query values are replaced. This keeps redirect and
-LRO URLs replayable. Malformed or unsafe location values are fully redacted.
+LRO URLs replayable. Malformed or unsafe non-fragment location values are
+fully redacted.
 Credential source URL headers such as `x-ms-copy-source` remain fully redacted.
 URL sanitization parses the URI reference from its start, percent-decodes path
-and query components through a bounded recursive decoder, recursively inspects
-URI-valued parameters, redacts recognized credential names and
-credential-shaped values, and rejects credential-bearing paths or fragments.
-Safe fragments are preserved in recorded URL headers; Core strips them when
-constructing the redirected HTTP request. Unsafe or malformed location
-fragments cause full header redaction. Relative redirects such as
+and query components through a bounded recursive decoder, and recursively
+sanitizes URI-valued parameters. Nested URIs are re-encoded with their
+host/path/nonsensitive fields preserved and exact while only nested credential
+fields are redacted. Credential-bearing paths are rejected. Safe fragments
+are preserved in recorded URL headers; Core strips them when constructing the
+redirected HTTP request. Recognized sensitive Location fragments are stripped
+while preserving the replayable pre-fragment target; malformed location
+fragments fail closed. Relative redirects such as
 `/callback?return=https://...` remain replayable when their decoded values are
 safe. Safe network-path references such as `//example.test/final` and pathless
 absolute references such as `https://example.test?mode=one` are preserved;
@@ -186,11 +201,13 @@ legal preambles, epilogues, and nested multipart parts are inspected, while
 invalid close suffixes, missing closes, and malformed multipart structures fail
 closed. Policy contexts are borrowed through `toJson`.
 
-Playback consumes one exchange for each successful raw transport invocation.
-Buffered attempts advance after response allocation succeeds; streaming
-attempts advance after operation allocation succeeds. Outer pipeline redirect
-allocation, retry, backoff, and cancellation behavior does not roll back an
-already completed raw attempt.
+Playback consumes one exchange for each raw transport invocation, including
+recorded failures. Buffered attempts advance after either a recorded transport
+error is returned or response allocation succeeds. Streaming attempts advance
+after either a recorded open error is returned or operation allocation
+succeeds. Body and finish outcomes then replay from the operation. Outer
+pipeline redirect allocation, retry, backoff, and cancellation behavior does
+not roll back an already completed raw attempt.
 
 Run its independent tests from this directory:
 
