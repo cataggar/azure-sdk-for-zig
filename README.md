@@ -169,6 +169,7 @@ const receiver = try amqp.openReceiver(&session, .{
     .name = link_name,
     .source_address = "myhub/ConsumerGroups/$Default/Partitions/0",
     .max_message_size = 4 * 1024 * 1024,
+    .max_buffered_bytes = 256 * 1024 * 1024,
 }, deadline_ms);
 ```
 
@@ -181,9 +182,24 @@ does not pay for tearing links down on a number the peer chose. Setting yours
 to `null` restores unlimited reassembly, which is what let a sender open a
 delivery, never end it, and grow the buffer until the process died.
 
-This bounds one message. A receiver holds up to its outstanding credit plus
-`max_overrun` completed deliveries at once, so the memory one link can tie up
-is that product: at the default prefetch, ~600 times this.
+`max_buffered_bytes` separately bounds the aggregate payload retained in the
+ready queue and the delivery currently being reassembled. It defaults to
+256 MiB. Initial credit and every top-up are capped conservatively by the
+remaining byte budget divided by `max_message_size`, so the default 128 MiB
+message limit advertises at most two credits even though `prefetch` defaults to
+300. As deliveries leave the queue their bytes are released and credit is
+replenished. A sender that ignores credit is detached with
+`amqp:resource-limit-exceeded` before the chunk that would cross the budget is
+retained.
+
+The delivery already returned to the caller is outside the aggregate budget
+and remains valid until the next successful `receive`; it is still bounded by
+`max_message_size`. Thus the default worst case is 256 MiB buffered plus one
+128 MiB caller-held delivery, not roughly 75 GiB. Set
+`max_buffered_bytes = null` only to opt out explicitly. Callers that know a
+service's smaller message limit should set `max_message_size` accordingly:
+that both advertises the real limit and permits proportionally more of the
+requested prefetch window.
 
 Settling one delivery at a time costs a frame per message, which at a 300-deep
 prefetch is 300 frames of bookkeeping. A disposition can name a `first`..`last`
@@ -261,6 +277,13 @@ as it was before.
 Deliveries settle in the order they were sent, and the ring holding them is
 allocated once at attach, so a silent peer costs a fixed amount of memory rather
 than a growing one.
+
+If a multi-frame send fails after its opening transfer reached the wire, the
+link is poisoned and detached best-effort. The peer is already holding an
+unterminated delivery, so starting another delivery on that link would instead
+continue the failed bytes and corrupt the protocol stream. Recovery must open a
+new sender. Link credit and delivery count are consumed when the first frame
+succeeds, while no settlement entry is created for the incomplete delivery.
 
 `abandonInFlight` is the way out of a pipeline that failed partway. Waiting is
 what just failed, so the caller cannot wait the remaining deliveries out, and a

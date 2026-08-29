@@ -180,6 +180,10 @@ pub const MemoryTransport = struct {
     closed: bool = false,
     /// Set by tests to make the next `write` fail.
     fail_write: bool = false,
+    /// Number of successful writes. Tests can fail a later write precisely,
+    /// after an earlier frame has already reached the wire.
+    write_count: usize = 0,
+    fail_write_after: ?usize = null,
 
     pub fn init(allocator: Allocator) MemoryTransport {
         return .{ .allocator = allocator };
@@ -234,8 +238,13 @@ pub const MemoryTransport = struct {
     fn memWrite(ptr: *anyopaque, bytes: []const u8) TransportError!void {
         const self: *MemoryTransport = @ptrCast(@alignCast(ptr));
         if (self.closed) return error.ConnectionClosed;
-        if (self.fail_write) return error.WriteFailed;
+        if (self.fail_write or
+            (self.fail_write_after != null and self.write_count >= self.fail_write_after.?))
+        {
+            return error.WriteFailed;
+        }
         try self.pending.appendSlice(self.allocator, bytes);
+        self.write_count += 1;
     }
 
     fn memFlush(ptr: *anyopaque) TransportError!void {

@@ -31,6 +31,8 @@ pub const LinkError = connection.ConnectionError || error{
     UnknownHandle,
     /// The peer sent a transfer without the credit to do so.
     CreditExceeded,
+    /// Buffered deliveries reached `ReceiverOptions.max_buffered_bytes`.
+    BufferLimitExceeded,
     /// `max_in_flight` deliveries are already unsettled; retire one with
     /// `awaitSettlement` before sending again.
     InFlightWindowFull,
@@ -346,6 +348,9 @@ pub const Session = struct {
         }
         if (self.receiverFor(d.handle)) |r| {
             r.attached = false;
+            // A detached link can still hand already completed deliveries to
+            // its caller, but an in-progress one can never finish.
+            r.clearPartialAndFree();
             try r.recordDetach(d.err);
         }
     }
@@ -793,12 +798,17 @@ pub const Sender = struct {
     /// Returns `error.InFlightWindowFull` when `max_in_flight` deliveries are
     /// already unsettled. Blocking instead would deadlock: only the caller
     /// can retire a delivery, and it cannot do so from inside this call.
+    ///
+    /// If a continuation fails after the opening frame was written, the link
+    /// is poisoned and later sends return `error.LinkDetached`; recovery must
+    /// open a new sender.
     pub fn sendBytesAsync(
         self: *Sender,
         payload: []const u8,
         options: SendOptions,
         deadline_ms: i64,
     ) LinkError!DeliveryToken {
+        if (!self.attached) return error.LinkDetached;
         if (self.maxMessageSize()) |limit| {
             if (payload.len > limit) return error.MessageTooLarge;
         }
@@ -820,6 +830,9 @@ pub const Sender = struct {
             try self.chunkBudget(delivery_id, &tag, false, options.message_format)
         else
             first_budget;
+        var begun = false;
+        var complete = false;
+        errdefer if (begun and !complete) self.poisonPartialDelivery();
 
         while (first or offset < payload.len) {
             const budget = if (first) first_budget else cont_budget;
@@ -845,6 +858,17 @@ pub const Sender = struct {
             const frame_cap = self.session.driver.maxOutgoingBody() - budget + take;
             try self.sendTransfer(xfer, payload[offset..][0..take], frame_cap);
 
+            if (first) {
+                // Link credit and delivery-count are consumed when a delivery
+                // begins, not when its final continuation is written. Keeping
+                // them until the end made a failed multi-frame delivery look
+                // as though it had never existed even though the peer had
+                // already accepted its opening transfer.
+                self.delivery_count +%= 1;
+                self.credit -|= 1;
+                begun = true;
+            }
+
             // Session ids count transfer *frames*, not deliveries (§2.5.6):
             // every frame of a multi-frame delivery consumes one, even though
             // only the first carries the delivery id. Advancing once per
@@ -858,17 +882,37 @@ pub const Sender = struct {
             first = false;
         }
 
-        self.delivery_count +%= 1;
-        self.credit -|= 1;
+        complete = true;
 
-        // Pushed only once every frame is away: a partially written delivery
-        // has no outcome to wait for, and leaving it in the ring would stall
-        // the next `awaitSettlement` on a disposition that cannot arrive.
+        // Pushed only once every frame is away. A failure after the opening
+        // frame poisons the link instead: the peer is holding an unterminated
+        // delivery, so reusing the link would make the next transfer a
+        // continuation of bytes the caller believed had failed.
         self.in_flight[(self.in_flight_head + self.in_flight_len) % self.in_flight.len] = .{
             .id = delivery_id,
         };
         self.in_flight_len += 1;
         return .{ .id = delivery_id };
+    }
+
+    /// Make a link with an unterminated outbound delivery unusable.
+    ///
+    /// A detach is best effort. A session-window timeout leaves the transport
+    /// usable and the peer benefits from being told; a socket failure may make
+    /// this write fail too. Local poisoning is unconditional either way, so a
+    /// caller can only recover by opening a new link.
+    fn poisonPartialDelivery(self: *Sender) void {
+        self.attached = false;
+        self.session.driver.sendPerformative(.amqp, self.session.channel, .{
+            .detach = .{
+                .handle = self.handle,
+                .closed = true,
+                .err = .{
+                    .condition = "amqp:link:detach-forced",
+                    .description = "outbound delivery did not reach its final transfer",
+                },
+            },
+        }) catch {};
     }
 
     /// Wait for the oldest delivery still in flight to settle and retire it.
@@ -1072,11 +1116,19 @@ pub const ReceiverOptions = struct {
     /// Null means unlimited, which is what let a delivery that never ends grow
     /// the reassembly buffer until the process died (#347). The peer's own
     /// declaration is not consulted; `Receiver.maxMessageSize` says why.
-    ///
-    /// This bounds one message. A receiver holds up to its outstanding credit
-    /// plus `max_overrun` completed deliveries at once, so raising this
-    /// multiplies against that: at the default prefetch, ~600 of these.
     max_message_size: ?u64 = default_max_message_size,
+    /// Aggregate payload bytes retained in completed deliveries and the
+    /// delivery currently being reassembled.
+    ///
+    /// Credit is capped so a conforming peer cannot fill more than this even
+    /// when every delivery reaches `max_message_size`. A peer that ignores
+    /// credit is detached before accepting the chunk that would cross it.
+    /// The delivery already handed to the caller is outside this budget; it is
+    /// bounded separately by `max_message_size` and remains valid until the
+    /// next successful `receive`.
+    ///
+    /// Null explicitly disables the aggregate bound.
+    max_buffered_bytes: ?u64 = default_max_buffered_bytes,
 };
 
 /// The floor for a derived `max_overrun`, so a receiver driving credit by
@@ -1092,10 +1144,16 @@ const min_overrun_allowance: u32 = 64;
 /// (`x-opt-sequence-number`, `x-opt-enqueued-time`, and friends), and going
 /// over detaches the link rather than returning something retryable.
 ///
-/// This bounds one message. A receiver holds up to its outstanding credit plus
-/// `max_overrun` completed deliveries at once, so the memory one link can tie
-/// up is that product — with the default prefetch, ~600 x this.
 pub const default_max_message_size: u64 = 128 * 1024 * 1024;
+
+/// Default aggregate ceiling for payload bytes retained by one receiver.
+///
+/// Two maximum-size deliveries fit, so Service Bus Premium's 100 MB messages
+/// retain useful read-ahead while a default receiver is bounded at 256 MiB
+/// rather than the roughly 75 GiB implied by 300 credits plus overrun. Event
+/// Hubs callers that advertise its smaller service limit get proportionally
+/// more of their requested prefetch window.
+pub const default_max_buffered_bytes: u64 = 256 * 1024 * 1024;
 
 /// §2.7.3: an absent *or zero* `max-message-size` means no limit.
 fn normalizeMaxMessageSize(size: ?u64) ?u64 {
@@ -1136,6 +1194,10 @@ pub const Receiver = struct {
     /// `maxMessageSize` says why. It is the largest message the *peer*
     /// supports, which is a bound on a sender rather than on us.
     peer_max_message_size: ?u64 = null,
+    /// Payload bytes in `partial` and the live portion of `ready`. The
+    /// delivery handed to the caller is no longer buffered and is not counted.
+    buffered_bytes: u64 = 0,
+    max_buffered_bytes: ?u64 = null,
     detach_error: ?connection.RemoteError = null,
 
     /// Bytes of the delivery currently being assembled.
@@ -1159,17 +1221,71 @@ pub const Receiver = struct {
     pub fn deinit(self: *Receiver) void {
         self.allocator.free(self.name);
         if (self.detach_error) |e| e.deinit(self.allocator);
+        self.releaseBuffered(self.partial.items.len);
         self.partial.deinit(self.allocator);
         self.partial_tag.deinit(self.allocator);
         // Everything before `ready_head` was already handed out, so its
         // buffers belong to `current` and are freed by `releaseCurrent`.
         for (self.ready.items[self.ready_head..]) |d| {
+            self.releaseBuffered(d.payload.len);
             self.allocator.free(d.payload);
             self.allocator.free(d.tag);
         }
         self.ready.deinit(self.allocator);
         self.releaseCurrent();
+        std.debug.assert(self.buffered_bytes == 0);
         self.allocator.destroy(self);
+    }
+
+    fn retainBuffered(self: *Receiver, bytes: usize) void {
+        self.buffered_bytes +|= @intCast(bytes);
+    }
+
+    fn releaseBuffered(self: *Receiver, bytes: usize) void {
+        self.buffered_bytes -|= @intCast(bytes);
+    }
+
+    fn bufferWouldOverflow(self: *const Receiver, bytes: usize) bool {
+        const limit = self.max_buffered_bytes orelse return false;
+        const add = std.math.cast(u64, bytes) orelse return true;
+        return self.buffered_bytes > limit or add > limit - self.buffered_bytes;
+    }
+
+    fn clearPartialRetainingCapacity(self: *Receiver) void {
+        self.releaseBuffered(self.partial.items.len);
+        self.partial.clearRetainingCapacity();
+        self.partial_tag.clearRetainingCapacity();
+        self.partial_id = null;
+    }
+
+    fn clearPartialAndFree(self: *Receiver) void {
+        self.releaseBuffered(self.partial.items.len);
+        self.partial.clearAndFree(self.allocator);
+        self.partial_tag.clearAndFree(self.allocator);
+        self.partial_id = null;
+    }
+
+    fn ensurePartialCapacity(self: *Receiver, needed: usize) Allocator.Error!void {
+        if (self.partial.capacity >= needed) return;
+
+        var ceiling: usize = std.math.maxInt(usize);
+        if (self.maxMessageSize()) |limit| {
+            ceiling = @min(ceiling, std.math.cast(usize, limit) orelse ceiling);
+        }
+        if (self.max_buffered_bytes) |limit| {
+            const other = self.buffered_bytes -| @as(u64, @intCast(self.partial.items.len));
+            const available = limit -| other;
+            ceiling = @min(ceiling, std.math.cast(usize, available) orelse ceiling);
+        }
+
+        // Grow geometrically, but never reserve bytes beyond either ceiling.
+        // Exact growth on every continuation would make a long delivery
+        // quadratic; unconstrained ArrayList growth could retain more than the
+        // aggregate budget even when the logical payload remained within it.
+        const geometric = self.partial.capacity +|
+            (self.partial.capacity / 2) +| 8;
+        const target = @min(@max(needed, geometric), ceiling);
+        try self.partial.ensureTotalCapacityPrecise(self.allocator, target);
     }
 
     fn recordDetach(self: *Receiver, err: ?perf.AmqpError) LinkError!void {
@@ -1254,8 +1370,13 @@ pub const Receiver = struct {
                 if (self.maxMessageSize()) |limit| {
                     if (chunk.len > limit) try self.refuseOversize();
                 }
+                if (self.bufferWouldOverflow(chunk.len)) try self.refuseBufferLimit();
                 const payload = try self.allocator.dupe(u8, chunk);
-                errdefer self.allocator.free(payload);
+                self.retainBuffered(payload.len);
+                errdefer {
+                    self.releaseBuffered(payload.len);
+                    self.allocator.free(payload);
+                }
                 const tag = try self.allocator.dupe(u8, t.delivery_tag orelse "");
                 errdefer self.allocator.free(tag);
                 return self.enqueue(id, tag, payload, t.settled orelse false);
@@ -1264,31 +1385,38 @@ pub const Receiver = struct {
 
         if (t.delivery_id) |id| {
             // A new delivery starts here.
-            self.partial.clearRetainingCapacity();
-            self.partial_tag.clearRetainingCapacity();
+            self.clearPartialRetainingCapacity();
             self.partial_id = id;
             self.partial_settled = t.settled orelse false;
             if (t.delivery_tag) |tag| try self.partial_tag.appendSlice(self.allocator, tag);
         }
         if (self.partial_id == null) return error.MalformedFrame;
 
+        const new_len = std.math.add(usize, self.partial.items.len, chunk.len) catch {
+            try self.refuseOversize();
+            unreachable;
+        };
         if (self.maxMessageSize()) |limit| {
-            if (self.partial.items.len + chunk.len > limit) try self.refuseOversize();
+            if (new_len > limit) try self.refuseOversize();
         }
-        try self.partial.appendSlice(self.allocator, chunk);
+        if (self.bufferWouldOverflow(chunk.len)) try self.refuseBufferLimit();
+        try self.ensurePartialCapacity(new_len);
+        self.partial.appendSliceAssumeCapacity(chunk);
+        self.retainBuffered(chunk.len);
 
         if (t.more) return;
 
         // The delivery is complete.
-        const payload = try self.allocator.dupe(u8, self.partial.items);
-        errdefer self.allocator.free(payload);
-        const tag = try self.allocator.dupe(u8, self.partial_tag.items);
+        const payload = try self.partial.toOwnedSlice(self.allocator);
+        errdefer {
+            self.releaseBuffered(payload.len);
+            self.allocator.free(payload);
+        }
+        const tag = try self.partial_tag.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(tag);
 
         const id = self.partial_id.?;
         const settled = self.partial_settled;
-        self.partial.clearRetainingCapacity();
-        self.partial_tag.clearRetainingCapacity();
         self.partial_id = null;
 
         try self.enqueue(id, tag, payload, settled);
@@ -1315,6 +1443,25 @@ pub const Receiver = struct {
         return normalizeMaxMessageSize(self.max_message_size);
     }
 
+    /// Aggregate payload bytes currently waiting in this receiver.
+    pub fn bufferedBytes(self: *const Receiver) u64 {
+        return self.buffered_bytes;
+    }
+
+    /// Maximum credit that can be outstanding without letting a conforming
+    /// sender exceed the aggregate payload budget.
+    fn byteCreditCapacity(self: *const Receiver) u32 {
+        const limit = self.max_buffered_bytes orelse return std.math.maxInt(u32);
+        if (self.buffered_bytes >= limit) return 0;
+        const free = limit - self.buffered_bytes;
+        // With no per-message bound, one delivery may consume the whole
+        // aggregate budget. If the configured message limit is larger than
+        // the aggregate budget, the aggregate limit remains authoritative.
+        const reservation = @min(self.maxMessageSize() orelse limit, limit);
+        if (reservation == 0) return 0;
+        return @intCast(@min(free / reservation, std.math.maxInt(u32)));
+    }
+
     /// Grant `count` more credit to the peer.
     ///
     /// Anything the peer already took beyond its last grant is charged against
@@ -1332,29 +1479,51 @@ pub const Receiver = struct {
     /// credit onto this endpoint's delivery count: a peer must not be able to
     /// clear the debt it ran up simply by asserting a new window.
     fn grant(self: *Receiver, amount: u32) void {
-        const charged = @min(self.overrun, amount);
+        const bounded = @min(amount, self.byteCreditCapacity());
+        const charged = @min(self.overrun, bounded);
         self.overrun -= charged;
-        self.credit = amount - charged;
+        self.credit = bounded - charged;
     }
 
     /// Top prefetch credit back up once half of it has been consumed, so a
     /// prefetching receiver never stalls waiting for the caller.
     fn replenish(self: *Receiver) LinkError!void {
         if (self.prefetch == 0) return;
-        if (self.credit > self.prefetch / 2) return;
+        const target = @min(self.prefetch, self.byteCreditCapacity());
+        if (target == 0) return;
+        // A one- or two-delivery byte window has no useful half-window: using
+        // its last credit avoids a flow write before every second delivery.
+        if (self.credit > 0 and
+            (target <= 2 or self.credit > target / 2))
+        {
+            return;
+        }
         // A peer that ran past its last grant is granted that much less now,
         // so it is slowed rather than handed the same window again. Run far
         // enough past and the charge cancels the window entirely, which is
         // what "stop granting credit" means here; keep going and
         // `refuseOverrun` ends the link.
+        const before = self.credit;
         self.grant(self.prefetch);
         // No flow when the charge cancelled the whole window. A peer only gets
         // here by ignoring credit already, so announcing zero to it buys
         // nothing and would put a frame on the wire per `receive` for as long
         // as it misbehaves. A peer merely racing a flow is usually charged
         // less than a window and is still told its reduced credit below.
-        if (self.credit == 0) return;
+        if (self.credit == 0 or self.credit == before) return;
         try self.session.sendFlow(self);
+    }
+
+    /// Charge overrun debt as buffered deliveries are released, but defer a
+    /// positive top-up while a ready backlog already exists. This preserves
+    /// the running credit accounting without making `receive` fail while
+    /// handing back events that arrived before a connection failure.
+    fn chargeOverrunAfterRelease(self: *Receiver, bytes: usize) void {
+        if (self.prefetch == 0 or self.overrun == 0) return;
+        self.releaseBuffered(bytes);
+        defer self.retainBuffered(bytes);
+        const allowance = @min(self.prefetch, self.byteCreditCapacity());
+        self.overrun -= @min(self.overrun, allowance);
     }
 
     /// Detach because the peer sent a message past our declared limit.
@@ -1370,9 +1539,7 @@ pub const Receiver = struct {
         // `refuseOverrun`: a send failure must not leave the link looking
         // attached and retrying this on every subsequent transfer.
         self.attached = false;
-        self.partial.clearAndFree(self.allocator);
-        self.partial_tag.clearAndFree(self.allocator);
-        self.partial_id = null;
+        self.clearPartialAndFree();
         try self.session.driver.sendPerformative(.amqp, self.session.channel, .{
             .detach = .{
                 .handle = self.handle,
@@ -1384,6 +1551,24 @@ pub const Receiver = struct {
             },
         });
         return error.MessageTooLarge;
+    }
+
+    /// Detach before retaining payload bytes past the configured aggregate
+    /// receiver budget.
+    fn refuseBufferLimit(self: *Receiver) LinkError!void {
+        self.attached = false;
+        self.clearPartialAndFree();
+        try self.session.driver.sendPerformative(.amqp, self.session.channel, .{
+            .detach = .{
+                .handle = self.handle,
+                .closed = true,
+                .err = .{
+                    .condition = "amqp:resource-limit-exceeded",
+                    .description = "receiver buffered payload budget exhausted",
+                },
+            },
+        });
+        return error.BufferLimitExceeded;
     }
 
     /// Tear the link down once a peer has run too far past its credit.
@@ -1407,6 +1592,7 @@ pub const Receiver = struct {
         // subsequent transfer. The caller then sees the send error rather than
         // `CreditExceeded`, which is the more urgent of the two.
         self.attached = false;
+        self.clearPartialAndFree();
         try self.session.driver.sendPerformative(.amqp, self.session.channel, .{
             .detach = .{
                 .handle = self.handle,
@@ -1431,8 +1617,10 @@ pub const Receiver = struct {
         }
 
         const delivery = self.ready.items[self.ready_head];
+        self.chargeOverrunAfterRelease(delivery.payload.len);
         self.ready_head += 1;
         self.compactReady();
+        self.releaseBuffered(delivery.payload.len);
 
         // Only now that a replacement is in hand, so a `receive` that fails or
         // times out leaves the previously returned delivery readable, as it
@@ -1444,7 +1632,6 @@ pub const Receiver = struct {
         self.current = delivery.payload;
         self.current_tag = delivery.tag;
 
-        try self.replenish();
         return delivery;
     }
 
@@ -1601,6 +1788,7 @@ pub fn openReceiver(
         .max_overrun = options.max_overrun orelse
             @max(options.prefetch, min_overrun_allowance),
         .max_message_size = options.max_message_size,
+        .max_buffered_bytes = options.max_buffered_bytes,
     };
 
     try session.receivers.append(session.allocator, receiver);
@@ -1789,6 +1977,140 @@ test "a message past max-frame-size is split and reassembles to the original" {
     for (frames.bodies.items) |body| {
         try testing.expect(body.len + frame.frame_header_size <= 512);
     }
+}
+
+test "a session-window timeout after the first frame poisons the sender" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try peer.pushHeader(&frame.amqp_header);
+    try peer.push(0, .{ .open = .{
+        .container_id = "service-bus",
+        .max_frame_size = 512,
+        .channel_max = 255,
+    } });
+    // Exactly one transfer frame fits. The continuation has to wait for a
+    // flow that this peer deliberately never sends.
+    try peer.push(0, .{ .begin = .{
+        .remote_channel = 0,
+        .next_outgoing_id = 1,
+        .incoming_window = 1,
+        .outgoing_window = 1000,
+    } });
+    try peer.push(0, .{ .attach = .{
+        .name = "producer",
+        .handle = 0,
+        .role = .receiver,
+        .initial_delivery_count = 0,
+    } });
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 1,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+        .handle = 0,
+        .delivery_count = 0,
+        .link_credit = 5,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+    }, 10_000);
+
+    const big = try allocator.alloc(u8, 1500);
+    defer allocator.free(big);
+    @memset(big, 'x');
+
+    mem.clearWritten();
+    mem.starve = true;
+    try testing.expectError(error.Timeout, sender.sendBytesAsync(big, .{}, 0));
+
+    try testing.expect(!sender.attached);
+    try testing.expectEqual(@as(u32, 1), sender.delivery_count);
+    try testing.expectEqual(@as(u32, 4), sender.credit);
+    try testing.expectEqual(@as(usize, 0), sender.inFlight());
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const transfers = try frames.of(allocator, perf.descriptor.transfer);
+    defer allocator.free(transfers);
+    try testing.expectEqual(@as(usize, 1), transfers.len);
+    var decoded = try perf.decode(allocator, transfers[0]);
+    defer decoded.deinit();
+    try testing.expect(decoded.performative.transfer.more);
+    const detaches = try frames.of(allocator, perf.descriptor.detach);
+    defer allocator.free(detaches);
+    try testing.expectEqual(@as(usize, 1), detaches.len);
+
+    // A crossing disposition for the incomplete id has no phantom ring entry
+    // to retire or settle twice.
+    try peer.push(0, .{ .disposition = .{
+        .role = .receiver,
+        .first = 0,
+        .last = 0,
+        .settled = true,
+        .state = .accepted,
+    } });
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(usize, 0), sender.inFlight());
+
+    const before = mem.written().len;
+    try testing.expectError(error.LinkDetached, sender.sendBytesAsync("new", .{}, 10_000));
+    try testing.expectEqual(before, mem.written().len);
+}
+
+test "a socket failure after the first frame poisons the sender" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptSenderAttach(peer, 5);
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const sender = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+    }, 10_000);
+
+    const big = try allocator.alloc(u8, 150_000);
+    defer allocator.free(big);
+    @memset(big, 'x');
+
+    mem.clearWritten();
+    // A frame is two writes, header then body. Fail the continuation's header.
+    mem.fail_write_after = mem.write_count + 2;
+    try testing.expectError(error.WriteFailed, sender.sendBytesAsync(big, .{}, 10_000));
+
+    try testing.expect(!sender.attached);
+    try testing.expectEqual(@as(u32, 1), sender.delivery_count);
+    try testing.expectEqual(@as(u32, 4), sender.credit);
+    try testing.expectEqual(@as(usize, 0), sender.inFlight());
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const transfers = try frames.of(allocator, perf.descriptor.transfer);
+    defer allocator.free(transfers);
+    try testing.expectEqual(@as(usize, 1), transfers.len);
+
+    mem.fail_write_after = null;
+    const before = mem.written().len;
+    try testing.expectError(error.LinkDetached, sender.sendBytesAsync("new", .{}, 10_000));
+    try testing.expectEqual(before, mem.written().len);
 }
 
 test "a delivery carries the requested message format" {
@@ -3242,6 +3564,43 @@ fn multiFrameReceiveUnderAllocator(allocator: Allocator) !void {
     try receiver.accept(delivery);
 }
 
+fn bufferedReceiveUnderAllocator(allocator: Allocator) !void {
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 0,
+        .delivery_tag = "t",
+        .settled = true,
+    }, "event");
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "partition/0",
+        .prefetch = 1,
+        .max_message_size = 8,
+        .max_buffered_bytes = 8,
+    }, 10_000);
+    const delivery = try receiver.receive(10_000);
+    try testing.expectEqualStrings("event", delivery.payload);
+    try testing.expectEqual(@as(u64, 0), receiver.bufferedBytes());
+}
+
 test "reassembling a delivery leaks nothing however the allocator fails" {
     // A multi-frame delivery is the receive path's allocating shape: the
     // payload buffer grows per frame, and on completion the payload and the
@@ -3257,6 +3616,14 @@ test "reassembling a delivery leaks nothing however the allocator fails" {
     try testing.checkAllAllocationFailures(
         testing.allocator,
         multiFrameReceiveUnderAllocator,
+        .{},
+    );
+}
+
+test "aggregate receive accounting survives every allocation failure" {
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        bufferedReceiveUnderAllocator,
         .{},
     );
 }
@@ -3814,6 +4181,7 @@ test "draining an already queued backlog allocates nothing" {
         .name = "consumer",
         .source_address = "eh/ConsumerGroups/$default/Partitions/0",
         .prefetch = 128,
+        .max_buffered_bytes = null,
     }, 10_000);
 
     // Queue the whole backlog first, so the receives below are pure drain.
@@ -4040,6 +4408,7 @@ test "a prefetching receiver replenishes credit rather than stalling" {
         .name = "consumer",
         .source_address = "eh/ConsumerGroups/$default/Partitions/0",
         .prefetch = prefetch,
+        .max_buffered_bytes = null,
     }, 10_000);
 
     mem.clearWritten();
@@ -4091,6 +4460,7 @@ test "the attach flow issues the requested prefetch credit" {
         .name = "consumer",
         .source_address = "eh",
         .prefetch = 250,
+        .max_buffered_bytes = null,
     }, 10_000);
     try testing.expectEqual(@as(u32, 250), receiver.credit);
 
@@ -4359,6 +4729,7 @@ test "draining a receiver waits for the sender to consume the outstanding credit
         .name = "drainable",
         .source_address = "partition/0",
         .prefetch = 5,
+        .max_buffered_bytes = null,
     }, 10_000);
     try testing.expectEqual(@as(u32, 5), receiver.credit);
 
@@ -4796,6 +5167,7 @@ test "a peer that overruns its credit is absorbed and charged for it" {
         .name = "consumer",
         .source_address = "eh/ConsumerGroups/$default/Partitions/0",
         .prefetch = 0,
+        .max_buffered_bytes = null,
     }, 10_000);
     try receiver.issueCredit(2);
 
@@ -4921,7 +5293,7 @@ test "a prefetching receiver charges an overrun against its next top-up" {
         .initial_delivery_count = 0,
     } });
     var i: u32 = 0;
-    while (i < 6) : (i += 1) {
+    while (i < 7) : (i += 1) {
         try peer.pushTransfer(0, .{
             .handle = 0,
             .delivery_id = i,
@@ -4941,6 +5313,7 @@ test "a prefetching receiver charges an overrun against its next top-up" {
         .name = "consumer",
         .source_address = "eh/ConsumerGroups/$default/Partitions/0",
         .prefetch = prefetch,
+        .max_buffered_bytes = null,
     }, 10_000);
 
     while (receiver.ready.items.len < 6) _ = try fixture.session.pump(10_000);
@@ -4961,9 +5334,14 @@ test "a prefetching receiver charges an overrun against its next top-up" {
     defer allocator.free(none);
     try testing.expectEqual(@as(usize, 0), none.len);
 
-    // Debt cleared, so the next one grants the full window again.
-    _ = try receiver.receive(10_000);
-    try testing.expectEqual(prefetch, receiver.credit);
+    // Positive credit is deferred while a ready backlog exists: there is no
+    // reason to risk a flow write hiding events already in hand. Drain the
+    // other four, then the next receive replenishes before pumping delivery 6.
+    i = 0;
+    while (i < 4) : (i += 1) _ = try receiver.receive(10_000);
+    const next = try receiver.receive(10_000);
+    try testing.expectEqual(@as(u32, 6), next.id);
+    try testing.expectEqual(@as(u32, 1), receiver.credit);
 
     var frames = try EmittedFrames.parse(allocator, mem.written());
     defer frames.deinit();
@@ -5018,6 +5396,7 @@ test "the overrun bound is on by default, not only when asked for" {
         .name = "consumer",
         .source_address = "eh/ConsumerGroups/$default/Partitions/0",
         .prefetch = 0,
+        .max_buffered_bytes = null,
     }, 10_000);
     try testing.expectEqual(min_overrun_allowance, receiver.max_overrun);
 
@@ -5209,6 +5588,7 @@ test "a flow that does grant credit has the debt charged against it" {
         .name = "consumer",
         .source_address = "eh/ConsumerGroups/$default/Partitions/0",
         .prefetch = 0,
+        .max_buffered_bytes = null,
     }, 10_000);
 
     i = 0;
@@ -5346,6 +5726,7 @@ test "an overrun bound of zero disables the detach but not the charging" {
         .source_address = "eh/ConsumerGroups/$default/Partitions/0",
         .prefetch = 0,
         .max_overrun = 0,
+        .max_buffered_bytes = null,
     }, 10_000);
 
     // Far past what the derived bound would have been, with no detach.
@@ -5413,6 +5794,7 @@ test "a flow that names a delivery count has the debt charged against it too" {
         .name = "consumer",
         .source_address = "eh/ConsumerGroups/$default/Partitions/0",
         .prefetch = 0,
+        .max_buffered_bytes = null,
     }, 10_000);
 
     i = 0;
@@ -5897,9 +6279,13 @@ test "a receiver is bounded by default" {
     const receiver = try openReceiver(&fixture.session, .{
         .name = "consumer",
         .source_address = "eh/ConsumerGroups/$default/Partitions/0",
-        .prefetch = 0,
     }, 10_000);
     try testing.expectEqual(default_max_message_size, receiver.maxMessageSize().?);
+    try testing.expectEqual(default_max_buffered_bytes, receiver.max_buffered_bytes.?);
+    // Two worst-case messages fit in the default aggregate budget, so the
+    // requested prefetch of 300 is advertised as two rather than reserving
+    // roughly 38 GiB before overrun is considered.
+    try testing.expectEqual(@as(u32, 2), receiver.credit);
 
     var frames = try EmittedFrames.parse(allocator, mem.written());
     defer frames.deinit();
@@ -5908,6 +6294,294 @@ test "a receiver is bounded by default" {
     var decoded = try perf.decode(allocator, attaches[0]);
     defer decoded.deinit();
     try testing.expectEqual(default_max_message_size, decoded.performative.attach.max_message_size.?);
+
+    const flows = try frames.of(allocator, perf.descriptor.flow);
+    defer allocator.free(flows);
+    try testing.expectEqual(@as(usize, 1), flows.len);
+    var flow = try perf.decode(allocator, flows[0]);
+    defer flow.deinit();
+    try testing.expectEqual(@as(u32, 2), flow.performative.flow.link_credit.?);
+}
+
+test "aggregate budget caps credit and replenishes as deliveries leave the queue" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    var i: u32 = 0;
+    while (i < 4) : (i += 1) {
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = i,
+            .delivery_tag = "t",
+            .settled = true,
+            .more = false,
+        }, "12345678");
+    }
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "partition/0",
+        .prefetch = 10,
+        .max_message_size = 8,
+        .max_buffered_bytes = 24,
+    }, 10_000);
+    try testing.expectEqual(@as(u32, 3), receiver.credit);
+
+    while (receiver.ready.items.len < 3) _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(u64, 24), receiver.bufferedBytes());
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+
+    mem.clearWritten();
+    const first = try receiver.receive(10_000);
+    try testing.expectEqualStrings("12345678", first.payload);
+    try testing.expectEqual(@as(u64, 16), receiver.bufferedBytes());
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+
+    _ = try receiver.receive(10_000);
+    _ = try receiver.receive(10_000);
+    // The fourth receive finds the ready queue empty, advertises the byte
+    // budget released by the first three, and then accepts the next delivery.
+    const fourth = try receiver.receive(10_000);
+    try testing.expectEqual(@as(u32, 3), fourth.id);
+    try testing.expectEqual(@as(u64, 0), receiver.bufferedBytes());
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const flows = try frames.of(allocator, perf.descriptor.flow);
+    defer allocator.free(flows);
+    try testing.expectEqual(@as(usize, 1), flows.len);
+    var decoded = try perf.decode(allocator, flows[0]);
+    defer decoded.deinit();
+    try testing.expectEqual(@as(u32, 3), decoded.performative.flow.link_credit.?);
+}
+
+test "a credit-ignoring sender cannot cross the aggregate buffered budget" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    var i: u32 = 0;
+    while (i < 2) : (i += 1) {
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = i,
+            .delivery_tag = "t",
+            .settled = true,
+            .more = false,
+        }, "twelve-bytes");
+    }
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "partition/0",
+        .prefetch = 1,
+        .max_overrun = 0,
+        .max_message_size = 16,
+        .max_buffered_bytes = 16,
+    }, 10_000);
+
+    mem.clearWritten();
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(u64, 12), receiver.bufferedBytes());
+    try testing.expectError(error.BufferLimitExceeded, fixture.session.pump(10_000));
+    try testing.expectEqual(@as(u64, 12), receiver.bufferedBytes());
+    try testing.expectEqual(@as(usize, 1), receiver.ready.items.len);
+    try testing.expect(!receiver.attached);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const detaches = try frames.of(allocator, perf.descriptor.detach);
+    defer allocator.free(detaches);
+    try testing.expectEqual(@as(usize, 1), detaches.len);
+    var decoded = try perf.decode(allocator, detaches[0]);
+    defer decoded.deinit();
+    try testing.expectEqualStrings(
+        "amqp:resource-limit-exceeded",
+        decoded.performative.detach.err.?.condition,
+    );
+}
+
+test "aggregate budget releases an in-progress delivery when it is exceeded" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 0,
+        .delivery_tag = "t",
+        .more = true,
+    }, "0123456789");
+    try peer.pushTransfer(0, .{ .handle = 0, .more = true }, "0123456789");
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "partition/0",
+        .prefetch = 1,
+        .max_message_size = 64,
+        .max_buffered_bytes = 16,
+    }, 10_000);
+
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(u64, 10), receiver.bufferedBytes());
+    try testing.expectError(error.BufferLimitExceeded, fixture.session.pump(10_000));
+    try testing.expectEqual(@as(u64, 0), receiver.bufferedBytes());
+    try testing.expectEqual(@as(usize, 0), receiver.partial.capacity);
+    try testing.expect(!receiver.attached);
+}
+
+test "a remote detach releases an in-progress delivery's budget" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 0,
+        .delivery_tag = "t",
+        .more = true,
+    }, "0123456789");
+    try peer.push(0, .{ .detach = .{
+        .handle = 0,
+        .closed = true,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "partition/0",
+        .prefetch = 1,
+        .max_message_size = 64,
+        .max_buffered_bytes = 16,
+    }, 10_000);
+
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(u64, 10), receiver.bufferedBytes());
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(u64, 0), receiver.bufferedBytes());
+    try testing.expectEqual(@as(usize, 0), receiver.partial.capacity);
+    try testing.expect(!receiver.attached);
+}
+
+test "one receiver exhausting its budget does not block another link" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    for ([_][]const u8{ "hostile", "healthy" }, 0..) |name, handle| {
+        try peer.push(0, .{ .attach = .{
+            .name = name,
+            .handle = @intCast(handle),
+            .role = .sender,
+            .initial_delivery_count = 0,
+        } });
+    }
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 0,
+        .delivery_tag = "t",
+        .settled = true,
+    }, "123456");
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 1,
+        .delivery_tag = "t",
+        .settled = true,
+    }, "123456");
+    try peer.pushTransfer(0, .{
+        .handle = 1,
+        .delivery_id = 2,
+        .delivery_tag = "t",
+        .settled = true,
+    }, "good");
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const hostile = try openReceiver(&fixture.session, .{
+        .name = "hostile",
+        .source_address = "partition/0",
+        .prefetch = 1,
+        .max_overrun = 0,
+        .max_message_size = 8,
+        .max_buffered_bytes = 8,
+    }, 10_000);
+    const healthy = try openReceiver(&fixture.session, .{
+        .name = "healthy",
+        .source_address = "partition/1",
+        .prefetch = 1,
+        .max_message_size = 8,
+        .max_buffered_bytes = 8,
+    }, 10_000);
+
+    _ = try fixture.session.pump(10_000);
+    try testing.expectError(error.BufferLimitExceeded, fixture.session.pump(10_000));
+    try testing.expect(!hostile.attached);
+
+    const delivery = try healthy.receive(10_000);
+    try testing.expectEqualStrings("good", delivery.payload);
+    try testing.expect(healthy.attached);
 }
 
 test "a zero max-message-size means unlimited, not zero" {

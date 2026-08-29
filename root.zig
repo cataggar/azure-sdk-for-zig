@@ -55,6 +55,7 @@ pub const DecidedDelivery = link.DecidedDelivery;
 pub const Receiver = link.Receiver;
 pub const ReceiverOptions = link.ReceiverOptions;
 pub const default_max_message_size = link.default_max_message_size;
+pub const default_max_buffered_bytes = link.default_max_buffered_bytes;
 pub const Delivery = link.Delivery;
 pub const Rejection = link.Rejection;
 pub const SettleBatch = link.SettleBatch;
