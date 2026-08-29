@@ -71,6 +71,39 @@ pub const ParsedRecordings = struct {
     }
 };
 
+pub const BodyDirection = enum {
+    request,
+    response,
+};
+
+/// Exchange-aware input for an optional recording body policy.
+pub const BodySafetyContext = struct {
+    direction: BodyDirection,
+    method: core.http.Method,
+    url: []const u8,
+    content_type: ?[]const u8,
+    body: []const u8,
+};
+
+/// A caller body policy may add a schema-specific rejection or explicitly
+/// allow an otherwise opaque/unsupported body that the caller knows is safe.
+///
+/// Built-in recognized credentials and private-key markers are never bypassed
+/// by `allow_opaque`.
+pub const BodyPolicyDecision = enum {
+    inspect,
+    reject_sensitive,
+    allow_opaque,
+};
+
+pub const RecordingOptions = struct {
+    body_policy_context: ?*anyopaque = null,
+    bodyPolicyFn: ?*const fn (
+        context: ?*anyopaque,
+        body: BodySafetyContext,
+    ) BodyPolicyDecision = null,
+};
+
 /// Parse the versioned, lossless JSON format emitted by `toJson`.
 ///
 /// All returned strings and decoded bodies are allocator-owned. Invalid JSON,
@@ -305,11 +338,13 @@ const PlaybackOperation = struct {
 ///
 /// The inner descriptor is copied by value. Its context, this recording
 /// transport, and the recording allocator must outlive every open operation.
-/// `deinit` does not deinitialize the borrowed inner transport.
+/// A configured body-policy context is also borrowed and must outlive calls to
+/// `toJson`. `deinit` does not deinitialize either borrowed context.
 pub const RecordingTransport = struct {
     inner: core.http.HttpTransport,
     exchanges: std.ArrayList(OwnedExchange) = .empty,
     allocator: std.mem.Allocator,
+    options: RecordingOptions,
 
     const vtable: core.http.HttpTransport.VTable = .{
         .send = &sendImpl,
@@ -320,7 +355,19 @@ pub const RecordingTransport = struct {
         allocator: std.mem.Allocator,
         inner: core.http.HttpTransport,
     ) RecordingTransport {
-        return .{ .inner = inner, .allocator = allocator };
+        return initWithOptions(allocator, inner, .{});
+    }
+
+    pub fn initWithOptions(
+        allocator: std.mem.Allocator,
+        inner: core.http.HttpTransport,
+        options: RecordingOptions,
+    ) RecordingTransport {
+        return .{
+            .inner = inner,
+            .allocator = allocator,
+            .options = options,
+        };
     }
 
     pub fn asTransport(self: *RecordingTransport) core.http.HttpTransport {
@@ -371,8 +418,18 @@ pub const RecordingTransport = struct {
             .{recording_format_version},
         );
         for (self.exchanges.items, 0..) |exchange, index| {
-            try ensureBodySafe(allocator, exchange.request_body);
-            try ensureBodySafe(allocator, exchange.response_body);
+            try ensureExchangeBodySafe(
+                allocator,
+                self.options,
+                exchange,
+                .request,
+            );
+            try ensureExchangeBodySafe(
+                allocator,
+                self.options,
+                exchange,
+                .response,
+            );
             if (index != 0) try writer.writeAll(",");
             try writer.writeAll("\n  {\"request_method\":");
             try writeJsonString(writer, methodToString(exchange.request_method));
@@ -421,6 +478,9 @@ pub const RecordingTransport = struct {
         if (options.body != null and request.body != null)
             return error.MultipleRequestBodies;
         try checkCancelled(options.cancellation);
+        const open_fn = self.inner.vtable.open;
+        if (open_fn == null and options.body != null)
+            return error.StreamingRequestUnsupported;
 
         var pending = try PendingRequest.init(
             self.allocator,
@@ -429,8 +489,6 @@ pub const RecordingTransport = struct {
         );
         errdefer pending.deinit(self.allocator);
 
-        const open_fn = self.inner.vtable.open orelse
-            return error.WrappedTransportDoesNotSupportOpen;
         var inner_options = options;
         var request_capture: CapturingReader = undefined;
         var has_capture = false;
@@ -445,16 +503,21 @@ pub const RecordingTransport = struct {
         }
         defer if (has_capture) request_capture.deinit();
 
-        const inner_operation = open_fn(
-            self.inner.context,
-            request,
-            inner_options,
-        ) catch |err| {
-            if (has_capture) {
-                if (request_capture.failure) |failure| return failure;
+        const inner_operation = if (open_fn) |call_open|
+            call_open(
+                self.inner.context,
+                request,
+                inner_options,
+            ) catch |err| {
+                if (has_capture) {
+                    if (request_capture.failure) |failure| return failure;
+                }
+                return err;
             }
-            return err;
-        };
+        else
+            try BufferedInnerOperation.create(
+                try self.inner.vtable.send(self.inner.context, request),
+            );
         errdefer {
             inner_operation.abort();
             inner_operation.deinit();
@@ -504,6 +567,52 @@ const PendingRequest = struct {
         deinitHeaderPairs(allocator, self.headers);
         if (self.body) |body| allocator.free(body);
         self.* = undefined;
+    }
+};
+
+const BufferedInnerOperation = struct {
+    operation: core.http.HttpOperation,
+    response: core.http.Response,
+    reader_impl: std.Io.Reader,
+
+    fn create(
+        response_value: core.http.Response,
+    ) !*core.http.HttpOperation {
+        var response = response_value;
+        errdefer response.deinit();
+        const self = try response.allocator.create(BufferedInnerOperation);
+        self.* = .{
+            .operation = undefined,
+            .response = response,
+            .reader_impl = std.Io.Reader.fixed(response.body),
+        };
+        self.operation = .{
+            .status_code = response.status_code,
+            .headers = response.headers,
+            .response_headers = response.response_headers,
+            .body_reader = &self.reader_impl,
+            .finishFn = &finishImpl,
+            .abortFn = &abortImpl,
+            .cancelFn = &abortImpl,
+            .deinitFn = &deinitImpl,
+        };
+        return &self.operation;
+    }
+
+    fn finishImpl(operation: *core.http.HttpOperation) !void {
+        const self: *BufferedInnerOperation =
+            @alignCast(@fieldParentPtr("operation", operation));
+        _ = try self.reader_impl.discardRemaining();
+    }
+
+    fn abortImpl(_: *core.http.HttpOperation) void {}
+
+    fn deinitImpl(operation: *core.http.HttpOperation) void {
+        const self: *BufferedInnerOperation =
+            @alignCast(@fieldParentPtr("operation", operation));
+        const allocator = self.response.allocator;
+        self.response.deinit();
+        allocator.destroy(self);
     }
 };
 
@@ -1272,6 +1381,10 @@ const explicitly_sensitive_headers = [_][]const u8{
     "x-ms-sas-token",
     "aeg-sas-key",
     "aeg-sas-token",
+    "aad-token",
+    "identity-token",
+    "lock-token",
+    "x-auth-token",
     "ocp-apim-subscription-key",
     "api-key",
     "x-api-key",
@@ -1330,6 +1443,11 @@ const sensitive_body_fields = [_][]const u8{
     "outputdatauri",
     "urlsource",
     "token",
+    "aadtoken",
+    "identitytoken",
+    "oidctoken",
+    "assertiontoken",
+    "sastoken",
     "aegsaskey",
     "aegsastoken",
     "authorization",
@@ -1370,7 +1488,10 @@ pub fn isSensitiveHeader(name: []const u8) bool {
         containsIgnoreCase(name, "credential") or
         containsIgnoreCase(name, "secret") or
         containsIgnoreCase(name, "signature") or
-        containsIgnoreCase(name, "token") or
+        containsIgnoreCase(name, "auth-token") or
+        containsIgnoreCase(name, "access-token") or
+        containsIgnoreCase(name, "refresh-token") or
+        containsIgnoreCase(name, "sas-token") or
         containsIgnoreCase(name, "encryption-key") or
         containsIgnoreCase(name, "api-key") or
         containsIgnoreCase(name, "apikey") or
@@ -1386,12 +1507,75 @@ pub fn isSensitiveHeader(name: []const u8) bool {
     return isFullyRedactedUrlHeader(name);
 }
 
+fn ensureExchangeBodySafe(
+    allocator: std.mem.Allocator,
+    options: RecordingOptions,
+    exchange: OwnedExchange,
+    direction: BodyDirection,
+) !void {
+    const body = switch (direction) {
+        .request => exchange.request_body,
+        .response => exchange.response_body,
+    };
+    const bytes = body orelse return;
+    if (bytes.len == 0) return;
+    const headers = switch (direction) {
+        .request => exchange.request_headers,
+        .response => exchange.response_headers,
+    };
+    const context = BodySafetyContext{
+        .direction = direction,
+        .method = exchange.request_method,
+        .url = exchange.request_url,
+        .content_type = getHeaderPair(headers, "Content-Type"),
+        .body = bytes,
+    };
+    const decision = if (options.bodyPolicyFn) |policy|
+        policy(options.body_policy_context, context)
+    else
+        .inspect;
+    if (decision == .reject_sensitive)
+        return error.SensitiveBodyRequiresSanitization;
+    return ensureBodySafe(
+        allocator,
+        context,
+        decision == .allow_opaque,
+    );
+}
+
 fn ensureBodySafe(
     allocator: std.mem.Allocator,
-    body: ?[]const u8,
+    context: BodySafetyContext,
+    allow_opaque: bool,
 ) !void {
-    const bytes = body orelse return;
-    if (!std.unicode.utf8ValidateSlice(bytes)) return;
+    const bytes = context.body;
+    if (containsPrivateKeyMarker(bytes))
+        return error.SensitiveBodyRequiresSanitization;
+
+    const content_type = context.content_type orelse "";
+    const multipart = containsIgnoreCase(content_type, "multipart/") or
+        (containsIgnoreCase(bytes, "content-disposition:") and
+            containsIgnoreCase(bytes, "form-data"));
+    if (multipart) {
+        if (containsSensitiveMultipartField(bytes))
+            return error.SensitiveBodyRequiresSanitization;
+        if (!allow_opaque) return error.UnsupportedBodySanitization;
+        return;
+    }
+
+    if (!std.unicode.utf8ValidateSlice(bytes)) {
+        if (!allow_opaque) return error.OpaqueBodyNotAllowed;
+        return;
+    }
+
+    const xml = containsIgnoreCase(content_type, "xml") or looksLikeXml(bytes);
+    if (xml) {
+        if (containsSensitiveXml(bytes) or containsSensitiveAssignment(bytes))
+            return error.SensitiveBodyRequiresSanitization;
+        if (!allow_opaque) return error.UnsupportedBodySanitization;
+        return;
+    }
+
     if (looksLikeStructuredJson(bytes)) {
         const parsed = std.json.parseFromSlice(
             std.json.Value,
@@ -1403,15 +1587,85 @@ fn ensureBodySafe(
             else => return error.UnsupportedBodySanitization,
         };
         defer parsed.deinit();
-        if (jsonContainsSensitiveField(parsed.value))
+        if (jsonContainsSensitiveField(parsed.value) or
+            (isKnownSecretEndpoint(context.url) and
+                jsonRootHasValueField(parsed.value)))
+        {
             return error.SensitiveBodyRequiresSanitization;
+        }
     }
     if (containsSensitiveAssignment(bytes) or
-        containsSensitiveXmlElement(bytes) or
-        containsIgnoreCase(bytes, "-----BEGIN PRIVATE KEY-----"))
+        containsSensitiveXml(bytes))
     {
         return error.SensitiveBodyRequiresSanitization;
     }
+}
+
+fn getHeaderPair(headers: []const HeaderPair, name: []const u8) ?[]const u8 {
+    for (headers) |header| {
+        if (std.ascii.eqlIgnoreCase(header.name, name)) return header.value;
+    }
+    return null;
+}
+
+fn containsPrivateKeyMarker(body: []const u8) bool {
+    return containsIgnoreCase(body, "-----BEGIN PRIVATE KEY-----") or
+        containsIgnoreCase(body, "-----BEGIN RSA PRIVATE KEY-----") or
+        containsIgnoreCase(body, "-----BEGIN EC PRIVATE KEY-----") or
+        containsIgnoreCase(body, "-----BEGIN ENCRYPTED PRIVATE KEY-----") or
+        containsIgnoreCase(body, "-----BEGIN OPENSSH PRIVATE KEY-----") or
+        (containsIgnoreCase(body, "-----BEGIN ") and
+            containsIgnoreCase(body, "PRIVATE KEY-----"));
+}
+
+fn containsSensitiveMultipartField(body: []const u8) bool {
+    var search_start: usize = 0;
+    while (indexOfIgnoreCasePos(body, search_start, "content-disposition:")) |start| {
+        const line_end = std.mem.indexOfAnyPos(
+            u8,
+            body,
+            start,
+            "\r\n",
+        ) orelse body.len;
+        var parameters = std.mem.splitScalar(u8, body[start..line_end], ';');
+        _ = parameters.next();
+        while (parameters.next()) |parameter| {
+            const equals = std.mem.indexOfScalar(u8, parameter, '=') orelse
+                continue;
+            const name = std.mem.trim(u8, parameter[0..equals], " \t");
+            if (!std.ascii.eqlIgnoreCase(name, "name")) continue;
+            const value = std.mem.trim(
+                u8,
+                parameter[equals + 1 ..],
+                " \t\"'",
+            );
+            if (isSensitiveBodyField(value)) return true;
+        }
+        search_start = line_end;
+    }
+    return false;
+}
+
+fn looksLikeXml(body: []const u8) bool {
+    const trimmed = std.mem.trim(u8, body, " \t\r\n");
+    return trimmed.len != 0 and trimmed[0] == '<';
+}
+
+fn isKnownSecretEndpoint(url: []const u8) bool {
+    return containsIgnoreCase(url, "vault") and
+        containsIgnoreCase(url, "/secrets/");
+}
+
+fn jsonRootHasValueField(value: std.json.Value) bool {
+    const object = switch (value) {
+        .object => |result| result,
+        else => return false,
+    };
+    var iterator = object.iterator();
+    while (iterator.next()) |entry| {
+        if (normalizedFieldEquals(entry.key_ptr.*, "value")) return true;
+    }
+    return false;
 }
 
 fn looksLikeStructuredJson(body: []const u8) bool {
@@ -1468,7 +1722,16 @@ fn isSensitiveBodyField(name: []const u8) bool {
     for (sensitive_body_fields) |field| {
         if (normalizedFieldEquals(name, field)) return true;
     }
-    return false;
+    return normalizedFieldEndsWith(name, "password") or
+        normalizedFieldEndsWith(name, "secret") or
+        normalizedFieldEndsWith(name, "connectionstring") or
+        normalizedFieldEndsWith(name, "apikey") or
+        normalizedFieldEndsWith(name, "accountkey") or
+        normalizedFieldEndsWith(name, "accesskey") or
+        normalizedFieldEndsWith(name, "encryptionkey") or
+        normalizedFieldEndsWith(name, "privatekey") or
+        normalizedFieldEndsWith(name, "sharedkey") or
+        normalizedFieldEndsWith(name, "secretkey");
 }
 
 fn normalizedFieldEquals(name: []const u8, normalized: []const u8) bool {
@@ -1485,6 +1748,24 @@ fn normalizedFieldEquals(name: []const u8, normalized: []const u8) bool {
         normalized_index += 1;
     }
     return normalized_index == normalized.len;
+}
+
+fn normalizedFieldEndsWith(name: []const u8, suffix: []const u8) bool {
+    var name_index = name.len;
+    var suffix_index = suffix.len;
+    while (suffix_index != 0) {
+        while (name_index != 0 and
+            !std.ascii.isAlphanumeric(name[name_index - 1]))
+        {
+            name_index -= 1;
+        }
+        if (name_index == 0) return false;
+        name_index -= 1;
+        suffix_index -= 1;
+        if (std.ascii.toLower(name[name_index]) != suffix[suffix_index])
+            return false;
+    }
+    return true;
 }
 
 fn containsSensitiveAssignment(body: []const u8) bool {
@@ -1539,7 +1820,7 @@ fn percentDecodeFieldName(
     return buffer[0..output_index];
 }
 
-fn containsSensitiveXmlElement(body: []const u8) bool {
+fn containsSensitiveXml(body: []const u8) bool {
     var index: usize = 0;
     while (std.mem.indexOfScalarPos(u8, body, index, '<')) |open| {
         index = open + 1;
@@ -1563,6 +1844,84 @@ fn containsSensitiveXmlElement(body: []const u8) bool {
             name = name[colon + 1 ..];
         }
         if (isSensitiveBodyField(name)) return true;
+
+        while (index < body.len and body[index] != '>') {
+            while (index < body.len and
+                (body[index] == ' ' or
+                    body[index] == '\t' or
+                    body[index] == '\r' or
+                    body[index] == '\n' or
+                    body[index] == '/'))
+            {
+                index += 1;
+            }
+            if (index >= body.len or body[index] == '>') break;
+            const attribute_start = index;
+            while (index < body.len and
+                body[index] != '=' and
+                body[index] != '>' and
+                body[index] != ' ' and
+                body[index] != '\t' and
+                body[index] != '\r' and
+                body[index] != '\n')
+            {
+                index += 1;
+            }
+            var attribute_name = body[attribute_start..index];
+            if (std.mem.lastIndexOfScalar(u8, attribute_name, ':')) |colon| {
+                attribute_name = attribute_name[colon + 1 ..];
+            }
+            while (index < body.len and
+                (body[index] == ' ' or
+                    body[index] == '\t' or
+                    body[index] == '\r' or
+                    body[index] == '\n'))
+            {
+                index += 1;
+            }
+            if (index >= body.len or body[index] != '=') continue;
+            index += 1;
+            while (index < body.len and
+                (body[index] == ' ' or
+                    body[index] == '\t' or
+                    body[index] == '\r' or
+                    body[index] == '\n'))
+            {
+                index += 1;
+            }
+            if (index >= body.len) break;
+            const quote = if (body[index] == '"' or body[index] == '\'')
+                body[index]
+            else
+                0;
+            if (quote != 0) index += 1;
+            const value_start = index;
+            while (index < body.len and
+                if (quote != 0)
+                    body[index] != quote
+                else
+                    body[index] != ' ' and
+                        body[index] != '\t' and
+                        body[index] != '\r' and
+                        body[index] != '\n' and
+                        body[index] != '>')
+            {
+                index += 1;
+            }
+            const attribute_value = body[value_start..index];
+            if (isSensitiveBodyField(attribute_name) or
+                ((normalizedFieldEquals(attribute_name, "key") or
+                    normalizedFieldEquals(attribute_name, "name") or
+                    normalizedFieldEquals(attribute_name, "field") or
+                    normalizedFieldEquals(attribute_name, "property")) and
+                    isSensitiveBodyField(attribute_value)) or
+                containsSensitiveAssignment(attribute_value) or
+                containsPrivateKeyMarker(attribute_value))
+            {
+                return true;
+            }
+            if (quote != 0 and index < body.len) index += 1;
+        }
     }
     return false;
 }
@@ -1678,15 +2037,23 @@ fn isSanitizedUrlHeader(name: []const u8) bool {
 }
 
 fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
-    if (needle.len > haystack.len) return false;
-    var index: usize = 0;
+    return indexOfIgnoreCasePos(haystack, 0, needle) != null;
+}
+
+fn indexOfIgnoreCasePos(
+    haystack: []const u8,
+    start: usize,
+    needle: []const u8,
+) ?usize {
+    if (needle.len > haystack.len or start > haystack.len) return null;
+    var index = start;
     while (index + needle.len <= haystack.len) : (index += 1) {
         if (std.ascii.eqlIgnoreCase(
             haystack[index .. index + needle.len],
             needle,
-        )) return true;
+        )) return index;
     }
-    return false;
+    return null;
 }
 
 fn methodToString(method: core.http.Method) []const u8 {
@@ -1755,6 +2122,38 @@ pub fn expectSuccess(response: core.http.Response) !void {
 
 pub fn expectStatus(response: core.http.Response, expected: u16) !void {
     try std.testing.expectEqual(expected, response.status_code);
+}
+
+const BufferedOnlyTransport = struct {
+    inner: *core.http.MockTransport,
+
+    const vtable: core.http.HttpTransport.VTable = .{
+        .send = &send,
+    };
+
+    fn asTransport(self: *BufferedOnlyTransport) core.http.HttpTransport {
+        return .{ .context = self, .vtable = &vtable };
+    }
+
+    fn send(
+        context: *anyopaque,
+        request: *core.http.Request,
+    ) !core.http.Response {
+        const self: *BufferedOnlyTransport = @ptrCast(@alignCast(context));
+        const transport = self.inner.asTransport();
+        return transport.vtable.send(transport.context, request);
+    }
+};
+
+fn allowKnownSafeOpaqueBody(
+    _: ?*anyopaque,
+    body: BodySafetyContext,
+) BodyPolicyDecision {
+    return if (containsIgnoreCase(body.url, "example.com/invalid") or
+        containsIgnoreCase(body.url, "example.com/nul"))
+        .allow_opaque
+    else
+        .inspect;
 }
 
 test "playback validates request and preserves duplicate response headers" {
@@ -2037,6 +2436,58 @@ test "recording wraps streaming operations and copies descriptor by value" {
     try std.testing.expectEqual(@as(usize, 1), mock.stream_deinit_count);
 }
 
+test "recording preserves buffered open fallback" {
+    var mock = core.http.MockTransport.init(
+        std.testing.allocator,
+        200,
+        "buffered-response",
+    );
+    defer mock.deinit();
+    var buffered_only = BufferedOnlyTransport{ .inner = &mock };
+    var recorder = RecordingTransport.init(
+        std.testing.allocator,
+        buffered_only.asTransport(),
+    );
+    defer recorder.deinit();
+
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .POST,
+        "https://example.com/buffered",
+    );
+    defer request.deinit();
+    request.body = "buffered-request";
+    var operation = try recorder.asTransport().open(&request, .{});
+    const response = try (try operation.reader()).allocRemaining(
+        std.testing.allocator,
+        .unlimited,
+    );
+    defer std.testing.allocator.free(response);
+    try std.testing.expectEqualStrings("buffered-response", response);
+    try operation.finish();
+    operation.deinit();
+    try std.testing.expectEqual(@as(usize, 1), recorder.getExchanges().len);
+    try std.testing.expectEqualStrings(
+        "buffered-request",
+        recorder.getExchanges()[0].request_body.?,
+    );
+
+    var streamed_request = core.http.Request.init(
+        std.testing.allocator,
+        .POST,
+        "https://example.com/streamed",
+    );
+    defer streamed_request.deinit();
+    var source = std.Io.Reader.fixed("streamed");
+    try std.testing.expectError(
+        error.StreamingRequestUnsupported,
+        recorder.asTransport().open(&streamed_request, .{
+            .body = core.http.StreamingRequestBody.chunked(&source),
+        }),
+    );
+    try std.testing.expectEqual(@as(usize, 1), mock.call_count);
+}
+
 test "recording forwards abort and cancel without recording partial responses" {
     var mock = core.http.MockTransport.init(std.testing.allocator, 200, "body");
     defer mock.deinit();
@@ -2171,6 +2622,7 @@ test "sensitive Azure headers are classified case-insensitively" {
     try std.testing.expect(!isSensitiveHeader("Content-Type"));
     try std.testing.expect(!isSensitiveHeader("x-opt-partition-key"));
     try std.testing.expect(!isSensitiveHeader("x-ms-documentdb-partitionkey"));
+    try std.testing.expect(!isSensitiveHeader("x-ms-continuation-token"));
 }
 
 test "Event Grid key and SAS token redactions roundtrip" {
@@ -2534,9 +2986,10 @@ test "recording JSON base64 bodies roundtrip arbitrary bytes" {
             .{ .status = 200, .body = response_bodies[3] },
         },
     );
-    var recorder = RecordingTransport.init(
+    var recorder = RecordingTransport.initWithOptions(
         std.testing.allocator,
         sequence.asTransport(),
+        .{ .bodyPolicyFn = &allowKnownSafeOpaqueBody },
     );
     defer recorder.deinit();
     for (urls, request_bodies) |url, body| {
@@ -2628,6 +3081,7 @@ test "recording JSON rejects structural JSON form XML and connection secrets" {
         "{\"result\":{\"connectionString\":\"Endpoint=x;SharedAccessKey=y\"}}",
         "{\"outer\":[{\"Api-Key\":{\"value\":\"api-value\"}}]}",
         "{\"applicationSecret\":\"application-value\"}",
+        "{\"properties\":{\"vCenterPassword\":\"vcenter-value\",\"NSXT-PASSWORD\":{\"value\":\"nsxt-value\"}}}",
         "client_secret=form-value&grant_type=client_credentials",
         "Endpoint=https://example;AccountKey=account-value",
         "<ListKeys><PrimaryKey>xml-value</PrimaryKey></ListKeys>",
@@ -2639,6 +3093,197 @@ test "recording JSON rejects structural JSON form XML and connection secrets" {
     try expectSensitiveRequestBodyRejected(
         "{\"outer\":{\"CLIENT-ASSERTION\":{\"value\":\"request-value\"}}}",
     );
+}
+
+test "Key Vault root value bodies are endpoint-sensitive" {
+    {
+        var mock = core.http.MockTransport.init(
+            std.testing.allocator,
+            200,
+            "{\"value\":\"response-key-vault-value\"}",
+        );
+        defer mock.deinit();
+        var recorder = RecordingTransport.init(
+            std.testing.allocator,
+            mock.asTransport(),
+        );
+        defer recorder.deinit();
+        var request = core.http.Request.init(
+            std.testing.allocator,
+            .GET,
+            "https://example.vault.azure.net/secrets/name?api-version=7.6",
+        );
+        defer request.deinit();
+        var response = try recorder.asTransport().send(&request);
+        response.deinit();
+        try std.testing.expectError(
+            error.SensitiveBodyRequiresSanitization,
+            recorder.toJson(std.testing.allocator),
+        );
+    }
+    {
+        var mock = core.http.MockTransport.init(
+            std.testing.allocator,
+            200,
+            "{\"id\":\"safe\"}",
+        );
+        defer mock.deinit();
+        var recorder = RecordingTransport.init(
+            std.testing.allocator,
+            mock.asTransport(),
+        );
+        defer recorder.deinit();
+        var request = core.http.Request.init(
+            std.testing.allocator,
+            .PUT,
+            "https://example.vault.azure.net/secrets/name?api-version=7.6",
+        );
+        defer request.deinit();
+        request.body = "{\"VaLuE\":\"request-key-vault-value\"}";
+        var response = try recorder.asTransport().send(&request);
+        response.deinit();
+        try std.testing.expectError(
+            error.SensitiveBodyRequiresSanitization,
+            recorder.toJson(std.testing.allocator),
+        );
+    }
+}
+
+test "multipart token fields and XML credential attributes are rejected" {
+    {
+        const multipart_body =
+            "--boundary\r\n" ++
+            "Content-Disposition: form-data; name=\"refreshToken\"\r\n\r\n" ++
+            "registry-refresh-value\r\n" ++
+            "--boundary\r\n" ++
+            "Content-Disposition: form-data; name=\"accessToken\"\r\n\r\n" ++
+            "registry-access-value\r\n" ++
+            "--boundary--\r\n";
+        var mock = core.http.MockTransport.init(
+            std.testing.allocator,
+            200,
+            "{\"message\":\"safe\"}",
+        );
+        defer mock.deinit();
+        var recorder = RecordingTransport.init(
+            std.testing.allocator,
+            mock.asTransport(),
+        );
+        defer recorder.deinit();
+        var request = core.http.Request.init(
+            std.testing.allocator,
+            .POST,
+            "https://registry.azurecr.io/oauth2/exchange",
+        );
+        defer request.deinit();
+        request.body = multipart_body;
+        try request.setHeader(
+            "Content-Type",
+            "multipart/form-data; boundary=boundary",
+        );
+        var response = try recorder.asTransport().send(&request);
+        response.deinit();
+        try std.testing.expectError(
+            error.SensitiveBodyRequiresSanitization,
+            recorder.toJson(std.testing.allocator),
+        );
+    }
+    {
+        var mock = core.http.MockTransport.init(
+            std.testing.allocator,
+            200,
+            "<settings><add key=\"Password\" value=\"xml-attribute-value\"/></settings>",
+        );
+        defer mock.deinit();
+        mock.response_headers_list = &.{
+            .{ .name = "Content-Type", .value = "application/xml" },
+        };
+        var recorder = RecordingTransport.init(
+            std.testing.allocator,
+            mock.asTransport(),
+        );
+        defer recorder.deinit();
+        var request = core.http.Request.init(
+            std.testing.allocator,
+            .GET,
+            "https://example.com/settings",
+        );
+        defer request.deinit();
+        var response = try recorder.asTransport().send(&request);
+        response.deinit();
+        try std.testing.expectError(
+            error.SensitiveBodyRequiresSanitization,
+            recorder.toJson(std.testing.allocator),
+        );
+    }
+}
+
+test "opaque bodies reject by default and require an explicit safe policy" {
+    const opaque_bodies = [_][]const u8{
+        "\x30\x82\xff\x00pkcs12-like",
+        "\xff\xfeP\x00a\x00s\x00s\x00w\x00o\x00r\x00d\x00",
+        "{\"message\":\"malformed\xff\"}",
+    };
+    for (opaque_bodies) |body| {
+        var mock = core.http.MockTransport.init(
+            std.testing.allocator,
+            200,
+            body,
+        );
+        defer mock.deinit();
+        var recorder = RecordingTransport.init(
+            std.testing.allocator,
+            mock.asTransport(),
+        );
+        defer recorder.deinit();
+        var request = core.http.Request.init(
+            std.testing.allocator,
+            .GET,
+            "https://example.com/opaque",
+        );
+        defer request.deinit();
+        var response = try recorder.asTransport().send(&request);
+        response.deinit();
+        try std.testing.expectError(
+            error.OpaqueBodyNotAllowed,
+            recorder.toJson(std.testing.allocator),
+        );
+    }
+}
+
+test "common private key markers cannot be allowed as opaque" {
+    for ([_][]const u8{
+        "-----BEGIN PRIVATE KEY-----\nvalue\n-----END PRIVATE KEY-----",
+        "-----BEGIN RSA PRIVATE KEY-----\nvalue\n-----END RSA PRIVATE KEY-----",
+        "-----BEGIN EC PRIVATE KEY-----\nvalue\n-----END EC PRIVATE KEY-----",
+        "-----BEGIN ENCRYPTED PRIVATE KEY-----\nvalue\n-----END ENCRYPTED PRIVATE KEY-----",
+        "-----BEGIN OPENSSH PRIVATE KEY-----\nvalue\n-----END OPENSSH PRIVATE KEY-----",
+    }) |body| {
+        var mock = core.http.MockTransport.init(
+            std.testing.allocator,
+            200,
+            body,
+        );
+        defer mock.deinit();
+        var recorder = RecordingTransport.initWithOptions(
+            std.testing.allocator,
+            mock.asTransport(),
+            .{ .bodyPolicyFn = &allowKnownSafeOpaqueBody },
+        );
+        defer recorder.deinit();
+        var request = core.http.Request.init(
+            std.testing.allocator,
+            .GET,
+            "https://example.com/invalid",
+        );
+        defer request.deinit();
+        var response = try recorder.asTransport().send(&request);
+        response.deinit();
+        try std.testing.expectError(
+            error.SensitiveBodyRequiresSanitization,
+            recorder.toJson(std.testing.allocator),
+        );
+    }
 }
 
 test "recording JSON rejects malformed structured bodies explicitly" {
@@ -2671,7 +3316,7 @@ test "recording JSON decodes safe structured bodies losslessly" {
     const request_body =
         "{\"key\":\"prod*\",\"value\":\"nonsensitive\",\"nested\":{\"kind\":\"filter\"}}";
     const response_body =
-        "{\"items\":[{\"key\":\"prod\",\"value\":\"enabled\"}]}";
+        "{\"items\":[{\"key\":\"prod\",\"value\":\"enabled\"}],\"continuationToken\":\"next\"}";
     var mock = core.http.MockTransport.init(
         std.testing.allocator,
         200,
@@ -2686,7 +3331,7 @@ test "recording JSON decodes safe structured bodies losslessly" {
     var request = core.http.Request.init(
         std.testing.allocator,
         .POST,
-        "https://example.com/safe",
+        "https://config.azconfig.io/kv?key=prod*&api-version=1.0",
     );
     defer request.deinit();
     request.body = request_body;
@@ -2708,13 +3353,31 @@ test "recording JSON decodes safe structured bodies losslessly" {
         response_body,
         parsed.asSlice()[0].response_body,
     );
-    try ensureBodySafe(
+
+    var playback = PlaybackTransport.init(
         std.testing.allocator,
-        parsed.asSlice()[0].request_body,
+        parsed.asSlice(),
     );
-    try ensureBodySafe(
+    var replay_request = core.http.Request.init(
         std.testing.allocator,
-        parsed.asSlice()[0].response_body,
+        .POST,
+        "https://config.azconfig.io/kv?key=prod*&api-version=1.0",
+    );
+    defer replay_request.deinit();
+    replay_request.body = request_body;
+    var replayed = try playback.asTransport().send(&replay_request);
+    defer replayed.deinit();
+    try std.testing.expectEqualSlices(u8, response_body, replayed.body);
+
+    var mismatch = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    replay_request.body =
+        "{\"key\":\"prod*\",\"value\":\"changed\",\"nested\":{\"kind\":\"filter\"}}";
+    try std.testing.expectError(
+        error.BodyMismatch,
+        mismatch.asTransport().send(&replay_request),
     );
 }
 
@@ -2782,6 +3445,29 @@ fn recordingRedirectAllocationFixture(allocator: std.mem.Allocator) !void {
     try operation.finish();
 }
 
+fn recordingBufferedFallbackAllocationFixture(
+    allocator: std.mem.Allocator,
+) !void {
+    var mock = core.http.MockTransport.init(allocator, 200, "response");
+    defer mock.deinit();
+    var buffered_only = BufferedOnlyTransport{ .inner = &mock };
+    var recorder = RecordingTransport.init(
+        allocator,
+        buffered_only.asTransport(),
+    );
+    defer recorder.deinit();
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .POST,
+        "https://example.com/buffered",
+    );
+    defer request.deinit();
+    request.body = "request";
+    var operation = try recorder.asTransport().open(&request, .{});
+    defer operation.deinit();
+    try operation.finish();
+}
+
 fn serializationAllocationFixture(allocator: std.mem.Allocator) !void {
     var mock = core.http.MockTransport.init(
         std.testing.allocator,
@@ -2831,6 +3517,11 @@ test "transport allocation failures clean up" {
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
         recordingRedirectAllocationFixture,
+        .{},
+    );
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        recordingBufferedFallbackAllocationFixture,
         .{},
     );
     try std.testing.checkAllAllocationFailures(
