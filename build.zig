@@ -9,8 +9,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const core_mod = core_dep.module("azure_sdk_core");
+    const http_conformance_mod = core_dep.module("azure_sdk_core_http_conformance");
 
-    _ = b.addModule("azure_sdk_testing", .{
+    const testing_mod = b.addModule("azure_sdk_testing", .{
         .root_source_file = b.path("root.zig"),
         .target = target,
         .optimize = optimize,
@@ -29,6 +30,22 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+    const conformance_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("conformance_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "azure_sdk_core", .module = core_mod },
+                .{ .name = "azure_sdk_testing", .module = testing_mod },
+                .{
+                    .name = "azure_sdk_core_http_conformance",
+                    .module = http_conformance_mod,
+                },
+            },
+        }),
+    });
     const test_step = b.step("test", "Run Core Testing tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
+    test_step.dependOn(&b.addRunArtifact(conformance_tests).step);
 }
