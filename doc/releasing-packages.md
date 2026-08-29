@@ -33,7 +33,13 @@ scripts/package-branch-release.sh publish azure_sdk_storage_blobs --execute
 - immutable internal and external dependency pins;
 - internal dependency commits protected by package release tags;
 - Zig package hashes by fetching each internal dependency;
-- package tests, examples, and live-test compilation.
+- the package-specific test, example, and live-test commands registered in
+  `eng/packages.zig`.
+
+`azure_sdk_core_symcrypt` uses source-only checks during sealed verification
+because release tooling has no ambient native SymCrypt binaries. Its protected
+package-branch CI validates the native dynamic/static tests and examples on
+Linux and Windows, plus the supported Arm64 build matrix, before merge.
 
 `publish` additionally requires a release version greater than every existing
 package tag. Without `--execute` it prints the proposed lightweight tag.
