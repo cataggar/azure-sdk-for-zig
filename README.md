@@ -203,6 +203,14 @@ budget cannot safely put the whole request on the wire, the remainder is held
 and issued automatically as queued deliveries leave, so callers need not loop
 just to restate the same requested count.
 
+Credit issuance is transactional with its `Flow` frame. The prospective
+credit, deferred request, and overrun debt are committed only after the whole
+frame is encoded, written, and flushed. An encode allocation failure therefore
+leaves the request retryable without a phantom local grant or double count; a
+write or flush failure leaves the local counters uncommitted and terminalizes
+the dirty connection instead. Drain intent follows the same rule and becomes
+active only after its `Flow` is emitted.
+
 The delivery already returned to the caller is outside the aggregate budget
 and remains valid until the next successful `receive`; it is still bounded by
 `max_message_size`. Callers that know a service's smaller message limit should

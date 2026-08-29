@@ -623,6 +623,33 @@ pub const Session = struct {
 
     /// Emit a session `flow`, optionally carrying link credit.
     fn sendFlow(self: *Session, link: ?*Receiver) LinkError!void {
+        return self.sendFlowWithLinkState(
+            link,
+            if (link) |r| r.credit else null,
+            if (link) |r| r.drain else false,
+        );
+    }
+
+    /// Emit a receiver flow using prospective credit that is not committed to
+    /// the receiver until the complete frame has reached the transport.
+    fn sendFlowWithCredit(
+        self: *Session,
+        link: ?*Receiver,
+        prospective_credit: ?u32,
+    ) LinkError!void {
+        return self.sendFlowWithLinkState(
+            link,
+            prospective_credit,
+            if (link) |r| r.drain else false,
+        );
+    }
+
+    fn sendFlowWithLinkState(
+        self: *Session,
+        link: ?*Receiver,
+        prospective_credit: ?u32,
+        prospective_drain: bool,
+    ) LinkError!void {
         var f = perf.Flow{
             .next_incoming_id = self.next_incoming_id,
             .incoming_window = self.incoming_window,
@@ -631,9 +658,9 @@ pub const Session = struct {
         };
         if (link) |r| {
             f.handle = r.handle;
-            f.link_credit = r.credit;
+            f.link_credit = prospective_credit orelse r.credit;
             f.delivery_count = r.delivery_count;
-            f.drain = r.drain;
+            f.drain = prospective_drain;
         }
         try self.driver.sendPerformative(.amqp, self.channel, .{ .flow = f });
     }
@@ -1969,9 +1996,11 @@ pub const Receiver = struct {
         if (self.poisoned or !self.attached or self.detach_sent or self.session.ended)
             return error.LinkDetached;
         try self.reserveIncomingCapacity(count);
-        self.deferred_credit +|= count;
-        self.grantDeferredCredit();
-        try self.session.sendFlow(self);
+        var prospective = self.creditState();
+        prospective.deferred_credit +|= count;
+        self.grantDeferredCredit(&prospective);
+        try self.session.sendFlowWithCredit(self, prospective.credit);
+        self.commitCreditState(prospective);
     }
 
     fn reserveIncomingCapacity(self: *Receiver, count: u32) Allocator.Error!void {
@@ -1983,12 +2012,32 @@ pub const Receiver = struct {
         try self.session.incoming_deliveries.ensureUnusedCapacity(self.allocator, reserve_count);
     }
 
-    fn grantDeferredCredit(self: *Receiver) void {
+    const CreditState = struct {
+        credit: u32,
+        deferred_credit: u32,
+        overrun: u32,
+    };
+
+    fn creditState(self: *const Receiver) CreditState {
+        return .{
+            .credit = self.credit,
+            .deferred_credit = self.deferred_credit,
+            .overrun = self.overrun,
+        };
+    }
+
+    fn commitCreditState(self: *Receiver, state: CreditState) void {
+        self.credit = state.credit;
+        self.deferred_credit = state.deferred_credit;
+        self.overrun = state.overrun;
+    }
+
+    fn grantDeferredCredit(self: *const Receiver, state: *CreditState) void {
         const capacity = self.byteCreditCapacity();
-        if (self.credit >= capacity or self.deferred_credit == 0) return;
-        const issued = @min(self.deferred_credit, capacity - self.credit);
-        self.deferred_credit -= issued;
-        self.grant(self.credit + issued);
+        if (state.credit >= capacity or state.deferred_credit == 0) return;
+        const issued = @min(state.deferred_credit, capacity - state.credit);
+        state.deferred_credit -= issued;
+        self.grantCreditState(state, state.credit + issued);
     }
 
     /// Set credit to `amount`, charging any outstanding overrun against it.
@@ -1998,31 +2047,46 @@ pub const Receiver = struct {
     /// credit onto this endpoint's delivery count: a peer must not be able to
     /// clear the debt it ran up simply by asserting a new window.
     fn grant(self: *Receiver, amount: u32) void {
+        var state = self.creditState();
+        self.grantCreditState(&state, amount);
+        self.commitCreditState(state);
+    }
+
+    fn grantCreditState(self: *const Receiver, state: *CreditState, amount: u32) void {
         const bounded = @min(amount, self.byteCreditCapacity());
-        const charged = @min(self.overrun, bounded);
-        self.overrun -= charged;
-        self.credit = bounded - charged;
+        const charged = @min(state.overrun, bounded);
+        state.overrun -= charged;
+        state.credit = bounded - charged;
     }
 
     /// Top prefetch credit back up once half of it has been consumed, so a
     /// prefetching receiver never stalls waiting for the caller.
     fn replenish(self: *Receiver) LinkError!void {
-        if (self.deferred_credit != 0) {
-            const before = self.credit;
-            self.grantDeferredCredit();
-            if (self.credit != before) {
-                try self.session.sendFlow(self);
+        var prospective = self.creditState();
+        if (prospective.deferred_credit != 0) {
+            const before = prospective.credit;
+            self.grantDeferredCredit(&prospective);
+            if (prospective.credit != before) {
+                try self.session.sendFlowWithCredit(self, prospective.credit);
+                self.commitCreditState(prospective);
                 return;
             }
         }
-        if (self.prefetch == 0) return;
+        if (self.prefetch == 0) {
+            self.commitCreditState(prospective);
+            return;
+        }
         const target = @min(self.prefetch, self.byteCreditCapacity());
-        if (target == 0) return;
+        if (target == 0) {
+            self.commitCreditState(prospective);
+            return;
+        }
         // A one- or two-delivery byte window has no useful half-window: using
         // its last credit avoids a flow write before every second delivery.
-        if (self.credit > 0 and
-            (target <= 2 or self.credit > target / 2))
+        if (prospective.credit > 0 and
+            (target <= 2 or prospective.credit > target / 2))
         {
+            self.commitCreditState(prospective);
             return;
         }
         // A peer that ran past its last grant is granted that much less now,
@@ -2030,15 +2094,19 @@ pub const Receiver = struct {
         // enough past and the charge cancels the window entirely, which is
         // what "stop granting credit" means here; keep going and
         // `refuseOverrun` ends the link.
-        const before = self.credit;
-        self.grant(self.prefetch);
+        const before = prospective.credit;
+        self.grantCreditState(&prospective, self.prefetch);
         // No flow when the charge cancelled the whole window. A peer only gets
         // here by ignoring credit already, so announcing zero to it buys
         // nothing and would put a frame on the wire per `receive` for as long
         // as it misbehaves. A peer merely racing a flow is usually charged
         // less than a window and is still told its reduced credit below.
-        if (self.credit == 0 or self.credit == before) return;
-        try self.session.sendFlow(self);
+        if (prospective.credit == 0 or prospective.credit == before) {
+            self.commitCreditState(prospective);
+            return;
+        }
+        try self.session.sendFlowWithCredit(self, prospective.credit);
+        self.commitCreditState(prospective);
     }
 
     /// Charge overrun debt as buffered deliveries are released, but defer a
@@ -2377,8 +2445,8 @@ pub const Receiver = struct {
     pub fn drainCredit(self: *Receiver, deadline_ms: i64) LinkError!void {
         if (self.session.ended or self.poisoned or !self.attached or self.detach_sent)
             return error.LinkDetached;
+        try self.session.sendFlowWithLinkState(self, self.credit, true);
         self.drain = true;
-        try self.session.sendFlow(self);
         // The sender answers a drain by advancing its delivery count over the
         // outstanding credit (§2.6.7), so wait until that lands rather than
         // leaving the link in a half-drained state.
@@ -6393,6 +6461,225 @@ test "the attach flow issues the requested prefetch credit" {
     var decoded = try perf.decode(allocator, flows[0]);
     defer decoded.deinit();
     try testing.expectEqual(@as(u32, 250), decoded.performative.flow.link_credit.?);
+}
+
+const CreditFlowPath = enum {
+    issue,
+    deferred_replenish,
+    prefetch_replenish,
+};
+
+const CreditFlowFailure = enum {
+    encode_oom,
+    pre_write,
+    partial_write,
+    flush,
+};
+
+fn invokeCreditFlow(receiver: *Receiver, path: CreditFlowPath) LinkError!void {
+    switch (path) {
+        .issue => try receiver.issueCredit(4),
+        .deferred_replenish, .prefetch_replenish => try receiver.replenish(),
+    }
+}
+
+fn creditFlowFailureIsTransactional(path: CreditFlowPath, failure: CreditFlowFailure) !void {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh",
+        .prefetch = 0,
+        .max_buffered_bytes = null,
+    }, 10_000);
+
+    switch (path) {
+        .issue => {},
+        .deferred_replenish => receiver.deferred_credit = 4,
+        .prefetch_replenish => receiver.prefetch = 4,
+    }
+    // Exercise debt as part of the transaction, and prove the Flow advertises
+    // the unchanged delivery-count paired with the newly committed credit.
+    receiver.overrun = 1;
+    receiver.delivery_count = 7;
+    const before = receiver.creditState();
+    mem.clearWritten();
+
+    var switching = SwitchAllocator{ .child = allocator };
+    const writes_before = mem.write_count;
+    switch (failure) {
+        .encode_oom => {
+            driver.allocator = switching.allocator();
+            switching.failing = true;
+        },
+        .pre_write => mem.fail_write = true,
+        .partial_write => mem.fail_write_after = writes_before + 1,
+        .flush => mem.fail_flush = true,
+    }
+
+    const result = invokeCreditFlow(receiver, path);
+    switching.failing = false;
+    driver.allocator = allocator;
+    mem.fail_write = false;
+    mem.fail_write_after = null;
+    mem.fail_flush = false;
+
+    switch (failure) {
+        .encode_oom => try testing.expectError(error.OutOfMemory, result),
+        .pre_write, .partial_write, .flush => try testing.expectError(error.WriteFailed, result),
+    }
+
+    try testing.expectEqual(before.credit, receiver.credit);
+    try testing.expectEqual(before.deferred_credit, receiver.deferred_credit);
+    try testing.expectEqual(before.overrun, receiver.overrun);
+    try testing.expectEqual(@as(usize, 0), mem.written().len);
+    try testing.expectEqual(@as(usize, 0), mem.pending.items.len);
+
+    if (failure == .encode_oom) {
+        try testing.expectEqual(connection.State.opened, driver.state);
+        try testing.expect(!mem.closed);
+        try invokeCreditFlow(receiver, path);
+
+        try testing.expectEqual(@as(u32, 3), receiver.credit);
+        try testing.expectEqual(@as(u32, 0), receiver.deferred_credit);
+        try testing.expectEqual(@as(u32, 0), receiver.overrun);
+
+        var frames = try EmittedFrames.parse(allocator, mem.written());
+        defer frames.deinit();
+        const flows = try frames.of(allocator, perf.descriptor.flow);
+        defer allocator.free(flows);
+        try testing.expectEqual(@as(usize, 1), flows.len);
+        var decoded = try perf.decode(allocator, flows[0]);
+        defer decoded.deinit();
+        const flow = decoded.performative.flow;
+        try testing.expectEqual(receiver.handle, flow.handle.?);
+        try testing.expectEqual(receiver.credit, flow.link_credit.?);
+        try testing.expectEqual(receiver.delivery_count, flow.delivery_count.?);
+        return;
+    }
+
+    try testing.expectEqual(connection.State.err, driver.state);
+    try testing.expect(mem.closed);
+    const successful_writes: usize = switch (failure) {
+        .pre_write => 0,
+        .partial_write => 1,
+        .flush => 2,
+        .encode_oom => unreachable,
+    };
+    try testing.expectEqual(
+        writes_before + successful_writes,
+        mem.write_count,
+    );
+    try testing.expectError(error.ConnectionClosed, invokeCreditFlow(receiver, path));
+    try testing.expectEqual(before.credit, receiver.credit);
+    try testing.expectEqual(before.deferred_credit, receiver.deferred_credit);
+    try testing.expectEqual(before.overrun, receiver.overrun);
+    try testing.expectEqual(@as(usize, 0), mem.written().len);
+}
+
+test "issueCredit commits only a completely emitted Flow" {
+    inline for (std.meta.tags(CreditFlowFailure)) |failure| {
+        try creditFlowFailureIsTransactional(.issue, failure);
+    }
+}
+
+test "deferred replenishment commits only a completely emitted Flow" {
+    inline for (std.meta.tags(CreditFlowFailure)) |failure| {
+        try creditFlowFailureIsTransactional(.deferred_replenish, failure);
+    }
+}
+
+test "prefetch replenishment commits only a completely emitted Flow" {
+    inline for (std.meta.tags(CreditFlowFailure)) |failure| {
+        try creditFlowFailureIsTransactional(.prefetch_replenish, failure);
+    }
+}
+
+test "drain state commits only after its Flow is emitted" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "eh",
+        .prefetch = 0,
+        .max_buffered_bytes = null,
+    }, 10_000);
+    receiver.credit = 4;
+    receiver.delivery_count = 7;
+    mem.clearWritten();
+
+    var switching = SwitchAllocator{ .child = allocator, .failing = true };
+    driver.allocator = switching.allocator();
+    try testing.expectError(error.OutOfMemory, receiver.drainCredit(10_000));
+    switching.failing = false;
+    driver.allocator = allocator;
+
+    try testing.expect(!receiver.drain);
+    try testing.expectEqual(@as(u32, 4), receiver.credit);
+    try testing.expectEqual(@as(u32, 7), receiver.delivery_count);
+    try testing.expectEqual(connection.State.opened, driver.state);
+    try testing.expectEqual(@as(usize, 0), mem.written().len);
+
+    try peer.push(0, .{ .flow = .{
+        .next_incoming_id = 0,
+        .incoming_window = 1000,
+        .next_outgoing_id = 1,
+        .outgoing_window = 1000,
+        .handle = 0,
+        .delivery_count = 11,
+        .link_credit = 0,
+        .drain = true,
+    } });
+    try receiver.drainCredit(10_000);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const flows = try frames.of(allocator, perf.descriptor.flow);
+    defer allocator.free(flows);
+    try testing.expectEqual(@as(usize, 1), flows.len);
+    var decoded = try perf.decode(allocator, flows[0]);
+    defer decoded.deinit();
+    const flow = decoded.performative.flow;
+    try testing.expectEqual(@as(?u32, 4), flow.link_credit);
+    try testing.expectEqual(@as(?u32, 7), flow.delivery_count);
+    try testing.expect(flow.drain);
+    try testing.expect(!receiver.drain);
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    try testing.expectEqual(@as(u32, 11), receiver.delivery_count);
 }
 
 test "a detach surfaces the condition that stole the link" {
