@@ -44,7 +44,11 @@ defer admin.deinit();
 
 The administration client copies the runtime descriptors into its pipeline.
 The credential and both runtime backend contexts are borrowed and must outlive
-the client and all in-flight operations.
+the client and all in-flight operations. Its bearer-token cache is synchronized
+for concurrent operations and for any pager or derived client sharing that
+pipeline. Credential and transport callbacks run outside the cache lock, so
+they may re-enter the same client. Call `deinit` only after all such operations
+and callbacks have completed.
 
 ## Layout
 
