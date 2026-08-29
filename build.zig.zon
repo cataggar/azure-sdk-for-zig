@@ -1,12 +1,16 @@
 .{
-    .name = .azure_sdk_testing,
+    .name = .azure_sdk_core_symcrypt,
     .version = "0.1.0",
-    .fingerprint = 0xedf330a9407b1b45,
+    .fingerprint = 0x3475427fd5847371,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .azure_sdk_core = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#3acfe9d5779b98d2ffcbddbf4112348e11de7122",
-            .hash = "azure_sdk_core-0.2.0-eFY0Eq5jBgD71A09kDRyNUP1rUohQrm6KUpENFnYWQzY",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#bc77bcacbb64af935ca53d60bf8a351c9592bc41",
+            .hash = "azure_sdk_core-0.3.0-eFY0Ev0-CACjsFaYPL6jS7CpeVNvsqYqTrXRfgQKiRFV",
+        },
+        .zig_symcrypt = .{
+            .url = "git+https://github.com/cataggar/zig-symcrypt.git#9b3c94a2a4e0d98e055f0d908e11e1d7031b9a4b",
+            .hash = "zig_symcrypt-0.1.0-QIw66SjCEAAi9B86kkwa2aD-unj5hbQsGhuhTZdL4XFf",
         },
     },
     .paths = .{
@@ -14,6 +18,8 @@
         "build.zig",
         "build.zig.zon",
         "root.zig",
+        "conformance",
+        "examples",
         "README.md",
         "LICENSE.txt",
     },
