@@ -1267,6 +1267,8 @@ const explicitly_sensitive_headers = [_][]const u8{
     "x-ms-encryption-key",
     "x-ms-encryption-key-sha256",
     "x-ms-sas-token",
+    "aeg-sas-key",
+    "aeg-sas-token",
     "ocp-apim-subscription-key",
     "api-key",
     "x-api-key",
@@ -1313,6 +1315,8 @@ const sensitive_query_fields = [_][]const u8{
     "password",
     "api_key",
     "subscription-key",
+    "aeg-sas-key",
+    "aeg-sas-token",
     "key",
     "secret",
     "code",
@@ -1944,6 +1948,8 @@ test "sensitive Azure headers are classified case-insensitively" {
         "OCP-APIM-SUBSCRIPTION-KEY",
         "x-functions-key",
         "X-Auth-Token",
+        "AeG-SaS-KeY",
+        "aEg-SaS-ToKeN",
         "Set-Cookie",
     }) |name| {
         try std.testing.expect(isSensitiveHeader(name));
@@ -1951,6 +1957,66 @@ test "sensitive Azure headers are classified case-insensitively" {
     try std.testing.expect(!isSensitiveHeader("Content-Type"));
     try std.testing.expect(!isSensitiveHeader("x-opt-partition-key"));
     try std.testing.expect(!isSensitiveHeader("x-ms-documentdb-partitionkey"));
+}
+
+test "Event Grid key and SAS token redactions roundtrip" {
+    var mock = core.http.MockTransport.init(
+        std.testing.allocator,
+        200,
+        "response",
+    );
+    defer mock.deinit();
+    mock.response_headers_list = &.{
+        .{ .name = "aEg-SaS-KeY", .value = "response-event-grid-key" },
+        .{ .name = "AEG-SAS-TOKEN", .value = "response-event-grid-token" },
+    };
+    var recorder = RecordingTransport.init(
+        std.testing.allocator,
+        mock.asTransport(),
+    );
+    defer recorder.deinit();
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .POST,
+        "https://topic.eventgrid.azure.net/api/events?AeG-SaS-KeY=query-event-grid-key&AeG-SaS-ToKeN=query-event-grid-token&mode=one",
+    );
+    defer request.deinit();
+    request.body = "event";
+    try request.setHeader("AeG-SaS-KeY", "header-event-grid-key");
+    try request.setHeader("aEg-SaS-ToKeN", "header-event-grid-token");
+    var response = try recorder.asTransport().send(&request);
+    response.deinit();
+
+    const json = try recorder.toJson(std.testing.allocator);
+    defer std.testing.allocator.free(json);
+    for ([_][]const u8{
+        "query-event-grid-key",
+        "query-event-grid-token",
+        "header-event-grid-key",
+        "header-event-grid-token",
+        "response-event-grid-key",
+        "response-event-grid-token",
+    }) |credential| {
+        try std.testing.expect(std.mem.indexOf(u8, json, credential) == null);
+    }
+
+    var parsed = try parseJson(std.testing.allocator, json);
+    defer parsed.deinit();
+    var playback = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    var live = core.http.Request.init(
+        std.testing.allocator,
+        .POST,
+        "https://topic.eventgrid.azure.net/api/events?AeG-SaS-KeY=live-query-key&AeG-SaS-ToKeN=live-query-token&mode=one",
+    );
+    defer live.deinit();
+    live.body = "event";
+    try live.setHeader("aeg-sas-key", "live-header-key");
+    try live.setHeader("AEG-SAS-TOKEN", "live-header-token");
+    var replayed = try playback.asTransport().send(&live);
+    replayed.deinit();
 }
 
 test "authenticated recording JSON roundtrips with structured redactions" {
