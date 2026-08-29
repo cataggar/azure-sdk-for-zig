@@ -51,7 +51,7 @@ the credential, the transport at the connection — so a copy would dangle.
 
 Nothing dials until the first operation runs, and `Options` carries the
 `ConnectionOptions` described below along with the container id, link id,
-consumer instance id, per-operation deadline, and retry jitter seed.
+consumer instance id, per-operation timeout, and retry jitter seed.
 
 `CbsAuthorizer` is the piece that satisfies `recovery.Authorizer`: before any
 link attaches on a connection generation, it opens `$cbs`, puts the client's
@@ -113,12 +113,15 @@ AMQP message. The service splits it back apart. Go and Rust produce the same
 shape.
 
 ```zig
-var pool = SenderPool.init(allocator, &session, .{ .deadline_ms = deadline });
+const operation_timeout_ms = 60_000;
+var pool = SenderPool.init(allocator, &session, .{
+    .deadline_ms = operation_timeout_ms,
+});
 defer pool.deinit();
 
 var transport = LinkTransport.init(management_client, .{
     .senders = &pool,
-    .deadline_ms = deadline,
+    .deadline_ms = operation_timeout_ms,
 });
 
 var batch = try producer.createBatch(allocator, .{ .partition_key = "orders" });
@@ -195,9 +198,10 @@ A partition is read through one receiver link held open for the life of a
 without advancing it replays events that were already handed to the caller.
 
 ```zig
+const receive_timeout_ms = 60_000;
 var pool = ReceiverPool.init(allocator, &session, .{
     .instance_id = "reader-1",
-    .deadline_ms = deadline,
+    .deadline_ms = receive_timeout_ms,
 });
 defer pool.deinit();
 
@@ -207,7 +211,7 @@ var transport = LinkTransport.init(management_client, .{
 });
 
 var partition: PartitionClient = undefined;
-try consumer.newPartitionClient(&partition, allocator, &session, "0", deadline, .{
+try consumer.newPartitionClient(&partition, allocator, &session, "0", receive_timeout_ms, .{
     .start_position = EventPosition.earliest(),
     .owner_level = 1,
 });
@@ -240,7 +244,9 @@ unsettled until its result and selector are ready for one atomic settlement;
 the eight-credit and byte windows continue to bound live payload retention.
 
 A receive that asks for more events than arrive returns the ones that did
-rather than failing: a quiet partition is not an error.
+rather than failing: a quiet partition is not an error. Its timeout is a
+duration renewed from the current AMQP clock for each `receiveEvents` call,
+not an absolute deadline captured when the link attached.
 
 ## Metadata
 
@@ -255,9 +261,10 @@ one, because the connection, its CBS authorisation, and its session outlive any
 single operation.
 
 ```zig
+const operation_timeout_ms = 60_000;
 var transport = LinkTransport.init(management_client, .{
     .security_token = token.token,
-    .deadline_ms = deadline,
+    .deadline_ms = operation_timeout_ms,
     .retry = .{ .sleeper = &sleeper, .random = prng.random() },
 });
 var props = try producer.getEventHubProperties(allocator);
@@ -478,7 +485,8 @@ try processor.close();
 ```
 
 `runOnce` is one balancing cycle rather than a thread, so the caller owns
-the loop and its shutdown. `close` is fallible and retryable: a detach timeout
+the loop and its shutdown. Keep the processor at a stable address after its
+first cycle because partition readers refer back to it. `close` is fallible and retryable: a detach timeout
 keeps the reader registered until its acknowledgement arrives, and every retry
 gets a fresh timeout duration on the current AMQP clock. Call it while the
 connection is alive; `deinit` then releases local allocations. If the
@@ -487,6 +495,9 @@ dereference the native receivers the connection already destroyed. Processor
 readers also carry the recoverable connection generation, so a rebuild between
 cycles invalidates stale native pointers before receive or close and reopens
 the partition from its unchanged checkpoint.
+Closing one `ProcessorPartitionClient` removes it from `ownedPartitions`
+immediately after a confirmed detach; if storage still assigns the partition
+to this processor, the next balancing cycle opens a fresh reader.
 `nextIntervalMs` applies Go's 0.8–1.3 jitter to the update interval, which
 keeps a fleet that started together from rebalancing in lockstep.
 

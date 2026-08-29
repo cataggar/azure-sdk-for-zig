@@ -197,7 +197,7 @@ pub const LinkTransport = struct {
     /// The CBS token for the hub audience. Event Hubs wants it on the message
     /// as well as on the link.
     security_token: ?[]const u8 = null,
-    deadline_ms: i64,
+    timeout_ms: i64,
     /// When set, operations run under the Event Hubs retry schedule.
     retry: ?errors.RetryConfig = null,
     transport: AmqpTransport,
@@ -229,7 +229,7 @@ pub const LinkTransport = struct {
     fn initEmpty(options: Options) LinkTransport {
         return .{
             .security_token = options.security_token,
-            .deadline_ms = options.deadline_ms,
+            .timeout_ms = options.deadline_ms,
             .retry = options.retry,
             .transport = .{
                 .sendBatchFn = &sendBatchImpl,
@@ -247,6 +247,8 @@ pub const LinkTransport = struct {
         senders: ?*SenderPool = null,
         receivers: ?*ReceiverPool = null,
         security_token: ?[]const u8 = null,
+        /// Per-operation timeout duration in milliseconds. The legacy field
+        /// name is retained for source compatibility.
         deadline_ms: i64,
         retry: ?errors.RetryConfig = null,
     };
@@ -416,13 +418,15 @@ pub const LinkTransport = struct {
 
     fn getHubPropsImpl(t: *AmqpTransport, allocator: std.mem.Allocator, hub_name: []const u8) !EventHubProperties {
         const self: *LinkTransport = @fieldParentPtr("transport", t);
+        const client = try self.managementClient();
+        const deadline_ms = receiving.deadlineAfter(client.rpc_link.session, self.timeout_ms);
         if (self.retry) |config| {
             return switch (management.getEventHubPropertiesWithRetry(
                 allocator,
-                try self.managementClient(),
+                client,
                 hub_name,
                 self.security_token,
-                self.deadline_ms,
+                deadline_ms,
                 config,
             )) {
                 .ok => |props| props,
@@ -431,23 +435,25 @@ pub const LinkTransport = struct {
         }
         return management.getEventHubProperties(
             allocator,
-            try self.managementClient(),
+            client,
             hub_name,
             self.security_token,
-            self.deadline_ms,
+            deadline_ms,
         );
     }
 
     fn getPartitionPropsImpl(t: *AmqpTransport, allocator: std.mem.Allocator, hub_name: []const u8, partition_id: []const u8) !PartitionProperties {
         const self: *LinkTransport = @fieldParentPtr("transport", t);
+        const client = try self.managementClient();
+        const deadline_ms = receiving.deadlineAfter(client.rpc_link.session, self.timeout_ms);
         if (self.retry) |config| {
             return switch (management.getPartitionPropertiesWithRetry(
                 allocator,
-                try self.managementClient(),
+                client,
                 hub_name,
                 partition_id,
                 self.security_token,
-                self.deadline_ms,
+                deadline_ms,
                 config,
             )) {
                 .ok => |props| props,
@@ -456,11 +462,11 @@ pub const LinkTransport = struct {
         }
         return management.getPartitionProperties(
             allocator,
-            try self.managementClient(),
+            client,
             hub_name,
             partition_id,
             self.security_token,
-            self.deadline_ms,
+            deadline_ms,
         );
     }
 
@@ -1035,13 +1041,14 @@ pub const ConsumerClient = struct {
     /// Initialise in place; `client` must outlive neither `session` nor the
     /// allocator. This mirrors Go's `NewPartitionClient` and is the path that
     /// supports prefetch, owner level, and resuming without replay.
+    /// `receive_timeout_ms` is renewed against the AMQP clock for every call.
     pub fn newPartitionClient(
         self: *ConsumerClient,
         client: *PartitionClient,
         allocator: std.mem.Allocator,
         session: *amqp.Session,
         partition_id: []const u8,
-        deadline_ms: i64,
+        receive_timeout_ms: i64,
         options: PartitionClientOptions,
     ) !void {
         const source = try self.consumerPath(allocator, partition_id);
@@ -1050,7 +1057,7 @@ pub const ConsumerClient = struct {
         try client.open(allocator, session, .{
             .source_address = source,
             .instance_id = self.instanceId(),
-            .deadline_ms = deadline_ms,
+            .deadline_ms = receive_timeout_ms,
         }, options);
     }
 
@@ -1184,7 +1191,7 @@ pub const ConsumerPartitionOpener = struct {
         client.open(allocator, session, .{
             .source_address = source,
             .instance_id = self.client.instanceId(),
-            .deadline_ms = receiving.deadlineAfter(session, self.timeout_ms),
+            .deadline_ms = self.timeout_ms,
             .generation_guard = .{
                 .context = self.connection,
                 .generation = generation,

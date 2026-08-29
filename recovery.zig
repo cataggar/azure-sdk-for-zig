@@ -33,11 +33,11 @@ pub const Plumbing = struct {
 /// against a scripted peer, and because #207 will add custom endpoints and
 /// WebSockets without this file needing to know.
 pub const ConnectionFactory = struct {
-    openFn: *const fn (self: *ConnectionFactory, deadline_ms: i64) anyerror!Plumbing,
+    openFn: *const fn (self: *ConnectionFactory, timeout_ms: i64) anyerror!Plumbing,
     closeFn: *const fn (self: *ConnectionFactory, plumbing: Plumbing) void,
 
-    pub fn open(self: *ConnectionFactory, deadline_ms: i64) !Plumbing {
-        return self.openFn(self, deadline_ms);
+    pub fn open(self: *ConnectionFactory, timeout_ms: i64) !Plumbing {
+        return self.openFn(self, timeout_ms);
     }
 
     pub fn close(self: *ConnectionFactory, plumbing: Plumbing) void {
@@ -81,7 +81,7 @@ pub const RecoverableConnection = struct {
     /// Null skips re-authorisation, which is what a test peer or an emulator
     /// with authentication disabled wants.
     authorizer: ?*Authorizer,
-    deadline_ms: i64,
+    timeout_ms: i64,
     sender_options: SenderPool.Options,
     receiver_options: ReceiverPool.Options,
 
@@ -120,6 +120,8 @@ pub const RecoverableConnection = struct {
     pub const Options = struct {
         factory: *ConnectionFactory,
         authorizer: ?*Authorizer = null,
+        /// Per-operation timeout duration in milliseconds. The legacy field
+        /// name is retained for source compatibility.
         deadline_ms: i64,
         /// Identifies this reader to the broker on receiver links.
         instance_id: []const u8 = "eventhubs",
@@ -136,7 +138,7 @@ pub const RecoverableConnection = struct {
             .allocator = allocator,
             .factory = options.factory,
             .authorizer = options.authorizer,
-            .deadline_ms = options.deadline_ms,
+            .timeout_ms = options.deadline_ms,
             .sender_options = .{
                 .deadline_ms = options.deadline_ms,
                 .link_id = options.link_id,
@@ -168,14 +170,17 @@ pub const RecoverableConnection = struct {
         if (self.closed) return RecoveryError.ConnectionClosedPermanently;
         if (self.plumbing != null) return self.generation;
 
-        const plumbing = try self.factory.open(self.deadline_ms);
+        const plumbing = try self.factory.open(self.timeout_ms);
         errdefer self.factory.close(plumbing);
 
         // Before the pools, not after: a link that attaches without a claim is
         // refused with a condition classified fatal, so the recovery would
         // report as unrecoverable.
         if (self.authorizer) |authorizer| {
-            try authorizer.authorize(plumbing.session, self.deadline_ms);
+            try authorizer.authorize(
+                plumbing.session,
+                receiving.deadlineAfter(plumbing.session, self.timeout_ms),
+            );
             self.authorizations += 1;
         }
 
@@ -215,7 +220,7 @@ pub const RecoverableConnection = struct {
         const client = try amqp.Management.open(
             self.plumbing.?.session,
             .{ .link_id = self.management_link_id },
-            self.deadline_ms,
+            receiving.deadlineAfter(self.plumbing.?.session, self.timeout_ms),
         );
         self.management = client;
         return client;
@@ -447,7 +452,7 @@ const ScriptedFactory = struct {
         self.live.deinit(self.allocator);
     }
 
-    fn open(f: *ConnectionFactory, deadline_ms: i64) anyerror!Plumbing {
+    fn open(f: *ConnectionFactory, timeout_ms: i64) anyerror!Plumbing {
         const self: *ScriptedFactory = @fieldParentPtr("factory", f);
         if (self.opened >= self.scripts.len) return error.NoMoreConnections;
 
@@ -464,6 +469,7 @@ const ScriptedFactory = struct {
 
         const conn = try self.allocator.create(driver.Driver);
         conn.* = try driver.Driver.init(self.allocator, mem.transport(), clock.clock(), harness.driver_options);
+        const deadline_ms = conn.clock.nowMillis() +| @max(timeout_ms, 0);
         try conn.open(deadline_ms);
 
         const session = try self.allocator.create(amqp.Session);

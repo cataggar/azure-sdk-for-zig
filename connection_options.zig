@@ -215,7 +215,7 @@ pub const AmqpConnectionFactory = struct {
     sasl: amqp.connection_driver.SaslMode = .anonymous,
     factory: recovery.ConnectionFactory = .{ .openFn = open, .closeFn = close },
 
-    fn open(f: *recovery.ConnectionFactory, deadline_ms: i64) anyerror!recovery.Plumbing {
+    fn open(f: *recovery.ConnectionFactory, timeout_ms: i64) anyerror!recovery.Plumbing {
         const self: *AmqpConnectionFactory = @fieldParentPtr("factory", f);
         const allocator = self.allocator;
 
@@ -276,6 +276,7 @@ pub const AmqpConnectionFactory = struct {
             .sasl = self.sasl,
         });
         errdefer driver.deinit();
+        const deadline_ms = driver.clock.nowMillis() +| @max(timeout_ms, 0);
         try driver.open(deadline_ms);
 
         const session = try allocator.create(amqp.Session);

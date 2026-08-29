@@ -106,7 +106,9 @@ pub const PartitionClient = struct {
     /// As configured, before `default_prefetch` is substituted for zero.
     prefetch: i32,
     owner_level: ?i64,
-    deadline_ms: i64,
+    /// Per-receive duration converted to a fresh absolute AMQP deadline for
+    /// every operation.
+    receive_timeout_ms: i64,
     /// Set when the broker detached the link; a stolen link reports
     /// `amqp:link:stolen` here. The detail slices point into the fixed buffers
     /// below, so they remain valid after the AMQP receiver is destroyed.
@@ -142,6 +144,7 @@ pub const PartitionClient = struct {
         source_address: []const u8,
         /// Identifies this reader to the broker.
         instance_id: []const u8,
+        /// Per-operation timeout duration in milliseconds.
         deadline_ms: i64,
         /// Attach with this selector instead of rendering
         /// `options.start_position`. Used to resume from a position that was
@@ -208,7 +211,7 @@ pub const PartitionClient = struct {
             .max_message_size = max_message_size,
             .max_buffered_bytes = max_buffered_bytes,
             .max_unsettled_deliveries = max_credit,
-        }, args.deadline_ms);
+        }, deadlineAfter(session, args.deadline_ms));
 
         self.* = .{
             .allocator = allocator,
@@ -218,7 +221,7 @@ pub const PartitionClient = struct {
             .filter_expression = filter,
             .prefetch = options.prefetch,
             .owner_level = options.owner_level,
-            .deadline_ms = args.deadline_ms,
+            .receive_timeout_ms = args.deadline_ms,
         };
     }
 
@@ -304,8 +307,10 @@ pub const PartitionClient = struct {
     ) ![]ReceivedEventData {
         if (count == 0 or count > max_credit) return ReceiveError.InvalidCount;
         if (!self.refreshGeneration()) return error.LinkDetached;
-        if (self.terminal or self.session == null) return error.LinkDetached;
+        if (self.terminal) return error.LinkDetached;
+        const session = self.session orelse return error.LinkDetached;
         const receiver = self.receiver orelse return error.LinkDetached;
+        const deadline_ms = deadlineAfter(session, self.receive_timeout_ms);
 
         // Credit is consumed by every initial transfer, including one the
         // peer later aborts. Use AMQP's actual outstanding plus deferred
@@ -313,7 +318,11 @@ pub const PartitionClient = struct {
         const outstanding = manualCreditOutstanding(receiver);
         if (self.prefetch < 0 and outstanding < count) {
             const additional = count - outstanding;
-            try receiver.issueCredit(additional);
+            receiver.issueCredit(additional) catch |err| {
+                self.recordDetach();
+                self.observeTerminal(receiver, err);
+                return err;
+            };
         }
 
         var events: std.ArrayList(ReceivedEventData) = .empty;
@@ -331,7 +340,7 @@ pub const PartitionClient = struct {
         var delivery_ids: [max_credit]u32 = undefined;
 
         while (events.items.len < count) {
-            const delivery = receiver.receive(self.deadline_ms) catch |err| {
+            const delivery = receiver.receive(deadline_ms) catch |err| {
                 self.recordDetach();
                 self.observeTerminal(receiver, err);
                 // Events already in hand arrived, so dropping them here would
@@ -428,7 +437,8 @@ pub const PartitionClient = struct {
     /// safely finish the handshake later.
     fn abandonConsumedBatch(self: *PartitionClient) void {
         self.terminal = true;
-        self.detachReceiver(self.deadline_ms) catch {};
+        const session = self.session orelse return;
+        self.detachReceiver(deadlineAfter(session, self.receive_timeout_ms)) catch {};
     }
 
     /// Complete a two-phase receiver close using AMQP's public state.
@@ -543,7 +553,7 @@ pub const ReceiverPool = struct {
     session: *amqp.Session,
     options: PartitionClientOptions,
     instance_id: []const u8,
-    deadline_ms: i64,
+    timeout_ms: i64,
     /// Keyed by source address. The pool owns the keys; the session owns the
     /// links behind the clients.
     clients: std.StringHashMapUnmanaged(*PartitionClient) = .empty,
@@ -554,6 +564,8 @@ pub const ReceiverPool = struct {
 
     pub const Options = struct {
         instance_id: []const u8,
+        /// Per-operation timeout duration in milliseconds. The legacy field
+        /// name is retained for source compatibility.
         deadline_ms: i64,
         client: PartitionClientOptions = .{},
     };
@@ -564,7 +576,7 @@ pub const ReceiverPool = struct {
             .session = session,
             .options = options.client,
             .instance_id = options.instance_id,
-            .deadline_ms = options.deadline_ms,
+            .timeout_ms = options.deadline_ms,
         };
     }
 
@@ -594,7 +606,7 @@ pub const ReceiverPool = struct {
         self.remember(source_address, client.filterExpression()) catch {};
 
         if (detach)
-            client.close(self.deadline_ms) catch return
+            client.closeAfter(self.timeout_ms) catch return
         else
             client.deinit();
 
@@ -661,7 +673,7 @@ pub const ReceiverPool = struct {
         try client.open(self.allocator, self.session, .{
             .source_address = source_address,
             .instance_id = self.instance_id,
-            .deadline_ms = self.deadline_ms,
+            .deadline_ms = self.timeout_ms,
             .filter_expression = resume_from,
         }, self.options);
         errdefer client.deinit();
@@ -1799,7 +1811,7 @@ test "disabled prefetch replaces an aborted delivery in the same receive" {
     try testing.expectEqual(@as(?u32, 1), replacement.performative.flow.link_credit);
 }
 
-test "disabled prefetch preserves repeated short and large batch demand" {
+test "disabled prefetch renews deadlines across repeated short and large batches" {
     const allocator = testing.allocator;
     var mem = MemoryTransport.init(allocator);
     defer mem.deinit();
@@ -1821,9 +1833,11 @@ test "disabled prefetch preserves repeated short and large batch demand" {
     defer event_data.freeReceivedEvents(allocator, first);
     try testing.expectEqual(@as(usize, 1), first.len);
     try testing.expectEqual(@as(u32, 9), manualCreditOutstanding(scripted.client.receiver.?));
+    try testing.expect(clock.millis >= scripted.client.receive_timeout_ms);
 
+    // The original attach-time absolute deadline has passed. A second call
+    // still gets a full duration from the clock as it exists now.
     try pushEvent(allocator, peer, 1, 2, "second");
-    scripted.client.deadline_ms = 20_000;
 
     const second = try scripted.client.receiveEvents(allocator, 10);
     defer event_data.freeReceivedEvents(allocator, second);
@@ -1834,7 +1848,6 @@ test "disabled prefetch preserves repeated short and large batch demand" {
     while (i < 10) : (i += 1) {
         try pushEvent(allocator, peer, i + 2, @as(i64, i) + 3, "next");
     }
-    scripted.client.deadline_ms = 30_000;
 
     const third = try scripted.client.receiveEvents(allocator, 10);
     defer event_data.freeReceivedEvents(allocator, third);

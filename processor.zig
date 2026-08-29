@@ -87,6 +87,7 @@ pub const ProcessorPartitionClient = struct {
     store: *CheckpointStore,
     details: OwnershipDetails,
     opener: *PartitionOpener,
+    processor: *Processor,
     link_closed: bool = false,
     finalized: bool = false,
     /// Set when the broker says another processor took the partition. The
@@ -147,10 +148,15 @@ pub const ProcessorPartitionClient = struct {
         });
     }
 
-    /// Close the underlying link. An ambiguous detach keeps this wrapper
-    /// intact so the caller can retry the same close handshake.
+    /// Close the underlying link and release it from the processor.
+    ///
+    /// An ambiguous detach keeps this wrapper registered so the caller can
+    /// retry the same close handshake. After success this pointer is invalid;
+    /// a later balancing cycle may open a replacement for the partition.
     pub fn close(self: *ProcessorPartitionClient) !void {
-        try self.closeReader();
+        const processor = self.processor;
+        const partition_id = self.partition_id;
+        try processor.releasePartition(partition_id);
     }
 
     fn closeReader(self: *ProcessorPartitionClient) !void {
@@ -183,11 +189,13 @@ pub const Processor = struct {
     /// reopened while the store still claims them for this processor; seeing
     /// a cycle where another owner holds them clears the suppression.
     suppressed: std.StringHashMapUnmanaged(void) = .empty,
-    deadline_ms: i64 = 60_000,
     closing: bool = false,
     relinquished: bool = false,
     deinitialized: bool = false,
 
+    /// Keep the returned value at a stable address after its first balancing
+    /// cycle. Partition readers retain a pointer to their owning processor so
+    /// a successful public close can unregister itself.
     pub fn init(
         allocator: Allocator,
         store: *CheckpointStore,
@@ -422,6 +430,7 @@ pub const Processor = struct {
             .store = self.store,
             .details = self.details,
             .opener = self.opener,
+            .processor = self,
         };
 
         try self.clients.put(self.allocator, owned_id, wrapper);
@@ -545,7 +554,7 @@ const FakeOpener = struct {
             .filter_expression = &.{},
             .prefetch = 0,
             .owner_level = null,
-            .deadline_ms = 0,
+            .receive_timeout_ms = 0,
         };
         return client;
     }
@@ -618,7 +627,7 @@ const AmqpTestOpener = struct {
         try client.open(allocator, self.session, .{
             .source_address = source,
             .instance_id = instance_id,
-            .deadline_ms = receiving.deadlineAfter(self.session, 10_000),
+            .deadline_ms = 10_000,
             .filter_expression = filter,
             .generation_guard = if (self.generation) |generation| .{
                 .context = generation,
@@ -823,6 +832,44 @@ test "each claimed partition is handed out once" {
     try testing.expectEqual(@as(usize, 2), seen);
     // A second drain yields nothing: the reader is already the caller's.
     try testing.expect(processor.nextPartitionClient() == null);
+}
+
+test "public partition close unregisters and reopens the claimed partition" {
+    const allocator = testing.allocator;
+    var clock = ManualClock{};
+    var store = InMemoryCheckpointStore{ .allocator = allocator, .clock = &clock.clock };
+    defer store.deinit();
+    var opener = FakeOpener{ .allocator = allocator, .partitions = &.{"0"} };
+    defer opener.deinit();
+
+    var random = std.Random.DefaultPrng.init(9);
+    var processor = Processor.init(
+        allocator,
+        &store.store,
+        &opener.opener,
+        test_details,
+        .{ .load_balancing_strategy = .greedy },
+        &clock.clock,
+        random.random(),
+    );
+    defer processor.deinit();
+
+    try processor.runOnce();
+    const first = processor.nextPartitionClient().?;
+
+    opener.close_failures_remaining = 1;
+    try testing.expectError(error.Timeout, first.close());
+    try testing.expectEqual(@as(usize, 1), processor.ownedPartitions().len);
+    try testing.expect(processor.clients.get("0").? == first);
+
+    try first.close();
+    try testing.expectEqual(@as(usize, 0), processor.ownedPartitions().len);
+    try testing.expect(processor.nextPartitionClient() == null);
+
+    try processor.runOnce();
+    try testing.expectEqual(@as(usize, 1), processor.ownedPartitions().len);
+    try testing.expectEqual(@as(usize, 2), opener.opened.items.len);
+    _ = processor.nextPartitionClient().?;
 }
 
 test "a reader that lost ownership is closed rather than reused" {
@@ -1166,6 +1213,73 @@ test "remote detach after a short batch is replaced next cycle" {
     const events = try replacement.receiveEvents(allocator, 1);
     defer event_data.freeReceivedEvents(allocator, events);
     try testing.expectEqual(@as(i64, 2), events[0].sequence_number);
+    try testing.expectEqualStrings("replacement", events[0].body());
+
+    try processor.close();
+}
+
+test "manual credit observes a detach pumped before receive and replaces the link" {
+    const allocator = testing.allocator;
+    var mem = amqp.MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var amqp_clock = amqp.connection_driver.ManualClock{};
+    var conn = try amqp.connection_driver.Driver.init(
+        allocator,
+        mem.transport(),
+        amqp_clock.clock(),
+        amqp.test_peer.driver_options,
+    );
+    defer conn.deinit();
+
+    const peer = amqp.test_peer.Peer{ .allocator = allocator, .mem = &mem };
+    try amqp.test_peer.scriptHandshake(peer, 512);
+    try scriptProcessorAttach(peer, 0);
+    try peer.push(0, .{ .detach = .{
+        .handle = 0,
+        .closed = true,
+        .err = .{
+            .condition = errors.condition.detach_forced,
+            .description = "move",
+        },
+    } });
+    try scriptProcessorAttach(peer, 1);
+    try pushProcessorEvent(allocator, peer, 1, 0, 1, "replacement");
+    try peer.push(0, .{ .detach = .{ .handle = 1, .closed = true } });
+
+    var fixture = try amqp.test_peer.Fixture.init(allocator, &mem, &amqp_clock, &conn);
+    defer fixture.deinit();
+    var opener = AmqpTestOpener{ .session = &fixture.session };
+    var clock = ManualClock{};
+    var store = InMemoryCheckpointStore{ .allocator = allocator, .clock = &clock.clock };
+    defer store.deinit();
+    var random = std.Random.DefaultPrng.init(42);
+    var processor = Processor.init(
+        allocator,
+        &store.store,
+        &opener.opener,
+        test_details,
+        .{ .load_balancing_strategy = .greedy, .prefetch = -1 },
+        &clock.clock,
+        random.random(),
+    );
+    defer processor.deinit();
+
+    try processor.runOnce();
+    const first = processor.nextPartitionClient().?;
+
+    // Another user of the shared session can observe this detach before the
+    // partition asks for manual credit. The Flow call itself must classify
+    // the dead link so the processor does not retain it forever.
+    _ = try fixture.session.pump(receiving.deadlineAfter(&fixture.session, 10_000));
+    try testing.expectError(error.LinkDetached, first.receiveEvents(allocator, 1));
+    try testing.expect(first.recoverable_failure);
+    try testing.expect(!first.ownership_lost);
+
+    try processor.runOnce();
+    try testing.expectEqual(@as(usize, 2), opener.opens);
+    const replacement = processor.nextPartitionClient().?;
+    const events = try replacement.receiveEvents(allocator, 1);
+    defer event_data.freeReceivedEvents(allocator, events);
     try testing.expectEqualStrings("replacement", events[0].body());
 
     try processor.close();
