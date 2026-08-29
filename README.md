@@ -218,7 +218,10 @@ write or flush failure leaves the local counters uncommitted and terminalizes
 the dirty connection instead. Drain intent follows the same rule and becomes
 active only after its `Flow` is emitted. A compliant drain response may omit
 `link-credit`; the remaining credit is then derived with serial arithmetic
-from the prior delivery limit and the reported `delivery-count`.
+from the prior delivery limit and the reported `delivery-count`. Once a drain
+Flow is emitted, an acknowledgement timeout terminally detaches that receiver:
+silently clearing the flag would race a peer that may still process the drain,
+and stale drain state would suppress later manual abort-demand replacement.
 
 Only a locally emitted `Flow` advances that delivery limit. A sender's incoming
 `Flow` may reconcile its view and reduce remaining credit, but `link-credit`

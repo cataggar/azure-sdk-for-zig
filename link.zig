@@ -2564,7 +2564,50 @@ pub const Receiver = struct {
         try self.settle(delivery, .released);
     }
 
+    /// A drain Flow is visible to the peer once emitted, so an ambiguous wait
+    /// failure cannot return this link to normal traffic. Close only this link
+    /// when the stream is still clean; a dirty/terminal driver already closes
+    /// the wider scope.
+    fn failPendingDrain(self: *Receiver, err: LinkError) LinkError {
+        const can_emit_detach = self.attached and
+            !self.poisoned and
+            !self.detach_sent and
+            !self.session.ended and
+            self.session.driver.state != .err;
+        self.drain = false;
+        self.credit = 0;
+        self.deferred_credit = 0;
+        self.delivery_limit = self.delivery_count;
+        self.attached = false;
+        self.awaiting_attach = false;
+        self.poisoned = true;
+        self.clearPartialAndFree();
+        self.session.releaseReceiverDeliveries(self);
+
+        if (!can_emit_detach) return err;
+        self.detach_sent = true;
+        self.session.driver.sendPerformative(.amqp, self.session.channel, .{
+            .detach = .{
+                .handle = self.handle,
+                .closed = true,
+                .err = .{
+                    .condition = "amqp:link:detach-forced",
+                    .description = "drain acknowledgement did not complete",
+                },
+            },
+        }) catch {
+            self.session.driver.invalidate();
+            self.session.terminate();
+        };
+        return err;
+    }
+
     /// Drain outstanding credit so the peer reports what it has left.
+    ///
+    /// Once the drain Flow is emitted, a timeout or other ambiguous wait
+    /// failure terminally detaches this link. Clearing `drain` and reusing it
+    /// would race a peer that may still process the old request, and would
+    /// suppress manual abort-demand replacement on later Transfers.
     pub fn drainCredit(self: *Receiver, deadline_ms: i64) LinkError!void {
         if (self.session.ended or self.poisoned or !self.attached or self.detach_sent)
             return error.LinkDetached;
@@ -2576,7 +2619,7 @@ pub const Receiver = struct {
         while (self.credit > 0 and self.attached) {
             _ = self.session.pump(deadline_ms) catch |e| switch (e) {
                 error.RemoteClosed, error.ConnectionClosed => break,
-                else => return e,
+                else => return self.failPendingDrain(e),
             };
         }
         self.drain = false;
@@ -7949,6 +7992,90 @@ test "draining a receiver waits for the sender to consume the outstanding credit
     try receiver.drainCredit(10_000);
     try testing.expectEqual(@as(u32, 0), receiver.credit);
     try testing.expect(!receiver.drain);
+
+    mem.clearWritten();
+    try receiver.issueCredit(1);
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const flows = try frames.of(allocator, perf.descriptor.flow);
+    defer allocator.free(flows);
+    try testing.expectEqual(@as(usize, 1), flows.len);
+    var decoded = try perf.decode(allocator, flows[0]);
+    defer decoded.deinit();
+    try testing.expect(!decoded.performative.flow.drain);
+}
+
+test "drain acknowledgement timeout terminally detaches manual receiver" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "drainable",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "drainable",
+        .source_address = "partition/0",
+        .prefetch = 0,
+        .max_message_size = 16,
+        .max_buffered_bytes = 16,
+    }, 10_000);
+    try receiver.issueCredit(1);
+
+    mem.clearWritten();
+    mem.starve = true;
+    clock.auto_advance_ms = 1;
+    try testing.expectError(error.Timeout, receiver.drainCredit(clock.millis));
+    try testing.expect(!receiver.drain);
+    try testing.expect(receiver.poisoned);
+    try testing.expect(!receiver.attached);
+    try testing.expect(receiver.detach_sent);
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    try testing.expectEqual(@as(u32, 0), receiver.deferred_credit);
+    try testing.expectEqual(connection.State.opened, driver.state);
+    try testing.expect(!fixture.session.ended);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    try testing.expectEqual(@as(usize, 2), frames.bodies.items.len);
+    try testing.expectEqual(
+        perf.descriptor.flow,
+        perf.peekDescriptor(frames.bodies.items[0]).?,
+    );
+    try testing.expectEqual(
+        perf.descriptor.detach,
+        perf.peekDescriptor(frames.bodies.items[1]).?,
+    );
+    var flow = try perf.decode(allocator, frames.bodies.items[0]);
+    defer flow.deinit();
+    try testing.expect(flow.performative.flow.drain);
+
+    const written = mem.written().len;
+    try testing.expectError(error.LinkDetached, receiver.issueCredit(1));
+    try testing.expectEqual(written, mem.written().len);
+
+    // A late aborted Transfer from a peer that processed the old drain is
+    // ignored as a detached-link straggler and cannot recreate demand.
+    mem.starve = false;
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 0,
+        .aborted = true,
+    }, "");
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(u32, 0), receiver.deferred_credit);
+    try testing.expectEqual(written, mem.written().len);
 }
 
 test "omitted drain credit derives remaining across delivery-count wrap" {
