@@ -1,6 +1,6 @@
 .{
     .name = .azure_rest_arm_avs,
-    .version = "0.1.0",
+    .version = "0.2.0",
     .fingerprint = 0xa125d6aff0d22b24,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
