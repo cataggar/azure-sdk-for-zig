@@ -59,11 +59,15 @@ only recognized credential query values are replaced. This keeps redirect and
 LRO URLs replayable. Malformed or unsafe location values are fully redacted.
 Credential source URL headers such as `x-ms-copy-source` remain fully redacted.
 URL sanitization parses the URI reference from its start, percent-decodes path
-and query components for inspection, redacts recognized credential names and
+and query components through a bounded recursive decoder, recursively inspects
+URI-valued parameters, redacts recognized credential names and
 credential-shaped values, and rejects credential-bearing paths or fragments.
-Request URL fragments are rejected; unsafe location fragments cause full
-header redaction. Relative redirects such as `/callback?return=https://...`
-remain replayable when their decoded values are safe.
+Safe fragments are preserved in recorded URL headers; Core strips them when
+constructing the redirected HTTP request. Unsafe or malformed location
+fragments cause full header redaction. Relative redirects such as
+`/callback?return=https://...` remain replayable when their decoded values are
+safe. Decode depth and size are bounded, and malformed or over-depth encodings
+fail closed.
 
 Header names are checked case-insensitively. The default preserves only a
 known-safe standard/Azure header allowlist, after inspecting every value for
@@ -103,10 +107,14 @@ private-key envelopes receive conservative checks. String scalars are scanned
 recursively for signed URLs/SAS parameters, connection strings, private-key
 containers, and JWT-shaped identity tokens. Key Vault secret, certificate, and
 JWK rules apply only to parsed trusted Azure vault hosts and matching resource
-paths; Kusto rules likewise use trusted service host suffixes. Arbitrary URL
-text cannot activate these schema rules, so App Configuration key/value
-documents and paths containing words such as `vault/secrets` remain recordable
-and exact.
+paths; Kusto rules likewise use trusted service host suffixes. ARM
+list/regenerate credential schemas—including Batch, AI Search, Event Grid,
+Cognitive Services, Cosmos DB, and Container Registry—apply only to the
+explicit public, US Government, China, and German management hosts. Storage
+User Delegation Key XML is recognized only on trusted sovereign Blob service
+hosts and the matching action. Arbitrary URL text cannot activate these schema
+rules, so App Configuration key/value documents and paths containing words
+such as `vault/secrets` remain recordable and exact.
 
 The default body contract is deny-by-default: every non-empty body is rejected
 with `BodyPolicyRequired` unless `bodyPolicyFn` classifies that exact exchange.
@@ -150,14 +158,18 @@ callers that approve otherwise opaque encodings take responsibility for their
 decoded contents. Multipart bodies are also scanned before opaque allowance,
 including form-data names, embedded HTTP authorization headers, signed URLs,
 JWTs, and parseable structured part payloads. Declared multipart boundaries are
-parsed from `Content-Type`; legal preambles and nested multipart parts are
-supported, while malformed multipart structures fail closed. Policy contexts
-are borrowed through `toJson`.
+parsed from `Content-Type` and recognized only as exact MIME delimiter lines;
+legal preambles, epilogues, and nested multipart parts are inspected, while
+invalid close suffixes, missing closes, and malformed multipart structures fail
+closed. Policy contexts are borrowed through `toJson`.
 
 Playback matches without consuming an exchange. It advances the caller-
-serialized index only after the response or streaming operation has been
-allocated successfully, so allocation failures can be retried against the same
-recording.
+serialized index only after a nonredirect buffered response succeeds or a
+final streaming operation finishes successfully. Redirect chains remain a
+single tentative transaction until their final response/operation commits, so
+allocation failure at any Core redirect-resolution/request-construction step
+can retry the original request. Aborted, cancelled, or failed streaming
+operations remain retryable.
 
 Run its independent tests from this directory:
 
