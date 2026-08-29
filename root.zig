@@ -1204,9 +1204,9 @@ pub const ConsumerPartitionOpener = struct {
         return false;
     }
 
-    fn closePartition(o: *PartitionOpener, client: *PartitionClient) void {
+    fn closePartition(o: *PartitionOpener, client: *PartitionClient) anyerror!void {
         const self: *ConsumerPartitionOpener = @fieldParentPtr("opener", o);
-        client.close(self.deadline_ms) catch {};
+        try client.close(self.deadline_ms);
         client.allocator.destroy(client);
     }
 };

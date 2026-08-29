@@ -81,6 +81,14 @@ pub const PartitionClient = struct {
     allocator: Allocator,
     session: ?*amqp.Session = null,
     receiver: *amqp.Receiver,
+    /// No more deliveries may be consumed after a batch has failed locally.
+    /// The unchanged selector is then safe to use on a replacement link.
+    terminal: bool = false,
+    /// A detach was emitted but its peer acknowledgement has not necessarily
+    /// arrived. While this is set, `close` continues pumping the same receiver
+    /// rather than emitting a second detach or freeing its handle early.
+    detach_started: bool = false,
+    deinitialized: bool = false,
     /// The selector the link was attached with, advanced past the last event
     /// delivered so a reattach resumes rather than replaying. Owned.
     filter_expression: []u8,
@@ -194,18 +202,23 @@ pub const PartitionClient = struct {
 
     /// Release the client. The link belongs to the session, which detaches it.
     pub fn deinit(self: *PartitionClient) void {
+        if (self.deinitialized) return;
         self.allocator.free(self.filter_expression);
         self.filter_expression = &.{};
         if (self.decode_arena) |*a| a.deinit();
         self.decode_arena = null;
+        self.deinitialized = true;
     }
 
     /// Detach the link, remove it from its session, and release the client.
+    ///
+    /// A timeout is ambiguous: the peer may still send on the handle before
+    /// acknowledging the detach. In that case ownership is retained and a
+    /// later call continues waiting for the acknowledgement.
     pub fn close(self: *PartitionClient, deadline_ms: i64) !void {
-        defer self.deinit();
-        const session = self.session orelse return;
-        self.session = null;
-        session.closeReceiver(self.receiver, deadline_ms);
+        if (self.deinitialized) return;
+        try self.detachReceiver(deadline_ms);
+        self.deinit();
     }
 
     /// The selector the next attach would use. Advances as events arrive.
@@ -225,6 +238,7 @@ pub const PartitionClient = struct {
         count: u32,
     ) ![]ReceivedEventData {
         if (count == 0 or count > max_credit) return ReceiveError.InvalidCount;
+        if (self.terminal or self.session == null) return error.LinkDetached;
 
         // Credit is consumed by every initial transfer, including one the
         // peer later aborts. Use AMQP's actual outstanding plus deferred
@@ -236,6 +250,8 @@ pub const PartitionClient = struct {
         }
 
         var events: std.ArrayList(ReceivedEventData) = .empty;
+        var consumed_any = false;
+        errdefer if (consumed_any) self.abandonConsumedBatch();
         // `count` is exactly how many will be appended on the success path, and
         // a `ReceivedEventData` is large enough that regrowing a 300-deep
         // prefetch means repeatedly copying tens of kilobytes.
@@ -257,6 +273,7 @@ pub const PartitionClient = struct {
                 if (events.items.len > 0) break;
                 return err;
             };
+            consumed_any = true;
 
             delivery_ids[events.items.len] = delivery.id;
             const received = blk: {
@@ -306,6 +323,67 @@ pub const PartitionClient = struct {
     fn recordDetach(self: *PartitionClient) void {
         const remote = self.receiver.detach_error orelse return;
         self.last_error = errors.EventHubsError.fromCondition(remote.condition, remote.description);
+    }
+
+    /// Stop a link whose caller-visible batch can no longer be completed.
+    ///
+    /// Settlement and selector advancement have not happened yet, so removing
+    /// the link makes the broker replay from the unchanged selector. A detach
+    /// timeout leaves the receiver session-owned and terminal; `close` can
+    /// safely finish the handshake later.
+    fn abandonConsumedBatch(self: *PartitionClient) void {
+        self.terminal = true;
+        self.detachReceiver(self.deadline_ms) catch {};
+    }
+
+    /// Complete a two-phase receiver close using AMQP's public state.
+    ///
+    /// `Session.closeReceiver` is called only after the peer detach has made
+    /// the receiver inactive, or after the whole session has ended. Until
+    /// then the receiver remains registered so late transfers are recognized
+    /// as belonging to the closing link rather than poisoning the session as
+    /// an unknown handle.
+    fn detachReceiver(self: *PartitionClient, deadline_ms: i64) !void {
+        const session = self.session orelse return;
+        const receiver = self.receiver;
+
+        if (!session.ended and !self.detach_started) {
+            if (!receiver.attached) {
+                // A peer-initiated detach sends our response before setting
+                // this flag. Other local poison paths do not, and cannot be
+                // removed safely without ending the session.
+                if (!receiver.detach_sent) return error.DetachUnconfirmed;
+            } else {
+                self.detach_started = true;
+                receiver.detach(deadline_ms) catch |err| {
+                    // No detach frame reached the peer, so an attached link
+                    // can retry the initial phase. An inactive link without a
+                    // peer acknowledgement remains ambiguous and retained.
+                    if (!receiver.detach_sent and receiver.attached) {
+                        self.detach_started = false;
+                    }
+                    if (!session.ended) return err;
+                };
+            }
+        }
+
+        if (!session.ended and receiver.attached) {
+            if (!receiver.detach_sent) {
+                self.detach_started = false;
+                return self.detachReceiver(deadline_ms);
+            }
+            while (receiver.attached and !session.ended) {
+                _ = try session.pump(deadline_ms);
+            }
+        }
+
+        if (!session.ended and (receiver.attached or !receiver.detach_sent)) {
+            return error.DetachUnconfirmed;
+        }
+
+        session.closeReceiver(receiver, deadline_ms);
+        self.session = null;
+        self.detach_started = false;
     }
 };
 
@@ -397,17 +475,18 @@ pub const ReceiverPool = struct {
     /// into a dead connection would fail, and the link died with the session
     /// regardless.
     pub fn drop(self: *ReceiverPool, source_address: []const u8, detach: bool) void {
-        const entry = self.clients.fetchRemove(source_address) orelse return;
-        const client = entry.value;
+        const client = self.clients.get(source_address) orelse return;
 
         // Remembered before the client is torn down, so the reattach resumes
         // rather than replaying everything already delivered.
-        self.remember(entry.key, client.filterExpression()) catch {};
+        self.remember(source_address, client.filterExpression()) catch {};
 
         if (detach)
-            client.close(self.deadline_ms) catch {}
+            client.close(self.deadline_ms) catch return
         else
             client.deinit();
+
+        const entry = self.clients.fetchRemove(source_address) orelse return;
         self.allocator.destroy(client);
         self.allocator.free(entry.key);
     }
@@ -599,6 +678,45 @@ fn pushEventWithSettlement(
     body: []const u8,
     settled: bool,
 ) !void {
+    return pushEventOnWithSettlement(
+        allocator,
+        peer,
+        0,
+        id,
+        sequence_number,
+        body,
+        settled,
+    );
+}
+
+fn pushEventOn(
+    allocator: Allocator,
+    peer: Peer,
+    handle: u32,
+    id: u32,
+    sequence_number: i64,
+    body: []const u8,
+) !void {
+    return pushEventOnWithSettlement(
+        allocator,
+        peer,
+        handle,
+        id,
+        sequence_number,
+        body,
+        true,
+    );
+}
+
+fn pushEventOnWithSettlement(
+    allocator: Allocator,
+    peer: Peer,
+    handle: u32,
+    id: u32,
+    sequence_number: i64,
+    body: []const u8,
+    settled: bool,
+) !void {
     var annotations = [_]amqp.MapEntry{
         .{
             .key = .{ .symbol = event_data.sequence_number_annotation },
@@ -618,7 +736,7 @@ fn pushEventWithSettlement(
 
     const tag = [_]u8{@intCast(id)};
     try peer.pushTransfer(0, .{
-        .handle = 0,
+        .handle = handle,
         .delivery_id = id,
         .delivery_tag = &tag,
         .message_format = 0,
@@ -780,6 +898,87 @@ test "close removes the receiver so the same partition can be reacquired" {
     }, .{});
     defer client.deinit();
     try testing.expectEqual(@as(usize, 1), fixture.session.receivers.items.len);
+}
+
+test "close timeout retains the receiver through late transfer and acknowledgement" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock = driver.ManualClock{};
+    var conn = try driver.Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
+    defer conn.deinit();
+
+    const other_source = "my-hub/ConsumerGroups/$default/Partitions/1";
+    const other_link_name = other_source ++ "-receiver-" ++ test_instance;
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+    try scriptAttach(peer);
+    try peer.push(0, .{ .attach = .{
+        .name = other_link_name,
+        .handle = 1,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+
+    var fixture = try Fixture.init(allocator, &mem, &clock, &conn);
+    defer fixture.deinit();
+
+    var closing: PartitionClient = undefined;
+    try closing.open(allocator, &fixture.session, .{
+        .source_address = test_source,
+        .instance_id = test_instance,
+        .deadline_ms = 10_000,
+    }, .{});
+    defer closing.deinit();
+
+    var unrelated: PartitionClient = undefined;
+    try unrelated.open(allocator, &fixture.session, .{
+        .source_address = other_source,
+        .instance_id = test_instance,
+        .deadline_ms = 10_000,
+    }, .{});
+    defer unrelated.deinit();
+
+    mem.starve = true;
+    clock.auto_advance_ms = 1_000;
+    try testing.expectError(error.Timeout, closing.close(10_000));
+    try testing.expectEqual(@as(usize, 2), fixture.session.receivers.items.len);
+    try testing.expect(closing.session != null);
+    try testing.expect(closing.detach_started);
+    try testing.expect(closing.receiver.attached);
+    try testing.expect(closing.receiver.detach_sent);
+
+    // A transfer already in flight may arrive before the peer observes the
+    // detach. Keeping the receiver registered lets the shared session route
+    // and discard it when the acknowledgement arrives.
+    try pushEventOn(allocator, peer, 0, 0, 1, "late");
+    try peer.push(0, .{ .detach = .{ .handle = 0, .closed = true } });
+    try pushEventOn(allocator, peer, 1, 1, 50, "unrelated");
+
+    try closing.close(20_000);
+    try closing.close(20_000);
+    try testing.expectEqual(@as(usize, 1), fixture.session.receivers.items.len);
+
+    const survived = try unrelated.receiveEvents(allocator, 1);
+    defer event_data.freeReceivedEvents(allocator, survived);
+    try testing.expectEqual(@as(usize, 1), survived.len);
+    try testing.expectEqual(@as(i64, 50), survived[0].sequence_number);
+
+    try peer.push(0, .{ .attach = .{
+        .name = test_link_name,
+        .handle = 2,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    try pushEventOn(allocator, peer, 2, 2, 1, "reacquired");
+    try closing.open(allocator, &fixture.session, .{
+        .source_address = test_source,
+        .instance_id = test_instance,
+        .deadline_ms = 30_000,
+    }, .{});
+    const reacquired = try closing.receiveEvents(allocator, 1);
+    defer event_data.freeReceivedEvents(allocator, reacquired);
+    try testing.expectEqualStrings("reacquired", reacquired[0].body());
+    try testing.expectEqual(@as(usize, 2), fixture.session.receivers.items.len);
 }
 
 test "attach carries the start position as a selector filter" {
@@ -949,7 +1148,65 @@ test "receiveEvents settles a whole batch in one disposition" {
     try testing.expectEqual(@as(u32, batch - 1), covered_last.?);
 }
 
-test "selector allocation failure leaves events unsettled and position unchanged" {
+test "decode failure detaches and replays the consumed sequence" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock = driver.ManualClock{};
+    var conn = try driver.Driver.init(allocator, mem.transport(), clock.clock(), harness.driver_options);
+    defer conn.deinit();
+
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+    try scriptAttach(peer);
+    const malformed_tag = [_]u8{0};
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 0,
+        .delivery_tag = &malformed_tag,
+        .settled = false,
+    }, "not an AMQP message");
+    try peer.push(0, .{ .detach = .{ .handle = 0, .closed = true } });
+    try peer.push(0, .{ .attach = .{
+        .name = test_link_name,
+        .handle = 1,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    try pushEventOn(allocator, peer, 1, 1, 1, "replayed");
+
+    var scripted: Scripted = undefined;
+    try scripted.open(allocator, &mem, &clock, &conn, .{
+        .start_position = EventPosition.earliest(),
+    });
+    defer scripted.deinit();
+
+    const previous = try allocator.dupe(u8, scripted.client.filterExpression());
+    defer allocator.free(previous);
+
+    if (scripted.client.receiveEvents(allocator, 1)) |events| {
+        event_data.freeReceivedEvents(allocator, events);
+        return error.ExpectedDecodeFailure;
+    } else |_| {}
+
+    try testing.expect(scripted.client.terminal);
+    try testing.expect(scripted.client.session == null);
+    try testing.expectEqualStrings(previous, scripted.client.filterExpression());
+
+    try scripted.client.close(10_000);
+    try scripted.client.open(allocator, &scripted.fixture.session, .{
+        .source_address = test_source,
+        .instance_id = test_instance,
+        .deadline_ms = 10_000,
+        .filter_expression = previous,
+    }, .{});
+
+    const replayed = try scripted.client.receiveEvents(allocator, 1);
+    defer event_data.freeReceivedEvents(allocator, replayed);
+    try testing.expectEqual(@as(i64, 1), replayed[0].sequence_number);
+    try testing.expectEqualStrings("replayed", replayed[0].body());
+}
+
+test "selector allocation failure replays without a sequence hole" {
     const allocator = testing.allocator;
     var mem = MemoryTransport.init(allocator);
     defer mem.deinit();
@@ -961,6 +1218,15 @@ test "selector allocation failure leaves events unsettled and position unchanged
     try scriptAttach(peer);
     try pushEvent(allocator, peer, 0, 1, "warm");
     try pushUnsettledEvent(allocator, peer, 1, 2, "fails");
+    try peer.push(0, .{ .detach = .{ .handle = 0, .closed = true } });
+    try peer.push(0, .{ .attach = .{
+        .name = test_link_name,
+        .handle = 1,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    try pushEventOn(allocator, peer, 1, 2, 2, "replayed");
+    try pushEventOn(allocator, peer, 1, 3, 3, "after");
 
     var scripted: Scripted = undefined;
     try scripted.open(allocator, &mem, &clock, &conn, .{});
@@ -983,12 +1249,34 @@ test "selector allocation failure leaves events unsettled and position unchanged
 
     try testing.expect(failing.failures > 0);
     try testing.expectEqualStrings(previous, scripted.client.filterExpression());
+    try testing.expect(scripted.client.terminal);
+    try testing.expect(scripted.client.session == null);
 
     var frames = try EmittedFrames.parse(allocator, mem.written());
     defer frames.deinit();
     const dispositions = try frames.of(allocator, amqp.performative.descriptor.disposition);
     defer allocator.free(dispositions);
     try testing.expectEqual(@as(usize, 0), dispositions.len);
+
+    try scripted.client.close(10_000);
+    try scripted.client.open(allocator, &scripted.fixture.session, .{
+        .source_address = test_source,
+        .instance_id = test_instance,
+        .deadline_ms = 10_000,
+        .filter_expression = previous,
+    }, .{});
+
+    const retried = try scripted.client.receiveEvents(allocator, 2);
+    defer event_data.freeReceivedEvents(allocator, retried);
+    try testing.expectEqual(@as(usize, 2), retried.len);
+    try testing.expectEqual(@as(i64, 2), retried[0].sequence_number);
+    try testing.expectEqualStrings("replayed", retried[0].body());
+    try testing.expectEqual(@as(i64, 3), retried[1].sequence_number);
+    try testing.expectEqualStrings("after", retried[1].body());
+    try testing.expectEqualStrings(
+        "amqp.annotation.x-opt-sequence-number > '3'",
+        scripted.client.filterExpression(),
+    );
 }
 
 test "short-batch result allocation failure leaves events unsettled and position unchanged" {
@@ -1020,6 +1308,8 @@ test "short-batch result allocation failure leaves events unsettled and position
     );
     try testing.expect(failing.saw_shrink);
     try testing.expectEqualStrings(previous, scripted.client.filterExpression());
+    try testing.expect(scripted.client.terminal);
+    try testing.expectError(error.LinkDetached, scripted.client.receiveEvents(allocator, 1));
 
     var frames = try EmittedFrames.parse(allocator, mem.written());
     defer frames.deinit();

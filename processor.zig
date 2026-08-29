@@ -42,7 +42,7 @@ pub const PartitionOpener = struct {
         position: EventPosition,
         options: PartitionClientOptions,
     ) anyerror!*PartitionClient,
-    closeFn: *const fn (self: *PartitionOpener, client: *PartitionClient) void,
+    closeFn: *const fn (self: *PartitionOpener, client: *PartitionClient) anyerror!void,
 
     /// The hub's partition ids. Caller owns the slice and its strings.
     pub fn partitionIds(self: *PartitionOpener, allocator: Allocator) ![][]const u8 {
@@ -59,8 +59,8 @@ pub const PartitionOpener = struct {
         return self.openFn(self, allocator, partition_id, position, options);
     }
 
-    pub fn close(self: *PartitionOpener, client: *PartitionClient) void {
-        self.closeFn(self, client);
+    pub fn close(self: *PartitionOpener, client: *PartitionClient) !void {
+        try self.closeFn(self, client);
     }
 };
 
@@ -79,6 +79,7 @@ pub const ProcessorPartitionClient = struct {
     store: *CheckpointStore,
     details: OwnershipDetails,
     opener: *PartitionOpener,
+    closed: bool = false,
     /// Set when the broker says another processor took the partition. The
     /// processor releases rather than retries: the whole point of an owner
     /// level is that the newer reader wins.
@@ -119,9 +120,23 @@ pub const ProcessorPartitionClient = struct {
         });
     }
 
-    pub fn close(self: *ProcessorPartitionClient) void {
-        self.opener.close(self.client);
+    /// Close the underlying link. An ambiguous detach keeps this wrapper
+    /// intact so the caller can retry the same close handshake.
+    pub fn close(self: *ProcessorPartitionClient) !void {
+        try self.closeReader();
+        self.finishClose();
+    }
+
+    fn closeReader(self: *ProcessorPartitionClient) !void {
+        if (self.closed) return;
+        try self.opener.close(self.client);
+    }
+
+    fn finishClose(self: *ProcessorPartitionClient) void {
+        if (self.closed) return;
         self.allocator.free(self.partition_id);
+        self.partition_id = &.{};
+        self.closed = true;
     }
 };
 
@@ -170,18 +185,28 @@ pub const Processor = struct {
     ///
     /// Relinquishing is best effort: a processor whose store has gone away
     /// still has to stop cleanly, and the records expire on their own.
+    /// A reader whose detach is ambiguous remains owned so another `deinit`
+    /// call can finish it after the session receives the acknowledgement.
     pub fn deinit(self: *Processor) void {
         var held: std.ArrayList([]const u8) = .empty;
         defer held.deinit(self.allocator);
         for (self.clients.keys()) |id| held.append(self.allocator, id) catch {};
         self.balancer.relinquish(held.items) catch {};
 
-        for (self.clients.values()) |client| {
-            client.close();
-            self.allocator.destroy(client);
+        var index: usize = 0;
+        while (index < self.clients.count()) {
+            const id = self.clients.keys()[index];
+            self.releasePartition(id) catch {
+                // An ambiguous detach must retain the wrapper and client so a
+                // later deinit can finish the same close handshake.
+                index += 1;
+                continue;
+            };
         }
-        self.clients.deinit(self.allocator);
-        self.pending.deinit(self.allocator);
+        if (self.clients.count() == 0) {
+            self.clients.deinit(self.allocator);
+            self.pending.deinit(self.allocator);
+        }
     }
 
     /// One balancing cycle: claim, renew, open, and release.
@@ -229,11 +254,13 @@ pub const Processor = struct {
             try dropped.append(self.allocator, id);
         }
 
-        for (dropped.items) |id| self.releasePartition(id);
+        for (dropped.items) |id| try self.releasePartition(id);
     }
 
-    fn releasePartition(self: *Processor, partition_id: []const u8) void {
+    fn releasePartition(self: *Processor, partition_id: []const u8) !void {
         const client = self.clients.get(partition_id) orelse return;
+
+        try client.closeReader();
 
         var i: usize = 0;
         while (i < self.pending.items.len) {
@@ -244,7 +271,7 @@ pub const Processor = struct {
             i += 1;
         }
         _ = self.clients.orderedRemove(partition_id);
-        client.close();
+        client.finishClose();
         self.allocator.destroy(client);
     }
 
@@ -334,6 +361,7 @@ const FakeOpener = struct {
     /// Every position the processor asked to open at, in order.
     opened: std.ArrayList(Opened) = .empty,
     closed: usize = 0,
+    close_failures_remaining: usize = 0,
     /// Reject an offset once, as a geo-replicated namespace does.
     reject_offsets: bool = false,
     opener: PartitionOpener = .{
@@ -415,8 +443,12 @@ const FakeOpener = struct {
         return client;
     }
 
-    fn close(o: *PartitionOpener, client: *PartitionClient) void {
+    fn close(o: *PartitionOpener, client: *PartitionClient) anyerror!void {
         const self: *FakeOpener = @fieldParentPtr("opener", o);
+        if (self.close_failures_remaining > 0) {
+            self.close_failures_remaining -= 1;
+            return error.Timeout;
+        }
         self.closed += 1;
         client.allocator.destroy(client);
     }
@@ -563,6 +595,50 @@ test "a partition claimed by another processor is released" {
     }};
     const taken = try store.store.claimOwnership(allocator, &stolen);
     checkpoint_types.freeOwnerships(allocator, taken);
+
+    try processor.runOnce();
+    try testing.expectEqual(@as(usize, 0), processor.ownedPartitions().len);
+    try testing.expectEqual(@as(usize, 1), opener.closed);
+}
+
+test "an ambiguous partition close retains ownership for retry" {
+    const allocator = testing.allocator;
+    var clock = ManualClock{};
+    var store = InMemoryCheckpointStore{ .allocator = allocator, .clock = &clock.clock };
+    defer store.deinit();
+    var opener = FakeOpener{ .allocator = allocator, .partitions = &.{"0"} };
+    defer opener.deinit();
+
+    var random = std.Random.DefaultPrng.init(23);
+    var processor = Processor.init(
+        allocator,
+        &store.store,
+        &opener.opener,
+        test_details,
+        .{ .load_balancing_strategy = .greedy },
+        &clock.clock,
+        random.random(),
+    );
+    defer processor.deinit();
+
+    try processor.runOnce();
+    const retained = processor.clients.get("0").?;
+
+    const stolen = [_]checkpoint_types.PartitionOwnership{.{
+        .fully_qualified_namespace = test_details.fully_qualified_namespace,
+        .event_hub_name = test_details.event_hub_name,
+        .consumer_group = test_details.consumer_group,
+        .partition_id = "0",
+        .owner_id = "processor-b",
+    }};
+    const taken = try store.store.claimOwnership(allocator, &stolen);
+    checkpoint_types.freeOwnerships(allocator, taken);
+
+    opener.close_failures_remaining = 1;
+    try testing.expectError(error.Timeout, processor.runOnce());
+    try testing.expectEqual(@as(usize, 1), processor.ownedPartitions().len);
+    try testing.expect(processor.clients.get("0").? == retained);
+    try testing.expect(!retained.closed);
 
     try processor.runOnce();
     try testing.expectEqual(@as(usize, 0), processor.ownedPartitions().len);
