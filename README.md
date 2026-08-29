@@ -2,9 +2,8 @@
 
 Hand-written, idiomatic Zig conveniences for **Azure Storage Tables**.
 
-Release branch: `sdk/data_tables`. The package starts at `0.1.0` and currently
-preserves its prototype `TableClient`, `TableServiceClient`, and `TableEntity`
-exports while the parity roadmap in
+Release branch: `sdk/data_tables`. Version `0.2.0` preserves the prototype
+`TableClient`, `TableServiceClient`, and `TableEntity` exports while the parity roadmap in
 [tracker #148](https://github.com/cataggar/azure-sdk-for-zig/issues/148) is
 implemented.
 
@@ -32,12 +31,14 @@ immutable upstream commit every time it is regenerated. A generic Storage
 `x-ms-version` is not a substitute for a Tables contract version.
 
 The SDK pins generated package commit
-`67d001426e73385a944a1bacde8d482b81dbf5ae` and Zig package hash
-`azure_rest_data_tables-0.1.0-CqXnR3B2AQBJhSOC2e17bpbGPj5hN9RjLcpQ01OfFGkf`,
-and re-exports its public root as `protocol`. Its provenance records upstream
-spec commit `0744f52a86919d243ba2225e55bdb9c87bf521a5`, generator commit
-`f5dde2c7aa95e7a5ac496793b5527c9a212d642c`, and stable API version
-`2019-02-02`.
+`799b35f81a0478045ec8faca7eb0e1b41c5fafe0` and Zig package hash
+`azure_rest_data_tables-0.1.0-CqXnR-ZzAQD4MTM5hBpINSq2sdV70SMD2lKjSN1-9loh`,
+and Core commit `bc77bcacbb64af935ca53d60bf8a351c9592bc41` with hash
+`azure_sdk_core-0.3.0-eFY0Ev0-CACjsFaYPL6jS7CpeVNvsqYqTrXRfgQKiRFV`.
+It re-exports the REST package public root as `protocol`. The REST provenance
+records upstream spec commit `0744f52a86919d243ba2225e55bdb9c87bf521a5`,
+generator commit `c83a1cbef5f728d7530fdec4a724cc453233cfa4`, and stable
+API version `2019-02-02`.
 
 `ProtocolClient` is the shared validated bridge to generated calls. It
 normalizes endpoint paths while preserving SAS query bytes, maps metadata,
@@ -60,7 +61,7 @@ source commit above, extracts all stable `Data.Tables.Versions` entries from
 `$batch`. If it reports a changed source, update the fixture and generator,
 regenerate `rest/data_tables`, update provenance and the SDK's immutable REST
 commit/hash together, then repeat the checks. The second command regenerates
-with generator commit `f5dde2c7aa95e7a5ac496793b5527c9a212d642c` and performs
+with generator commit `c83a1cbef5f728d7530fdec4a724cc453233cfa4` and performs
 an exact diff against `rest/data_tables`; it removes only its generated output
 under the supplied codegen worktree. It never selects a generic Storage API
 version.
@@ -70,8 +71,11 @@ version.
 Create owning token-authenticated clients with
 `TableServiceClient.initWithToken` or `TableClient.initWithToken`. Both copy
 their endpoint, API version, telemetry application ID, default client request
-ID, and policy pointer list. The credential, transport, and policy objects
-remain borrowed and must outlive the client. The bearer policy requests
+ID, and policy pointer list. Every constructor takes a canonical
+`core.http.HttpRuntime`; its transport and crypto descriptors are copied by
+value while their backend contexts remain borrowed. The credential, runtime
+contexts, and policy objects must outlive the client and all in-flight calls.
+The bearer policy requests
 `https://storage.azure.com/.default`. Token-authenticated constructors require
 HTTPS, including for custom and private endpoint hosts. HTTP remains available
 to future explicit emulator Shared Key and no-token constructors.
@@ -86,7 +90,10 @@ Derived clients share the parent's bearer-token cache and transport.
 `SharedKeyCredential.init` validates and decodes an account key, and
 `initWithSharedKey` uses the Table-only `SharedKeyLite` canonical form. The
 signer runs after retry, so it applies a current `x-ms-date`, API version, and
-signature to every attempt. Use `initWithSasUrl` only with a complete signed
+signature to every attempt. Shared Key, connection-string, account SAS, and
+table SAS signing all use the crypto provider selected by the client's
+`HttpRuntime`; provider failures are returned without a standard-provider
+fallback. Use `initWithSasUrl` only with a complete signed
 URL; its query bytes are retained verbatim and the pipeline has no
 `Authorization` policy. Client formatting omits all query strings.
 
@@ -123,7 +130,8 @@ authentication and caller policies run on every retry.
 Initialized clients may be moved because policy objects and their type-erased
 pointers live in allocator-owned stable storage. Calls that share a pipeline
 must nevertheless be serialized: the bearer-token cache and standard HTTP
-transport are mutable and not thread-safe. Callers may provide external
+transport are mutable and not thread-safe. Crypto provider contexts must be
+concurrent-safe or caller-serialized. Callers may provide external
 synchronization when sharing a client or using multiple derived clients.
 
 The canonical TypeSpec does not model `$batch`; the generated provenance and

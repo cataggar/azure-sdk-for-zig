@@ -5,6 +5,12 @@
 
 const std = @import("std");
 const core = @import("azure_sdk_core");
+
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+fn testingRuntime(http_transport: core.http.HttpTransport) core.http.HttpRuntime {
+    return .init(http_transport, testing_crypto_provider.asProvider());
+}
 const entity = @import("entity.zig");
 const entity_codec = @import("entity_codec.zig");
 const options = @import("options.zig");
@@ -131,7 +137,7 @@ fn copyListOptions(
     }
     if (source.protocol.policies.len > 0)
         result.protocol.policies = try allocator.dupe(
-            *core.pipeline.HttpPolicy,
+            *core.http.HttpPolicy,
             source.protocol.policies,
         );
     return result;
@@ -419,7 +425,7 @@ fn copyQueryEntitiesOptions(
     };
     if (source.protocol.policies.len > 0)
         result.protocol.policies = try allocator.dupe(
-            *core.pipeline.HttpPolicy,
+            *core.http.HttpPolicy,
             source.protocol.policies,
         );
     return result;
@@ -444,13 +450,13 @@ fn deinitQueryEntitiesOptions(
 const OptionPolicy = struct {
     calls: usize = 0,
     expected_request_id: []const u8,
-    policy: core.pipeline.HttpPolicy = .{ .processFn = &process },
+    policy: core.http.HttpPolicy = .{ .processFn = &process },
 
     fn process(
-        policy: *core.pipeline.HttpPolicy,
+        policy: *core.http.HttpPolicy,
         request: *core.http.Request,
-        next: []*core.pipeline.HttpPolicy,
-        transport: *core.http.HttpTransport,
+        next: []*core.http.HttpPolicy,
+        runtime: core.http.HttpRuntime,
     ) anyerror!core.http.Response {
         const self: *OptionPolicy = @alignCast(@fieldParentPtr("policy", policy));
         if (!std.mem.eql(
@@ -459,8 +465,8 @@ const OptionPolicy = struct {
             request.getHeader("x-ms-client-request-id") orelse return error.MissingRequestId,
         )) return error.UnexpectedRequestId;
         self.calls += 1;
-        if (next.len == 0) return transport.send(request);
-        return next[0].process(request, next[1..], transport);
+        if (next.len == 0) return runtime.transport.send(request);
+        return next[0].process(request, next[1..], runtime);
     }
 };
 
@@ -488,10 +494,7 @@ test "table pager carries options and exact continuation bytes across pages" {
         },
     };
     var transport = core.http.SequenceMockTransport.init(allocator, &responses_for_pages);
-    const base_pipeline: core.pipeline.HttpPipeline = .{
-        .policies = &.{},
-        .transport_impl = transport.asTransport(),
-    };
+    const base_pipeline = core.http.HttpPipeline.init(testingRuntime(transport.asTransport()), &.{});
     var protocol = try protocol_client.ProtocolClient.init(
         allocator,
         "https://account.table.core.windows.net",
@@ -562,10 +565,7 @@ test "table pager represents each OData metadata format" {
             .{ .name = "Date", .value = "Sun, 26 Jul 2026 00:00:00 GMT" },
             .{ .name = "Content-Type", .value = "application/json" },
         };
-        const base_pipeline: core.pipeline.HttpPipeline = .{
-            .policies = &.{},
-            .transport_impl = transport.asTransport(),
-        };
+        const base_pipeline = core.http.HttpPipeline.init(testingRuntime(transport.asTransport()), &.{});
         var protocol = try protocol_client.ProtocolClient.init(
             allocator,
             "https://account.table.core.windows.net",
@@ -607,10 +607,7 @@ test "table pager owns list option bytes and policy pointer storage" {
         },
     };
     var transport = core.http.SequenceMockTransport.init(allocator, &pages);
-    const base_pipeline: core.pipeline.HttpPipeline = .{
-        .policies = &.{},
-        .transport_impl = transport.asTransport(),
-    };
+    const base_pipeline = core.http.HttpPipeline.init(testingRuntime(transport.asTransport()), &.{});
     var protocol = try protocol_client.ProtocolClient.init(
         allocator,
         "https://account.table.core.windows.net",
@@ -625,7 +622,7 @@ test "table pager owns list option bytes and policy pointer storage" {
     var metadata = [_]u8{ 'a', 'p', 'p', 'l', 'i', 'c', 'a', 't', 'i', 'o', 'n', '/', 'j', 's', 'o', 'n', ';', 'o', 'd', 'a', 't', 'a', '=', 'c', 'u', 's', 't', 'o', 'm' };
     var applied = OptionPolicy{ .expected_request_id = "orig-id" };
     var replacement = OptionPolicy{ .expected_request_id = "orig-id" };
-    var policy_ptrs = [_]*core.pipeline.HttpPolicy{&applied.policy};
+    var policy_ptrs = [_]*core.http.HttpPolicy{&applied.policy};
     var table_pager = try TablePager.init(allocator, &protocol, .{
         .select = &select,
         .filter = &filter,
@@ -670,10 +667,7 @@ fn testPagerAllocationFailures(allocator: std.mem.Allocator) !void {
         .{ .name = "Content-Type", .value = "application/json" },
         .{ .name = "x-ms-continuation-NextTableName", .value = "Continuation" },
     };
-    const base_pipeline: core.pipeline.HttpPipeline = .{
-        .policies = &.{},
-        .transport_impl = transport.asTransport(),
-    };
+    const base_pipeline = core.http.HttpPipeline.init(testingRuntime(transport.asTransport()), &.{});
     var protocol = try protocol_client.ProtocolClient.init(
         allocator,
         "https://account.table.core.windows.net",
@@ -686,7 +680,7 @@ fn testPagerAllocationFailures(allocator: std.mem.Allocator) !void {
     var request_id = [_]u8{ 'a', 'l', 'l', 'o', 'c' };
     var metadata = [_]u8{ 'c', 'u', 's', 't', 'o', 'm' };
     var option_policy = OptionPolicy{ .expected_request_id = "alloc" };
-    var policy_ptrs = [_]*core.pipeline.HttpPolicy{&option_policy.policy};
+    var policy_ptrs = [_]*core.http.HttpPolicy{&option_policy.policy};
     var table_pager = try TablePager.init(allocator, &protocol, .{
         .select = &select,
         .filter = &filter,
@@ -759,10 +753,7 @@ test "entity pager preserves all continuation combinations and decodes typed pag
         },
     };
     var transport = core.http.SequenceMockTransport.init(allocator, &page_headers);
-    const base_pipeline: core.pipeline.HttpPipeline = .{
-        .policies = &.{},
-        .transport_impl = transport.asTransport(),
-    };
+    const base_pipeline = core.http.HttpPipeline.init(testingRuntime(transport.asTransport()), &.{});
     var protocol = try protocol_client.ProtocolClient.init(
         allocator,
         "https://account.table.core.windows.net",
@@ -850,10 +841,7 @@ test "entity pager owns mutable options and decodes dynamic EDM values" {
         },
     };
     var transport = core.http.SequenceMockTransport.init(allocator, &pages);
-    const base_pipeline: core.pipeline.HttpPipeline = .{
-        .policies = &.{},
-        .transport_impl = transport.asTransport(),
-    };
+    const base_pipeline = core.http.HttpPipeline.init(testingRuntime(transport.asTransport()), &.{});
     var protocol = try protocol_client.ProtocolClient.init(
         allocator,
         "https://account.table.core.windows.net",
@@ -869,7 +857,7 @@ test "entity pager owns mutable options and decodes dynamic EDM values" {
     var initial_partition = [_]u8{ 'i', 'n', 'i', 't', ' ', '/', '%', '?' };
     var applied = OptionPolicy{ .expected_request_id = "orig-id" };
     var replacement = OptionPolicy{ .expected_request_id = "orig-id" };
-    var policy_ptrs = [_]*core.pipeline.HttpPolicy{&applied.policy};
+    var policy_ptrs = [_]*core.http.HttpPolicy{&applied.policy};
     var entity_pager = try EntityPager(entity.DynamicEntity).init(allocator, &protocol, "Table123", .{
         .select = &select,
         .filter = &filter,
@@ -944,10 +932,7 @@ test "entity pager preserves continuation after a structured service failure" {
         },
     };
     var transport = core.http.SequenceMockTransport.init(allocator, &pages);
-    const base_pipeline: core.pipeline.HttpPipeline = .{
-        .policies = &.{},
-        .transport_impl = transport.asTransport(),
-    };
+    const base_pipeline = core.http.HttpPipeline.init(testingRuntime(transport.asTransport()), &.{});
     var protocol = try protocol_client.ProtocolClient.init(
         allocator,
         "https://account.table.core.windows.net",
@@ -1004,10 +989,7 @@ fn testEntityPagerAllocationFailures(allocator: std.mem.Allocator) !void {
         .{ .name = "x-ms-continuation-NextPartitionKey", .value = "next" },
         .{ .name = "x-ms-continuation-NextRowKey", .value = "row" },
     };
-    const base_pipeline: core.pipeline.HttpPipeline = .{
-        .policies = &.{},
-        .transport_impl = transport.asTransport(),
-    };
+    const base_pipeline = core.http.HttpPipeline.init(testingRuntime(transport.asTransport()), &.{});
     var protocol = try protocol_client.ProtocolClient.init(
         allocator,
         "https://account.table.core.windows.net",

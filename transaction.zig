@@ -5,6 +5,12 @@
 
 const std = @import("std");
 const core = @import("azure_sdk_core");
+
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+fn testingRuntime(http_transport: core.http.HttpTransport) core.http.HttpRuntime {
+    return .init(http_transport, testing_crypto_provider.asProvider());
+}
 const entity = @import("entity.zig");
 const entity_codec = @import("entity_codec.zig");
 const errors = @import("errors.zig");
@@ -1141,7 +1147,7 @@ fn expectIndeterminateTransactionResponse(
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=SECRET&sp=a",
         "People",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{},
     );
     defer client.deinit();
@@ -1204,7 +1210,7 @@ test "submitted transaction inner failure remains a precise indexed TableError" 
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=SECRET&sp=a",
         "People",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{},
     );
     defer client.deinit();
@@ -1234,6 +1240,7 @@ const TestCredential = struct {
         _: *core.credentials.TokenCredential,
         _: core.credentials.TokenRequestContext,
         _: core.context.Context,
+        _: core.http.HttpRuntime,
     ) anyerror!core.credentials.AccessToken {
         return .{ .token = "transaction-token", .expires_on = std.math.maxInt(i64) };
     }
@@ -1282,7 +1289,7 @@ fn expectTransactionRedirectRejected(
             "https://account.table.core.windows.net",
             "People",
             &test_credential.credential,
-            transport.asTransport(),
+            testingRuntime(transport.asTransport()),
             .{},
         ),
         .shared_key => try client_mod.TableClient.initWithSharedKey(
@@ -1290,14 +1297,14 @@ fn expectTransactionRedirectRejected(
             "https://account.table.core.windows.net",
             "People",
             &shared_credential,
-            transport.asTransport(),
+            testingRuntime(transport.asTransport()),
             .{},
         ),
         .sas => try client_mod.TableClient.initWithSasUrl(
             allocator,
             "https://account.table.core.windows.net?sv=1&sig=SECRET&sp=a",
             "People",
-            transport.asTransport(),
+            testingRuntime(transport.asTransport()),
             .{},
         ),
     };
@@ -1347,31 +1354,31 @@ test "transaction 307 and 308 redirects are rejected without replay for every au
 
 const PreTransportOncePolicy = struct {
     calls: usize = 0,
-    policy: core.pipeline.HttpPolicy = .{ .processFn = &process },
+    policy: core.http.HttpPolicy = .{ .processFn = &process },
 
     fn process(
-        policy: *core.pipeline.HttpPolicy,
+        policy: *core.http.HttpPolicy,
         req: *core.http.Request,
-        next: []*core.pipeline.HttpPolicy,
-        transport: *core.http.HttpTransport,
+        next: []*core.http.HttpPolicy,
+        runtime: core.http.HttpRuntime,
     ) anyerror!core.http.Response {
         const self: *PreTransportOncePolicy = @alignCast(@fieldParentPtr("policy", policy));
         self.calls += 1;
         if (self.calls == 1) return error.InjectedPreTransportFailure;
-        if (next.len == 0) return transport.send(req);
-        return next[0].process(req, next[1..], transport);
+        if (next.len == 0) return runtime.transport.send(req);
+        return next[0].process(req, next[1..], runtime);
     }
 };
 
 const AlwaysFailPreTransportPolicy = struct {
     calls: usize = 0,
-    policy: core.pipeline.HttpPolicy = .{ .processFn = &process },
+    policy: core.http.HttpPolicy = .{ .processFn = &process },
 
     fn process(
-        policy: *core.pipeline.HttpPolicy,
+        policy: *core.http.HttpPolicy,
         _: *core.http.Request,
-        _: []*core.pipeline.HttpPolicy,
-        _: *core.http.HttpTransport,
+        _: []*core.http.HttpPolicy,
+        _: core.http.HttpRuntime,
     ) anyerror!core.http.Response {
         const self: *AlwaysFailPreTransportPolicy = @alignCast(
             @fieldParentPtr("policy", policy),
@@ -1384,19 +1391,18 @@ const AlwaysFailPreTransportPolicy = struct {
 const FailingTransactionTransport = struct {
     calls: usize = 0,
     failure: anyerror = error.InjectedTransportFailure,
-    transport: core.http.HttpTransport = .{ .sendFn = &send },
 
-    fn asTransport(self: *FailingTransactionTransport) *core.http.HttpTransport {
-        return &self.transport;
+    const vtable: core.http.HttpTransport.VTable = .{ .send = &send };
+
+    fn asTransport(self: *FailingTransactionTransport) core.http.HttpTransport {
+        return .{ .context = self, .vtable = &vtable };
     }
 
     fn send(
-        transport: *core.http.HttpTransport,
+        context: *anyopaque,
         _: *core.http.Request,
     ) anyerror!core.http.Response {
-        const self: *FailingTransactionTransport = @alignCast(
-            @fieldParentPtr("transport", transport),
-        );
+        const self: *FailingTransactionTransport = @ptrCast(@alignCast(context));
         self.calls += 1;
         return self.failure;
     }
@@ -1417,7 +1423,7 @@ test "transaction POST retries pretransport failure but not ambiguous transport 
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=SECRET&sp=a",
         "People",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{ .retry = .{ .max_retries = 1, .initial_delay_ms = 0, .max_delay_ms = 0 } },
     );
     defer client.deinit();
@@ -1438,7 +1444,7 @@ test "transaction POST retries pretransport failure but not ambiguous transport 
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=SECRET&sp=a",
         "People",
-        failing.asTransport(),
+        testingRuntime(failing.asTransport()),
         .{ .retry = .{ .max_retries = 5, .initial_delay_ms = 0, .max_delay_ms = 0 } },
     );
     defer failing_client.deinit();
@@ -1455,7 +1461,7 @@ test "transaction POST retries pretransport failure but not ambiguous transport 
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=SECRET&sp=a",
         "People",
-        timed_out.asTransport(),
+        testingRuntime(timed_out.asTransport()),
         .{},
     );
     defer timeout_client.deinit();
@@ -1479,7 +1485,7 @@ test "transaction pretransport retries honor operation time budget" {
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=SECRET&sp=a",
         "People",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{ .retry = .{ .max_retries = 5, .initial_delay_ms = 50, .max_delay_ms = 50 } },
     );
     defer client.deinit();
@@ -1516,7 +1522,7 @@ test "transaction submission uses bearer and SharedKey authentication" {
         "https://account.table.core.windows.net",
         "People",
         &test_credential.credential,
-        bearer_mock.asTransport(),
+        testingRuntime(bearer_mock.asTransport()),
         .{},
     );
     defer bearer.deinit();
@@ -1543,7 +1549,7 @@ test "transaction submission uses bearer and SharedKey authentication" {
         "https://account.table.core.windows.net",
         "People",
         &credential,
-        shared_mock.asTransport(),
+        testingRuntime(shared_mock.asTransport()),
         .{},
     );
     defer shared.deinit();
@@ -1567,7 +1573,7 @@ test "transaction validation occurs before transport" {
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=SECRET&sp=a",
         "People",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{},
     );
     defer client.deinit();

@@ -5,12 +5,18 @@
 
 const std = @import("std");
 const core = @import("azure_sdk_core");
+
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+fn testingRuntime(http_transport: core.http.HttpTransport) core.http.HttpRuntime {
+    return .init(http_transport, testing_crypto_provider.asProvider());
+}
 const auth = @import("auth.zig");
 const options = @import("options.zig");
 const responses = @import("responses.zig");
 
-const HttpPolicy = core.pipeline.HttpPolicy;
-const HttpTransport = core.http.HttpTransport;
+const HttpPolicy = core.http.HttpPolicy;
+const HttpRuntime = core.http.HttpRuntime;
 const Request = core.http.Request;
 const Response = core.http.Response;
 
@@ -30,10 +36,11 @@ fn sleepMs(ms: u64) void {
     threaded.io().sleep(.fromNanoseconds(nanoseconds), .awake) catch {};
 }
 
-pub const user_agent = "azsdk-zig-data-tables/0.1.0";
+pub const user_agent = "azsdk-zig-data-tables/0.2.0";
 
 /// Heap-owned policy storage shared by an owning client and its derived
-/// clients. The credential, transport, and caller policy objects are borrowed.
+/// clients. The credential, runtime backend contexts, and caller policy
+/// objects are borrowed and must outlive all clients and in-flight calls.
 ///
 /// The mutable bearer-token cache and the standard transport are not
 /// thread-safe. Calls sharing this state, including calls from derived clients,
@@ -41,11 +48,11 @@ pub const user_agent = "azsdk-zig-data-tables/0.1.0";
 pub const PipelineState = struct {
     allocator: std.mem.Allocator,
     request_options: RequestOptionsPolicy,
-    telemetry: core.pipeline.TelemetryPolicy,
-    retry: core.pipeline.RetryPolicy,
+    telemetry: core.http.TelemetryPolicy,
+    retry: core.http.RetryPolicy,
     authentication: Authentication,
     policy_ptrs: []*HttpPolicy,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     owned_user_agent: []u8,
     owned_client_request_id: ?[]u8,
     owned_api_version: []u8,
@@ -53,7 +60,7 @@ pub const PipelineState = struct {
     pub fn create(
         allocator: std.mem.Allocator,
         credential: *core.credentials.TokenCredential,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
         init_options: options.TableClientOptions,
     ) !*PipelineState {
         try validateHeaderValue(init_options.client_request_id, error.InvalidClientRequestId);
@@ -64,9 +71,9 @@ pub const PipelineState = struct {
 
         return createWithAuthentication(
             allocator,
-            transport,
+            runtime,
             init_options,
-            .{ .bearer = core.pipeline.BearerTokenAuthPolicy.init(
+            .{ .bearer = core.http.BearerTokenAuthPolicy.init(
                 allocator,
                 credential,
                 &.{auth.storage_scope},
@@ -77,12 +84,12 @@ pub const PipelineState = struct {
     pub fn createSharedKey(
         allocator: std.mem.Allocator,
         credential: *auth.SharedKeyCredential,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
         init_options: options.TableClientOptions,
     ) !*PipelineState {
         return createWithAuthentication(
             allocator,
-            transport,
+            runtime,
             init_options,
             .{ .shared_key = auth.SharedKeyLitePolicy.init(credential, init_options.api_version) },
         );
@@ -91,15 +98,15 @@ pub const PipelineState = struct {
     /// Used by SAS clients. It deliberately has no authorization policy.
     pub fn createNoAuth(
         allocator: std.mem.Allocator,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
         init_options: options.TableClientOptions,
     ) !*PipelineState {
-        return createWithAuthentication(allocator, transport, init_options, .{ .none = .{} });
+        return createWithAuthentication(allocator, runtime, init_options, .{ .none = .{} });
     }
 
     fn createWithAuthentication(
         allocator: std.mem.Allocator,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
         init_options: options.TableClientOptions,
         authentication: Authentication,
     ) !*PipelineState {
@@ -138,8 +145,8 @@ pub const PipelineState = struct {
                 request_id,
                 init_options.operation_timeout_ms,
             ),
-            .telemetry = core.pipeline.TelemetryPolicy.init(agent),
-            .retry = core.pipeline.RetryPolicy.init(),
+            .telemetry = core.http.TelemetryPolicy.init(agent),
+            .retry = core.http.RetryPolicy.init(),
             .authentication = authentication,
             .policy_ptrs = policy_ptrs,
             .pipeline = undefined,
@@ -159,10 +166,7 @@ pub const PipelineState = struct {
         policy_ptrs[2] = state.retry.asPolicy();
         policy_ptrs[3] = state.authentication.asPolicy();
         @memcpy(policy_ptrs[4..], init_options.policies);
-        state.pipeline = .{
-            .policies = policy_ptrs,
-            .transport_impl = transport,
-        };
+        state.pipeline = .init(runtime, policy_ptrs);
         return state;
     }
 
@@ -211,17 +215,16 @@ const NoAuthenticationPolicy = struct {
         _: *HttpPolicy,
         request: *Request,
         next: []*HttpPolicy,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) anyerror!Response {
         // A SAS URL's signature is in the query. The SDK never synthesizes
         // Authorization for this mode.
-        if (next.len == 0) return transport.send(request);
-        return next[0].process(request, next[1..], transport);
+        return callNext(request, next, runtime);
     }
 };
 
 const Authentication = union(enum) {
-    bearer: core.pipeline.BearerTokenAuthPolicy,
+    bearer: core.http.BearerTokenAuthPolicy,
     shared_key: auth.SharedKeyLitePolicy,
     none: NoAuthenticationPolicy,
 
@@ -272,18 +275,18 @@ const RequestOptionsPolicy = struct {
         policy: *HttpPolicy,
         request: *Request,
         next: []*HttpPolicy,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) anyerror!Response {
         const self: *RequestOptionsPolicy = @alignCast(@fieldParentPtr("policy", policy));
         if (request.getHeader("x-ms-client-request-id") == null) {
             if (self.client_request_id) |request_id|
                 try request.setHeader("x-ms-client-request-id", request_id)
             else
-                try core.pipeline.ensureRequestId(request);
+                try core.http.ensureRequestId(request, runtime);
         }
         if (request.operation_timeout_ms == null)
             request.operation_timeout_ms = self.operation_timeout_ms;
-        return callNext(request, next, transport);
+        return callNext(request, next, runtime);
     }
 };
 
@@ -302,11 +305,11 @@ pub const CallContext = struct {
     capture_policy: ?*CapturePolicy,
     sas_policy: *SasAuthPolicy,
     policy_ptrs: []*HttpPolicy,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn init(
         allocator: std.mem.Allocator,
-        base: core.pipeline.HttpPipeline,
+        base: core.http.HttpPipeline,
         raw_endpoint_query: ?[]const u8,
         endpoint_query_is_sas: bool,
         operation_timeout_ms: ?u64,
@@ -328,7 +331,7 @@ pub const CallContext = struct {
 
     pub fn initWithResponseBody(
         allocator: std.mem.Allocator,
-        base: core.pipeline.HttpPipeline,
+        base: core.http.HttpPipeline,
         raw_endpoint_query: ?[]const u8,
         endpoint_query_is_sas: bool,
         operation_timeout_ms: ?u64,
@@ -350,7 +353,7 @@ pub const CallContext = struct {
 
     pub fn initNoCapture(
         allocator: std.mem.Allocator,
-        base: core.pipeline.HttpPipeline,
+        base: core.http.HttpPipeline,
         raw_endpoint_query: ?[]const u8,
         endpoint_query_is_sas: bool,
         operation_timeout_ms: ?u64,
@@ -375,7 +378,7 @@ pub const CallContext = struct {
     /// the standard retry policy because repeating their payload is safe.
     pub fn initMutation(
         allocator: std.mem.Allocator,
-        base: core.pipeline.HttpPipeline,
+        base: core.http.HttpPipeline,
         raw_endpoint_query: ?[]const u8,
         endpoint_query_is_sas: bool,
         operation_timeout_ms: ?u64,
@@ -405,7 +408,7 @@ pub const CallContext = struct {
     /// entry. Retry only failures known to precede transport dispatch.
     pub fn initTransaction(
         allocator: std.mem.Allocator,
-        base: core.pipeline.HttpPipeline,
+        base: core.http.HttpPipeline,
         raw_endpoint_query: ?[]const u8,
         endpoint_query_is_sas: bool,
         operation_timeout_ms: ?u64,
@@ -432,7 +435,7 @@ pub const CallContext = struct {
 
     fn initInternal(
         allocator: std.mem.Allocator,
-        base: core.pipeline.HttpPipeline,
+        base: core.http.HttpPipeline,
         raw_endpoint_query: ?[]const u8,
         endpoint_query_is_sas: bool,
         operation_timeout_ms: ?u64,
@@ -481,7 +484,7 @@ pub const CallContext = struct {
             .capture_policy = capture,
             .sas_policy = sas,
             .policy_ptrs = policies,
-            .pipeline = .{ .policies = policies, .transport_impl = base.transport_impl },
+            .pipeline = .init(base.runtime, policies),
         };
     }
 
@@ -543,7 +546,7 @@ const ConfigPolicy = struct {
         policy: *HttpPolicy,
         request: *Request,
         next: []*HttpPolicy,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) anyerror!Response {
         const self: *ConfigPolicy = @alignCast(@fieldParentPtr("policy", policy));
         const old_timeout = request.operation_timeout_ms;
@@ -564,7 +567,7 @@ const ConfigPolicy = struct {
             owned_url = timeout_url;
             url = timeout_url;
         }
-        if (owned_url == null) return self.send(request, next, transport);
+        if (owned_url == null) return self.send(request, next, runtime);
         const final_url = owned_url.?;
         owned_url = null;
         request.url = final_url;
@@ -572,20 +575,20 @@ const ConfigPolicy = struct {
             request.url = old_url;
             request.allocator.free(final_url);
         }
-        return self.send(request, next, transport);
+        return self.send(request, next, runtime);
     }
 
     fn send(
         self: *ConfigPolicy,
         request: *Request,
         next: []*HttpPolicy,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) !Response {
         const mutation = self.mutation_retry orelse
-            return callNext(request, next, transport);
+            return callNext(request, next, runtime);
 
         if (!mutation.conditional) {
-            return callNext(request, next, transport) catch |err| {
+            return callNext(request, next, runtime) catch |err| {
                 if (request.transport_started) return outcomeUnknown(mutation.outcome);
                 return err;
             };
@@ -609,7 +612,7 @@ const ConfigPolicy = struct {
         while (true) {
             if (deadlineExpired(deadline_ns)) return error.OperationTimedOut;
             request.transport_started = false;
-            const result = callNext(request, next, transport);
+            const result = callNext(request, next, runtime);
             if (result) |response| return response else |err| {
                 if (request.transport_started) return outcomeUnknown(mutation.outcome);
                 if (!isRetryablePreTransportError(err) or
@@ -723,10 +726,10 @@ const SasAuthPolicy = struct {
         policy: *HttpPolicy,
         request: *Request,
         next: []*HttpPolicy,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) anyerror!Response {
         const self: *SasAuthPolicy = @alignCast(@fieldParentPtr("policy", policy));
-        const raw_query = self.raw_query orelse return callNext(request, next, transport);
+        const raw_query = self.raw_query orelse return callNext(request, next, runtime);
         if (next.len != 0) return error.InvalidSasPolicyOrder;
 
         const signed_url = try appendEndpointQuery(request.allocator, request.url, raw_query);
@@ -740,7 +743,7 @@ const SasAuthPolicy = struct {
             request.redirect_policy = old_redirect_policy;
             request.allocator.free(signed_url);
         }
-        return transport.send(request);
+        return runtime.transport.send(request);
     }
 };
 
@@ -801,10 +804,10 @@ const CapturePolicy = struct {
         policy: *HttpPolicy,
         request: *Request,
         next: []*HttpPolicy,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) anyerror!Response {
         const self: *CapturePolicy = @alignCast(@fieldParentPtr("policy", policy));
-        var response = try callNext(request, next, transport);
+        var response = try callNext(request, next, runtime);
         errdefer response.deinit();
         if (self.metadata) |*old| old.deinit();
         self.metadata = try responses.ResponseMetadata.fromResponse(self.allocator, &response);
@@ -827,10 +830,7 @@ fn testLargeSuccessCapture(allocator: std.mem.Allocator) !void {
     @memset(&body, 'x');
     var transport = core.http.MockTransport.init(allocator, 200, &body);
     defer transport.deinit();
-    const base: core.pipeline.HttpPipeline = .{
-        .policies = &.{},
-        .transport_impl = transport.asTransport(),
-    };
+    const base = core.http.HttpPipeline.init(testingRuntime(transport.asTransport()), &.{});
     var call = try CallContext.init(allocator, base, null, false, null, null, &.{});
     defer call.deinit();
     var request = Request.init(allocator, .GET, "https://example.test/Tables");
@@ -854,10 +854,7 @@ test "capture retains a non-success body for structured error adaptation" {
     const allocator = std.testing.allocator;
     var transport = core.http.MockTransport.init(allocator, 409, "failure body");
     defer transport.deinit();
-    const base: core.pipeline.HttpPipeline = .{
-        .policies = &.{},
-        .transport_impl = transport.asTransport(),
-    };
+    const base = core.http.HttpPipeline.init(testingRuntime(transport.asTransport()), &.{});
     var call = try CallContext.init(allocator, base, null, false, null, null, &.{});
     defer call.deinit();
     var request = Request.init(allocator, .GET, "https://example.test/Tables");
@@ -872,10 +869,10 @@ test "capture retains a non-success body for structured error adaptation" {
 fn callNext(
     request: *Request,
     next: []*HttpPolicy,
-    transport: *HttpTransport,
+    runtime: HttpRuntime,
 ) !Response {
-    if (next.len == 0) return transport.send(request);
-    return next[0].process(request, next[1..], transport);
+    if (next.len == 0) return runtime.transport.send(request);
+    return next[0].process(request, next[1..], runtime);
 }
 
 const ExpiringCredential = struct {
@@ -890,6 +887,7 @@ const ExpiringCredential = struct {
         credential: *core.credentials.TokenCredential,
         context: core.credentials.TokenRequestContext,
         _: core.context.Context,
+        _: core.http.HttpRuntime,
     ) anyerror!core.credentials.AccessToken {
         const self: *ExpiringCredential = @alignCast(
             @fieldParentPtr("credential", credential),
@@ -912,7 +910,7 @@ const InspectPolicy = struct {
         policy: *HttpPolicy,
         request: *Request,
         next: []*HttpPolicy,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) anyerror!Response {
         const self: *InspectPolicy = @alignCast(@fieldParentPtr("policy", policy));
         if (request.getHeader("Authorization") == null or
@@ -922,7 +920,7 @@ const InspectPolicy = struct {
             return error.IncorrectPolicyOrder;
         }
         self.calls += 1;
-        return callNext(request, next, transport);
+        return callNext(request, next, runtime);
     }
 };
 
@@ -934,7 +932,7 @@ const RetryOncePolicy = struct {
         policy: *HttpPolicy,
         request: *Request,
         next: []*HttpPolicy,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) anyerror!Response {
         const self: *RetryOncePolicy = @alignCast(@fieldParentPtr("policy", policy));
         if (request.getHeader("Authorization") == null)
@@ -948,22 +946,23 @@ const RetryOncePolicy = struct {
                 .allocator = request.allocator,
             };
         }
-        return callNext(request, next, transport);
+        return callNext(request, next, runtime);
     }
 };
 
 const FailingTransport = struct {
-    transport: HttpTransport = .{ .sendFn = &send },
     captured_url: [512]u8 = undefined,
     captured_url_len: usize = 0,
     saw_redirects_disabled: bool = false,
 
-    fn asTransport(self: *FailingTransport) *HttpTransport {
-        return &self.transport;
+    const vtable: core.http.HttpTransport.VTable = .{ .send = &send };
+
+    fn asTransport(self: *FailingTransport) core.http.HttpTransport {
+        return .{ .context = self, .vtable = &vtable };
     }
 
-    fn send(transport: *HttpTransport, request: *Request) anyerror!Response {
-        const self: *FailingTransport = @alignCast(@fieldParentPtr("transport", transport));
+    fn send(context: *anyopaque, request: *Request) anyerror!Response {
+        const self: *FailingTransport = @ptrCast(@alignCast(context));
         if (request.url.len > self.captured_url.len) return error.TestUrlTooLong;
         @memcpy(self.captured_url[0..request.url.len], request.url);
         self.captured_url_len = request.url.len;
@@ -986,7 +985,7 @@ test "stable policy order authenticates every retry and runs caller policies" {
     const state = try PipelineState.create(
         allocator,
         credential.asCredential(),
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{
             .retry = .{
                 .max_retries = 1,
@@ -1034,14 +1033,14 @@ test "core logging and tracing never observe SAS while retries send exact opaque
     });
     var recording_tracer = core.tracing.RecordingTracer.init(allocator);
     defer recording_tracer.deinit();
-    var logging = core.pipeline.LoggingPolicy.init();
-    var tracing = core.pipeline.TracingPolicy.init(
+    var logging = core.http.LoggingPolicy.init();
+    var tracing = core.http.TracingPolicy.init(
         recording_tracer.asTracer(),
         "Microsoft.Storage",
     );
     const state = try PipelineState.createNoAuth(
         allocator,
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
         .{
             .retry = .{
                 .max_retries = 1,
@@ -1080,14 +1079,14 @@ test "SAS transport errors restore the credential-free URL and redirect policy" 
     var transport = FailingTransport{};
     var recording_tracer = core.tracing.RecordingTracer.init(allocator);
     defer recording_tracer.deinit();
-    var logging = core.pipeline.LoggingPolicy.init();
-    var tracing = core.pipeline.TracingPolicy.init(
+    var logging = core.http.LoggingPolicy.init();
+    var tracing = core.http.TracingPolicy.init(
         recording_tracer.asTracer(),
         "Microsoft.Storage",
     );
     const state = try PipelineState.createNoAuth(
         allocator,
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
         .{
             .retry = .{ .max_retries = 0 },
             .policies = &.{ logging.asPolicy(), tracing.asPolicy() },
@@ -1127,10 +1126,7 @@ test "SAS URL allocation errors leave the request untouched" {
     const allocator = std.testing.allocator;
     var transport = core.http.MockTransport.init(allocator, 200, "{}");
     defer transport.deinit();
-    const base: core.pipeline.HttpPipeline = .{
-        .policies = &.{},
-        .transport_impl = transport.asTransport(),
-    };
+    const base = core.http.HttpPipeline.init(testingRuntime(transport.asTransport()), &.{});
     var call = try CallContext.init(
         allocator,
         base,
@@ -1165,15 +1161,15 @@ test "Shared Key core observability records no credential material in URLs" {
     defer credential.deinit();
     var recording_tracer = core.tracing.RecordingTracer.init(allocator);
     defer recording_tracer.deinit();
-    var logging = core.pipeline.LoggingPolicy.init();
-    var tracing = core.pipeline.TracingPolicy.init(
+    var logging = core.http.LoggingPolicy.init();
+    var tracing = core.http.TracingPolicy.init(
         recording_tracer.asTracer(),
         "Microsoft.Storage",
     );
     const state = try PipelineState.createSharedKey(
         allocator,
         &credential,
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
         .{ .policies = &.{ logging.asPolicy(), tracing.asPolicy() } },
     );
     defer state.deinit();
@@ -1203,7 +1199,7 @@ test "Shared Key policy retains an owned API version across caller mutation and 
     var state = try PipelineState.createSharedKey(
         allocator,
         &credential,
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{ .api_version = supplied_api_version },
     );
     defer state.deinit();

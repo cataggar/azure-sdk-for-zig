@@ -1,5 +1,11 @@
 const std = @import("std");
 const core = @import("azure_sdk_core");
+
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+fn testingRuntime(http_transport: core.http.HttpTransport) core.http.HttpRuntime {
+    return .init(http_transport, testing_crypto_provider.asProvider());
+}
 const auth = @import("auth.zig");
 const connection_string = @import("connection_string.zig");
 const entity = @import("entity.zig");
@@ -19,8 +25,9 @@ const transaction = @import("transaction.zig");
 /// A direct token client owns stable pipeline state. A client returned by
 /// `TableServiceClient.getTableClient` borrows that state and must be
 /// deinitialized before its parent. The credential, transport, and caller
-/// policy objects are always borrowed. Calls sharing pipeline state must be
-/// serialized because the token cache and standard transport are mutable.
+/// policy objects and runtime backend contexts are always borrowed and must
+/// outlive the client and in-flight calls. Calls sharing pipeline state must
+/// be serialized because the token cache and standard transport are mutable.
 pub const TableClient = struct {
     allocator: std.mem.Allocator,
     protocol: protocol_client.ProtocolClient,
@@ -36,7 +43,7 @@ pub const TableClient = struct {
         endpoint: []const u8,
         table_name: []const u8,
         credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
+        runtime: core.http.HttpRuntime,
         init_options: Options,
     ) !TableClient {
         try request.validateTableName(table_name);
@@ -44,7 +51,7 @@ pub const TableClient = struct {
         const state = try pipeline.PipelineState.create(
             allocator,
             credential,
-            transport,
+            runtime,
             init_options,
         );
         errdefer state.deinit();
@@ -65,7 +72,7 @@ pub const TableClient = struct {
         endpoint: []const u8,
         table_name: []const u8,
         credential: *auth.SharedKeyCredential,
-        transport: *core.http.HttpTransport,
+        runtime: core.http.HttpRuntime,
         init_options: Options,
     ) !TableClient {
         try request.validateTableName(table_name);
@@ -73,7 +80,7 @@ pub const TableClient = struct {
         const state = try pipeline.PipelineState.createSharedKey(
             allocator,
             credential,
-            transport,
+            runtime,
             init_options,
         );
         errdefer state.deinit();
@@ -86,12 +93,12 @@ pub const TableClient = struct {
         allocator: std.mem.Allocator,
         complete_sas_url: []const u8,
         table_name: []const u8,
-        transport: *core.http.HttpTransport,
+        runtime: core.http.HttpRuntime,
         init_options: Options,
     ) !TableClient {
         try request.validateTableName(table_name);
         try request.validateSasEndpoint(complete_sas_url);
-        const state = try pipeline.PipelineState.createNoAuth(allocator, transport, init_options);
+        const state = try pipeline.PipelineState.createNoAuth(allocator, runtime, init_options);
         errdefer state.deinit();
         const service_endpoint = try serviceEndpointFromSasUrl(
             allocator,
@@ -108,7 +115,7 @@ pub const TableClient = struct {
         allocator: std.mem.Allocator,
         value: []const u8,
         table_name: []const u8,
-        transport: *core.http.HttpTransport,
+        runtime: core.http.HttpRuntime,
         init_options: Options,
     ) !TableClient {
         var parsed = try connection_string.parse(allocator, value);
@@ -118,11 +125,11 @@ pub const TableClient = struct {
             errdefer allocator.destroy(credential);
             credential.* = try auth.SharedKeyCredential.init(allocator, parsed.account_name, key);
             errdefer credential.deinit();
-            var result = try initWithSharedKey(allocator, parsed.endpoint, table_name, credential, transport, init_options);
+            var result = try initWithSharedKey(allocator, parsed.endpoint, table_name, credential, runtime, init_options);
             result.owned_credential = credential;
             return result;
         }
-        return initWithSasUrl(allocator, parsed.endpoint, table_name, transport, init_options);
+        return initWithSasUrl(allocator, parsed.endpoint, table_name, runtime, init_options);
     }
 
     /// Internal constructor for service-derived clients.
@@ -205,7 +212,11 @@ pub const TableClient = struct {
         } else if (!std.ascii.eqlIgnoreCase(values.tableName, self.table_name)) {
             return error.SasTableNameMismatch;
         }
-        var parameters = try values.sign(allocator, credential);
+        var parameters = try values.sign(
+            allocator,
+            credential,
+            self.pipeline_state.pipeline.runtime.crypto,
+        );
         defer parameters.deinit();
         const table_url = try std.fmt.allocPrint(
             allocator,
@@ -987,6 +998,7 @@ const TestCredential = struct {
         credential: *core.credentials.TokenCredential,
         _: core.credentials.TokenRequestContext,
         _: core.context.Context,
+        _: core.http.HttpRuntime,
     ) anyerror!core.credentials.AccessToken {
         const self: *TestCredential = @alignCast(
             @fieldParentPtr("credential", credential),
@@ -998,31 +1010,31 @@ const TestCredential = struct {
 
 const PreTransportOncePolicy = struct {
     calls: usize = 0,
-    policy: core.pipeline.HttpPolicy = .{ .processFn = &process },
+    policy: core.http.HttpPolicy = .{ .processFn = &process },
 
     fn process(
-        policy: *core.pipeline.HttpPolicy,
+        policy: *core.http.HttpPolicy,
         req: *core.http.Request,
-        next: []*core.pipeline.HttpPolicy,
-        transport: *core.http.HttpTransport,
+        next: []*core.http.HttpPolicy,
+        runtime: core.http.HttpRuntime,
     ) anyerror!core.http.Response {
         const self: *PreTransportOncePolicy = @alignCast(@fieldParentPtr("policy", policy));
         self.calls += 1;
         if (self.calls == 1) return error.InjectedPreTransportFailure;
-        if (next.len == 0) return transport.send(req);
-        return next[0].process(req, next[1..], transport);
+        if (next.len == 0) return runtime.transport.send(req);
+        return next[0].process(req, next[1..], runtime);
     }
 };
 
 const AlwaysFailPreTransportPolicy = struct {
     calls: usize = 0,
-    policy: core.pipeline.HttpPolicy = .{ .processFn = &process },
+    policy: core.http.HttpPolicy = .{ .processFn = &process },
 
     fn process(
-        policy: *core.pipeline.HttpPolicy,
+        policy: *core.http.HttpPolicy,
         _: *core.http.Request,
-        _: []*core.pipeline.HttpPolicy,
-        _: *core.http.HttpTransport,
+        _: []*core.http.HttpPolicy,
+        _: core.http.HttpRuntime,
     ) anyerror!core.http.Response {
         const self: *AlwaysFailPreTransportPolicy = @alignCast(
             @fieldParentPtr("policy", policy),
@@ -1034,19 +1046,18 @@ const AlwaysFailPreTransportPolicy = struct {
 
 const FailingMutationTransport = struct {
     calls: usize = 0,
-    transport: core.http.HttpTransport = .{ .sendFn = &send },
 
-    fn asTransport(self: *FailingMutationTransport) *core.http.HttpTransport {
-        return &self.transport;
+    const vtable: core.http.HttpTransport.VTable = .{ .send = &send };
+
+    fn asTransport(self: *FailingMutationTransport) core.http.HttpTransport {
+        return .{ .context = self, .vtable = &vtable };
     }
 
     fn send(
-        transport: *core.http.HttpTransport,
+        context: *anyopaque,
         _: *core.http.Request,
     ) anyerror!core.http.Response {
-        const self: *FailingMutationTransport = @alignCast(
-            @fieldParentPtr("transport", transport),
-        );
+        const self: *FailingMutationTransport = @ptrCast(@alignCast(context));
         self.calls += 1;
         return error.InjectedTransportFailure;
     }
@@ -1118,7 +1129,7 @@ test "typed and dynamic add share EDM wire behavior and preserve metadata" {
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=secret",
         "Table123",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{},
     );
     defer client.deinit();
@@ -1165,7 +1176,7 @@ test "typed and dynamic add update and upsert payloads omit Timestamp exactly" {
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=secret",
         "Table123",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{},
     );
     defer client.deinit();
@@ -1217,7 +1228,7 @@ test "dynamic read retains Timestamp but read-then-update omits it" {
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=secret",
         "Table123",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{},
     );
     defer client.deinit();
@@ -1257,7 +1268,7 @@ test "get supports full minimal and no metadata responses" {
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=secret",
         "Table123",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{},
     );
     defer client.deinit();
@@ -1304,7 +1315,7 @@ test "conditional delete preserves service failure and wildcard success" {
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=secret",
         "Table123",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{},
     );
     defer client.deinit();
@@ -1341,7 +1352,7 @@ test "typed and dynamic update and upsert use generated merge and replace operat
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=secret",
         "Table123",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{},
     );
     defer client.deinit();
@@ -1403,7 +1414,7 @@ test "update existence and ETag failures remain structured while upsert creates"
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=secret",
         "Table123",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{},
     );
     defer client.deinit();
@@ -1464,7 +1475,7 @@ test "merge preserves omitted properties and replace removes them by wire operat
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=secret",
         "Table123",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{},
     );
     defer client.deinit();
@@ -1497,7 +1508,7 @@ test "conditional mutation retries before transport and classifies ambiguity aft
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=secret",
         "Table123",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{ .retry = .{
             .max_retries = 2,
             .initial_delay_ms = 0,
@@ -1546,7 +1557,7 @@ test "conditional mutation retries before transport and classifies ambiguity aft
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=secret",
         "Table123",
-        tight_mock.asTransport(),
+        testingRuntime(tight_mock.asTransport()),
         .{
             .operation_timeout_ms = 1,
             .retry = .{
@@ -1573,7 +1584,7 @@ test "conditional mutation retries before transport and classifies ambiguity aft
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=secret",
         "Table123",
-        failing.asTransport(),
+        testingRuntime(failing.asTransport()),
         .{ .retry = .{
             .max_retries = 2,
             .initial_delay_ms = 0,
@@ -1594,7 +1605,7 @@ test "conditional mutation retries before transport and classifies ambiguity aft
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=secret",
         "Table123",
-        safe_failing.asTransport(),
+        testingRuntime(safe_failing.asTransport()),
         .{ .retry = .{
             .max_retries = 2,
             .initial_delay_ms = 0,
@@ -1623,7 +1634,7 @@ test "entity constraints and malformed success fail locally" {
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=secret",
         "Table123",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{},
     );
     defer client.deinit();
@@ -1697,7 +1708,7 @@ test "entity query pager survives moving its source client" {
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=secret",
         "Table123",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{},
     );
     var entity_pager = try table_client.queryEntities(SimpleEntity, allocator, .{});
@@ -1755,7 +1766,7 @@ test "original raw entity method signatures remain source compatible" {
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=compatibility-secret",
         "Table123",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{},
     );
     defer client.deinit();
@@ -1797,7 +1808,7 @@ test "raw calls do not copy large response bodies while typed adapters capture" 
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=no-copy-secret",
         "Table123",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{},
     );
     defer client.deinit();
@@ -1869,7 +1880,7 @@ fn testEntityCrudAllocationFailures(allocator: std.mem.Allocator) !void {
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=allocation-secret",
         "Table123",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{ .retry = .{ .max_retries = 0 } },
     );
     defer client.deinit();
@@ -1898,7 +1909,7 @@ fn testEntityMutationAllocationFailures(allocator: std.mem.Allocator) !void {
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=allocation-secret",
         "Table123",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{ .retry = .{ .max_retries = 0 } },
     );
     defer client.deinit();
@@ -1934,7 +1945,7 @@ test "token client survives moves and applies all client options" {
         "https://myaccount.table.core.windows.net",
         "MyTable",
         credential.asCredential(),
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{
             .api_version = "2020-test",
             .telemetry = .{ .application_id = "my-app/1.0" },
@@ -1956,7 +1967,7 @@ test "token client survives moves and applies all client options" {
         mock.last_headers.get("x-ms-client-request-id").?,
     );
     try std.testing.expectEqualStrings(
-        "my-app/1.0 azsdk-zig-data-tables/0.1.0",
+        "my-app/1.0 azsdk-zig-data-tables/0.2.0",
         mock.last_headers.get("User-Agent").?,
     );
     try std.testing.expectEqualStrings(
@@ -1975,7 +1986,7 @@ fn testAllocationFailures(allocator: std.mem.Allocator) !void {
         "https://myaccount.table.core.windows.net",
         "MyTable",
         credential.asCredential(),
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{
             .telemetry = .{ .application_id = "allocation-test" },
             .client_request_id = "allocation-request-id",
@@ -2005,7 +2016,7 @@ test "token client rejects HTTP before credential and transport use" {
             "http://127.0.0.1:10002/devstoreaccount1",
             "MyTable",
             credential.asCredential(),
-            mock.asTransport(),
+            testingRuntime(mock.asTransport()),
             .{},
         ),
     );
@@ -2024,7 +2035,7 @@ test "token client accepts HTTPS custom private endpoint" {
         "HTTPS://tables.internal.example:8443/private/path",
         "MyTable",
         credential.asCredential(),
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{},
     );
     defer table_client.deinit();
@@ -2053,7 +2064,7 @@ test "Shared Key and SAS constructors have isolated authentication behavior" {
         "https://account.table.core.windows.net",
         "Table123",
         &credential,
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{},
     );
     defer shared.deinit();
@@ -2070,7 +2081,7 @@ test "Shared Key and SAS constructors have isolated authentication behavior" {
         allocator,
         "https://account.table.core.windows.net?sv=1%2F2&sig=a+b%3D&sp=r",
         "Table123",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{},
     );
     defer sas.deinit();
@@ -2087,7 +2098,7 @@ fn testSasOperationAllocationFailures(allocator: std.mem.Allocator) !void {
         allocator,
         "https://account.table.core.windows.net/Table123?sv=1%2F2&sig=allocation+SECRET%3D&sp=r&tn=Table123",
         "Table123",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{ .retry = .{ .max_retries = 0 } },
     );
     defer sas.deinit();
@@ -2118,7 +2129,7 @@ test "table SAS URL is exact and full URL initializes a credential-free client" 
         "https://fakeaccount.table.core.windows.net",
         "People",
         &credential,
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
         .{},
     );
     defer shared.deinit();
@@ -2143,7 +2154,7 @@ test "table SAS URL is exact and full URL initializes a credential-free client" 
         allocator,
         sas_url,
         "People",
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
         .{},
     );
     defer anonymous.deinit();
@@ -2192,7 +2203,7 @@ test "account SAS preserves a custom account path equal to the table name" {
         allocator,
         account_sas,
         "People",
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
         .{},
     );
     defer table.deinit();
@@ -2223,7 +2234,7 @@ test "table SAS scope uses decoded case-insensitive tn without changing query by
         allocator,
         table_sas,
         "People",
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
         .{},
     );
     defer table.deinit();
@@ -2254,7 +2265,7 @@ test "table SAS scope rejects mismatched duplicate and malformed tn" {
             allocator,
             "https://account.table.core.windows.net/Other?sv=1&tn=Other&sig=x",
             "People",
-            transport.asTransport(),
+            testingRuntime(transport.asTransport()),
             .{},
         ),
     );
@@ -2264,7 +2275,7 @@ test "table SAS scope rejects mismatched duplicate and malformed tn" {
             allocator,
             "https://account.table.core.windows.net/People?tn=People&TN=%50eople&sig=x",
             "People",
-            transport.asTransport(),
+            testingRuntime(transport.asTransport()),
             .{},
         ),
     );
@@ -2274,7 +2285,7 @@ test "table SAS scope rejects mismatched duplicate and malformed tn" {
             allocator,
             "https://account.table.core.windows.net?tn=People&sig=x",
             "People",
-            transport.asTransport(),
+            testingRuntime(transport.asTransport()),
             .{},
         ),
     );
@@ -2284,7 +2295,7 @@ test "table SAS scope rejects mismatched duplicate and malformed tn" {
             allocator,
             "https://account.table.core.windows.net/People?t%ZZ=People&sig=x",
             "People",
-            transport.asTransport(),
+            testingRuntime(transport.asTransport()),
             .{},
         ),
     );
@@ -2294,7 +2305,7 @@ test "table SAS scope rejects mismatched duplicate and malformed tn" {
             allocator,
             "https://account.table.core.windows.net/People?tn=Peop%ZZle&sig=x",
             "People",
-            transport.asTransport(),
+            testingRuntime(transport.asTransport()),
             .{},
         ),
     );
@@ -2316,7 +2327,7 @@ test "stored access policies use generated XML and preserve response metadata" {
         "https://account.table.core.windows.net",
         "People",
         credential.asCredential(),
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
         .{},
     );
     defer table_client.deinit();
@@ -2416,7 +2427,7 @@ test "stored access policy limits preserve empty zero and five lists" {
         "https://account.table.core.windows.net",
         "People",
         credential.asCredential(),
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
         .{},
     );
     defer table_client.deinit();
@@ -2524,7 +2535,7 @@ test "stored policy identifiers generate SAS and policy calls use every auth mod
         "https://account.table.core.windows.net",
         "People",
         &shared_credential,
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
         .{},
     );
     defer shared.deinit();
@@ -2552,7 +2563,7 @@ test "stored policy identifiers generate SAS and policy calls use every auth mod
         allocator,
         sas_url,
         "People",
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
         .{},
     );
     defer anonymous.deinit();
@@ -2581,7 +2592,7 @@ test "stored policy malformed XML and service failures remain distinct" {
         "https://account.table.core.windows.net",
         "People",
         credential.asCredential(),
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
         .{},
     );
     defer table_client.deinit();
@@ -2628,7 +2639,7 @@ fn testAccessPolicyAllocationFailures(allocator: std.mem.Allocator) !void {
         "https://account.table.core.windows.net",
         "People",
         credential.asCredential(),
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
         .{ .retry = .{ .max_retries = 0 } },
     );
     defer table_client.deinit();

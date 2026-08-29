@@ -12,6 +12,8 @@ pub fn main(init: std.process.Init) !void {
     const env = init.environ_map;
     var transport = core.http.StdHttpTransport.init(allocator, init.io);
     defer transport.deinit();
+    var crypto = core.crypto.StdCryptoProvider.init(init.io);
+    const runtime = core.http.HttpRuntime.init(transport.asTransport(), crypto.asProvider());
 
     const endpoint = env.get("AZURE_DATA_TABLES_ENDPOINT");
     if (endpoint) |service_endpoint| {
@@ -21,7 +23,7 @@ pub fn main(init: std.process.Init) !void {
                 allocator,
                 service_endpoint,
                 credential.asCredential(),
-                transport.asTransport(),
+                runtime,
                 .{},
             );
             defer client.deinit();
@@ -39,7 +41,7 @@ pub fn main(init: std.process.Init) !void {
                 allocator,
                 service_endpoint,
                 &credential,
-                transport.asTransport(),
+                runtime,
                 .{},
             );
             defer client.deinit();
@@ -50,7 +52,7 @@ pub fn main(init: std.process.Init) !void {
         var client = try tables.TableServiceClient.initWithSasUrl(
             allocator,
             sas_url,
-            transport.asTransport(),
+            runtime,
             .{},
         );
         defer client.deinit();
@@ -60,7 +62,7 @@ pub fn main(init: std.process.Init) !void {
         var client = try tables.TableServiceClient.initFromConnectionString(
             allocator,
             connection_string,
-            transport.asTransport(),
+            runtime,
             .{},
         );
         defer client.deinit();
@@ -70,7 +72,7 @@ pub fn main(init: std.process.Init) !void {
         var client = try tables.TableServiceClient.initFromConnectionString(
             allocator,
             "UseDevelopmentStorage=true",
-            transport.asTransport(),
+            runtime,
             .{},
         );
         defer client.deinit();

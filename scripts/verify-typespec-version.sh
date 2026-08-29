@@ -9,7 +9,7 @@ source_commit=0744f52a86919d243ba2225e55bdb9c87bf521a5
 source_path=specification/cosmos-db/data-plane/Tables
 expected_version=2019-02-02
 
-latest_commit=$(git ls-remote "$source_repository" refs/heads/main | awk '{print $1}')
+latest_commit=$(git ls-remote "$source_repository" refs/heads/main | cut -f1)
 if [ "$latest_commit" != "$source_commit" ]; then
     echo "Azure Tables TypeSpec changed: pinned $source_commit, upstream $latest_commit" >&2
     exit 1
@@ -24,7 +24,7 @@ routes=$(curl --fail --silent --show-error --location \
 
 printf '%s\n' "$config" | grep -Fq 'service-dir'
 versions=$(printf '%s\n' "$main" |
-    awk -F'"' '/^[[:space:]]*v[0-9][0-9][0-9][0-9]_[0-9][0-9]_[0-9][0-9]:/ { print $2 }' |
+    sed -n 's/^[[:space:]]*v[0-9][0-9][0-9][0-9]_[0-9][0-9]_[0-9][0-9]:[[:space:]]*"\([^"]*\)".*/\1/p' |
     sort -u)
 if [ "$versions" != "$expected_version" ]; then
     echo "expected only stable Tables version $expected_version; found: $versions" >&2
@@ -36,7 +36,7 @@ if printf '%s\n' "$routes" | grep -Fq '$batch'; then
 fi
 grep -Fq "pub const latest_api_version = \"$expected_version\";" \
     "$repository_root/options.zig"
-grep -Fq "#67d001426e73385a944a1bacde8d482b81dbf5ae" \
+grep -Fq "#799b35f81a0478045ec8faca7eb0e1b41c5fafe0" \
     "$repository_root/build.zig.zon"
 
 printf '%s\n' "Azure Tables TypeSpec is current at $source_commit ($expected_version; \$batch absent)."

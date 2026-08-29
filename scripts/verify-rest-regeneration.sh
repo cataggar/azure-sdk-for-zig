@@ -10,9 +10,9 @@ fi
 
 codegen_worktree=$1
 rest_worktree=$2
-generator_commit=f5dde2c7aa95e7a5ac496793b5527c9a212d642c
-core_commit=da55987aa3c90393a726fc1fa5e86ccd69d72271
-core_hash=azure_sdk_core-0.1.2-eFY0EtO6BQARBvYkxdhibifztfqTgJKEN1fe14sMUIYs
+generator_commit=c83a1cbef5f728d7530fdec4a724cc453233cfa4
+core_commit=bc77bcacbb64af935ca53d60bf8a351c9592bc41
+core_hash=azure_sdk_core-0.3.0-eFY0Ev0-CACjsFaYPL6jS7CpeVNvsqYqTrXRfgQKiRFV
 output="$codegen_worktree/.release/data_tables-regeneration-check"
 
 if [ "$(git -C "$codegen_worktree" rev-parse HEAD)" != "$generator_commit" ]; then
