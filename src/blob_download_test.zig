@@ -8,6 +8,13 @@ const isRetryableDownloadError = blob_download.isRetryableDownloadError;
 const isRetryableStatus = blob_download.isRetryableStatus;
 const copy_buffer_size: usize = 64 * 1024;
 
+fn testDigest(bytes: []const u8) ![digest_mod.sha256_formatted_length]u8 {
+    return digest_mod.computeSha256Digest(
+        @import("test_runtime.zig").crypto(),
+        bytes,
+    );
+}
+
 fn checkCancellation(cancellation: ?*const core.http.CancellationToken) !void {
     if (cancellation) |token| {
         if (token.isCancelled()) return error.OperationCancelled;
@@ -16,14 +23,14 @@ fn checkCancellation(cancellation: ?*const core.http.CancellationToken) !void {
 
 fn testClient(
     allocator: std.mem.Allocator,
-    transport: *core.http.HttpTransport,
+    transport: core.http.HttpTransport,
 ) !BlobDownloadClient {
     return BlobDownloadClient.init(
         allocator,
         "https://registry.example",
         "team/app",
         .{
-            .transport = transport,
+            .runtime = @import("test_runtime.zig").init(transport),
             .authentication = .anonymous,
         },
     );
@@ -109,7 +116,6 @@ const DownloadTestTransport = struct {
 
     allocator: std.mem.Allocator,
     responses: []const ResponseSpec,
-    transport: core.http.HttpTransport,
     call_count: usize = 0,
     ranges: [32][96]u8 = undefined,
     range_lengths: [32]usize = .{0} ** 32,
@@ -131,12 +137,14 @@ const DownloadTestTransport = struct {
         return .{
             .allocator = allocator,
             .responses = responses,
-            .transport = .{ .sendFn = &sendImpl, .openFn = &openImpl },
         };
     }
 
-    fn asTransport(self: *DownloadTestTransport) *core.http.HttpTransport {
-        return &self.transport;
+    fn asTransport(self: *DownloadTestTransport) core.http.HttpTransport {
+        return .{
+            .context = self,
+            .vtable = &.{ .send = &sendImpl, .open = &openImpl },
+        };
     }
 
     fn capturedRange(self: *const DownloadTestTransport, index: usize) []const u8 {
@@ -172,11 +180,10 @@ const DownloadTestTransport = struct {
     }
 
     fn sendImpl(
-        transport: *core.http.HttpTransport,
+        context: *anyopaque,
         request: *core.http.Request,
     ) !core.http.Response {
-        const self: *DownloadTestTransport =
-            @alignCast(@fieldParentPtr("transport", transport));
+        const self: *DownloadTestTransport = @ptrCast(@alignCast(context));
         const index = try self.capture(request);
         const spec = self.responses[index];
         if (spec.open_error) |failure| return failure;
@@ -194,12 +201,11 @@ const DownloadTestTransport = struct {
     }
 
     fn openImpl(
-        transport: *core.http.HttpTransport,
+        context: *anyopaque,
         request: *core.http.Request,
         options: core.http.OpenOptions,
     ) !*core.http.HttpOperation {
-        const self: *DownloadTestTransport =
-            @alignCast(@fieldParentPtr("transport", transport));
+        const self: *DownloadTestTransport = @ptrCast(@alignCast(context));
         try checkCancellation(options.cancellation);
         const index = try self.capture(request);
         const spec = self.responses[index];
@@ -394,7 +400,7 @@ const DownloadTestReader = struct {
 test "buffered blob download validates exact identity bytes and bound" {
     const allocator = std.testing.allocator;
     const body = "small blob";
-    const expected_digest = digest_mod.computeSha256Digest(body);
+    const expected_digest = try testDigest(body);
     const headers = [_]core.http.MockTransport.HeaderPair{
         .{ .name = "Content-Length", .value = "10" },
         .{ .name = "Docker-Content-Digest", .value = &expected_digest },
@@ -423,10 +429,44 @@ test "buffered blob download validates exact identity bytes and bound" {
     try std.testing.expectEqual(@as(usize, 1), transport.stream_abort_count);
 }
 
+test "blob download uses selected provider and propagates final failure" {
+    const allocator = std.testing.allocator;
+    const body = "provider-backed download";
+    const expected_digest = try testDigest(body);
+    const headers = [_]core.http.MockTransport.HeaderPair{
+        .{ .name = "Content-Length", .value = "24" },
+        .{ .name = "Docker-Content-Digest", .value = &expected_digest },
+    };
+    var transport = core.http.MockTransport.init(allocator, 200, body);
+    defer transport.deinit();
+    transport.response_headers_list = &headers;
+    var spy = @import("crypto_test_provider.zig").Spy.init(std.testing.io);
+    spy.failure = .final;
+    var client = try BlobDownloadClient.init(
+        allocator,
+        "https://registry.example",
+        "team/app",
+        .{
+            .runtime = .init(transport.asTransport(), spy.asProvider()),
+            .authentication = .anonymous,
+        },
+    );
+    defer client.deinit();
+
+    try std.testing.expectError(
+        error.InjectedCryptoFailure,
+        client.downloadBlob(&expected_digest, .{}),
+    );
+    try std.testing.expectEqual(@as(usize, 1), spy.sha256_init_calls);
+    try std.testing.expect(spy.update_calls > 0);
+    try std.testing.expectEqual(@as(usize, 1), spy.final_calls);
+    try std.testing.expectEqual(@as(usize, 1), transport.stream_abort_count);
+}
+
 test "buffered and streaming downloads distinguish identity and compressed lengths" {
     const allocator = std.testing.allocator;
     const body = "decoded bytes";
-    const expected_digest = digest_mod.computeSha256Digest(body);
+    const expected_digest = try testDigest(body);
     var headers = [_]core.http.MockTransport.HeaderPair{
         .{ .name = "Content-Length", .value = "3" },
         .{ .name = "Content-Encoding", .value = "gzip" },
@@ -452,7 +492,7 @@ test "buffered and streaming downloads distinguish identity and compressed lengt
 test "streaming blob ownership supports finish abort cancellation and exact failures" {
     const allocator = std.testing.allocator;
     const body = "streamed";
-    const expected_digest = digest_mod.computeSha256Digest(body);
+    const expected_digest = try testDigest(body);
     const headers = [_]core.http.MockTransport.HeaderPair{
         .{ .name = "Content-Length", .value = "8" },
     };
@@ -514,7 +554,7 @@ test "streaming blob ownership supports finish abort cancellation and exact fail
 test "blob response content length headers are required unique and numeric" {
     const allocator = std.testing.allocator;
     const body = "length";
-    const digest = digest_mod.computeSha256Digest(body);
+    const digest = try testDigest(body);
     var transport = core.http.MockTransport.init(allocator, 200, body);
     defer transport.deinit();
     var client = try testClient(allocator, transport.asTransport());
@@ -554,7 +594,7 @@ test "blob response content length headers are required unique and numeric" {
 test "sequential ranged download validates 206 ranges and exact digest" {
     const allocator = std.testing.allocator;
     const body = "abcdefghij";
-    const expected_digest = digest_mod.computeSha256Digest(body);
+    const expected_digest = try testDigest(body);
     const headers_1 = [_]DownloadTestTransport.Header{
         .{ .name = "Content-Length", .value = "4" },
         .{ .name = "Content-Range", .value = "bytes 0-3/10" },
@@ -596,7 +636,7 @@ test "sequential ranged download validates 206 ranges and exact digest" {
 test "ranged download accepts full 200 and terminal 416" {
     const allocator = std.testing.allocator;
     const body = "full body";
-    const expected_digest = digest_mod.computeSha256Digest(body);
+    const expected_digest = try testDigest(body);
     const full_headers = [_]DownloadTestTransport.Header{
         .{ .name = "Content-Length", .value = "9" },
     };
@@ -617,7 +657,7 @@ test "ranged download accepts full 200 and terminal 416" {
     try std.testing.expectEqualStrings(body, output.writer.buffered());
     try std.testing.expectEqualStrings("bytes=0-3", full_transport.capturedRange(0));
 
-    const empty_digest = digest_mod.computeSha256Digest("");
+    const empty_digest = try testDigest("");
     const empty_headers = [_]DownloadTestTransport.Header{
         .{ .name = "Content-Length", .value = "0" },
         .{ .name = "Content-Range", .value = "bytes */0" },
@@ -660,8 +700,8 @@ test "ranged download accepts full 200 and terminal 416" {
 
 test "ranged and fallback downloads validate optional service digest and full bytes" {
     const allocator = std.testing.allocator;
-    const requested_digest = digest_mod.computeSha256Digest("range");
-    const other_digest = digest_mod.computeSha256Digest("other");
+    const requested_digest = try testDigest("range");
+    const other_digest = try testDigest("other");
     const range_headers = [_]DownloadTestTransport.Header{
         .{ .name = "Content-Length", .value = "5" },
         .{ .name = "Content-Range", .value = "bytes 0-4/5" },
@@ -770,7 +810,7 @@ test "ranged and fallback downloads validate optional service digest and full by
 test "partial ranged reads resume at confirmed writer offset without duplication" {
     const allocator = std.testing.allocator;
     const body = "abcdefghij";
-    const expected_digest = digest_mod.computeSha256Digest(body);
+    const expected_digest = try testDigest(body);
     const first_headers = [_]DownloadTestTransport.Header{
         .{ .name = "Content-Length", .value = "6" },
         .{ .name = "Content-Range", .value = "bytes 0-5/10" },
@@ -816,7 +856,7 @@ test "partial ranged reads resume at confirmed writer offset without duplication
 test "range retries classify open status and read failures without broad fallback" {
     const allocator = std.testing.allocator;
     const body = "retry";
-    const expected_digest = digest_mod.computeSha256Digest(body);
+    const expected_digest = try testDigest(body);
     const headers = [_]DownloadTestTransport.Header{
         .{ .name = "Content-Length", .value = "5" },
         .{ .name = "Content-Range", .value = "bytes 0-4/5" },
@@ -854,7 +894,7 @@ test "range retries classify open status and read failures without broad fallbac
 
 test "range validation rejects malformed offsets spans lengths encodings and totals" {
     const allocator = std.testing.allocator;
-    const digest = digest_mod.computeSha256Digest("abcd");
+    const digest = try testDigest("abcd");
     var output: std.Io.Writer.Allocating = .init(allocator);
     defer output.deinit();
 
@@ -958,8 +998,8 @@ test "range validation rejects malformed offsets spans lengths encodings and tot
 test "direct blob downloads allow absent service digest and validate present digests" {
     const allocator = std.testing.allocator;
     const body = "digest bytes";
-    const requested_digest = digest_mod.computeSha256Digest(body);
-    const other_digest = digest_mod.computeSha256Digest("other");
+    const requested_digest = try testDigest(body);
+    const other_digest = try testDigest("other");
     const missing_headers = [_]core.http.MockTransport.HeaderPair{
         .{ .name = "Content-Length", .value = "12" },
     };
@@ -1019,7 +1059,7 @@ test "direct blob downloads allow absent service digest and validate present dig
 
 test "blob download preserves structured ACR service errors" {
     const allocator = std.testing.allocator;
-    const digest = digest_mod.computeSha256Digest("missing");
+    const digest = try testDigest("missing");
     const body =
         "{\"errors\":[{\"code\":\"BLOB_UNKNOWN\",\"message\":\"missing blob\"}]}";
     var transport = core.http.MockTransport.init(allocator, 404, body);
@@ -1041,7 +1081,7 @@ test "blob download preserves structured ACR service errors" {
 
 test "cross-origin blob redirects strip credentials and insecure redirects fail" {
     const allocator = std.testing.allocator;
-    const digest = digest_mod.computeSha256Digest("redirected");
+    const digest = try testDigest("redirected");
     const redirect_headers = [_]core.http.MockTransport.HeaderPair{
         .{ .name = "Location", .value = "https://storage.example/blob#fragment" },
     };
@@ -1097,8 +1137,8 @@ test "cross-origin blob redirects strip credentials and insecure redirects fail"
 test "redirected blob downloads allow absent service digest and validate present digests" {
     const allocator = std.testing.allocator;
     const body = "redirected";
-    const requested_digest = digest_mod.computeSha256Digest(body);
-    const other_digest = digest_mod.computeSha256Digest("other");
+    const requested_digest = try testDigest(body);
+    const other_digest = try testDigest("other");
 
     try expectRedirectedBlobDownload(
         allocator,
@@ -1133,7 +1173,7 @@ test "redirected blob downloads allow absent service digest and validate present
 test "ranged resume restarts from registry instead of retaining redirect continuation" {
     const allocator = std.testing.allocator;
     const body = "abcd";
-    const digest = digest_mod.computeSha256Digest(body);
+    const digest = try testDigest(body);
     const redirect_1 = [_]DownloadTestTransport.Header{
         .{ .name = "Location", .value = "https://storage-one.example/blob" },
     };
@@ -1199,7 +1239,7 @@ test "large ranged writer path keeps SDK copy and request sizes bounded" {
     const body = try allocator.alloc(u8, 140 * 1024);
     defer allocator.free(body);
     for (body, 0..) |*byte, index| byte.* = @truncate(index);
-    const digest = digest_mod.computeSha256Digest(body);
+    const digest = try testDigest(body);
     var range_1_buffer: [64]u8 = undefined;
     const range_1 = try std.fmt.bufPrint(
         &range_1_buffer,
@@ -1260,7 +1300,7 @@ test "large ranged writer path keeps SDK copy and request sizes bounded" {
 
 fn bufferedAllocationFixture(allocator: std.mem.Allocator) !void {
     const body = "allocation";
-    const digest = digest_mod.computeSha256Digest(body);
+    const digest = try testDigest(body);
     const headers = [_]core.http.MockTransport.HeaderPair{
         .{ .name = "Content-Length", .value = "10" },
         .{ .name = "Docker-Content-Digest", .value = &digest },

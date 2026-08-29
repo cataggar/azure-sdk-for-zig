@@ -5,7 +5,7 @@ const service_error = @import("service_error.zig");
 pub fn LinkPager(comptime Page: type) type {
     return struct {
         allocator: std.mem.Allocator,
-        pipeline: core.pipeline.HttpPipeline,
+        pipeline: core.http.HttpPipeline,
         trusted_origin: []u8,
         next_url: ?[]u8,
         parsePage: *const fn (std.mem.Allocator, []const u8) anyerror!Page,
@@ -15,7 +15,7 @@ pub fn LinkPager(comptime Page: type) type {
 
         pub fn init(
             allocator: std.mem.Allocator,
-            pipeline: core.pipeline.HttpPipeline,
+            pipeline: core.http.HttpPipeline,
             trusted_origin: []const u8,
             initial_url: []const u8,
             parsePage: *const fn (std.mem.Allocator, []const u8) anyerror!Page,

@@ -14,9 +14,18 @@ operations, status unions, and custom-pipeline scenarios.
 
 ```zig
 const acr = @import("azure_sdk_container_registry");
+const core = @import("azure_sdk_core");
+
+var transport = core.http.StdHttpTransport.init(allocator, io);
+defer transport.deinit();
+var crypto = core.crypto.StdCryptoProvider.init(io);
+const runtime = core.http.HttpRuntime.init(
+    transport.asTransport(),
+    crypto.asProvider(),
+);
 
 var client = try acr.ContainerRegistryClient.init(allocator, registry_endpoint, .{
-    .transport = transport,
+    .runtime = runtime,
     .authentication = .{ .credential = credential },
 });
 defer client.deinit();
@@ -94,7 +103,7 @@ var content = try acr.ContainerRegistryContentClient.init(
     registry_endpoint,
     "team/app",
     .{
-        .transport = transport,
+        .runtime = runtime,
         .authentication = .{ .credential = credential },
     },
 );
@@ -165,7 +174,7 @@ var blobs = try acr.BlobDownloadClient.init(
     registry_endpoint,
     "team/app",
     .{
-        .transport = transport,
+        .runtime = runtime,
         .authentication = .{ .credential = credential },
     },
 );
@@ -207,6 +216,21 @@ Long-lived clients use bounded LRU caches: 128 routes, 128 scoped access
 tokens, and 32 refresh tokens. Tokens that reach the configured expiry skew
 are pruned before lookup or insertion.
 
+All clients use the canonical `core.http.HttpRuntime` construction path.
+Runtime, transport, and crypto provider descriptors are copied by value; their
+backend contexts are borrowed and must outlive clients, credential calls, and
+open streaming operations. HTTP transport and crypto providers are independent,
+so either backend can be replaced without replacing the other. Digest helpers
+also require the selected provider:
+
+```zig
+const digest = try acr.computeSha256Digest(runtime.crypto, bytes);
+```
+
+Provider and allocation failures propagate directly. The SDK does not silently
+fall back to `std.crypto`, and it does not return partially computed digests or
+successful transfer results after a provider failure.
+
 Local development uses relative package dependencies. The canonical package
 split changes the common dependency to `azure_sdk_core`. Release branches
 replace local paths with immutable Core and
@@ -215,8 +239,9 @@ replace local paths with immutable Core and
 
 ## Ownership and lifetime rules
 
-- Clients own their copied endpoint/repository/auth-policy state and must be
-  deinitialized before their borrowed transport and credential.
+- Clients own their copied endpoint/repository/auth-policy/runtime descriptor
+  state and must be deinitialized before the borrowed transport context,
+  crypto-provider context, and credential.
 - Pagers borrow the originating client pipeline. Keep the client alive until
   `pager.deinit()`, and deinitialize every page result before requesting or
   discarding more pages.

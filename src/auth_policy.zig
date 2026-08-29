@@ -6,10 +6,17 @@ const BearerChallenge = challenge_mod.BearerChallenge;
 const Request = core.http.Request;
 const Response = core.http.Response;
 const HttpOperation = core.http.HttpOperation;
-const HttpPolicy = core.pipeline.HttpPolicy;
+const HttpPolicy = core.http.HttpPolicy;
+const HttpRuntime = core.http.HttpRuntime;
 const HttpTransport = core.http.HttpTransport;
 const OpenOptions = core.http.OpenOptions;
 const CancellationToken = core.http.CancellationToken;
+
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+fn testingRuntime(transport: HttpTransport) HttpRuntime {
+    return .init(transport, testing_crypto_provider.asProvider());
+}
 
 const default_aad_scope = "https://containerregistry.azure.net/.default";
 const default_api_version = "2021-07-01";
@@ -308,7 +315,7 @@ pub const ChallengeAuthenticationPolicy = struct {
         policy: *HttpPolicy,
         request: *Request,
         next: []*HttpPolicy,
-        final_transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) !Response {
         const self: *ChallengeAuthenticationPolicy =
             @alignCast(@fieldParentPtr("policy", policy));
@@ -328,14 +335,14 @@ pub const ChallengeAuthenticationPolicy = struct {
                 first_attempt_token = try self.acquireAccessTokenVersioned(
                     challenge,
                     null,
-                    final_transport,
+                    runtime,
                 );
                 try authorization.setBearer(request, first_attempt_token.?.value);
                 sdk_authorized = true;
             }
         }
 
-        var response = try callNext(request, next, final_transport);
+        var response = try callNext(request, next, runtime);
         if (response.status_code != 401) return response;
 
         if (!sdk_authorized and request.getHeader("Authorization") != null)
@@ -360,7 +367,7 @@ pub const ChallengeAuthenticationPolicy = struct {
         const token = self.acquireAccessTokenVersioned(
             &challenge,
             null,
-            final_transport,
+            runtime,
         ) catch |err| {
             response.deinit();
             return err;
@@ -372,13 +379,17 @@ pub const ChallengeAuthenticationPolicy = struct {
         };
 
         response.deinit();
-        const replay = try callNext(request, next, final_transport);
+        const replay = try callNext(request, next, runtime);
         if (replay.status_code == 401)
             self.invalidateAccessToken(&challenge, token);
         return replay;
     }
 
-    fn prepareImpl(policy: *HttpPolicy, request: *Request) !void {
+    fn prepareImpl(
+        policy: *HttpPolicy,
+        request: *Request,
+        _: HttpRuntime,
+    ) !void {
         const self: *ChallengeAuthenticationPolicy =
             @alignCast(@fieldParentPtr("policy", policy));
         try self.validateRequestUrl(request.url);
@@ -389,7 +400,7 @@ pub const ChallengeAuthenticationPolicy = struct {
         request: *Request,
         options: OpenOptions,
         next: []*HttpPolicy,
-        final_transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) !*HttpOperation {
         const self: *ChallengeAuthenticationPolicy =
             @alignCast(@fieldParentPtr("policy", policy));
@@ -410,7 +421,7 @@ pub const ChallengeAuthenticationPolicy = struct {
                 first_attempt_token = try self.acquireAccessTokenVersioned(
                     challenge,
                     options.cancellation,
-                    final_transport,
+                    runtime,
                 );
                 try authorization.setBearer(request, first_attempt_token.?.value);
                 sdk_authorized = true;
@@ -421,7 +432,7 @@ pub const ChallengeAuthenticationPolicy = struct {
             request,
             options,
             next,
-            final_transport,
+            runtime,
         );
         defer if (owned_operation) |operation| operation.deinit();
         var operation = owned_operation.?;
@@ -447,7 +458,7 @@ pub const ChallengeAuthenticationPolicy = struct {
         const token = try self.acquireAccessTokenVersioned(
             &challenge,
             options.cancellation,
-            final_transport,
+            runtime,
         );
         defer token.deinit(self.allocator);
         try authorization.setBearer(request, token.value);
@@ -463,7 +474,7 @@ pub const ChallengeAuthenticationPolicy = struct {
             request,
             replay_options,
             next,
-            final_transport,
+            runtime,
         );
         owned_operation = operation;
         if (operation.status_code == 401)
@@ -476,12 +487,12 @@ pub const ChallengeAuthenticationPolicy = struct {
         self: *ChallengeAuthenticationPolicy,
         challenge: *const BearerChallenge,
         cancellation: ?*const CancellationToken,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) ![]u8 {
         return (try self.acquireAccessTokenVersioned(
             challenge,
             cancellation,
-            transport,
+            runtime,
         )).value;
     }
 
@@ -489,7 +500,7 @@ pub const ChallengeAuthenticationPolicy = struct {
         self: *ChallengeAuthenticationPolicy,
         challenge: *const BearerChallenge,
         cancellation: ?*const CancellationToken,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) !AcquiredAccessToken {
         try checkCancelled(cancellation);
         const current_time = self.now();
@@ -519,7 +530,7 @@ pub const ChallengeAuthenticationPolicy = struct {
             self.mutex.unlock(self.io);
             return err;
         };
-        self.startFlightWorkerLocked(flight, transport) catch |err| {
+        self.startFlightWorkerLocked(flight, runtime) catch |err| {
             self.removeFlightLocked(flight);
             self.mutex.unlock(self.io);
             return err;
@@ -533,7 +544,7 @@ pub const ChallengeAuthenticationPolicy = struct {
         self: *ChallengeAuthenticationPolicy,
         challenge: *const BearerChallenge,
         cancellation: ?*const CancellationToken,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) ![]u8 {
         try checkCancelled(cancellation);
         const current_time = self.now();
@@ -558,7 +569,7 @@ pub const ChallengeAuthenticationPolicy = struct {
             self.mutex.unlock(self.io);
             return err;
         };
-        self.startFlightWorkerLocked(flight, transport) catch |err| {
+        self.startFlightWorkerLocked(flight, runtime) catch |err| {
             self.removeFlightLocked(flight);
             self.mutex.unlock(self.io);
             return err;
@@ -571,7 +582,7 @@ pub const ChallengeAuthenticationPolicy = struct {
         self: *ChallengeAuthenticationPolicy,
         challenge: *const BearerChallenge,
         cancellation: ?*const CancellationToken,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) ![]u8 {
         return switch (self.authentication) {
             .anonymous => self.exchangeAccessToken(
@@ -579,7 +590,7 @@ pub const ChallengeAuthenticationPolicy = struct {
                 "",
                 .password,
                 cancellation,
-                transport,
+                runtime,
             ),
             .credential => blk: {
                 var retried = false;
@@ -587,7 +598,7 @@ pub const ChallengeAuthenticationPolicy = struct {
                     const refresh_token = try self.acquireRefreshToken(
                         challenge,
                         cancellation,
-                        transport,
+                        runtime,
                     );
                     defer self.allocator.free(refresh_token);
                     const access_token = self.exchangeAccessToken(
@@ -595,7 +606,7 @@ pub const ChallengeAuthenticationPolicy = struct {
                         refresh_token,
                         .refresh_token,
                         cancellation,
-                        transport,
+                        runtime,
                     ) catch |err| {
                         if (!isRefreshTokenRejection(err)) return err;
                         self.invalidateRefreshToken(challenge, refresh_token);
@@ -614,7 +625,7 @@ pub const ChallengeAuthenticationPolicy = struct {
         challenge: *const BearerChallenge,
         aad_token: []const u8,
         cancellation: ?*const CancellationToken,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) ![]u8 {
         const url = try self.tokenUrl(challenge.realm, "/oauth2/exchange");
         defer self.allocator.free(url);
@@ -634,7 +645,7 @@ pub const ChallengeAuthenticationPolicy = struct {
             "refresh_token",
             false,
             cancellation,
-            transport,
+            runtime,
         );
     }
 
@@ -649,7 +660,7 @@ pub const ChallengeAuthenticationPolicy = struct {
         refresh_token: []const u8,
         grant: AccessGrant,
         cancellation: ?*const CancellationToken,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) ![]u8 {
         const url = try self.tokenUrl(challenge.realm, "/oauth2/token");
         defer self.allocator.free(url);
@@ -667,7 +678,7 @@ pub const ChallengeAuthenticationPolicy = struct {
             "access_token",
             grant == .refresh_token,
             cancellation,
-            transport,
+            runtime,
         );
     }
 
@@ -678,7 +689,7 @@ pub const ChallengeAuthenticationPolicy = struct {
         response_field: []const u8,
         classify_refresh_rejection: bool,
         cancellation: ?*const CancellationToken,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) ![]u8 {
         try checkCancelled(cancellation);
         var request = Request.init(self.allocator, .POST, url);
@@ -688,7 +699,7 @@ pub const ChallengeAuthenticationPolicy = struct {
         try request.setHeader("Accept", "application/json");
         try request.setHeader("Content-Type", "application/x-www-form-urlencoded");
 
-        var response = try transport.send(&request);
+        var response = try runtime.transport.send(&request);
         defer response.deinit();
         try checkCancelled(cancellation);
         if (response.status_code == 401) return error.AcrTokenEndpointUnauthorized;
@@ -1068,37 +1079,37 @@ pub const ChallengeAuthenticationPolicy = struct {
     fn startFlightWorkerLocked(
         self: *ChallengeAuthenticationPolicy,
         flight: *TokenFlight,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) !void {
         std.debug.assert(flight.worker == null);
         flight.worker = try std.Thread.spawn(
             .{},
             runFlightWorker,
-            .{ self, flight, transport },
+            .{ self, flight, runtime },
         );
     }
 
     fn runFlightWorker(
         self: *ChallengeAuthenticationPolicy,
         flight: *TokenFlight,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) void {
         switch (flight.kind) {
-            .refresh => self.runRefreshFlight(flight, transport),
-            .access => self.runAccessFlight(flight, transport),
+            .refresh => self.runRefreshFlight(flight, runtime),
+            .access => self.runAccessFlight(flight, runtime),
         }
     }
 
     fn runAccessFlight(
         self: *ChallengeAuthenticationPolicy,
         flight: *TokenFlight,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) void {
         const challenge = flight.challenge(self.allocator);
         const token = self.requestAccessToken(
             &challenge,
             null,
-            transport,
+            runtime,
         ) catch |err| {
             self.publishFlightFailure(flight, err);
             return;
@@ -1132,7 +1143,7 @@ pub const ChallengeAuthenticationPolicy = struct {
     fn runRefreshFlight(
         self: *ChallengeAuthenticationPolicy,
         flight: *TokenFlight,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) void {
         const credential = switch (self.authentication) {
             .credential => |value| value,
@@ -1145,6 +1156,7 @@ pub const ChallengeAuthenticationPolicy = struct {
         var aad_token = credential.getToken(
             .{ .scopes = &scopes },
             core.context.Context.none,
+            runtime,
         ) catch |err| {
             self.publishFlightFailure(flight, err);
             return;
@@ -1156,7 +1168,7 @@ pub const ChallengeAuthenticationPolicy = struct {
             &challenge,
             aad_token.token,
             null,
-            transport,
+            runtime,
         ) catch |err| {
             self.publishFlightFailure(flight, err);
             return;
@@ -1378,20 +1390,20 @@ pub const ChallengeAuthenticationPolicy = struct {
 fn callNext(
     request: *Request,
     next: []*HttpPolicy,
-    final_transport: *HttpTransport,
+    runtime: HttpRuntime,
 ) !Response {
-    if (next.len == 0) return final_transport.send(request);
-    return next[0].process(request, next[1..], final_transport);
+    if (next.len == 0) return runtime.transport.send(request);
+    return next[0].process(request, next[1..], runtime);
 }
 
 fn callNextOpen(
     request: *Request,
     options: OpenOptions,
     next: []*HttpPolicy,
-    final_transport: *HttpTransport,
+    runtime: HttpRuntime,
 ) !*HttpOperation {
-    if (next.len == 0) return final_transport.open(request, options);
-    return next[0].open(request, options, next[1..], final_transport);
+    if (next.len == 0) return runtime.transport.open(request, options);
+    return next[0].open(request, options, next[1..], runtime);
 }
 
 fn parseChallengeFromResponse(
@@ -1782,6 +1794,7 @@ const TestCredential = struct {
         credential: *core.credentials.TokenCredential,
         _: core.credentials.TokenRequestContext,
         _: core.context.Context,
+        _: HttpRuntime,
     ) anyerror!core.credentials.AccessToken {
         const self: *TestCredential =
             @alignCast(@fieldParentPtr("credential", credential));
@@ -1883,15 +1896,12 @@ fn countCapturedUrl(
 fn sendBuffered(
     allocator: std.mem.Allocator,
     policy: *ChallengeAuthenticationPolicy,
-    transport: *HttpTransport,
+    runtime: HttpRuntime,
     method: core.http.Method,
     url: []const u8,
 ) !Response {
     var policies = [_]*HttpPolicy{policy.asPolicy()};
-    var pipeline = core.pipeline.HttpPipeline{
-        .policies = &policies,
-        .transport_impl = transport,
-    };
+    var pipeline = core.http.HttpPipeline.init(runtime, &policies);
     var request = Request.init(allocator, method, url);
     defer request.deinit();
     return pipeline.send(&request);
@@ -1932,7 +1942,6 @@ const ParallelAccessTransport = struct {
     exchange_calls: std.atomic.Value(usize) = .init(0),
     access_calls: std.atomic.Value(usize) = .init(0),
     access_release: std.Io.Semaphore = .{},
-    transport: HttpTransport,
 
     fn init(
         allocator: std.mem.Allocator,
@@ -1945,17 +1954,18 @@ const ParallelAccessTransport = struct {
             .refresh_body = refresh_body,
             .access_one_body = access_one_body,
             .access_two_body = access_two_body,
-            .transport = .{ .sendFn = &sendImpl },
         };
     }
 
-    fn asTransport(self: *ParallelAccessTransport) *HttpTransport {
-        return &self.transport;
+    fn asTransport(self: *ParallelAccessTransport) HttpTransport {
+        return .{
+            .context = self,
+            .vtable = &.{ .send = &sendImpl },
+        };
     }
 
-    fn sendImpl(transport: *HttpTransport, request: *Request) !Response {
-        const self: *ParallelAccessTransport =
-            @alignCast(@fieldParentPtr("transport", transport));
+    fn sendImpl(context: *anyopaque, request: *Request) !Response {
+        const self: *ParallelAccessTransport = @ptrCast(@alignCast(context));
         if (std.mem.indexOf(u8, request.url, "/oauth2/exchange") != null) {
             _ = self.exchange_calls.fetchAdd(1, .monotonic);
             return testResponse(self.allocator, 200, self.refresh_body);
@@ -1993,23 +2003,23 @@ const CancelAfterOpenPolicy = struct {
         _: *HttpPolicy,
         request: *Request,
         next: []*HttpPolicy,
-        final_transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) !Response {
-        return callNext(request, next, final_transport);
+        return callNext(request, next, runtime);
     }
 
-    fn prepareImpl(_: *HttpPolicy, _: *Request) !void {}
+    fn prepareImpl(_: *HttpPolicy, _: *Request, _: HttpRuntime) !void {}
 
     fn openImpl(
         policy: *HttpPolicy,
         request: *Request,
         options: OpenOptions,
         next: []*HttpPolicy,
-        final_transport: *HttpTransport,
+        runtime: HttpRuntime,
     ) !*HttpOperation {
         const self: *CancelAfterOpenPolicy =
             @alignCast(@fieldParentPtr("policy", policy));
-        const operation = try callNextOpen(request, options, next, final_transport);
+        const operation = try callNextOpen(request, options, next, runtime);
         self.cancellation.cancel();
         return operation;
     }
@@ -2021,7 +2031,6 @@ const BlockingTokenTransport = struct {
     entered: std.Io.Semaphore = .{},
     release: std.Io.Semaphore = .{},
     calls: std.atomic.Value(usize) = .init(0),
-    transport: HttpTransport,
 
     fn init(
         allocator: std.mem.Allocator,
@@ -2030,17 +2039,18 @@ const BlockingTokenTransport = struct {
         return .{
             .allocator = allocator,
             .response_body = response_body,
-            .transport = .{ .sendFn = &sendImpl },
         };
     }
 
-    fn asTransport(self: *BlockingTokenTransport) *HttpTransport {
-        return &self.transport;
+    fn asTransport(self: *BlockingTokenTransport) HttpTransport {
+        return .{
+            .context = self,
+            .vtable = &.{ .send = &sendImpl },
+        };
     }
 
-    fn sendImpl(transport: *HttpTransport, request: *Request) !Response {
-        const self: *BlockingTokenTransport =
-            @alignCast(@fieldParentPtr("transport", transport));
+    fn sendImpl(context: *anyopaque, request: *Request) !Response {
+        const self: *BlockingTokenTransport = @ptrCast(@alignCast(context));
         if (std.mem.indexOf(u8, request.url, "/oauth2/token") == null)
             return error.UnexpectedMockRequest;
         _ = self.calls.fetchAdd(1, .monotonic);
@@ -2066,7 +2076,6 @@ const DelayedUnauthorizedTransport = struct {
     token_one_requests: std.atomic.Value(usize) = .init(0),
     token_two_requests: std.atomic.Value(usize) = .init(0),
     token_requests: std.atomic.Value(usize) = .init(0),
-    transport: HttpTransport,
 
     fn init(
         allocator: std.mem.Allocator,
@@ -2081,17 +2090,18 @@ const DelayedUnauthorizedTransport = struct {
             .token_one = token_one,
             .token_two = token_two,
             .token_two_body = token_two_body,
-            .transport = .{ .sendFn = &sendImpl },
         };
     }
 
-    fn asTransport(self: *DelayedUnauthorizedTransport) *HttpTransport {
-        return &self.transport;
+    fn asTransport(self: *DelayedUnauthorizedTransport) HttpTransport {
+        return .{
+            .context = self,
+            .vtable = &.{ .send = &sendImpl },
+        };
     }
 
-    fn sendImpl(transport: *HttpTransport, request: *Request) !Response {
-        const self: *DelayedUnauthorizedTransport =
-            @alignCast(@fieldParentPtr("transport", transport));
+    fn sendImpl(context: *anyopaque, request: *Request) !Response {
+        const self: *DelayedUnauthorizedTransport = @ptrCast(@alignCast(context));
         if (std.mem.indexOf(u8, request.url, "/oauth2/token") != null) {
             _ = self.token_requests.fetchAdd(1, .monotonic);
             return testResponse(self.allocator, 200, self.token_two_body);
@@ -2129,7 +2139,7 @@ fn bearerTokenMatches(authorization: []const u8, token: []const u8) bool {
 const AuthRaceRequest = struct {
     allocator: std.mem.Allocator,
     policy: *ChallengeAuthenticationPolicy,
-    transport: *HttpTransport,
+    runtime: HttpRuntime,
     path: RequestPath,
     status_code: ?u16 = null,
     authorization_restored: bool = false,
@@ -2137,10 +2147,7 @@ const AuthRaceRequest = struct {
 
     fn run(self: *@This()) void {
         var policies = [_]*HttpPolicy{self.policy.asPolicy()};
-        var pipeline = core.pipeline.HttpPipeline{
-            .policies = &policies,
-            .transport_impl = self.transport,
-        };
+        var pipeline = core.http.HttpPipeline.init(self.runtime, &policies);
         var request = Request.init(
             self.allocator,
             .GET,
@@ -2231,7 +2238,7 @@ test "authenticated challenge flow uses form encoding and caches both tokens" {
     var first = try sendBuffered(
         allocator,
         &policy,
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
         .GET,
         "https://registry.example/v2/team/image/manifests/latest",
     );
@@ -2256,7 +2263,7 @@ test "authenticated challenge flow uses form encoding and caches both tokens" {
     var second = try sendBuffered(
         allocator,
         &policy,
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
         .GET,
         "https://registry.example/v2/team/image/manifests/latest?reference=other",
     );
@@ -2312,7 +2319,7 @@ test "explicit anonymous mode obtains an anonymous scoped token" {
     var response = try sendBuffered(
         allocator,
         &policy,
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
         .GET,
         "https://registry.example/v2/_catalog",
     );
@@ -2360,7 +2367,7 @@ test "authenticated credential failures never downgrade to anonymous" {
         sendBuffered(
             allocator,
             &policy,
-            transport.asTransport(),
+            testingRuntime(transport.asTransport()),
             .GET,
             "https://registry.example/v2/_catalog",
         ),
@@ -2423,7 +2430,7 @@ test "expired refresh and access tokens are refreshed before sending" {
     var first = try sendBuffered(
         allocator,
         &policy,
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
         .GET,
         "https://registry.example/v2/one/manifests/latest",
     );
@@ -2432,7 +2439,7 @@ test "expired refresh and access tokens are refreshed before sending" {
     var second = try sendBuffered(
         allocator,
         &policy,
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
         .GET,
         "https://registry.example/v2/one/manifests/latest",
     );
@@ -2501,7 +2508,7 @@ test "401 invalidates one scoped access token and replays exactly once" {
     var first = try sendBuffered(
         allocator,
         &policy,
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
         .GET,
         "https://registry.example/v2/one/manifests/latest",
     );
@@ -2509,7 +2516,7 @@ test "401 invalidates one scoped access token and replays exactly once" {
     var second = try sendBuffered(
         allocator,
         &policy,
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
         .GET,
         "https://registry.example/v2/one/manifests/latest",
     );
@@ -2582,10 +2589,10 @@ test "buffered request reuse restores SDK authorization across invalidation and 
     );
     defer policy.deinit();
     var policies = [_]*HttpPolicy{policy.asPolicy()};
-    var pipeline = core.pipeline.HttpPipeline{
-        .policies = &policies,
-        .transport_impl = transport.asTransport(),
-    };
+    var pipeline = core.http.HttpPipeline.init(
+        testingRuntime(transport.asTransport()),
+        &policies,
+    );
     var request = Request.init(
         allocator,
         .GET,
@@ -2686,7 +2693,7 @@ test "repository scopes use isolated access token cache entries" {
     var one = try sendBuffered(
         allocator,
         &policy,
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
         .GET,
         "https://registry.example/v2/one/manifests/latest",
     );
@@ -2694,7 +2701,7 @@ test "repository scopes use isolated access token cache entries" {
     var two = try sendBuffered(
         allocator,
         &policy,
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
         .GET,
         "https://registry.example/v2/two/manifests/latest",
     );
@@ -2761,7 +2768,7 @@ test "concurrent token acquisition is single flight" {
     const AcquireContext = struct {
         policy: *ChallengeAuthenticationPolicy,
         challenge: *const BearerChallenge,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
         token: ?[]u8 = null,
         err: ?anyerror = null,
 
@@ -2769,7 +2776,7 @@ test "concurrent token acquisition is single flight" {
             self.token = self.policy.acquireAccessToken(
                 self.challenge,
                 null,
-                self.transport,
+                self.runtime,
             ) catch |err| {
                 self.err = err;
                 return;
@@ -2780,7 +2787,7 @@ test "concurrent token acquisition is single flight" {
     var first = AcquireContext{
         .policy = &policy,
         .challenge = &challenge,
-        .transport = transport.asTransport(),
+        .runtime = testingRuntime(transport.asTransport()),
     };
     var second = first;
     const first_thread = try std.Thread.spawn(.{}, AcquireContext.run, .{&first});
@@ -2822,7 +2829,7 @@ test "untrusted request and challenge hosts never receive tokens" {
         sendBuffered(
             allocator,
             &policy,
-            untrusted_transport.asTransport(),
+            testingRuntime(untrusted_transport.asTransport()),
             .GET,
             "https://evil.example/v2/_catalog",
         ),
@@ -2848,7 +2855,7 @@ test "untrusted request and challenge hosts never receive tokens" {
         sendBuffered(
             allocator,
             &policy,
-            malicious_transport.asTransport(),
+            testingRuntime(malicious_transport.asTransport()),
             .GET,
             "https://registry.example/v2/_catalog",
         ),
@@ -2891,7 +2898,7 @@ test "token bootstrap redirects cannot forward AAD credentials" {
         sendBuffered(
             allocator,
             &policy,
-            transport.asTransport(),
+            testingRuntime(transport.asTransport()),
             .GET,
             "https://registry.example/v2/_catalog",
         ),
@@ -2956,13 +2963,13 @@ test "refresh token cache keys include the challenge tenant" {
     const first_token = try policy.acquireAccessToken(
         &first,
         null,
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
     );
     defer allocator.free(first_token);
     const second_token = try policy.acquireAccessToken(
         &second,
         null,
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
     );
     defer allocator.free(second_token);
 
@@ -3023,7 +3030,7 @@ test "a replayed 401 is returned without a second replay" {
     var response = try sendBuffered(
         allocator,
         &policy,
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
         .GET,
         "https://registry.example/v2/_catalog",
     );
@@ -3057,10 +3064,10 @@ test "non-rewindable streaming bodies are not replayed" {
     );
     defer policy.deinit();
     var policies = [_]*HttpPolicy{policy.asPolicy()};
-    var pipeline = core.pipeline.HttpPipeline{
-        .policies = &policies,
-        .transport_impl = transport.asTransport(),
-    };
+    var pipeline = core.http.HttpPipeline.init(
+        testingRuntime(transport.asTransport()),
+        &policies,
+    );
     var request = Request.init(
         allocator,
         .PATCH,
@@ -3109,10 +3116,10 @@ test "rewindable streaming bodies are replayed once after authentication" {
     );
     defer policy.deinit();
     var policies = [_]*HttpPolicy{policy.asPolicy()};
-    var pipeline = core.pipeline.HttpPipeline{
-        .policies = &policies,
-        .transport_impl = transport.asTransport(),
-    };
+    var pipeline = core.http.HttpPipeline.init(
+        testingRuntime(transport.asTransport()),
+        &policies,
+    );
     var request = Request.init(
         allocator,
         .PATCH,
@@ -3144,10 +3151,10 @@ test "streaming cancellation is preserved before transport" {
     );
     defer policy.deinit();
     var policies = [_]*HttpPolicy{policy.asPolicy()};
-    var pipeline = core.pipeline.HttpPipeline{
-        .policies = &policies,
-        .transport_impl = transport.asTransport(),
-    };
+    var pipeline = core.http.HttpPipeline.init(
+        testingRuntime(transport.asTransport()),
+        &policies,
+    );
     var request = Request.init(allocator, .GET, "https://registry.example/v2/_catalog");
     defer request.deinit();
     var cancellation = CancellationToken{};
@@ -3184,10 +3191,10 @@ test "streaming challenge cancellation aborts and deinitializes the active opera
     var cancellation = CancellationToken{};
     var cancel_policy = CancelAfterOpenPolicy.init(&cancellation);
     var policies = [_]*HttpPolicy{ policy.asPolicy(), &cancel_policy.policy };
-    var pipeline = core.pipeline.HttpPipeline{
-        .policies = &policies,
-        .transport_impl = transport.asTransport(),
-    };
+    var pipeline = core.http.HttpPipeline.init(
+        testingRuntime(transport.asTransport()),
+        &policies,
+    );
     var request = Request.init(allocator, .GET, "https://registry.example/v2/_catalog");
     defer request.deinit();
 
@@ -3250,10 +3257,10 @@ test "streaming request reuse restores SDK authorization across invalidation and
     );
     defer policy.deinit();
     var policies = [_]*HttpPolicy{policy.asPolicy()};
-    var pipeline = core.pipeline.HttpPipeline{
-        .policies = &policies,
-        .transport_impl = transport.asTransport(),
-    };
+    var pipeline = core.http.HttpPipeline.init(
+        testingRuntime(transport.asTransport()),
+        &policies,
+    );
     var request = Request.init(allocator, .GET, "https://registry.example/v2/_catalog");
     defer request.deinit();
 
@@ -3355,13 +3362,13 @@ test "delayed unauthorized response preserves a newer same-key access token" {
         var delayed = AuthRaceRequest{
             .allocator = allocator,
             .policy = &policy,
-            .transport = transport.asTransport(),
+            .runtime = testingRuntime(transport.asTransport()),
             .path = path,
         };
         var refresher = AuthRaceRequest{
             .allocator = allocator,
             .policy = &policy,
-            .transport = transport.asTransport(),
+            .runtime = testingRuntime(transport.asTransport()),
             .path = path,
         };
         const delayed_thread = try std.Thread.spawn(
@@ -3451,7 +3458,7 @@ test "trusted origins compare HTTPS host and effective port" {
         sendBuffered(
             allocator,
             &default_policy,
-            unused_transport.asTransport(),
+            testingRuntime(unused_transport.asTransport()),
             .GET,
             "https://registry.example:8443/v2/_catalog",
         ),
@@ -3480,7 +3487,7 @@ test "trusted origins compare HTTPS host and effective port" {
         sendBuffered(
             allocator,
             &default_policy,
-            untrusted_transport.asTransport(),
+            testingRuntime(untrusted_transport.asTransport()),
             .GET,
             "https://registry.example/v2/_catalog",
         ),
@@ -3499,7 +3506,7 @@ test "trusted origins compare HTTPS host and effective port" {
         sendBuffered(
             allocator,
             &hostname_policy,
-            unused_transport.asTransport(),
+            testingRuntime(unused_transport.asTransport()),
             .GET,
             "https://auth.example:8443/v2/_catalog",
         ),
@@ -3536,7 +3543,7 @@ test "trusted origins compare HTTPS host and effective port" {
     var response = try sendBuffered(
         allocator,
         &explicit_policy,
-        explicit_transport.asTransport(),
+        testingRuntime(explicit_transport.asTransport()),
         .GET,
         "https://REGISTRY.example:8443/v2/_catalog",
     );
@@ -3608,7 +3615,7 @@ test "cached refresh rejection invalidates exact token and recovers once" {
     const token = try policy.acquireAccessToken(
         &challenge,
         null,
-        transport.asTransport(),
+        testingRuntime(transport.asTransport()),
     );
     defer allocator.free(token);
     try std.testing.expectEqualStrings(access_token, token);
@@ -3680,7 +3687,11 @@ test "refresh rejection retry is bounded and unrelated failures are not retried"
 
     try std.testing.expectError(
         error.AcrRefreshTokenRejected,
-        policy.acquireAccessToken(&challenge, null, transport.asTransport()),
+        policy.acquireAccessToken(
+            &challenge,
+            null,
+            testingRuntime(transport.asTransport()),
+        ),
     );
     try std.testing.expectEqual(@as(usize, 3), transport.call_count);
     try std.testing.expectEqual(@as(usize, 1), credential.calls.load(.monotonic));
@@ -3718,7 +3729,7 @@ test "refresh rejection retry is bounded and unrelated failures are not retried"
         unrelated_policy.acquireAccessToken(
             &challenge,
             null,
-            unrelated_transport.asTransport(),
+            testingRuntime(unrelated_transport.asTransport()),
         ),
     );
     try std.testing.expectEqual(@as(usize, 1), unrelated_transport.call_count);
@@ -3761,7 +3772,7 @@ test "token endpoint preserves authentication rejection classification" {
             "access_token",
             true,
             null,
-            transport.asTransport(),
+            testingRuntime(transport.asTransport()),
         ),
     );
     try std.testing.expectError(
@@ -3772,7 +3783,7 @@ test "token endpoint preserves authentication rejection classification" {
             "access_token",
             true,
             null,
-            transport.asTransport(),
+            testingRuntime(transport.asTransport()),
         ),
     );
     try std.testing.expectError(
@@ -3783,7 +3794,7 @@ test "token endpoint preserves authentication rejection classification" {
             "access_token",
             true,
             null,
-            transport.asTransport(),
+            testingRuntime(transport.asTransport()),
         ),
     );
     try std.testing.expectEqual(@as(usize, 3), transport.call_count);
@@ -4135,7 +4146,7 @@ test "different access keys refresh concurrently while sharing refresh flight" {
     const AcquireContext = struct {
         policy: *ChallengeAuthenticationPolicy,
         challenge: *const BearerChallenge,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
         token: ?[]u8 = null,
         err: ?anyerror = null,
 
@@ -4143,7 +4154,7 @@ test "different access keys refresh concurrently while sharing refresh flight" {
             self.token = self.policy.acquireAccessToken(
                 self.challenge,
                 null,
-                self.transport,
+                self.runtime,
             ) catch |err| {
                 self.err = err;
                 return;
@@ -4153,12 +4164,12 @@ test "different access keys refresh concurrently while sharing refresh flight" {
     var first = AcquireContext{
         .policy = &policy,
         .challenge = &challenge_one,
-        .transport = transport.asTransport(),
+        .runtime = testingRuntime(transport.asTransport()),
     };
     var second = AcquireContext{
         .policy = &policy,
         .challenge = &challenge_two,
-        .transport = transport.asTransport(),
+        .runtime = testingRuntime(transport.asTransport()),
     };
     const first_thread = try std.Thread.spawn(.{}, AcquireContext.run, .{&first});
     const second_thread = std.Thread.spawn(.{}, AcquireContext.run, .{&second}) catch |err| {
@@ -4226,14 +4237,14 @@ test "same-key flight wakes waiters with the leader failure" {
     const AcquireContext = struct {
         policy: *ChallengeAuthenticationPolicy,
         challenge: *const BearerChallenge,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
         err: ?anyerror = null,
 
         fn run(self: *@This()) void {
             const token = self.policy.acquireAccessToken(
                 self.challenge,
                 null,
-                self.transport,
+                self.runtime,
             ) catch |err| {
                 self.err = err;
                 return;
@@ -4244,7 +4255,7 @@ test "same-key flight wakes waiters with the leader failure" {
     var first = AcquireContext{
         .policy = &policy,
         .challenge = &challenge,
-        .transport = transport.asTransport(),
+        .runtime = testingRuntime(transport.asTransport()),
     };
     var second = first;
     const first_thread = try std.Thread.spawn(.{}, AcquireContext.run, .{&first});
@@ -4308,7 +4319,7 @@ test "cancelled refresh flight leader does not fail a non-cancelled follower" {
         policy: *ChallengeAuthenticationPolicy,
         challenge: *const BearerChallenge,
         cancellation: ?*const CancellationToken,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
         token: ?[]u8 = null,
         err: ?anyerror = null,
 
@@ -4316,7 +4327,7 @@ test "cancelled refresh flight leader does not fail a non-cancelled follower" {
             self.token = self.policy.acquireRefreshToken(
                 self.challenge,
                 self.cancellation,
-                self.transport,
+                self.runtime,
             ) catch |err| {
                 self.err = err;
                 return;
@@ -4327,13 +4338,13 @@ test "cancelled refresh flight leader does not fail a non-cancelled follower" {
         .policy = &policy,
         .challenge = &leader_challenge,
         .cancellation = &cancellation,
-        .transport = transport.asTransport(),
+        .runtime = testingRuntime(transport.asTransport()),
     };
     var follower = AcquireContext{
         .policy = &policy,
         .challenge = &follower_challenge,
         .cancellation = null,
-        .transport = transport.asTransport(),
+        .runtime = testingRuntime(transport.asTransport()),
     };
     const leader_thread = try std.Thread.spawn(.{}, AcquireContext.run, .{&leader});
     entered.waitUncancelable(policy.io);
@@ -4396,7 +4407,7 @@ test "cancelled access flight leader does not fail a non-cancelled follower" {
         policy: *ChallengeAuthenticationPolicy,
         challenge: *const BearerChallenge,
         cancellation: ?*const CancellationToken,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
         token: ?[]u8 = null,
         err: ?anyerror = null,
 
@@ -4404,7 +4415,7 @@ test "cancelled access flight leader does not fail a non-cancelled follower" {
             self.token = self.policy.acquireAccessToken(
                 self.challenge,
                 self.cancellation,
-                self.transport,
+                self.runtime,
             ) catch |err| {
                 self.err = err;
                 return;
@@ -4415,13 +4426,13 @@ test "cancelled access flight leader does not fail a non-cancelled follower" {
         .policy = &policy,
         .challenge = &leader_challenge,
         .cancellation = &cancellation,
-        .transport = transport.asTransport(),
+        .runtime = testingRuntime(transport.asTransport()),
     };
     var follower = AcquireContext{
         .policy = &policy,
         .challenge = &follower_challenge,
         .cancellation = null,
-        .transport = transport.asTransport(),
+        .runtime = testingRuntime(transport.asTransport()),
     };
     const leader_thread = try std.Thread.spawn(.{}, AcquireContext.run, .{&leader});
     transport.entered.waitUncancelable(policy.io);
@@ -4482,14 +4493,14 @@ test "policy deinit joins orphaned shared work after participant cancellation" {
         policy: *ChallengeAuthenticationPolicy,
         challenge: *const BearerChallenge,
         cancellation: *const CancellationToken,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
         err: ?anyerror = null,
 
         fn run(self: *@This()) void {
             const token = self.policy.acquireAccessToken(
                 self.challenge,
                 self.cancellation,
-                self.transport,
+                self.runtime,
             ) catch |err| {
                 self.err = err;
                 return;
@@ -4501,7 +4512,7 @@ test "policy deinit joins orphaned shared work after participant cancellation" {
         .policy = &policy,
         .challenge = &challenge,
         .cancellation = &cancellation,
-        .transport = transport.asTransport(),
+        .runtime = testingRuntime(transport.asTransport()),
     };
     const acquire_thread = try std.Thread.spawn(.{}, AcquireContext.run, .{&acquire});
     transport.entered.waitUncancelable(policy.io);
@@ -4590,7 +4601,7 @@ test "cancelling a same-key waiter leaves the leader race safe" {
         policy: *ChallengeAuthenticationPolicy,
         challenge: *const BearerChallenge,
         cancellation: ?*const CancellationToken,
-        transport: *HttpTransport,
+        runtime: HttpRuntime,
         token: ?[]u8 = null,
         err: ?anyerror = null,
 
@@ -4598,7 +4609,7 @@ test "cancelling a same-key waiter leaves the leader race safe" {
             self.token = self.policy.acquireAccessToken(
                 self.challenge,
                 self.cancellation,
-                self.transport,
+                self.runtime,
             ) catch |err| {
                 self.err = err;
                 return;
@@ -4609,13 +4620,13 @@ test "cancelling a same-key waiter leaves the leader race safe" {
         .policy = &policy,
         .challenge = &challenge,
         .cancellation = null,
-        .transport = transport.asTransport(),
+        .runtime = testingRuntime(transport.asTransport()),
     };
     var waiter = AcquireContext{
         .policy = &policy,
         .challenge = &challenge,
         .cancellation = &cancellation,
-        .transport = transport.asTransport(),
+        .runtime = testingRuntime(transport.asTransport()),
     };
     const leader_thread = try std.Thread.spawn(.{}, AcquireContext.run, .{&leader});
     entered.waitUncancelable(policy.io);

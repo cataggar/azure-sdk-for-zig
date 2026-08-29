@@ -38,7 +38,7 @@ pub const ListTagPropertiesOptions = struct {
 };
 
 pub const ContainerRegistryClientOptions = struct {
-    transport: *core.http.HttpTransport,
+    runtime: core.http.HttpRuntime,
     authentication: auth.Authentication,
     api_version: []const u8 = "2021-07-01",
     authentication_options: auth.Options = .{},
@@ -48,8 +48,8 @@ pub const ContainerRegistryClientOptions = struct {
 pub const ContainerRegistryClient = struct {
     allocator: std.mem.Allocator,
     auth_policy: *auth.ChallengeAuthenticationPolicy,
-    policy_ptrs: []*core.pipeline.HttpPolicy,
-    pipeline: core.pipeline.HttpPipeline,
+    policy_ptrs: []*core.http.HttpPolicy,
+    pipeline: core.http.HttpPipeline,
     endpoint: []const u8,
     api_version: []const u8,
     protocol_client: protocol.ContainerRegistryClient,
@@ -71,14 +71,11 @@ pub const ContainerRegistryClient = struct {
         );
         errdefer auth_policy.deinit();
 
-        const policy_ptrs = try allocator.alloc(*core.pipeline.HttpPolicy, 1);
+        const policy_ptrs = try allocator.alloc(*core.http.HttpPolicy, 1);
         errdefer allocator.free(policy_ptrs);
         policy_ptrs[0] = auth_policy.asPolicy();
 
-        const pipeline = core.pipeline.HttpPipeline{
-            .policies = policy_ptrs,
-            .transport_impl = options.transport,
-        };
+        const pipeline = core.http.HttpPipeline.init(options.runtime, policy_ptrs);
         return .{
             .allocator = allocator,
             .auth_policy = auth_policy,
@@ -86,8 +83,7 @@ pub const ContainerRegistryClient = struct {
             .pipeline = pipeline,
             .endpoint = auth_policy.endpoint,
             .api_version = auth_policy.api_version,
-            .protocol_client = protocol.ContainerRegistryClient.initWithPipeline(
-                allocator,
+            .protocol_client = protocol.ContainerRegistryClient.init(
                 pipeline,
                 .{
                     .endpoint = auth_policy.endpoint,
@@ -98,7 +94,6 @@ pub const ContainerRegistryClient = struct {
     }
 
     pub fn deinit(self: *ContainerRegistryClient) void {
-        self.protocol_client.deinit();
         self.allocator.free(self.policy_ptrs);
         self.auth_policy.deinit();
         self.allocator.destroy(self.auth_policy);
@@ -576,7 +571,7 @@ test "ContainerRegistryClient drives generated protocol APIs through challenge a
         allocator,
         "https://registry.example",
         .{
-            .transport = transport.asTransport(),
+            .runtime = @import("test_runtime.zig").init(transport.asTransport()),
             .authentication = .anonymous,
         },
     );

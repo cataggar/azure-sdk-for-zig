@@ -113,6 +113,7 @@ pub const BlobDownloadStream = struct {
 
     fn init(
         allocator: std.mem.Allocator,
+        provider: core.crypto.CryptoProvider,
         operation: *core.http.HttpOperation,
         requested_digest: []const u8,
         service_digest: ?[]const u8,
@@ -134,7 +135,9 @@ pub const BlobDownloadStream = struct {
             .digest = owned_digest,
             .content_length = content_length,
             .decoded_content_length = decoded_content_length,
-            .reader_impl = ValidatingReader.init(
+            .reader_impl = try ValidatingReader.init(
+                allocator,
+                provider,
                 operation,
                 owned_digest,
                 owned_service_digest,
@@ -215,6 +218,7 @@ pub const BlobDownloadStream = struct {
 
     pub fn deinit(self: *BlobDownloadStream) void {
         self.operation.deinit();
+        self.reader_impl.deinit();
         if (self.reader_impl.service_digest) |value| self.allocator.free(value);
         self.allocator.free(self.digest);
         self.* = undefined;
@@ -229,19 +233,21 @@ const ValidatingReader = struct {
     service_digest: ?[]u8,
     expected_length: ?u64,
     cancellation: ?*const core.http.CancellationToken,
-    hasher: digest_mod.Sha256Digest = .{},
+    hasher: digest_mod.Sha256Digest,
     computed_digest: [digest_mod.sha256_formatted_length]u8 = undefined,
     total: u64 = 0,
     complete: bool = false,
     failure: ?anyerror = null,
 
     fn init(
+        allocator: std.mem.Allocator,
+        provider: core.crypto.CryptoProvider,
         operation: *core.http.HttpOperation,
         requested_digest: []const u8,
         service_digest: ?[]u8,
         expected_length: ?u64,
         cancellation: ?*const core.http.CancellationToken,
-    ) ValidatingReader {
+    ) !ValidatingReader {
         return .{
             .interface = .{
                 .vtable = &.{ .stream = &stream },
@@ -255,7 +261,12 @@ const ValidatingReader = struct {
             .service_digest = service_digest,
             .expected_length = expected_length,
             .cancellation = cancellation,
+            .hasher = try digest_mod.Sha256Digest.init(allocator, provider),
         };
+    }
+
+    fn deinit(self: *ValidatingReader) void {
+        self.hasher.deinit();
     }
 
     fn stream(
@@ -288,8 +299,11 @@ const ValidatingReader = struct {
             }
         }
         self.checkCancellation() catch return error.ReadFailed;
+        self.hasher.update(buffer[0..count]) catch |err| {
+            self.failure = err;
+            return error.ReadFailed;
+        };
         try writer.writeAll(buffer[0..count]);
-        self.hasher.update(buffer[0..count]);
         self.total += count;
         return count;
     }
@@ -311,7 +325,10 @@ const ValidatingReader = struct {
                 return error.ContentLengthMismatch;
             }
         }
-        self.computed_digest = self.hasher.final();
+        self.computed_digest = self.hasher.final() catch |err| {
+            self.failure = err;
+            return err;
+        };
         if (!std.ascii.eqlIgnoreCase(&self.computed_digest, self.requested_digest)) {
             self.failure = error.RequestedDigestMismatch;
             return error.RequestedDigestMismatch;
@@ -469,6 +486,7 @@ pub const BlobDownloadClient = struct {
 
         const stream = try BlobDownloadStream.init(
             self.allocator,
+            self.pipeline().runtime.crypto,
             operation,
             requested_digest,
             service_digest,
@@ -503,7 +521,11 @@ pub const BlobDownloadClient = struct {
         if (options.range_size == 0) return error.InvalidRangeSize;
         try checkCancellation(options.cancellation);
 
-        var hasher = digest_mod.Sha256Digest{};
+        var hasher = try digest_mod.Sha256Digest.init(
+            self.allocator,
+            self.pipeline().runtime.crypto,
+        );
+        defer hasher.deinit();
         var confirmed: u64 = 0;
         var total_size: ?u64 = null;
         var retries: u32 = 0;
@@ -683,7 +705,7 @@ pub const BlobDownloadClient = struct {
             }
         }
 
-        const computed = hasher.final();
+        const computed = try hasher.final();
         if (!std.ascii.eqlIgnoreCase(&computed, requested_digest))
             return error.RequestedDigestMismatch;
         const owned_digest = try self.allocator.dupe(u8, &computed);
@@ -694,7 +716,7 @@ pub const BlobDownloadClient = struct {
         } };
     }
 
-    fn pipeline(self: *BlobDownloadClient) *core.pipeline.HttpPipeline {
+    fn pipeline(self: *BlobDownloadClient) *core.http.HttpPipeline {
         return &self.registry_client.protocolClient().pipeline;
     }
 
@@ -945,8 +967,8 @@ fn copyOperationBody(
             return;
         }
         try checkCancellationAndCancel(cancellation, operation);
+        try hasher.update(buffer[0..count]);
         try writer.writeAll(buffer[0..count]);
-        hasher.update(buffer[0..count]);
         confirmed.* += count;
         copied += count;
     }

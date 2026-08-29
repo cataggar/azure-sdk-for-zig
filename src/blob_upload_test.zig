@@ -11,6 +11,13 @@ const UploadContext = upload_mod.UploadContext;
 const max_chunk_size = upload_mod.max_chunk_size;
 const upload = upload_mod.upload;
 
+fn testDigest(bytes: []const u8) ![digest_mod.sha256_formatted_length]u8 {
+    return digest_mod.computeSha256Digest(
+        @import("test_runtime.zig").crypto(),
+        bytes,
+    );
+}
+
 const TestHeader = struct {
     name: []const u8,
     value: []const u8,
@@ -62,7 +69,6 @@ const TestCapture = struct {
 const ScriptedTransport = struct {
     allocator: std.mem.Allocator,
     actions: []const TestAction,
-    transport: core.http.HttpTransport,
     call_count: usize = 0,
     captures: [64]TestCapture = [_]TestCapture{.{}} ** 64,
     finish_count: usize = 0,
@@ -77,28 +83,29 @@ const ScriptedTransport = struct {
         return .{
             .allocator = allocator,
             .actions = actions,
-            .transport = .{ .sendFn = &sendImpl, .openFn = &openImpl },
         };
     }
 
-    fn asTransport(self: *ScriptedTransport) *core.http.HttpTransport {
-        return &self.transport;
+    fn asTransport(self: *ScriptedTransport) core.http.HttpTransport {
+        return .{
+            .context = self,
+            .vtable = &.{ .send = &sendImpl, .open = &openImpl },
+        };
     }
 
     fn sendImpl(
-        _: *core.http.HttpTransport,
+        _: *anyopaque,
         _: *core.http.Request,
     ) !core.http.Response {
         return error.UnexpectedBufferedSend;
     }
 
     fn openImpl(
-        transport: *core.http.HttpTransport,
+        context: *anyopaque,
         request: *core.http.Request,
         options: core.http.OpenOptions,
     ) !*core.http.HttpOperation {
-        const self: *ScriptedTransport =
-            @alignCast(@fieldParentPtr("transport", transport));
+        const self: *ScriptedTransport = @ptrCast(@alignCast(context));
         if (self.call_count >= self.actions.len)
             return error.NoScriptedResponse;
         if (self.call_count >= self.captures.len)
@@ -273,10 +280,10 @@ fn testUpload(
     reader: *std.Io.Reader,
     options: BlobUploadOptions,
 ) !BlobUploadResponse {
-    var pipeline = core.pipeline.HttpPipeline{
-        .policies = &.{},
-        .transport_impl = transport.asTransport(),
-    };
+    var pipeline = core.http.HttpPipeline.init(
+        @import("test_runtime.zig").init(transport.asTransport()),
+        &.{},
+    );
     return upload(.{
         .allocator = allocator,
         .pipeline = &pipeline,
@@ -284,6 +291,49 @@ fn testUpload(
         .api_version = "2021-07-01",
         .repository_name = "team/app",
     }, reader, options);
+}
+
+test "blob upload propagates incremental provider failure and cleans session" {
+    const allocator = std.testing.allocator;
+    const bytes = "provider failure";
+    const actions = [_]TestAction{
+        .{ .response = .{
+            .status = 202,
+            .headers = successHeaders("/upload/id", "0-0", "id"),
+        } },
+        .{ .response = .{
+            .status = 202,
+            .headers = successHeaders("/upload/new-id", "0-15", "id"),
+        } },
+        .{ .response = .{ .status = 204 } },
+    };
+    var transport = ScriptedTransport.init(allocator, &actions);
+    var spy = @import("crypto_test_provider.zig").Spy.init(std.testing.io);
+    spy.failure = .update;
+    var pipeline = core.http.HttpPipeline.init(
+        .init(transport.asTransport(), spy.asProvider()),
+        &.{},
+    );
+    var reader = std.Io.Reader.fixed(bytes);
+
+    try std.testing.expectError(
+        error.InjectedCryptoFailure,
+        upload(.{
+            .allocator = allocator,
+            .pipeline = &pipeline,
+            .endpoint = "https://registry.example",
+            .api_version = "2021-07-01",
+            .repository_name = "team/app",
+        }, &reader, .{ .chunk_size = bytes.len }),
+    );
+    try std.testing.expectEqual(@as(usize, 1), spy.sha256_init_calls);
+    try std.testing.expectEqual(@as(usize, 1), spy.update_calls);
+    try std.testing.expectEqual(@as(usize, 3), transport.call_count);
+    try std.testing.expectEqual(core.http.Method.DELETE, transport.captures[2].method);
+    try std.testing.expectEqualStrings(
+        "https://registry.example/upload/new-id?api-version=2021-07-01",
+        transport.captures[2].urlSlice(),
+    );
 }
 
 fn expectUpload(
@@ -329,7 +379,7 @@ fn completionHeaders(
 
 test "blob upload accepts empty content" {
     const allocator = std.testing.allocator;
-    const digest = digest_mod.computeSha256Digest("");
+    const digest = try testDigest("");
     const complete_headers = completionHeaders(
         "/v2/team/app/blobs/empty",
         "0-0",
@@ -363,7 +413,7 @@ test "blob upload accepts empty content" {
 
 test "content client exposes high-level blob upload" {
     const allocator = std.testing.allocator;
-    const digest = digest_mod.computeSha256Digest("public");
+    const digest = try testDigest("public");
     const complete_headers = completionHeaders("/blob/final", "0-5", &digest);
     const actions = [_]TestAction{
         .{ .response = .{
@@ -382,7 +432,7 @@ test "content client exposes high-level blob upload" {
         "https://registry.example",
         "team/app",
         .{
-            .transport = transport.asTransport(),
+            .runtime = @import("test_runtime.zig").init(transport.asTransport()),
             .authentication = .anonymous,
         },
     );
@@ -397,7 +447,7 @@ test "content client exposes high-level blob upload" {
 test "blob upload sends one exact ranged chunk" {
     const allocator = std.testing.allocator;
     const bytes = "hello";
-    const digest = digest_mod.computeSha256Digest(bytes);
+    const digest = try testDigest(bytes);
     const complete_headers = completionHeaders(
         "/v2/team/app/blobs/final",
         "0-4",
@@ -429,7 +479,7 @@ test "blob upload sends one exact ranged chunk" {
 test "blob upload sends sequential multiple chunks" {
     const allocator = std.testing.allocator;
     const bytes = "abcdefghij";
-    const digest = digest_mod.computeSha256Digest(bytes);
+    const digest = try testDigest(bytes);
     const complete_headers = completionHeaders("/blob/final", "0-9", &digest);
     const actions = [_]TestAction{
         .{ .response = .{
@@ -470,7 +520,7 @@ test "blob upload sends sequential multiple chunks" {
 test "blob upload exact chunk boundary does not send an empty patch" {
     const allocator = std.testing.allocator;
     const bytes = "abcdefgh";
-    const digest = digest_mod.computeSha256Digest(bytes);
+    const digest = try testDigest(bytes);
     const complete_headers = completionHeaders("/blob/final", "0-7", &digest);
     const actions = [_]TestAction{
         .{ .response = .{
@@ -543,7 +593,7 @@ const PartialReader = struct {
 test "blob upload supports non-seekable partial readers" {
     const allocator = std.testing.allocator;
     const bytes = "partial-reader";
-    const digest = digest_mod.computeSha256Digest(bytes);
+    const digest = try testDigest(bytes);
     const complete_headers = completionHeaders("/blob/final", "0-13", &digest);
     const actions = [_]TestAction{
         .{ .response = .{
@@ -580,7 +630,7 @@ test "blob upload supports non-seekable partial readers" {
 }
 
 const FailBeforeTransportPolicy = struct {
-    policy: core.pipeline.HttpPolicy,
+    policy: core.http.HttpPolicy,
     remaining_failures: usize,
     failure_count: usize = 0,
 
@@ -595,28 +645,32 @@ const FailBeforeTransportPolicy = struct {
         };
     }
 
-    fn asPolicy(self: *FailBeforeTransportPolicy) *core.pipeline.HttpPolicy {
+    fn asPolicy(self: *FailBeforeTransportPolicy) *core.http.HttpPolicy {
         return &self.policy;
     }
 
-    fn prepareImpl(_: *core.pipeline.HttpPolicy, _: *core.http.Request) !void {}
+    fn prepareImpl(
+        _: *core.http.HttpPolicy,
+        _: *core.http.Request,
+        _: core.http.HttpRuntime,
+    ) !void {}
 
     fn processImpl(
-        _: *core.pipeline.HttpPolicy,
+        _: *core.http.HttpPolicy,
         request: *core.http.Request,
-        next: []*core.pipeline.HttpPolicy,
-        transport: *core.http.HttpTransport,
+        next: []*core.http.HttpPolicy,
+        runtime: core.http.HttpRuntime,
     ) !core.http.Response {
-        if (next.len == 0) return transport.send(request);
-        return next[0].process(request, next[1..], transport);
+        if (next.len == 0) return runtime.transport.send(request);
+        return next[0].process(request, next[1..], runtime);
     }
 
     fn openImpl(
-        policy: *core.pipeline.HttpPolicy,
+        policy: *core.http.HttpPolicy,
         request: *core.http.Request,
         options: core.http.OpenOptions,
-        next: []*core.pipeline.HttpPolicy,
-        transport: *core.http.HttpTransport,
+        next: []*core.http.HttpPolicy,
+        runtime: core.http.HttpRuntime,
     ) !*core.http.HttpOperation {
         const self: *FailBeforeTransportPolicy =
             @alignCast(@fieldParentPtr("policy", policy));
@@ -625,15 +679,15 @@ const FailBeforeTransportPolicy = struct {
             self.failure_count += 1;
             return error.InjectedPreTransportFailure;
         }
-        if (next.len == 0) return transport.open(request, options);
-        return next[0].open(request, options, next[1..], transport);
+        if (next.len == 0) return runtime.transport.open(request, options);
+        return next[0].open(request, options, next[1..], runtime);
     }
 };
 
 test "blob upload retries failures before transport starts" {
     const allocator = std.testing.allocator;
     const bytes = "retry";
-    const digest = digest_mod.computeSha256Digest(bytes);
+    const digest = try testDigest(bytes);
     const complete_headers = completionHeaders("/blob/final", "0-4", &digest);
     const actions = [_]TestAction{
         .{ .response = .{
@@ -648,11 +702,11 @@ test "blob upload retries failures before transport starts" {
     };
     var transport = ScriptedTransport.init(allocator, &actions);
     var failure_policy = FailBeforeTransportPolicy.init(1);
-    var policies = [_]*core.pipeline.HttpPolicy{failure_policy.asPolicy()};
-    var pipeline = core.pipeline.HttpPipeline{
-        .policies = &policies,
-        .transport_impl = transport.asTransport(),
-    };
+    var policies = [_]*core.http.HttpPolicy{failure_policy.asPolicy()};
+    var pipeline = core.http.HttpPipeline.init(
+        @import("test_runtime.zig").init(transport.asTransport()),
+        &policies,
+    );
     var reader = std.Io.Reader.fixed(bytes);
     var response = try upload(.{
         .allocator = allocator,
@@ -672,7 +726,7 @@ test "blob upload retries failures before transport starts" {
 test "blob upload recovers a fully accepted uncertain chunk" {
     const allocator = std.testing.allocator;
     const bytes = "recover";
-    const digest = digest_mod.computeSha256Digest(bytes);
+    const digest = try testDigest(bytes);
     const complete_headers = completionHeaders("/blob/final", "0-6", &digest);
     const status_headers = [_]TestHeader{
         .{ .name = "Range", .value = "bytes=0-6" },
@@ -703,7 +757,7 @@ test "blob upload recovers a fully accepted uncertain chunk" {
 test "blob upload resumes the confirmed suffix after uncertain transport" {
     const allocator = std.testing.allocator;
     const bytes = "abcdef";
-    const digest = digest_mod.computeSha256Digest(bytes);
+    const digest = try testDigest(bytes);
     const complete_headers = completionHeaders("/blob/final", "0-5", &digest);
     const status_headers = [_]TestHeader{
         .{ .name = "Range", .value = "0-1" },
@@ -742,7 +796,7 @@ test "blob upload resumes the confirmed suffix after uncertain transport" {
 test "blob upload restores digest and chunk cursor before retry" {
     const allocator = std.testing.allocator;
     const bytes = "abcdefgh";
-    const digest = digest_mod.computeSha256Digest(bytes);
+    const digest = try testDigest(bytes);
     const complete_headers = completionHeaders("/blob/final", "0-7", &digest);
     const status_headers = [_]TestHeader{
         .{ .name = "Range", .value = "0-3" },
@@ -881,7 +935,7 @@ test "blob upload validates every continuation Location origin" {
 
 test "blob upload origin comparison includes effective HTTPS port" {
     const allocator = std.testing.allocator;
-    const digest = digest_mod.computeSha256Digest("");
+    const digest = try testDigest("");
     const complete_headers = completionHeaders(
         "https://REGISTRY.example:8443/blob/final",
         "0-0",
@@ -899,10 +953,10 @@ test "blob upload origin comparison includes effective HTTPS port" {
         .{ .response = .{ .status = 201, .headers = &complete_headers } },
     };
     var transport = ScriptedTransport.init(allocator, &actions);
-    var pipeline = core.pipeline.HttpPipeline{
-        .policies = &.{},
-        .transport_impl = transport.asTransport(),
-    };
+    var pipeline = core.http.HttpPipeline.init(
+        @import("test_runtime.zig").init(transport.asTransport()),
+        &.{},
+    );
     var reader = std.Io.Reader.fixed("");
     var response = try upload(.{
         .allocator = allocator,
@@ -923,10 +977,10 @@ test "blob upload origin comparison includes effective HTTPS port" {
         .{ .response = .{ .status = 202, .headers = &wrong_port_headers } },
     };
     var wrong_transport = ScriptedTransport.init(allocator, &wrong_actions);
-    var wrong_pipeline = core.pipeline.HttpPipeline{
-        .policies = &.{},
-        .transport_impl = wrong_transport.asTransport(),
-    };
+    var wrong_pipeline = core.http.HttpPipeline.init(
+        @import("test_runtime.zig").init(wrong_transport.asTransport()),
+        &.{},
+    );
     var wrong_reader = std.Io.Reader.fixed("");
     try std.testing.expectError(
         error.UntrustedUploadLocation,
@@ -943,7 +997,7 @@ test "blob upload origin comparison includes effective HTTPS port" {
 test "blob upload recovers uncertain completion through upload status" {
     const allocator = std.testing.allocator;
     const bytes = "done";
-    const digest = digest_mod.computeSha256Digest(bytes);
+    const digest = try testDigest(bytes);
     const complete_headers = completionHeaders("/blob/final", "0-3", &digest);
     const status_headers = [_]TestHeader{
         .{ .name = "Range", .value = "0-3" },
@@ -974,7 +1028,7 @@ test "blob upload recovers uncertain completion through upload status" {
 test "blob upload verifies the final blob when completion closed the session" {
     const allocator = std.testing.allocator;
     const bytes = "done";
-    const digest = digest_mod.computeSha256Digest(bytes);
+    const digest = try testDigest(bytes);
     const head_headers = [_]TestHeader{
         .{ .name = "Docker-Content-Digest", .value = &digest },
         .{ .name = "Content-Length", .value = "4" },
@@ -1006,7 +1060,7 @@ test "blob upload verifies the final blob when completion closed the session" {
 test "blob upload rejects a mismatched final service digest" {
     const allocator = std.testing.allocator;
     const bytes = "expected";
-    const wrong_digest = digest_mod.computeSha256Digest("different");
+    const wrong_digest = try testDigest("different");
     const complete_headers = completionHeaders(
         "/blob/final",
         "0-7",
@@ -1217,7 +1271,7 @@ test "blob upload accepts a seekable reader at its current position" {
     const allocator = std.testing.allocator;
     const bytes = "prefix-content";
     const uploaded = "content";
-    const digest = digest_mod.computeSha256Digest(uploaded);
+    const digest = try testDigest(uploaded);
     const complete_headers = completionHeaders("/blob/final", "0-6", &digest);
     const actions = [_]TestAction{
         .{ .response = .{
@@ -1249,7 +1303,7 @@ test "blob upload accepts a seekable reader at its current position" {
 test "blob upload resumes from a 416 confirmed range" {
     const allocator = std.testing.allocator;
     const bytes = "abcdef";
-    const digest = digest_mod.computeSha256Digest(bytes);
+    const digest = try testDigest(bytes);
     const complete_headers = completionHeaders("/blob/final", "0-5", &digest);
     const range_headers = [_]TestHeader{
         .{ .name = "Location", .value = "/upload/id?_state=range" },
@@ -1383,7 +1437,7 @@ test "blob upload allocations stay bounded by one configured chunk" {
     const bytes = try backing.alloc(u8, chunk_size * 3 + 17);
     defer backing.free(bytes);
     @memset(bytes, 'x');
-    const digest = digest_mod.computeSha256Digest(bytes);
+    const digest = try testDigest(bytes);
     const complete_headers = completionHeaders(
         "/blob/final",
         "0-196624",
@@ -1432,7 +1486,6 @@ test "blob upload allocations stay bounded by one configured chunk" {
 
 const AllocationTransport = struct {
     allocator: std.mem.Allocator,
-    transport: core.http.HttpTransport,
     finish_count: usize = 0,
     abort_count: usize = 0,
     deinit_count: usize = 0,
@@ -1440,29 +1493,30 @@ const AllocationTransport = struct {
     fn init(allocator: std.mem.Allocator) AllocationTransport {
         return .{
             .allocator = allocator,
-            .transport = .{ .sendFn = &sendImpl, .openFn = &openImpl },
         };
     }
 
-    fn asTransport(self: *AllocationTransport) *core.http.HttpTransport {
-        return &self.transport;
+    fn asTransport(self: *AllocationTransport) core.http.HttpTransport {
+        return .{
+            .context = self,
+            .vtable = &.{ .send = &sendImpl, .open = &openImpl },
+        };
     }
 
     fn sendImpl(
-        _: *core.http.HttpTransport,
+        _: *anyopaque,
         _: *core.http.Request,
     ) !core.http.Response {
         return error.UnexpectedBufferedSend;
     }
 
     fn openImpl(
-        transport: *core.http.HttpTransport,
+        context: *anyopaque,
         request: *core.http.Request,
         _: core.http.OpenOptions,
     ) !*core.http.HttpOperation {
-        const self: *AllocationTransport =
-            @alignCast(@fieldParentPtr("transport", transport));
-        const empty_digest = digest_mod.computeSha256Digest("");
+        const self: *AllocationTransport = @ptrCast(@alignCast(context));
+        const empty_digest = try testDigest("");
         return switch (request.method) {
             .POST => AllocationOperation.create(self, 202, &.{
                 .{ .name = "Location", .value = "/upload/id" },
@@ -1548,10 +1602,10 @@ const AllocationOperation = struct {
 
 fn uploadAllocationFixture(allocator: std.mem.Allocator) !void {
     var transport = AllocationTransport.init(std.testing.allocator);
-    var pipeline = core.pipeline.HttpPipeline{
-        .policies = &.{},
-        .transport_impl = transport.asTransport(),
-    };
+    var pipeline = core.http.HttpPipeline.init(
+        @import("test_runtime.zig").init(transport.asTransport()),
+        &.{},
+    );
     var reader = std.Io.Reader.fixed("");
     var response = upload(.{
         .allocator = allocator,

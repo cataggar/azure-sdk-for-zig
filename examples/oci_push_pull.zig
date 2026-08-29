@@ -42,8 +42,14 @@ pub fn main(init: std.process.Init) !void {
     defer config.deinit();
     var layer = try content.uploadBlobBytes(layer_bytes, .{});
     defer layer.deinit();
-    const expected_config_digest = acr.computeSha256Digest(config_bytes);
-    const expected_layer_digest = acr.computeSha256Digest(layer_bytes);
+    const expected_config_digest = try acr.computeSha256Digest(
+        session.runtime().crypto,
+        config_bytes,
+    );
+    const expected_layer_digest = try acr.computeSha256Digest(
+        session.runtime().crypto,
+        layer_bytes,
+    );
     if (config.size != config_bytes.len or
         !try acr.sha256DigestsEqual(config.digest, &expected_config_digest))
     {
@@ -82,7 +88,10 @@ pub fn main(init: std.process.Init) !void {
     defer downloaded.deinit(init.gpa);
     if (!std.mem.eql(u8, manifest_bytes, downloaded.bytes))
         return error.ContainerRegistryManifestRoundTripMismatch;
-    const expected_manifest_digest = acr.computeSha256Digest(manifest_bytes);
+    const expected_manifest_digest = try acr.computeSha256Digest(
+        session.runtime().crypto,
+        manifest_bytes,
+    );
     if (!try acr.sha256DigestsEqual(
         uploaded.digest,
         &expected_manifest_digest,
