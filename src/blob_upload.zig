@@ -394,10 +394,9 @@ fn uploadChunk(
                 operation,
                 request_url,
             );
-            errdefer context.allocator.free(next_location);
+            session.replaceLocation(next_location);
             try digest.update(attempt);
             try operation.finish();
-            session.replaceLocation(next_location);
             session.confirmed_offset = response_offset;
             cursor = chunk.len;
             return .{ .ok = {} };

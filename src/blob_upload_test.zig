@@ -303,7 +303,7 @@ test "blob upload propagates incremental provider failure and cleans session" {
         } },
         .{ .response = .{
             .status = 202,
-            .headers = successHeaders("/upload/id", "0-15", "id"),
+            .headers = successHeaders("/upload/new-id", "0-15", "id"),
         } },
         .{ .response = .{ .status = 204 } },
     };
@@ -330,6 +330,10 @@ test "blob upload propagates incremental provider failure and cleans session" {
     try std.testing.expectEqual(@as(usize, 1), spy.update_calls);
     try std.testing.expectEqual(@as(usize, 3), transport.call_count);
     try std.testing.expectEqual(core.http.Method.DELETE, transport.captures[2].method);
+    try std.testing.expectEqualStrings(
+        "https://registry.example/upload/new-id?api-version=2021-07-01",
+        transport.captures[2].urlSlice(),
+    );
 }
 
 fn expectUpload(
