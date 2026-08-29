@@ -25,8 +25,16 @@ pub fn main(init: std.process.Init) !u8 {
 
     if (std.mem.eql(u8, args[1], "list") and args.len == 2) {
         for (history.all) |entry| {
-            try writer.print("{s}\t{s}\n", .{ entry.package, entry.branch });
+            try writer.print(
+                "{s}\t{s}\t{s}\n",
+                .{ entry.package, entry.branch, @tagName(entry.origin) },
+            );
         }
+        return 0;
+    }
+    if (std.mem.eql(u8, args[1], "origin") and args.len == 3) {
+        const entry = history.find(args[2]) orelse return error.UnknownPackage;
+        try writer.print("{s}\n", .{@tagName(entry.origin)});
         return 0;
     }
     if (std.mem.eql(u8, args[1], "paths") and args.len == 3) {
@@ -86,6 +94,7 @@ fn printMappings(writer: anytype, mappings: []const history.PathMapping) !void {
 fn usage() void {
     std.debug.print(
         "usage: package-history-tool <check|check-current-examples|list|" ++
+            "origin PACKAGE|" ++
             "paths PACKAGE|example-list|" ++
             "example-paths EXAMPLE|example-current-paths EXAMPLE|" ++
             "example-current-root EXAMPLE|rejections>\n",

@@ -114,6 +114,10 @@ candidate_targets() {
     exit 2
   fi
   if [[ -n "$requested_package" ]]; then
+    if [[ "$(history_tool origin "$requested_package")" == branch_native ]]; then
+      echo "$requested_package is branch-native and has no Main history to reconstruct" >&2
+      exit 1
+    fi
     history_tool paths "$requested_package" >/dev/null
     printf 'package\t%s\n' "$requested_package"
   elif [[ -n "$requested_example" ]]; then
@@ -124,7 +128,8 @@ candidate_targets() {
       printf 'example\t%s\n' "$requested_example"
     fi
   else
-    history_tool list | cut -f1 | awk '{ print "package\t" $0 }'
+    history_tool list |
+      awk -F '\t' '$3 != "branch_native" { print "package\t" $1 }'
     history_tool example-list | cut -f1 | awk '{ print "example\t" $0 }'
     compatibility_example_list |
       awk '{ print "compatibility-example\t" $0 }'
@@ -1586,6 +1591,15 @@ case "$mode" in
           ;;
       esac
     done
+    if [[ -n "$package" && -n "$example" ]]; then
+      echo "--package and --example are mutually exclusive" >&2
+      exit 2
+    fi
+    if [[ -n "$package" &&
+      "$(history_tool origin "$package")" == branch_native ]]; then
+      echo "$package is branch-native and has no Main history to reconstruct" >&2
+      exit 1
+    fi
     mkdir -p "$output/candidates"
     source_commit="$(git -C "$ROOT" rev-parse "$source_commit^{commit}")"
     require_sealed_output "$output" "$source_commit" "$remote"

@@ -37,9 +37,10 @@ scripts/package-branch-release.sh publish azure_sdk_storage_blobs --execute
   `eng/packages.zig`.
 
 `azure_sdk_core_symcrypt` uses source-only checks during sealed verification
-because release tooling has no ambient native SymCrypt binaries. Its protected
-package-branch CI validates the native dynamic/static tests and examples on
-Linux and Windows, plus the supported Arm64 build matrix, before merge.
+because release tooling has no ambient native SymCrypt binaries. Its package
+pull-request CI validates the native dynamic/static tests and examples on
+Linux and Windows, plus the supported Arm64 build matrix. Release review must
+confirm those checks completed successfully before merge.
 
 `publish` additionally requires a release version greater than every existing
 package tag. Without `--execute` it prints the proposed lightweight tag.
