@@ -47,7 +47,9 @@ pub fn Page(comptime T: type) type {
 /// ```
 ///
 /// which is normally a small struct capturing the area sub-client and
-/// the operation's fixed parameters.
+/// the operation's fixed parameters. The pager borrows that fetcher. When the
+/// fetcher contains a generated client, its copied pipeline still borrows the
+/// original runtime's transport and crypto contexts, which must outlive paging.
 pub fn ContinuationPager(comptime T: type, comptime Fetcher: type) type {
     return struct {
         fetcher: *Fetcher,

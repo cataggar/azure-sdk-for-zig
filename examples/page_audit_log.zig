@@ -82,10 +82,15 @@ pub fn main(init: std.process.Init) !void {
 
     var transport = core.http.StdHttpTransport.init(allocator, init.io);
     defer transport.deinit();
+    var crypto = core.crypto.StdCryptoProvider.init(init.io);
+    const runtime = core.http.HttpRuntime.init(
+        transport.asTransport(),
+        crypto.asProvider(),
+    );
 
     const settings = try support.loadSettings(init.environ_map);
 
-    var client = try support.client(allocator, settings, transport.asTransport());
+    var client = try support.client(allocator, settings, runtime);
     defer client.deinit();
 
     var audit = client.audit();

@@ -1,7 +1,7 @@
 //! Shared setup for the Azure DevOps examples.
 //!
 //! Every example needs the same three things — an organization, a
-//! credential and a transport — so they are resolved here from the
+//! credential and an HTTP runtime — so they are resolved here from the
 //! environment rather than repeated four times.
 //!
 //! Environment:
@@ -60,11 +60,11 @@ pub fn requireProject(settings: Settings) ![]const u8 {
 pub fn client(
     allocator: std.mem.Allocator,
     settings: Settings,
-    transport: *core.http.HttpTransport,
+    runtime: core.http.HttpRuntime,
 ) !devops.DevOpsClient {
     return devops.DevOpsClient.init(allocator, .{
         .organization = settings.organization,
         .credential = .fromPat(settings.pat),
-        .transport = transport,
+        .runtime = runtime,
     });
 }
