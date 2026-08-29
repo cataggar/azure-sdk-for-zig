@@ -88,10 +88,12 @@ pub const BodySafetyContext = struct {
 };
 
 /// A caller body policy may add a schema-specific rejection or explicitly
-/// allow an otherwise opaque/unsupported body that the caller knows is safe.
+/// request built-in inspection of a supported textual body, or allow an
+/// otherwise opaque/unsupported body that the caller knows is safe.
 ///
-/// Built-in recognized credentials and private-key markers are never bypassed
-/// by `allow_opaque`.
+/// Every non-empty body requires a configured policy. Built-in recognizable
+/// credentials and private-key markers are checked before default rejection;
+/// the callback is the explicit trust boundary for persistence.
 pub const BodyPolicyDecision = enum {
     inspect,
     reject_sensitive,
@@ -109,6 +111,8 @@ pub const HeaderSafetyContext = struct {
 
 /// Header policy decisions are serialized into structured matching metadata.
 ///
+/// `inspect` applies the built-in known-safe header-name allowlist and scans
+/// every value; unknown names and recognizable credentials are redacted.
 /// `preserve` is an explicit escape hatch for application headers that the
 /// built-in conservative name rules classify as sensitive. The caller is
 /// responsible for proving that the value is safe to persist.
@@ -418,6 +422,11 @@ pub const RecordingTransport = struct {
 
     /// Serialize version 2 recordings with lossless base64 bodies while
     /// redacting sensitive header values and sensitive URL query parameters.
+    ///
+    /// Every non-empty body requires a configured `bodyPolicyFn`. Returning
+    /// `.inspect` explicitly opts supported text into built-in checks;
+    /// `.allow_opaque` is the caller's trust boundary for known-safe opaque
+    /// content.
     ///
     /// Structurally recognized credential-bearing JSON, form, connection
     /// string, XML, and private-key bodies cause
@@ -1522,6 +1531,49 @@ const sensitive_query_fields = [_][]const u8{
     "code",
 };
 
+const known_safe_headers = [_][]const u8{
+    "accept",
+    "accept-charset",
+    "accept-encoding",
+    "accept-language",
+    "cache-control",
+    "connection",
+    "content-encoding",
+    "content-language",
+    "content-length",
+    "content-range",
+    "content-type",
+    "date",
+    "etag",
+    "expires",
+    "host",
+    "if-match",
+    "if-modified-since",
+    "if-none-match",
+    "if-unmodified-since",
+    "last-modified",
+    "location",
+    "content-location",
+    "operation-location",
+    "azure-asyncoperation",
+    "pragma",
+    "range",
+    "retry-after",
+    "server",
+    "traceparent",
+    "tracestate",
+    "transfer-encoding",
+    "user-agent",
+    "vary",
+    "x-ms-client-request-id",
+    "x-ms-continuation-token",
+    "x-ms-date",
+    "x-ms-error-code",
+    "x-ms-request-id",
+    "x-ms-return-client-request-id",
+    "x-ms-version",
+};
+
 pub fn isSensitiveHeader(name: []const u8) bool {
     for (explicitly_sensitive_headers) |sensitive| {
         if (std.ascii.eqlIgnoreCase(name, sensitive)) return true;
@@ -1554,6 +1606,23 @@ pub fn isSensitiveHeader(name: []const u8) bool {
     return isFullyRedactedUrlHeader(name);
 }
 
+fn isKnownSafeHeader(name: []const u8) bool {
+    for (known_safe_headers) |safe| {
+        if (std.ascii.eqlIgnoreCase(name, safe)) return true;
+    }
+    return false;
+}
+
+fn shouldRedactHeader(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    value: []const u8,
+) !bool {
+    return isSensitiveHeader(name) or
+        try containsSensitiveScalar(allocator, value) or
+        !isKnownSafeHeader(name);
+}
+
 fn ensureExchangeBodySafe(
     allocator: std.mem.Allocator,
     options: RecordingOptions,
@@ -1578,10 +1647,11 @@ fn ensureExchangeBodySafe(
         .content_encoding = getHeaderPair(headers, "Content-Encoding"),
         .body = bytes,
     };
-    const decision = if (options.bodyPolicyFn) |policy|
-        policy(options.body_policy_context, context)
-    else
-        .inspect;
+    const policy = options.bodyPolicyFn orelse {
+        try ensureBodySafe(allocator, context, false);
+        return error.BodyPolicyRequired;
+    };
+    const decision = policy(options.body_policy_context, context);
     if (decision == .reject_sensitive)
         return error.SensitiveBodyRequiresSanitization;
     return ensureBodySafe(
@@ -1612,30 +1682,20 @@ fn ensureBodySafe(
         return;
     }
 
-    if (hasUnicodeBom(bytes) or
-        std.mem.indexOfScalar(u8, bytes, 0) != null or
-        declaresWideCharset(content_type) or
-        isBinaryContentType(content_type) or
-        (content_encoding.len != 0 and
-            !std.ascii.eqlIgnoreCase(
-                std.mem.trim(u8, content_encoding, " \t"),
-                "identity",
-            )) or
-        !std.unicode.utf8ValidateSlice(bytes))
-    {
-        if (!allow_opaque) return error.OpaqueBodyNotAllowed;
-        return;
-    }
+    const valid_text = !hasUnicodeBom(bytes) and
+        std.mem.indexOfScalar(u8, bytes, 0) == null and
+        std.unicode.utf8ValidateSlice(bytes);
+    const identity_encoding = content_encoding.len == 0 or
+        std.ascii.eqlIgnoreCase(
+            std.mem.trim(u8, content_encoding, " \t"),
+            "identity",
+        );
+    if (valid_text and try containsSensitiveScalar(allocator, bytes))
+        return error.SensitiveBodyRequiresSanitization;
 
-    const xml = containsIgnoreCase(content_type, "xml") or looksLikeXml(bytes);
-    if (xml) {
-        if (containsSensitiveXml(bytes) or containsSensitiveAssignment(bytes))
-            return error.SensitiveBodyRequiresSanitization;
-        if (!allow_opaque) return error.UnsupportedBodySanitization;
-        return;
-    }
-
-    if (isJsonContentType(content_type) or looksLikeStructuredJson(bytes)) {
+    const json = valid_text and identity_encoding and
+        (isJsonContentType(content_type) or looksLikeStructuredJson(bytes));
+    if (json) {
         const parsed = std.json.parseFromSlice(
             std.json.Value,
             allocator,
@@ -1646,12 +1706,32 @@ fn ensureBodySafe(
             else => return error.UnsupportedBodySanitization,
         };
         defer parsed.deinit();
-        if (jsonContainsSensitiveField(parsed.value) or
+        if (try jsonContainsSensitiveField(allocator, parsed.value) or
             jsonContainsExchangeSensitiveSchema(parsed.value, context))
         {
             return error.SensitiveBodyRequiresSanitization;
         }
     }
+
+    const xml = valid_text and identity_encoding and
+        (containsIgnoreCase(content_type, "xml") or looksLikeXml(bytes));
+    if (xml and
+        (containsSensitiveXml(bytes) or containsSensitiveAssignment(bytes)))
+    {
+        return error.SensitiveBodyRequiresSanitization;
+    }
+
+    if (!valid_text or
+        std.mem.indexOfScalar(u8, bytes, 0) != null or
+        declaresWideCharset(content_type) or
+        !isSupportedTextContentType(content_type) or
+        !identity_encoding)
+    {
+        if (!allow_opaque) return error.OpaqueBodyNotAllowed;
+        return;
+    }
+
+    if (xml or json) return;
     if (containsSensitiveAssignment(bytes) or
         containsSensitiveXml(bytes))
     {
@@ -1722,13 +1802,21 @@ fn jsonContainsExchangeSensitiveSchema(
             return true;
         }
         if (pathHasResource(target.path, "keys") and
-            jsonContainsJwkPrivateField(value))
+            (jsonRootHasField(value, "value") or
+                jsonContainsJwkPrivateField(value)))
         {
             return true;
         }
     }
     if (isKustoHost(target.host) and
         jsonContainsField(value, "sourceuri"))
+    {
+        return true;
+    }
+    if (isAzureManagementHost(target.host) and
+        isAzureKeyManagementPath(target.path) and
+        (jsonRootHasField(value, "key1") or
+            jsonRootHasField(value, "key2")))
     {
         return true;
     }
@@ -1867,6 +1955,24 @@ fn isKustoHost(host: []const u8) bool {
         hostMatches(host, "kusto.fabric.microsoft.com");
 }
 
+fn isAzureManagementHost(host: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(host, "management.azure.com") or
+        std.ascii.eqlIgnoreCase(host, "management.azure.cn") or
+        std.ascii.eqlIgnoreCase(host, "management.usgovcloudapi.net") or
+        std.ascii.eqlIgnoreCase(host, "management.microsoftazure.de");
+}
+
+fn isAzureKeyManagementPath(path: []const u8) bool {
+    const recognized_provider =
+        pathHasResource(path, "Microsoft.EventGrid") or
+        pathHasResource(path, "Microsoft.CognitiveServices");
+    const recognized_action =
+        pathHasResource(path, "listKeys") or
+        pathHasResource(path, "regenerateKey") or
+        pathHasResource(path, "regenerateKeys");
+    return recognized_provider and recognized_action;
+}
+
 fn pathHasResource(path: []const u8, resource: []const u8) bool {
     var segments = std.mem.splitScalar(u8, path, '/');
     while (segments.next()) |segment| {
@@ -1900,29 +2006,34 @@ fn isJsonContentType(content_type: []const u8) bool {
         containsIgnoreCase(content_type, "+json");
 }
 
-fn isBinaryContentType(content_type: []const u8) bool {
-    return containsIgnoreCase(content_type, "application/octet-stream") or
-        containsIgnoreCase(content_type, "application/pkcs12") or
-        containsIgnoreCase(content_type, "application/x-pkcs12") or
-        containsIgnoreCase(content_type, "application/pkcs8") or
-        containsIgnoreCase(content_type, "application/x-pem-file") or
-        containsIgnoreCase(content_type, "application/zip") or
-        containsIgnoreCase(content_type, "application/gzip") or
-        containsIgnoreCase(content_type, "application/x-gzip") or
-        containsIgnoreCase(content_type, "image/") or
-        containsIgnoreCase(content_type, "audio/") or
-        containsIgnoreCase(content_type, "video/") or
-        containsIgnoreCase(content_type, "font/");
+fn isSupportedTextContentType(content_type: []const u8) bool {
+    const trimmed = std.mem.trim(u8, content_type, " \t");
+    if (trimmed.len == 0) return true;
+    return std.ascii.startsWithIgnoreCase(trimmed, "text/") or
+        isJsonContentType(trimmed) or
+        containsIgnoreCase(trimmed, "/xml") or
+        containsIgnoreCase(trimmed, "+xml") or
+        std.ascii.startsWithIgnoreCase(
+            trimmed,
+            "application/x-www-form-urlencoded",
+        ) or
+        std.ascii.startsWithIgnoreCase(trimmed, "application/javascript") or
+        std.ascii.startsWithIgnoreCase(trimmed, "application/ecmascript") or
+        std.ascii.startsWithIgnoreCase(trimmed, "application/graphql");
 }
 
-fn jsonContainsSensitiveField(value: std.json.Value) bool {
-    return jsonContainsSensitiveFieldInContext(value, false);
+fn jsonContainsSensitiveField(
+    allocator: std.mem.Allocator,
+    value: std.json.Value,
+) !bool {
+    return jsonContainsSensitiveFieldInContext(allocator, value, false);
 }
 
 fn jsonContainsSensitiveFieldInContext(
+    allocator: std.mem.Allocator,
     value: std.json.Value,
     sensitive_container: bool,
-) bool {
+) !bool {
     switch (value) {
         .object => |object| {
             var iterator = object.iterator();
@@ -1930,7 +2041,8 @@ fn jsonContainsSensitiveFieldInContext(
                 if (isSensitiveBodyField(entry.key_ptr.*) or
                     (sensitive_container and
                         normalizedFieldEquals(entry.key_ptr.*, "value")) or
-                    jsonContainsSensitiveFieldInContext(
+                    try jsonContainsSensitiveFieldInContext(
+                        allocator,
                         entry.value_ptr.*,
                         sensitive_container or
                             isSensitiveBodyContainer(entry.key_ptr.*),
@@ -1942,23 +2054,30 @@ fn jsonContainsSensitiveFieldInContext(
         },
         .array => |array| {
             for (array.items) |item| {
-                if (jsonContainsSensitiveFieldInContext(
+                if (try jsonContainsSensitiveFieldInContext(
+                    allocator,
                     item,
                     sensitive_container,
                 )) return true;
             }
         },
-        .string => |string| return containsSensitiveScalar(string),
+        .string => |string| return containsSensitiveScalar(allocator, string),
         else => {},
     }
     return false;
 }
 
-fn containsSensitiveScalar(value: []const u8) bool {
+fn containsSensitiveScalar(
+    allocator: std.mem.Allocator,
+    value: []const u8,
+) !bool {
     return containsPrivateKeyMarker(value) or
         containsSensitiveAssignment(value) or
         containsSasCredential(value) or
-        looksLikeJwt(value);
+        containsIgnoreCase(value, "Bearer ") or
+        containsIgnoreCase(value, "SharedKey ") or
+        containsIgnoreCase(value, "SharedKeyLite ") or
+        try containsJwtToken(allocator, value);
 }
 
 fn containsSasCredential(value: []const u8) bool {
@@ -1977,20 +2096,104 @@ fn containsSasCredential(value: []const u8) bool {
             containsIgnoreCase(value, "&s="));
 }
 
-fn looksLikeJwt(value: []const u8) bool {
+fn looksLikeJwt(
+    allocator: std.mem.Allocator,
+    value: []const u8,
+) !bool {
     const trimmed = std.mem.trim(u8, value, " \t\r\n");
-    var dots: usize = 0;
-    for (trimmed) |byte| {
-        if (byte == '.') {
-            dots += 1;
-        } else if (!std.ascii.isAlphanumeric(byte) and
-            byte != '-' and
-            byte != '_')
-        {
-            return false;
-        }
+    var segments = std.mem.splitScalar(u8, trimmed, '.');
+    const encoded_header = segments.next() orelse return false;
+    const encoded_payload = segments.next() orelse return false;
+    const encoded_signature = segments.next() orelse return false;
+    if (segments.next() != null or
+        encoded_header.len == 0 or
+        encoded_payload.len == 0 or
+        encoded_signature.len < 16)
+    {
+        return false;
     }
-    return dots == 2 and trimmed.len >= 24;
+
+    const signature = decodeJwtSegment(
+        allocator,
+        encoded_signature,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return false,
+    };
+    defer allocator.free(signature);
+    if (signature.len < 12) return false;
+
+    const header = decodeJwtSegment(allocator, encoded_header) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return false,
+    };
+    defer allocator.free(header);
+    const payload = decodeJwtSegment(allocator, encoded_payload) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return false,
+    };
+    defer allocator.free(payload);
+    return try isPlausibleJwtObject(allocator, header, true) and
+        try isPlausibleJwtObject(allocator, payload, false);
+}
+
+fn containsJwtToken(
+    allocator: std.mem.Allocator,
+    value: []const u8,
+) !bool {
+    var tokens = std.mem.tokenizeAny(
+        u8,
+        value,
+        " \t\r\n\"'[](){},;:=<>",
+    );
+    while (tokens.next()) |token| {
+        if (try looksLikeJwt(allocator, token)) return true;
+    }
+    return false;
+}
+
+fn decodeJwtSegment(
+    allocator: std.mem.Allocator,
+    encoded: []const u8,
+) ![]u8 {
+    const size = std.base64.url_safe_no_pad.Decoder.calcSizeForSlice(
+        encoded,
+    ) catch return error.InvalidBase64;
+    const decoded = try allocator.alloc(u8, size);
+    errdefer allocator.free(decoded);
+    std.base64.url_safe_no_pad.Decoder.decode(
+        decoded,
+        encoded,
+    ) catch return error.InvalidBase64;
+    return decoded;
+}
+
+fn isPlausibleJwtObject(
+    allocator: std.mem.Allocator,
+    value: []const u8,
+    require_alg: bool,
+) !bool {
+    const trimmed = std.mem.trim(u8, value, " \t\r\n");
+    const parsed = std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        trimmed,
+        .{},
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return false,
+    };
+    defer parsed.deinit();
+    const object = switch (parsed.value) {
+        .object => |result| result,
+        else => return false,
+    };
+    if (!require_alg) return true;
+    const alg = object.get("alg") orelse return false;
+    return switch (alg) {
+        .string => |name| name.len != 0,
+        else => false,
+    };
 }
 
 fn isSensitiveBodyContainer(name: []const u8) bool {
@@ -2239,7 +2442,11 @@ fn writeHeaders(
         const redact = header.redacted or switch (decision) {
             .redact => true,
             .preserve => false,
-            .inspect => isSensitiveHeader(header.name),
+            .inspect => try shouldRedactHeader(
+                allocator,
+                header.name,
+                header.value,
+            ),
         };
         if (redact) {
             try writeJsonString(writer, redacted_value);
@@ -2461,11 +2668,27 @@ fn allowKnownSafeOpaqueBody(
         .inspect;
 }
 
+fn inspectKnownSafeBody(
+    _: ?*anyopaque,
+    _: BodySafetyContext,
+) BodyPolicyDecision {
+    return .inspect;
+}
+
+fn allowOpaqueBody(
+    _: ?*anyopaque,
+    _: BodySafetyContext,
+) BodyPolicyDecision {
+    return .allow_opaque;
+}
+
 fn preserveKnownSafeMetadata(
     _: ?*anyopaque,
     header: HeaderSafetyContext,
 ) HeaderPolicyDecision {
     if (std.ascii.eqlIgnoreCase(header.name, "x-ms-meta-pwd"))
+        return .preserve;
+    if (std.ascii.eqlIgnoreCase(header.name, "x-stable"))
         return .preserve;
     if (std.ascii.eqlIgnoreCase(header.name, "x-application-auth-material"))
         return .redact;
@@ -2911,9 +3134,10 @@ test "recording and playback preserve streaming redirect sequences" {
 test "recording JSON redacts headers and URL query credentials" {
     var mock = core.http.MockTransport.init(std.testing.allocator, 200, "ok");
     defer mock.deinit();
-    var recorder = RecordingTransport.init(
+    var recorder = RecordingTransport.initWithOptions(
         std.testing.allocator,
         mock.asTransport(),
+        .{ .bodyPolicyFn = &inspectKnownSafeBody },
     );
     defer recorder.deinit();
     var request = core.http.Request.init(
@@ -2960,6 +3184,12 @@ test "sensitive Azure headers are classified case-insensitively" {
 }
 
 test "sensitive metadata headers redact with configurable exact overrides" {
+    const jwt =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" ++
+        "." ++
+        "eyJzdWIiOiJoZWFkZXIiLCJleHAiOjQxMDI0NDQ4MDB9" ++
+        "." ++
+        "c2lnbmF0dXJlLWJ5dGVzLXZhbHVl";
     var mock = core.http.MockTransport.init(
         std.testing.allocator,
         200,
@@ -2969,11 +3199,19 @@ test "sensitive metadata headers redact with configurable exact overrides" {
     mock.response_headers_list = &.{
         .{ .name = "X-MS-META-PASSWORD", .value = "response-password-value" },
         .{ .name = "x-ms-meta-private-key", .value = "cmVzcG9uc2Uta2V5" },
+        .{
+            .name = "x-ms-meta-source-uri",
+            .value = "https://storage.example/blob?sig=response-source-sas",
+        },
+        .{ .name = "ETag", .value = jwt },
     };
     var recorder = RecordingTransport.initWithOptions(
         std.testing.allocator,
         mock.asTransport(),
-        .{ .headerPolicyFn = &preserveKnownSafeMetadata },
+        .{
+            .bodyPolicyFn = &inspectKnownSafeBody,
+            .headerPolicyFn = &preserveKnownSafeMetadata,
+        },
     );
     defer recorder.deinit();
     var request = core.http.Request.init(
@@ -2990,6 +3228,17 @@ test "sensitive metadata headers redact with configurable exact overrides" {
     );
     try request.setHeader("X-MS-META-PWD", "known-safe-label");
     try request.setHeader(
+        "x-ms-meta-source-uri",
+        "https://storage.example/blob?sig=request-source-sas",
+    );
+    try request.setHeader("x-ms-meta-label", "unknown-metadata-value");
+    try request.setHeader("ETag", jwt);
+    try request.setHeader(
+        "Content-Language",
+        "Endpoint=https://example;AccountKey=header-account-key",
+    );
+    try request.setHeader("x-ms-request-id", "service.production.contoso");
+    try request.setHeader(
         "X-Application-Auth-Material",
         "custom-sensitive-value",
     );
@@ -3005,6 +3254,11 @@ test "sensitive metadata headers redact with configurable exact overrides" {
         "cmVxdWVzdC1rZXk=",
         "RW5kcG9pbnQ9eDtBY2NvdW50S2V5PXk=",
         "custom-sensitive-value",
+        "response-source-sas",
+        "request-source-sas",
+        "unknown-metadata-value",
+        "header-account-key",
+        jwt,
     }) |secret| {
         try std.testing.expect(std.mem.indexOf(u8, json, secret) == null);
     }
@@ -3014,6 +3268,24 @@ test "sensitive metadata headers redact with configurable exact overrides" {
 
     var parsed = try parseJson(std.testing.allocator, json);
     defer parsed.deinit();
+    for (parsed.asSlice()[0].request_headers) |header| {
+        if (header.redacted) {
+            try std.testing.expectEqualStrings(redacted_value, header.value);
+        } else {
+            try std.testing.expect(
+                std.mem.eql(u8, header.value, "known-safe-label") or
+                    std.mem.eql(
+                        u8,
+                        header.value,
+                        "service.production.contoso",
+                    ),
+            );
+        }
+    }
+    for (parsed.asSlice()[0].response_headers) |header| {
+        try std.testing.expect(header.redacted);
+        try std.testing.expectEqualStrings(redacted_value, header.value);
+    }
     var playback = PlaybackTransport.init(
         std.testing.allocator,
         parsed.asSlice(),
@@ -3031,6 +3303,17 @@ test "sensitive metadata headers redact with configurable exact overrides" {
         "rotated-connection-string",
     );
     try live.setHeader("x-ms-meta-pwd", "known-safe-label");
+    try live.setHeader(
+        "x-ms-meta-source-uri",
+        "https://storage.example/blob?sig=rotated-source-sas",
+    );
+    try live.setHeader("x-ms-meta-label", "rotated-metadata");
+    try live.setHeader("ETag", "rotated-jwt");
+    try live.setHeader(
+        "Content-Language",
+        "Endpoint=https://example;AccountKey=rotated-account-key",
+    );
+    try live.setHeader("x-ms-request-id", "service.production.contoso");
     try live.setHeader("x-application-auth-material", "rotated-custom-value");
     var replayed = try playback.asTransport().send(&live);
     replayed.deinit();
@@ -3057,9 +3340,10 @@ test "Event Grid key and SAS token redactions roundtrip" {
         .{ .name = "aEg-SaS-KeY", .value = "response-event-grid-key" },
         .{ .name = "AEG-SAS-TOKEN", .value = "response-event-grid-token" },
     };
-    var recorder = RecordingTransport.init(
+    var recorder = RecordingTransport.initWithOptions(
         std.testing.allocator,
         mock.asTransport(),
+        .{ .bodyPolicyFn = &inspectKnownSafeBody },
     );
     defer recorder.deinit();
     var request = core.http.Request.init(
@@ -3113,9 +3397,10 @@ test "Azure Files rename source URL redactions roundtrip" {
         "accepted",
     );
     defer mock.deinit();
-    var recorder = RecordingTransport.init(
+    var recorder = RecordingTransport.initWithOptions(
         std.testing.allocator,
         mock.asTransport(),
+        .{ .bodyPolicyFn = &inspectKnownSafeBody },
     );
     defer recorder.deinit();
     var request = core.http.Request.init(
@@ -3178,9 +3463,10 @@ test "App Configuration key query remains exact" {
         "setting",
     );
     defer mock.deinit();
-    var recorder = RecordingTransport.init(
+    var recorder = RecordingTransport.initWithOptions(
         std.testing.allocator,
         mock.asTransport(),
+        .{ .bodyPolicyFn = &inspectKnownSafeBody },
     );
     defer recorder.deinit();
     var request = core.http.Request.init(
@@ -3236,9 +3522,13 @@ test "authenticated recording JSON roundtrips with structured redactions" {
             .value = "https://storage.example/source?sig=response-copy-secret",
         },
     };
-    var recorder = RecordingTransport.init(
+    var recorder = RecordingTransport.initWithOptions(
         std.testing.allocator,
         mock.asTransport(),
+        .{
+            .bodyPolicyFn = &inspectKnownSafeBody,
+            .headerPolicyFn = &preserveKnownSafeMetadata,
+        },
     );
     defer recorder.deinit();
     var request = core.http.Request.init(
@@ -3585,9 +3875,10 @@ test "Key Vault path text on App Configuration hosts stays recordable and exact"
     mock.response_headers_list = &.{
         .{ .name = "Content-Type", .value = "application/json" },
     };
-    var recorder = RecordingTransport.init(
+    var recorder = RecordingTransport.initWithOptions(
         std.testing.allocator,
         mock.asTransport(),
+        .{ .bodyPolicyFn = &inspectKnownSafeBody },
     );
     defer recorder.deinit();
     var request = core.http.Request.init(
@@ -3647,9 +3938,10 @@ test "Key Vault exchange rules ignore untrusted origins" {
             body,
         );
         defer mock.deinit();
-        var recorder = RecordingTransport.init(
+        var recorder = RecordingTransport.initWithOptions(
             std.testing.allocator,
             mock.asTransport(),
+            .{ .bodyPolicyFn = &inspectKnownSafeBody },
         );
         defer recorder.deinit();
         var request = core.http.Request.init(
@@ -3729,12 +4021,154 @@ test "Key Vault private JWK and certificate import schemas are rejected" {
     }
 }
 
+test "Key Vault key operation root values are rejected" {
+    for ([_][]const u8{
+        "/keys/name/version/encrypt",
+        "/keys/name/version/decrypt",
+        "/keys/name/version/wrapkey",
+        "/keys/name/version/unwrapkey",
+        "/keys/name/backup",
+        "/keys/restore",
+        "/keys/name/version/release",
+    }) |path| {
+        const url = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "https://example.vault.azure.net{s}?api-version=7.6",
+            .{path},
+        );
+        defer std.testing.allocator.free(url);
+        var mock = core.http.MockTransport.init(
+            std.testing.allocator,
+            200,
+            "{\"value\":\"operation-secret-value\"}",
+        );
+        defer mock.deinit();
+        var recorder = RecordingTransport.init(
+            std.testing.allocator,
+            mock.asTransport(),
+        );
+        defer recorder.deinit();
+        var request = core.http.Request.init(
+            std.testing.allocator,
+            .POST,
+            url,
+        );
+        defer request.deinit();
+        var response = try recorder.asTransport().send(&request);
+        response.deinit();
+        try expectRejectedSerializationExcludes(
+            &recorder,
+            error.SensitiveBodyRequiresSanitization,
+            &.{"operation-secret-value"},
+        );
+    }
+
+    var mock = core.http.MockTransport.init(
+        std.testing.allocator,
+        200,
+        "",
+    );
+    defer mock.deinit();
+    var recorder = RecordingTransport.init(
+        std.testing.allocator,
+        mock.asTransport(),
+    );
+    defer recorder.deinit();
+    var restore = core.http.Request.init(
+        std.testing.allocator,
+        .POST,
+        "https://example.vault.azure.net/keys/restore?api-version=7.6",
+    );
+    defer restore.deinit();
+    restore.body = "{\"value\":\"backup-blob-secret\"}";
+    var response = try recorder.asTransport().send(&restore);
+    response.deinit();
+    try expectRejectedSerializationExcludes(
+        &recorder,
+        error.SensitiveBodyRequiresSanitization,
+        &.{"backup-blob-secret"},
+    );
+
+    var opaque_mock = core.http.MockTransport.init(
+        std.testing.allocator,
+        200,
+        "{\"value\":\"mislabelled-backup-secret\"}",
+    );
+    defer opaque_mock.deinit();
+    opaque_mock.response_headers_list = &.{
+        .{ .name = "Content-Type", .value = "application/pdf" },
+    };
+    var opaque_recorder = RecordingTransport.initWithOptions(
+        std.testing.allocator,
+        opaque_mock.asTransport(),
+        .{ .bodyPolicyFn = &allowOpaqueBody },
+    );
+    defer opaque_recorder.deinit();
+    var backup = core.http.Request.init(
+        std.testing.allocator,
+        .POST,
+        "https://example.vault.azure.net/keys/name/backup?api-version=7.6",
+    );
+    defer backup.deinit();
+    var opaque_response = try opaque_recorder.asTransport().send(&backup);
+    opaque_response.deinit();
+    try expectRejectedSerializationExcludes(
+        &opaque_recorder,
+        error.SensitiveBodyRequiresSanitization,
+        &.{"mislabelled-backup-secret"},
+    );
+}
+
+test "Azure key management key1 and key2 responses are rejected" {
+    for ([_][]const u8{
+        "https://management.azure.com/subscriptions/s/resourceGroups/r/providers/Microsoft.EventGrid/topics/t/listKeys?api-version=2025-02-15",
+        "https://management.azure.com/subscriptions/s/resourceGroups/r/providers/Microsoft.CognitiveServices/accounts/a/regenerateKey?api-version=2024-10-01",
+    }) |url| {
+        var mock = core.http.MockTransport.init(
+            std.testing.allocator,
+            200,
+            "{\"KeY1\":\"first-service-key\",\"key2\":\"second-service-key\"}",
+        );
+        defer mock.deinit();
+        var recorder = RecordingTransport.init(
+            std.testing.allocator,
+            mock.asTransport(),
+        );
+        defer recorder.deinit();
+        var request = core.http.Request.init(
+            std.testing.allocator,
+            .POST,
+            url,
+        );
+        defer request.deinit();
+        var response = try recorder.asTransport().send(&request);
+        response.deinit();
+        try expectRejectedSerializationExcludes(
+            &recorder,
+            error.SensitiveBodyRequiresSanitization,
+            &.{ "first-service-key", "second-service-key" },
+        );
+    }
+}
+
 test "Kusto source URIs and tabular credential scalars are rejected" {
+    const jwt =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" ++
+        "." ++
+        "eyJzdWIiOiJpZGVudGl0eSIsImV4cCI6NDEwMjQ0NDgwMH0" ++
+        "." ++
+        "c2lnbmF0dXJlLWJ5dGVzLXZhbHVl";
+    const jwt_body = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"Tables\":[{{\"Rows\":[[\"{s}\"]]}}]}}",
+        .{jwt},
+    );
+    defer std.testing.allocator.free(jwt_body);
     for ([_][]const u8{
         "{\"sourceUri\":\"https://storage.example/container?sig=kusto-source-sas\"}",
         "{\"Tables\":[{\"Rows\":[[\"https://storage.example/blob?sig=row-sas\"]]}]}",
         "{\"Tables\":[{\"Rows\":[[\"https%3A%2F%2Fstorage.example%2Fblob%3Fsv%3D1%26sig%3Dencoded-sas\"]]}]}",
-        "{\"Tables\":[{\"Rows\":[[\"aaaaaaaa.bbbbbbbb.cccccccc\"]]}]}",
+        jwt_body,
     }) |body| {
         var mock = core.http.MockTransport.init(
             std.testing.allocator,
@@ -3762,8 +4196,56 @@ test "Kusto source URIs and tabular credential scalars are rejected" {
                 "kusto-source-sas",
                 "row-sas",
                 "encoded-sas",
-                "aaaaaaaa.bbbbbbbb.cccccccc",
+                jwt,
             },
+        );
+    }
+}
+
+test "plain text signed URLs and structurally valid JWTs are rejected" {
+    const jwt =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" ++
+        "." ++
+        "eyJzdWIiOiJpZGVudGl0eSIsImV4cCI6NDEwMjQ0NDgwMH0" ++
+        "." ++
+        "c2lnbmF0dXJlLWJ5dGVzLXZhbHVl";
+    const jwt_text = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "identity token: {s}",
+        .{jwt},
+    );
+    defer std.testing.allocator.free(jwt_text);
+    for ([_][]const u8{
+        "https://storage.example/container/blob?sv=2026-01-01&sig=plain-sas",
+        jwt_text,
+    }) |body| {
+        var mock = core.http.MockTransport.init(
+            std.testing.allocator,
+            200,
+            body,
+        );
+        defer mock.deinit();
+        mock.response_headers_list = &.{
+            .{ .name = "Content-Type", .value = "text/plain" },
+        };
+        var recorder = RecordingTransport.initWithOptions(
+            std.testing.allocator,
+            mock.asTransport(),
+            .{ .bodyPolicyFn = &inspectKnownSafeBody },
+        );
+        defer recorder.deinit();
+        var request = core.http.Request.init(
+            std.testing.allocator,
+            .GET,
+            "https://example.test/plain",
+        );
+        defer request.deinit();
+        var response = try recorder.asTransport().send(&request);
+        response.deinit();
+        try expectRejectedSerializationExcludes(
+            &recorder,
+            error.SensitiveBodyRequiresSanitization,
+            &.{body},
         );
     }
 }
@@ -3962,6 +4444,31 @@ test "declared encodings and opaque MIME bodies require explicit approval" {
             .expected_error = error.OpaqueBodyNotAllowed,
         },
         .{
+            .content_type = "application/pdf",
+            .body = "%PDF-printable-fixture",
+            .expected_error = error.OpaqueBodyNotAllowed,
+        },
+        .{
+            .content_type = "application/cbor",
+            .body = "cbor-container-fixture",
+            .expected_error = error.OpaqueBodyNotAllowed,
+        },
+        .{
+            .content_type = "application/pkcs7-mime",
+            .body = "pkcs7-container-fixture",
+            .expected_error = error.OpaqueBodyNotAllowed,
+        },
+        .{
+            .content_type = "application/x-protobuf",
+            .body = "protobuf-container-fixture",
+            .expected_error = error.OpaqueBodyNotAllowed,
+        },
+        .{
+            .content_type = "application/vnd.contoso.binary",
+            .body = "vendor-container-fixture",
+            .expected_error = error.OpaqueBodyNotAllowed,
+        },
+        .{
             .content_type = "application/json",
             .content_encoding = "gzip",
             .body = "compressed-looking-body",
@@ -4005,6 +4512,79 @@ test "declared encodings and opaque MIME bodies require explicit approval" {
     }
 }
 
+test "non-empty bodies require an explicit caller policy" {
+    for ([_]bool{ false, true }) |request_has_body| {
+        var mock = core.http.MockTransport.init(
+            std.testing.allocator,
+            200,
+            if (request_has_body) "" else "{\"message\":\"ordinary\"}",
+        );
+        defer mock.deinit();
+        var recorder = RecordingTransport.init(
+            std.testing.allocator,
+            mock.asTransport(),
+        );
+        defer recorder.deinit();
+        var request = core.http.Request.init(
+            std.testing.allocator,
+            if (request_has_body) .POST else .GET,
+            "https://example.test/default-policy",
+        );
+        defer request.deinit();
+        if (request_has_body) request.body = "{\"message\":\"ordinary\"}";
+        var response = try recorder.asTransport().send(&request);
+        response.deinit();
+        try std.testing.expectError(
+            error.BodyPolicyRequired,
+            recorder.toJson(std.testing.allocator),
+        );
+    }
+}
+
+test "App Configuration dotted values are not mistaken for JWTs" {
+    const body =
+        "{\"key\":\"endpoint\",\"key1\":\"configuration-label\",\"value\":\"service.production.contoso\"}";
+    var mock = core.http.MockTransport.init(
+        std.testing.allocator,
+        200,
+        body,
+    );
+    defer mock.deinit();
+    mock.response_headers_list = &.{
+        .{ .name = "Content-Type", .value = "application/json" },
+    };
+    var recorder = RecordingTransport.initWithOptions(
+        std.testing.allocator,
+        mock.asTransport(),
+        .{ .bodyPolicyFn = &inspectKnownSafeBody },
+    );
+    defer recorder.deinit();
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://store.azconfig.io/kv/endpoint?api-version=1.0",
+    );
+    defer request.deinit();
+    var response = try recorder.asTransport().send(&request);
+    response.deinit();
+    const json = try recorder.toJson(std.testing.allocator);
+    defer std.testing.allocator.free(json);
+    var parsed = try parseJson(std.testing.allocator, json);
+    defer parsed.deinit();
+    try std.testing.expectEqualSlices(
+        u8,
+        body,
+        parsed.asSlice()[0].response_body,
+    );
+
+    var playback = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    var replayed = try playback.asTransport().send(&request);
+    replayed.deinit();
+}
+
 test "recording JSON decodes safe structured bodies losslessly" {
     const request_body =
         "{\"key\":\"prod*\",\"value\":\"nonsensitive\",\"nested\":{\"kind\":\"filter\"}}";
@@ -4016,9 +4596,10 @@ test "recording JSON decodes safe structured bodies losslessly" {
         response_body,
     );
     defer mock.deinit();
-    var recorder = RecordingTransport.init(
+    var recorder = RecordingTransport.initWithOptions(
         std.testing.allocator,
         mock.asTransport(),
+        .{ .bodyPolicyFn = &inspectKnownSafeBody },
     );
     defer recorder.deinit();
     var request = core.http.Request.init(
@@ -4168,9 +4749,10 @@ fn serializationAllocationFixture(allocator: std.mem.Allocator) !void {
         "{\"message\":\"response\"}",
     );
     defer mock.deinit();
-    var recorder = RecordingTransport.init(
+    var recorder = RecordingTransport.initWithOptions(
         std.testing.allocator,
         mock.asTransport(),
+        .{ .bodyPolicyFn = &inspectKnownSafeBody },
     );
     defer recorder.deinit();
     var request = core.http.Request.init(
@@ -4181,6 +4763,37 @@ fn serializationAllocationFixture(allocator: std.mem.Allocator) !void {
     defer request.deinit();
     request.body = "{\"message\":\"request\"}";
     try request.setHeader("Authorization", "Bearer secret");
+    var response = try recorder.asTransport().send(&request);
+    response.deinit();
+    const json = try recorder.toJson(allocator);
+    allocator.free(json);
+}
+
+fn jwtHeaderAllocationFixture(allocator: std.mem.Allocator) !void {
+    const jwt =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" ++
+        "." ++
+        "eyJzdWIiOiJoZWFkZXIiLCJleHAiOjQxMDI0NDQ4MDB9" ++
+        "." ++
+        "c2lnbmF0dXJlLWJ5dGVzLXZhbHVl";
+    var mock = core.http.MockTransport.init(
+        std.testing.allocator,
+        200,
+        "",
+    );
+    defer mock.deinit();
+    var recorder = RecordingTransport.init(
+        std.testing.allocator,
+        mock.asTransport(),
+    );
+    defer recorder.deinit();
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://example.com",
+    );
+    defer request.deinit();
+    try request.setHeader("ETag", jwt);
     var response = try recorder.asTransport().send(&request);
     response.deinit();
     const json = try recorder.toJson(allocator);
@@ -4220,6 +4833,11 @@ test "transport allocation failures clean up" {
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
         serializationAllocationFixture,
+        .{},
+    );
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        jwtHeaderAllocationFixture,
         .{},
     );
     try std.testing.checkAllAllocationFailures(

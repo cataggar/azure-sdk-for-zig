@@ -30,11 +30,10 @@ duplicates are preserved.
 
 `RecordingTransport.toJson` emits version 2 recordings. Accepted request and
 response bodies are represented losslessly as base64 with an explicit encoding
-field, so approved binary bodies and empty, NUL-containing, non-UTF-8, and
-normal UTF-8 bodies can round-trip through `parseJson`. NUL-containing,
-non-UTF-8, encoded, and binary bodies are rejected by default as opaque; they
-must first be approved by the caller policy described below. Parsed recordings
-can be passed directly to playback:
+field. Every non-empty body is rejected by default and requires an explicit
+caller body-policy decision. Approved textual and binary bodies, including NUL
+and non-UTF-8 data, then round-trip exactly through `parseJson`. Parsed
+recordings can be passed directly to playback:
 
 ```zig
 var parsed = try testing.parseJson(allocator, json);
@@ -54,9 +53,12 @@ nonsensitive query fields such as App Configuration's `key` filter and all
 other nonsensitive URL components, headers, and bodies remain exact-match
 requirements.
 
-Header names are checked case-insensitively using conservative Azure credential
-patterns, including metadata suffixes such as `password`, `pwd`,
-`private-key`, and `connection-string`. Applications can add redactions or
+Header names are checked case-insensitively. The default preserves only a
+known-safe standard/Azure header allowlist, after inspecting every value for
+signed URLs, JWTs, connection strings, and other recognized credentials.
+Unknown application and metadata headers are redacted. Credential-shaped names,
+including metadata suffixes such as `password`, `pwd`, `private-key`, and
+`connection-string`, are also redacted. Applications can add redactions or
 explicitly preserve a known-safe false positive with an exchange-aware header
 policy:
 
@@ -89,15 +91,18 @@ text cannot activate these schema rules, so App Configuration key/value
 documents and paths containing words such as `vault/secrets` remain recordable
 and exact.
 
-The default threat model accepts structurally inspected safe JSON, form, and
-plain-text bodies. A declared JSON content type always requires successful JSON
-parsing. Unicode BOMs, NUL-bearing data, UTF-16/32 charsets, non-identity
-content encodings, binary MIME types, non-UTF-8 bodies, multipart bodies, XML
-bodies, and malformed JSON are rejected unless the relevant opaque structure
-is explicitly approved. This prevents DER/PKCS#12, compressed or wide-character
-secret documents, and unknown containers from being base64-obscured under a
-false sanitization guarantee. A caller that knows a specific rejected
-opaque/XML/multipart exchange is safe can opt in with an exchange-aware policy:
+The default body contract is deny-by-default: every non-empty body is rejected
+with `BodyPolicyRequired` unless `bodyPolicyFn` classifies that exact exchange.
+Before default rejection, the recorder still detects known plaintext and
+structured credentials and returns `SensitiveBodyRequiresSanitization`.
+Returning `inspect` explicitly opts a recognized textual content type into
+built-in structural checks. A declared JSON content type must parse
+successfully. Only untyped UTF-8 text,
+`text/*`, JSON, XML, form URL encoding, JavaScript/ECMAScript, and GraphQL are
+recognized as textual; PDF, CBOR, PKCS7, protobuf, arbitrary vendor/container
+types, Unicode BOMs, NUL-bearing data, UTF-16/32 charsets, non-identity content
+encodings, and non-UTF-8 bodies are opaque. Returning `allow_opaque` is the
+explicit trust boundary for a caller-verified opaque body:
 
 ```zig
 fn bodyPolicy(
@@ -105,7 +110,9 @@ fn bodyPolicy(
     body: testing.BodySafetyContext,
 ) testing.BodyPolicyDecision {
     _ = context;
-    return if (isKnownSafeBinaryEndpoint(body.url)) .allow_opaque else .inspect;
+    if (isKnownSafeAppConfigurationExchange(body)) return .inspect;
+    if (isKnownSafeBinaryEndpoint(body.url)) return .allow_opaque;
+    return .reject_sensitive;
 }
 
 var recording = testing.RecordingTransport.initWithOptions(
@@ -118,10 +125,12 @@ var recording = testing.RecordingTransport.initWithOptions(
 );
 ```
 
-The callback may also return `reject_sensitive` for application-specific
-schemas. Private-key markers cannot be bypassed by `allow_opaque`; callers that
-approve otherwise opaque encodings take responsibility for their decoded
-contents. Policy contexts are borrowed through `toJson`.
+`inspect` does not sanitize or rewrite bodies; it persists only bodies that pass
+the built-in checks, and playback continues to match request bodies exactly.
+`reject_sensitive` rejects application-specific schemas. Private-key markers
+and detectable plaintext credentials cannot be bypassed by `allow_opaque`;
+callers that approve otherwise opaque encodings take responsibility for their
+decoded contents. Policy contexts are borrowed through `toJson`.
 
 Run its independent tests from this directory:
 
