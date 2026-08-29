@@ -1294,13 +1294,19 @@ pub const ConsumerPartitionOpener = struct {
             else
                 null;
             defer if (failed_open) |*diagnostic| diagnostic.deinit();
-            const geo_rejected = if (failed_open) |diagnostic|
-                load_balancing.isGeoReplicationOffsetError(diagnostic.condition())
+            const clean_geo_rejection = if (failed_open) |diagnostic|
+                self.connection.isGenerationCurrent(generation) and
+                    !session.ended and
+                    load_balancing.isGeoReplicationOffsetError(diagnostic.condition())
             else
                 false;
 
+            // AMQP only returns this diagnostic after consuming the peer's
+            // Detach and removing the refused receiver. The session and links
+            // already opened on it remain usable.
+            if (clean_geo_rejection) return error.GeoReplicationOffsetRejected;
+
             self.connection.invalidateGeneration(generation);
-            if (geo_rejected) return error.GeoReplicationOffsetRejected;
             return err;
         };
         return client;
@@ -1567,9 +1573,10 @@ const TestTransportSequence = struct {
 
 fn testNoSleep(_: *errors.Sleeper, _: u64) errors.SleepError!void {}
 
-fn scriptManagement(
+fn scriptManagementForPartitions(
     allocator: std.mem.Allocator,
     peer: amqp.test_peer.Peer,
+    ids: []const []const u8,
 ) !void {
     try amqp.test_peer.scriptHandshake(peer, 65536);
     try peer.push(0, .{ .attach = .{
@@ -1601,12 +1608,14 @@ fn scriptManagement(
         .state = .accepted,
     } });
 
-    var partition_ids = [_]amqp.AmqpValue{.{ .string = "0" }};
+    const partition_ids = try allocator.alloc(amqp.AmqpValue, ids.len);
+    defer allocator.free(partition_ids);
+    for (partition_ids, ids) |*value, id| value.* = .{ .string = id };
     var body_map = [_]amqp.MapEntry{
         .{ .key = .{ .string = management.reply.name }, .value = .{ .string = "my-hub" } },
         .{
             .key = .{ .string = management.reply.partition_ids },
-            .value = .{ .array = &partition_ids },
+            .value = .{ .array = partition_ids },
         },
         .{
             .key = .{ .string = management.reply.created_at },
@@ -1645,16 +1654,28 @@ fn scriptManagement(
     }, response);
 }
 
+fn scriptManagement(
+    allocator: std.mem.Allocator,
+    peer: amqp.test_peer.Peer,
+) !void {
+    try scriptManagementForPartitions(allocator, peer, &.{"0"});
+}
+
 fn scriptPartition(
     allocator: std.mem.Allocator,
     peer: amqp.test_peer.Peer,
+    partition_id: []const u8,
     handle: u32,
     delivery_id: u32,
     event_body: []const u8,
     close_ack: bool,
 ) !void {
-    const receiver_name =
-        "my-hub/ConsumerGroups/$Default/Partitions/0-receiver-eventhubs";
+    const receiver_name = try std.fmt.allocPrint(
+        allocator,
+        "my-hub/ConsumerGroups/$Default/Partitions/{s}-receiver-eventhubs",
+        .{partition_id},
+    );
+    defer allocator.free(receiver_name);
     try peer.push(0, .{ .attach = .{
         .name = receiver_name,
         .handle = handle,
@@ -1700,16 +1721,22 @@ fn scriptManagementAndPartition(
     close_ack: bool,
 ) !void {
     try scriptManagement(allocator, peer);
-    try scriptPartition(allocator, peer, 2, 1, event_body, close_ack);
+    try scriptPartition(allocator, peer, "0", 2, 1, event_body, close_ack);
 }
 
 fn scriptRejectedPartition(
+    allocator: std.mem.Allocator,
     peer: amqp.test_peer.Peer,
+    partition_id: []const u8,
     handle: u32,
     condition: []const u8,
 ) !void {
-    const receiver_name =
-        "my-hub/ConsumerGroups/$Default/Partitions/0-receiver-eventhubs";
+    const receiver_name = try std.fmt.allocPrint(
+        allocator,
+        "my-hub/ConsumerGroups/$Default/Partitions/{s}-receiver-eventhubs",
+        .{partition_id},
+    );
+    defer allocator.free(receiver_name);
     try peer.pushExact(0, .{ .attach = .{
         .name = receiver_name,
         .handle = handle,
@@ -1731,18 +1758,32 @@ fn scriptRejectedPartition(
 fn attachedReceiverFilter(
     allocator: std.mem.Allocator,
     mem: *amqp.MemoryTransport,
+    partition_id: []const u8,
+    occurrence: usize,
 ) ![]u8 {
+    const receiver_name = try std.fmt.allocPrint(
+        allocator,
+        "my-hub/ConsumerGroups/$Default/Partitions/{s}-receiver-eventhubs",
+        .{partition_id},
+    );
+    defer allocator.free(receiver_name);
+
     var frames = try amqp.test_peer.EmittedFrames.parse(allocator, mem.written());
     defer frames.deinit();
+    var found: usize = 0;
     for (frames.bodies.items) |body| {
         if (amqp.performative.peekDescriptor(body) != amqp.performative.descriptor.attach) continue;
         var decoded = try amqp.performative.decode(allocator, body);
         defer decoded.deinit();
         const attach = decoded.performative.attach;
-        if (!std.mem.endsWith(u8, attach.name, "-receiver-eventhubs")) continue;
+        if (!std.mem.eql(u8, attach.name, receiver_name)) continue;
         const source = attach.source orelse continue;
         const filters = source.filters orelse continue;
         if (filters.len == 0) continue;
+        if (found != occurrence) {
+            found += 1;
+            continue;
+        }
         return allocator.dupe(u8, filters[0].value.string);
     }
     return error.ReceiverAttachNotFound;
@@ -1879,20 +1920,16 @@ test "production partition opener maps only geo-replication failed opens" {
         const allocator = std.testing.allocator;
         var first_mem = amqp.MemoryTransport.init(allocator);
         defer first_mem.deinit();
-        var second_mem = amqp.MemoryTransport.init(allocator);
-        defer second_mem.deinit();
 
         const first_peer = amqp.test_peer.Peer{ .allocator = allocator, .mem = &first_mem };
         try scriptManagement(allocator, first_peer);
-        try scriptRejectedPartition(first_peer, 2, case.condition);
+        try scriptRejectedPartition(allocator, first_peer, "0", 2, case.condition);
         if (case.geo_fallback) {
-            const second_peer = amqp.test_peer.Peer{ .allocator = allocator, .mem = &second_mem };
-            try amqp.test_peer.scriptHandshake(second_peer, 65536);
-            try scriptPartition(allocator, second_peer, 0, 0, "fallback", true);
+            try scriptPartition(allocator, first_peer, "0", 3, 0, "fallback", true);
         }
 
         var transports = TestTransportSequence{
-            .memories = &.{ &first_mem, &second_mem },
+            .memories = &.{&first_mem},
         };
         var wire_clock = amqp.connection_driver.ManualClock{};
         var factory = connection_options.AmqpConnectionFactory{
@@ -1952,16 +1989,16 @@ test "production partition opener maps only geo-replication failed opens" {
 
         if (case.geo_fallback) {
             try processor.runOnce();
-            try std.testing.expectEqual(@as(u64, 1), connection.recoveries);
-            try std.testing.expectEqual(@as(usize, 2), transports.next);
+            try std.testing.expectEqual(@as(u64, 0), connection.recoveries);
+            try std.testing.expectEqual(@as(usize, 1), transports.next);
 
-            const rejected_filter = try attachedReceiverFilter(allocator, &first_mem);
+            const rejected_filter = try attachedReceiverFilter(allocator, &first_mem, "0", 0);
             defer allocator.free(rejected_filter);
             try std.testing.expectEqualStrings(
                 "amqp.annotation.x-opt-offset > '12345'",
                 rejected_filter,
             );
-            const fallback_filter = try attachedReceiverFilter(allocator, &second_mem);
+            const fallback_filter = try attachedReceiverFilter(allocator, &first_mem, "0", 1);
             defer allocator.free(fallback_filter);
             try std.testing.expectEqualStrings(
                 "amqp.annotation.x-opt-offset > '-1'",
@@ -1981,6 +2018,137 @@ test "production partition opener maps only geo-replication failed opens" {
             try processor.close();
         }
     }
+}
+
+test "geo-replication refusal preserves previously opened partition clients" {
+    const allocator = std.testing.allocator;
+    var mem = amqp.MemoryTransport.init(allocator);
+    defer mem.deinit();
+
+    const peer = amqp.test_peer.Peer{ .allocator = allocator, .mem = &mem };
+    try scriptManagementForPartitions(allocator, peer, &.{ "0", "1", "2" });
+    try scriptPartition(allocator, peer, "0", 2, 1, "partition 0", false);
+    try scriptRejectedPartition(
+        allocator,
+        peer,
+        "1",
+        3,
+        errors.condition.georeplication_invalid_offset,
+    );
+    try scriptPartition(allocator, peer, "1", 4, 2, "partition 1", false);
+    try scriptRejectedPartition(
+        allocator,
+        peer,
+        "2",
+        5,
+        errors.condition.georeplication_invalid_offset,
+    );
+    try scriptPartition(allocator, peer, "2", 6, 3, "partition 2", false);
+    try peer.push(0, .{ .detach = .{ .handle = 2, .closed = true } });
+    try peer.push(0, .{ .detach = .{ .handle = 4, .closed = true } });
+    try peer.push(0, .{ .detach = .{ .handle = 6, .closed = true } });
+
+    var transports = TestTransportSequence{ .memories = &.{&mem} };
+    var wire_clock = amqp.connection_driver.ManualClock{};
+    var factory = connection_options.AmqpConnectionFactory{
+        .allocator = allocator,
+        .fully_qualified_namespace = "ns.servicebus.windows.net",
+        .container_id = "multi-partition-failed-open-test",
+        .options = .{ .web_socket = transports.hook() },
+        .clock = wire_clock.clock(),
+        .sasl = .none,
+    };
+    var connection = recovery.RecoverableConnection.init(allocator, .{
+        .factory = &factory.factory,
+        .deadline_ms = 10_000,
+    });
+    defer connection.deinit();
+    connection.management_link_id = "eh";
+
+    var sleeper = errors.Sleeper{ .sleepFn = testNoSleep };
+    var retry_random = std.Random.DefaultPrng.init(71);
+    var link_transport = LinkTransport.initRecoverable(
+        &connection,
+        .{ .sleeper = &sleeper, .random = retry_random.random() },
+        .{ .deadline_ms = 10_000 },
+    );
+    var credential = ScopeRecordingCredential.init();
+    var consumer = ConsumerClient.init(.{
+        .runtime = testRuntime(),
+        .fully_qualified_namespace = "ns.servicebus.windows.net",
+        .event_hub_name = "my-hub",
+    }, credential.asCredential(), link_transport.asTransport());
+    defer consumer.deinit();
+
+    var opener = consumer.partitionOpener(&connection, 10_000);
+    var balance_clock = ManualClock{};
+    var store = InMemoryCheckpointStore{
+        .allocator = allocator,
+        .clock = &balance_clock.clock,
+    };
+    defer store.deinit();
+    for ([_][]const u8{ "0", "1", "2" }, [_][]const u8{ "10", "20", "30" }) |id, offset| {
+        try store.store.updateCheckpoint(allocator, .{
+            .fully_qualified_namespace = "ns.servicebus.windows.net",
+            .event_hub_name = "my-hub",
+            .consumer_group = "$Default",
+            .partition_id = id,
+            .offset = offset,
+        });
+    }
+    var balance_random = std.Random.DefaultPrng.init(0);
+    var processor = consumer.newProcessor(
+        allocator,
+        &store.store,
+        opener.asOpener(),
+        .{ .load_balancing_strategy = .greedy },
+        &balance_clock.clock,
+        balance_random.random(),
+    );
+    defer processor.deinit();
+
+    try processor.runOnce();
+    try std.testing.expectEqual(@as(u64, 0), connection.recoveries);
+    try std.testing.expectEqual(@as(usize, 1), transports.next);
+    try std.testing.expectEqual(@as(usize, 3), processor.ownedPartitions().len);
+
+    for ([_][]const u8{ "0", "1", "2" }, [_][]const u8{
+        "partition 0",
+        "partition 1",
+        "partition 2",
+    }) |id, body| {
+        const partition = processor.nextPartitionClient().?;
+        try std.testing.expectEqualStrings(id, partition.partitionId());
+        try std.testing.expectEqual(@as(?u64, 0), partition.client.generation());
+        const events = try partition.receiveEvents(allocator, 1);
+        defer freeReceivedEvents(allocator, events);
+        try std.testing.expectEqualStrings(body, events[0].body());
+    }
+    try std.testing.expect(processor.nextPartitionClient() == null);
+
+    const expected_filters = [_]struct {
+        partition_id: []const u8,
+        occurrence: usize,
+        expression: []const u8,
+    }{
+        .{ .partition_id = "0", .occurrence = 0, .expression = "amqp.annotation.x-opt-offset > '10'" },
+        .{ .partition_id = "1", .occurrence = 0, .expression = "amqp.annotation.x-opt-offset > '20'" },
+        .{ .partition_id = "1", .occurrence = 1, .expression = "amqp.annotation.x-opt-offset > '-1'" },
+        .{ .partition_id = "2", .occurrence = 0, .expression = "amqp.annotation.x-opt-offset > '30'" },
+        .{ .partition_id = "2", .occurrence = 1, .expression = "amqp.annotation.x-opt-offset > '-1'" },
+    };
+    for (expected_filters) |expected| {
+        const filter = try attachedReceiverFilter(
+            allocator,
+            &mem,
+            expected.partition_id,
+            expected.occurrence,
+        );
+        defer allocator.free(filter);
+        try std.testing.expectEqualStrings(expected.expression, filter);
+    }
+
+    try processor.close();
 }
 
 const TestCryptoProvider = struct {
