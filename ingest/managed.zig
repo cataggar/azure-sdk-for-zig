@@ -82,64 +82,24 @@ pub const ManagedIngestionResult = union(enum) {
 
 /// Managed direct-to-queued ingestion.
 ///
-/// This value borrows its transport, optional `ResourceManager`, and optional
-/// shared `KustoConnection`. They must outlive this client, all copies of it,
-/// and all calls. A shared connection (and a manager backed by one) is not
+/// This value borrows its `ResourceManager`, shared `KustoConnection`, and the
+/// connection runtime contexts. They must outlive this client, all copies of
+/// it, and all calls. A shared connection (and a manager backed by one) is not
 /// concurrent-safe; callers must externally serialize use.
 pub const ManagedIngestClient = struct {
     streaming: streaming.StreamingIngestClient,
     queued: queued.QueuedIngestClient,
 
-    /// Legacy unauthenticated constructor. Queue fallback requires an
-    /// injected ResourceManager or a shared connection, so a streaming
-    /// fallback from this constructor reports
-    /// `QueuedIngestionResourceManagerRequired`.
     pub fn init(
-        connection: kusto_common.ConnectionProperties,
-        transport: *core.http.HttpTransport,
-    ) ManagedIngestClient {
-        return .{
-            .streaming = streaming.StreamingIngestClient.init(connection, transport),
-            .queued = queued.QueuedIngestClient.init(connection, transport),
-        };
-    }
-
-    /// Creates a client borrowing a shared authenticated connection. A
-    /// short-lived resource manager is created for queue operations.
-    pub fn initWithConnection(connection: *kusto_common.KustoConnection) ManagedIngestClient {
-        return .{
-            .streaming = streaming.StreamingIngestClient.initWithConnection(connection),
-            .queued = queued.QueuedIngestClient.initWithConnection(connection),
-        };
-    }
-
-    /// Creates a client with an injected ResourceManager and raw transport.
-    /// The manager and transport are borrowed. The legacy streaming client
-    /// cannot authenticate; use `initWithConnectionAndResourceManager` for
-    /// authenticated direct ingestion.
-    pub fn initWithResourceManager(
-        connection: kusto_common.ConnectionProperties,
-        manager: *resources.ResourceManager,
-        transport: *core.http.HttpTransport,
-    ) ManagedIngestClient {
-        return .{
-            .streaming = streaming.StreamingIngestClient.init(connection, transport),
-            .queued = queued.QueuedIngestClient.initWithResourceManager(manager, transport),
-        };
-    }
-
-    /// Creates a client borrowing both a shared connection and an injected
-    /// resource manager. This retains resource discovery caching and ranking.
-    pub fn initWithConnectionAndResourceManager(
         connection: *kusto_common.KustoConnection,
-        manager: *resources.ResourceManager,
+        manager: ?*resources.ResourceManager,
     ) ManagedIngestClient {
         return .{
-            .streaming = streaming.StreamingIngestClient.initWithConnection(connection),
-            .queued = queued.QueuedIngestClient.initWithConnectionAndResourceManager(
-                connection,
-                manager,
-            ),
+            .streaming = streaming.StreamingIngestClient.init(connection),
+            .queued = queued.QueuedIngestClient.init(connection.runtime, .{
+                .connection = connection,
+                .resource_manager = manager,
+            }),
         };
     }
 
@@ -161,7 +121,11 @@ pub const ManagedIngestClient = struct {
 
         // Queue may be selected before direct streaming, so IDs always obey
         // Queue's canonical UUID contract even for a streaming-only success.
-        const canonical_id = try queued.makeLogicalSourceId(allocator, options.source_id);
+        const canonical_id = try queued.makeLogicalSourceId(
+            allocator,
+            self.queued.runtime.crypto,
+            options.source_id,
+        );
         defer allocator.free(canonical_id);
         var normalized_options = options;
         normalized_options.source_id = canonical_id;
@@ -537,6 +501,43 @@ const PrefixTailReader = struct {
     }
 };
 
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+fn testRuntime(transport: core.http.HttpTransport) core.http.HttpRuntime {
+    return core.http.HttpRuntime.init(transport, testing_crypto_provider.asProvider());
+}
+
+const TestTokenCredential = struct {
+    credential: core.credentials.TokenCredential = .{ .getTokenFn = &getToken },
+
+    fn getToken(
+        _: *core.credentials.TokenCredential,
+        _: core.credentials.TokenRequestContext,
+        _: core.context.Context,
+        _: core.http.HttpRuntime,
+    ) anyerror!core.credentials.AccessToken {
+        return .{ .token = "managed-test-token", .expires_on = std.math.maxInt(i64) };
+    }
+};
+
+var testing_token_credential = TestTokenCredential{};
+
+fn testConnection(
+    allocator: std.mem.Allocator,
+    cluster_url: []const u8,
+    runtime: core.http.HttpRuntime,
+) !*kusto_common.KustoConnection {
+    return kusto_common.KustoConnection.init(
+        allocator,
+        .{
+            .cluster_url = cluster_url,
+            .credential = &testing_token_credential.credential,
+        },
+        runtime,
+        .{ .metadata_mode = .disabled },
+    );
+}
+
 test "managed routing decisions honor threshold formats properties and blob size" {
     const options = IngestOptions{ .managed_streaming_threshold_bytes = 4 };
     try std.testing.expect(!requiresQueueBeforeStreaming(.{ .bytes = "four" }, options));
@@ -624,10 +625,9 @@ test "managed small unknown reader streams as replayable bytes with canonical ID
     const allocator = std.testing.allocator;
     var transport = core.http.MockTransport.init(allocator, 200, "{}");
     defer transport.deinit();
-    var client = ManagedIngestClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        transport.asTransport(),
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(transport.asTransport()));
+    defer connection.deinit();
+    var client = ManagedIngestClient.init(connection, null);
     var reader = std.Io.Reader.fixed("tiny");
 
     var result = try client.ingestResult(
@@ -662,35 +662,33 @@ test "managed small unknown reader streams as replayable bytes with canonical ID
     );
 }
 
-test "managed preflight queue does not enter direct transport" {
+test "managed preflight queue reports resource discovery failure without streaming" {
     const allocator = std.testing.allocator;
     var transport = core.http.MockTransport.init(allocator, 200, "{}");
     defer transport.deinit();
-    var client = ManagedIngestClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        transport.asTransport(),
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(transport.asTransport()));
+    defer connection.deinit();
+    var client = ManagedIngestClient.init(connection, null);
 
-    try std.testing.expectError(
-        error.QueuedIngestionResourceManagerRequired,
-        client.ingestResult(
-            allocator,
-            .{ .database = "DB", .table = "Table" },
-            .{ .bytes = "large" },
-            .{ .managed_streaming_threshold_bytes = 4 },
-        ),
+    var result = try client.ingestResult(
+        allocator,
+        .{ .database = "DB", .table = "Table" },
+        .{ .bytes = "large" },
+        .{ .managed_streaming_threshold_bytes = 4 },
     );
-    try std.testing.expectEqual(@as(usize, 0), transport.call_count);
+    defer result.deinit(allocator);
+    try std.testing.expectEqual(queued.QueuedSubmissionOutcome.pre_queue_failed, result.ok.queued.outcome);
+    try std.testing.expectEqual(@as(usize, 1), transport.call_count);
+    try std.testing.expect(std.mem.endsWith(u8, transport.last_url.?, "/v1/rest/mgmt"));
 }
 
 test "managed small blob streams with direct URI compression normalized" {
     const allocator = std.testing.allocator;
     var transport = core.http.MockTransport.init(allocator, 200, "{}");
     defer transport.deinit();
-    var client = ManagedIngestClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        transport.asTransport(),
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(transport.asTransport()));
+    defer connection.deinit();
+    var client = ManagedIngestClient.init(connection, null);
     var result = try client.ingestResult(
         allocator,
         .{ .database = "DB", .table = "Table" },
@@ -718,10 +716,9 @@ test "managed permanent ambiguous and one-shot streaming failures never queue" {
             "{\"error\":{\"code\":\"BadRequest\",\"message\":\"permanent\"}}",
         );
         defer transport.deinit();
-        var client = ManagedIngestClient.init(
-            .{ .cluster_url = "https://cluster.kusto.windows.net" },
-            transport.asTransport(),
-        );
+        const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(transport.asTransport()));
+        defer connection.deinit();
+        var client = ManagedIngestClient.init(connection, null);
         var result = try client.ingestResult(
             allocator,
             .{ .database = "DB", .table = "Table" },
@@ -737,10 +734,9 @@ test "managed permanent ambiguous and one-shot streaming failures never queue" {
         var transport = core.http.MockTransport.init(allocator, 200, "{}");
         transport.stream_fail_upload_after = 0;
         defer transport.deinit();
-        var client = ManagedIngestClient.init(
-            .{ .cluster_url = "https://cluster.kusto.windows.net" },
-            transport.asTransport(),
-        );
+        const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(transport.asTransport()));
+        defer connection.deinit();
+        var client = ManagedIngestClient.init(connection, null);
         var result = try client.ingestResult(
             allocator,
             .{ .database = "DB", .table = "Table" },
@@ -759,10 +755,9 @@ test "managed permanent ambiguous and one-shot streaming failures never queue" {
             "{\"error\":{\"code\":\"ServiceUnavailable\",\"message\":\"retry\"}}",
         );
         defer transport.deinit();
-        var client = ManagedIngestClient.init(
-            .{ .cluster_url = "https://cluster.kusto.windows.net" },
-            transport.asTransport(),
-        );
+        const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(transport.asTransport()));
+        defer connection.deinit();
+        var client = ManagedIngestClient.init(connection, null);
         var reader = std.Io.Reader.fixed("body");
         var result = try client.ingestResult(
             allocator,
@@ -782,10 +777,9 @@ test "managed cancellation prevents either route" {
     defer transport.deinit();
     var token = core.http.CancellationToken{};
     token.cancel();
-    var client = ManagedIngestClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        transport.asTransport(),
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(transport.asTransport()));
+    defer connection.deinit();
+    var client = ManagedIngestClient.init(connection, null);
     try std.testing.expectError(
         error.OperationCancelled,
         client.ingestResult(
@@ -859,7 +853,10 @@ const ManagedTestExecutor = struct {
 const ManagedFallbackTransport = struct {
     direct: core.http.MockTransport,
     storage: core.http.MockTransport,
-    transport: core.http.HttpTransport = .{ .sendFn = &send, .openFn = &open },
+    const vtable: core.http.HttpTransport.VTable = .{
+        .send = &send,
+        .open = &open,
+    };
 
     fn init(allocator: std.mem.Allocator) ManagedFallbackTransport {
         return .{
@@ -877,36 +874,32 @@ const ManagedFallbackTransport = struct {
         self.storage.deinit();
     }
 
-    fn asTransport(self: *ManagedFallbackTransport) *core.http.HttpTransport {
-        return &self.transport;
+    fn asTransport(self: *ManagedFallbackTransport) core.http.HttpTransport {
+        return .{ .context = self, .vtable = &vtable };
     }
 
     fn send(
-        transport: *core.http.HttpTransport,
+        context: *anyopaque,
         request: *core.http.Request,
     ) !core.http.Response {
-        const self: *ManagedFallbackTransport = @alignCast(
-            @fieldParentPtr("transport", transport),
-        );
+        const self: *ManagedFallbackTransport = @ptrCast(@alignCast(context));
         self.storage.response_status =
             if (std.mem.indexOf(u8, request.url, ".table.core.windows.net") != null) 204 else 201;
-        return self.storage.transport.sendFn(&self.storage.transport, request);
+        return self.storage.asTransport().send(request);
     }
 
     fn open(
-        transport: *core.http.HttpTransport,
+        context: *anyopaque,
         request: *core.http.Request,
         options: core.http.OpenOptions,
     ) !*core.http.HttpOperation {
-        const self: *ManagedFallbackTransport = @alignCast(
-            @fieldParentPtr("transport", transport),
-        );
+        const self: *ManagedFallbackTransport = @ptrCast(@alignCast(context));
         if (std.mem.indexOf(u8, request.url, ".core.windows.net") != null) {
             self.storage.response_status =
                 if (std.mem.indexOf(u8, request.url, ".table.core.windows.net") != null) 204 else 201;
-            return self.storage.transport.openFn.?(&self.storage.transport, request, options);
+            return self.storage.asTransport().open(request, options);
         }
-        return self.direct.transport.openFn.?(&self.direct.transport, request, options);
+        return self.direct.asTransport().open(request, options);
     }
 };
 
@@ -969,11 +962,9 @@ test "managed retryable known failure falls back once with one canonical ID" {
     defer manager.deinit();
     var transport = ManagedFallbackTransport.init(allocator);
     defer transport.deinit();
-    var client = ManagedIngestClient.initWithResourceManager(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        &manager,
-        transport.asTransport(),
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(transport.asTransport()));
+    defer connection.deinit();
+    var client = ManagedIngestClient.init(connection, &manager);
 
     var result = try client.ingestResult(
         allocator,
@@ -1028,11 +1019,9 @@ test "managed large unknown reader queues its prefix and tail once" {
     defer manager.deinit();
     var transport = ManagedFallbackTransport.init(allocator);
     defer transport.deinit();
-    var client = ManagedIngestClient.initWithResourceManager(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        &manager,
-        transport.asTransport(),
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(transport.asTransport()));
+    defer connection.deinit();
+    var client = ManagedIngestClient.init(connection, &manager);
     var reader = std.Io.Reader.fixed("prefix and tail");
 
     var result = try client.ingestResult(
@@ -1082,11 +1071,9 @@ test "managed cancellation during resource refresh starts no storage request" {
     defer manager.deinit();
     var transport = ManagedFallbackTransport.init(allocator);
     defer transport.deinit();
-    var client = ManagedIngestClient.initWithResourceManager(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        &manager,
-        transport.asTransport(),
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(transport.asTransport()));
+    defer connection.deinit();
+    var client = ManagedIngestClient.init(connection, &manager);
 
     try std.testing.expectError(
         error.OperationCancelled,
@@ -1117,11 +1104,9 @@ test "managed cancellation in a classified reader surfaces as cancellation" {
     defer manager.deinit();
     var transport = ManagedFallbackTransport.init(allocator);
     defer transport.deinit();
-    var client = ManagedIngestClient.initWithResourceManager(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        &manager,
-        transport.asTransport(),
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(transport.asTransport()));
+    defer connection.deinit();
+    var client = ManagedIngestClient.init(connection, &manager);
     var token = core.http.CancellationToken{};
     var reader = CancelOnTailReader.init(&token, "prefix and tail", 5);
 
@@ -1145,10 +1130,9 @@ test "managed cancellation in a classified reader surfaces as cancellation" {
 fn managedAllocationFixture(allocator: std.mem.Allocator) !void {
     var transport = core.http.MockTransport.init(allocator, 200, "{}");
     defer transport.deinit();
-    var client = ManagedIngestClient.init(
-        .{ .cluster_url = "https://cluster.kusto.windows.net" },
-        transport.asTransport(),
-    );
+    const connection = try testConnection(allocator, "https://cluster.kusto.windows.net", testRuntime(transport.asTransport()));
+    defer connection.deinit();
+    var client = ManagedIngestClient.init(connection, null);
     var reader = std.Io.Reader.fixed("tiny");
     var result = try client.ingestResult(
         allocator,

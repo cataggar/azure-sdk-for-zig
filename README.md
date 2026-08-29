@@ -9,7 +9,7 @@ independently versioned package:
 | [`data`](data/README.md) | Query, management, progressive results, KQL, and typed rows |
 | [`ingest`](ingest/README.md) | Streaming, managed, and queued ingestion |
 
-The package begins at `0.1.0`. All namespaces release together. Ingest uses
+The current package version is `0.2.0`. All namespaces release together. Ingest uses
 the Storage packages required for complete-SAS queued ingestion.
 
 ## Feature matrix
@@ -35,9 +35,17 @@ cells, and preserve dynamic or unknown cells as raw JSON.
 Create authenticated clients from one owned `KustoConnection`:
 
 ```zig
+const core = @import("azure_sdk_core");
 const kusto = @import("azure_sdk_kusto");
 const common = kusto.common;
 const data = kusto.data;
+
+var std_transport = core.http.StdHttpTransport.init(allocator, io);
+var crypto_provider = core.crypto.StdCryptoProvider.init(io);
+const runtime = core.http.HttpRuntime.init(
+    std_transport.asTransport(),
+    crypto_provider.asProvider(),
+);
 
 var builder = common.KustoConnectionStringBuilder.init(
     "https://mycluster.kusto.windows.net",
@@ -47,27 +55,28 @@ _ = builder.withTokenCredential(credential);
 const connection = try common.KustoConnection.init(
     allocator,
     builder.build(),
-    transport,
+    runtime,
     .{},
 );
 defer connection.deinit();
 
-var client = data.KustoClient.initWithConnection(connection, .{});
+var client = data.KustoClient.init(connection, .{});
 ```
 
 `KustoConnection` owns copies of its endpoint, scope, user-agent, policy, and
-token-cache state. It borrows the credential and transport; both must outlive
-the connection. Derived clients borrow the connection, require no `deinit`,
-and must not outlive it.
+token-cache state. It copies `HttpRuntime` by value while borrowing the
+credential plus the runtime's transport and crypto contexts. Those contexts
+must outlive the connection, every derived client, and every open operation.
+Derived clients borrow the connection, require no `deinit`, and must not
+outlive it. Provider failures propagate directly; Kusto never falls back to
+`std.crypto` or another transport.
 
 Connections and derived clients are not safe for concurrent use. Externally
 serialize all calls, including calls through separate clients sharing one
 connection.
 
-The existing client constructors remain unauthenticated compatibility APIs.
-Authentication configuration passed to them returns
-`AuthenticatedConnectionRequired`; authenticated code must use
-`initWithConnection`. `withAadAppKey` is deprecated and rejected with
+Every Data and Ingest client is derived from this shared connection.
+`withAadAppKey` is deprecated and rejected with
 `AadAppKeyAuthenticationUnsupported`; use an
 `azure_sdk_core.credentials.TokenCredential`.
 
@@ -101,7 +110,7 @@ credential authority themselves.
 
 | Previous entry point or assumption | Migration |
 | --- | --- |
-| Client `init` methods with authentication fields | Create one `KustoConnection`, then use `initWithConnection` |
+| Transport-only or `initWithConnection` client constructors | Create one `KustoConnection` with `HttpRuntime`, then call the client's `init` |
 | `withAadAppKey` | Supply a `TokenCredential` |
 | Generic `executeQuery`, `executeMgmt`, or `execute` failures | Prefer `*Result` APIs retaining `.ok`, `.partial`, and `.err` |
 | Slice/Blob ingestion compatibility wrappers | Prefer runtime-source `ingestResult`/`ingest` |

@@ -124,45 +124,29 @@ pub const QueuedIngestionResult = struct {
 pub const QueuedIngestClient = struct {
     manager: ?*resources.ResourceManager = null,
     connection: ?*kusto_common.KustoConnection = null,
-    transport: *core.http.HttpTransport,
+    runtime: core.http.HttpRuntime,
 
-    /// Compatibility constructor. It cannot discover authenticated resources;
-    /// use `initWithResourceManager` or
-    /// `initWithConnectionAndResourceManager` before submitting ingestion.
+    pub const Options = struct {
+        connection: ?*kusto_common.KustoConnection = null,
+        resource_manager: ?*resources.ResourceManager = null,
+    };
+
+    /// Copies the runtime descriptors and borrows their contexts plus the
+    /// optional connection and resource manager. When a connection is
+    /// supplied, its runtime is authoritative so Kusto and Storage operations
+    /// use the same provider. All borrowed values must outlive this client and
+    /// every operation.
     pub fn init(
-        _: kusto_common.ConnectionProperties,
-        transport: *core.http.HttpTransport,
-    ) QueuedIngestClient {
-        return .{ .transport = transport };
-    }
-
-    /// Creates a client borrowing a shared connection. Calls create a
-    /// short-lived ResourceManager when no injected manager is available;
-    /// inject one to retain discovery cache and ranking state across calls.
-    pub fn initWithConnection(connection: *kusto_common.KustoConnection) QueuedIngestClient {
-        return .{ .connection = connection, .transport = connection.transport };
-    }
-
-    /// Creates a queued client borrowing a ResourceManager and raw transport.
-    /// The transport is used only by complete-SAS Blob and Queue clients, so
-    /// Kusto bearer policies cannot attach to those storage requests.
-    pub fn initWithResourceManager(
-        manager: *resources.ResourceManager,
-        transport: *core.http.HttpTransport,
-    ) QueuedIngestClient {
-        return .{ .manager = manager, .transport = transport };
-    }
-
-    /// Creates a queued client borrowing a shared connection and a manager
-    /// whose executor normally borrows that same connection.
-    pub fn initWithConnectionAndResourceManager(
-        connection: *kusto_common.KustoConnection,
-        manager: *resources.ResourceManager,
+        runtime: core.http.HttpRuntime,
+        options: Options,
     ) QueuedIngestClient {
         return .{
-            .manager = manager,
-            .connection = connection,
-            .transport = connection.transport,
+            .manager = options.resource_manager,
+            .connection = options.connection,
+            .runtime = if (options.connection) |connection|
+                connection.runtime
+            else
+                runtime,
         };
     }
 
@@ -181,7 +165,7 @@ pub const QueuedIngestClient = struct {
         const manager = if (self.manager) |injected|
             injected
         else if (self.connection) |connection| blk: {
-            executor = resources.DataManagementCommandExecutor.initWithConnection(connection);
+            executor = resources.DataManagementCommandExecutor.init(connection);
             owned_manager = try resources.ResourceManager.init(
                 allocator,
                 threaded.io(),
@@ -196,7 +180,11 @@ pub const QueuedIngestClient = struct {
         const source_info = try sourceInfo(source, options);
         try checkCancelled(options.cancellation);
 
-        const source_id = try makeLogicalSourceId(allocator, options.source_id);
+        const source_id = try makeLogicalSourceId(
+            allocator,
+            self.runtime.crypto,
+            options.source_id,
+        );
         const attempt_capacity = attemptCapacity(options.queued_max_resource_attempts) catch |err| {
             allocator.free(source_id);
             return err;
@@ -390,7 +378,7 @@ pub const QueuedIngestClient = struct {
             var blob_client = blobs.SasBlobClient.init(
                 allocator,
                 blob_uri,
-                self.transport,
+                self.runtime,
             ) catch |err| {
                 if (err == error.OutOfMemory) return err;
                 result.attempts[result_attempt].outcome = .local_failure;
@@ -543,7 +531,7 @@ pub const QueuedIngestClient = struct {
             var tracking = status.StatusTrackingHandle.init(
                 allocator,
                 selection.resource.uri(),
-                self.transport,
+                self.runtime,
                 result.ingestion_id,
                 target.database,
                 target.table,
@@ -679,7 +667,7 @@ pub const QueuedIngestClient = struct {
             var queue_client = queues.SasQueueClient.init(
                 allocator,
                 selection.resource.uri(),
-                self.transport,
+                self.runtime,
             ) catch |err| {
                 if (err == error.OutOfMemory) return err;
                 result.attempts[result_attempt].outcome = .local_failure;
@@ -954,18 +942,18 @@ fn temporaryBlobExtension(info: SourceInfo, options: IngestOptions) []const u8 {
 /// Creates a secure nonzero canonical UUID for Queue-compatible ingestion.
 /// Managed ingestion shares this helper so a streaming attempt and a fallback
 /// queue submission always use the exact same normalized ID.
-pub fn makeLogicalSourceId(allocator: std.mem.Allocator, provided: ?[]const u8) ![]u8 {
+pub fn makeLogicalSourceId(
+    allocator: std.mem.Allocator,
+    crypto_provider: core.crypto.CryptoProvider,
+    provided: ?[]const u8,
+) ![]u8 {
     const output = try allocator.alloc(u8, 36);
     errdefer allocator.free(output);
     if (provided) |source_id| {
         try canonicalizeQueuedSourceId(source_id, output);
         return output;
     }
-    var threaded: std.Io.Threaded = .init_single_threaded;
-    var seed: [std.Random.DefaultCsprng.secret_seed_length]u8 = undefined;
-    try threaded.io().randomSecure(&seed);
-    var csprng = std.Random.DefaultCsprng.init(seed);
-    const uuid = core.uuid.Uuid.init(csprng.random()).toString();
+    const uuid = (try core.uuid.Uuid.init(crypto_provider)).toString();
     @memcpy(output, &uuid);
     return output;
 }
@@ -1475,10 +1463,10 @@ const QueuedOutcomeTransport = struct {
     call_count: usize = 0,
     capture_body: bool = false,
     last_body: ?[]u8 = null,
-    transport: core.http.HttpTransport = .{ .sendFn = &send },
+    const vtable: core.http.HttpTransport.VTable = .{ .send = &send };
 
-    fn asTransport(self: *QueuedOutcomeTransport) *core.http.HttpTransport {
-        return &self.transport;
+    fn asTransport(self: *QueuedOutcomeTransport) core.http.HttpTransport {
+        return .{ .context = self, .vtable = &vtable };
     }
 
     fn deinit(self: *QueuedOutcomeTransport) void {
@@ -1487,10 +1475,10 @@ const QueuedOutcomeTransport = struct {
     }
 
     fn send(
-        transport: *core.http.HttpTransport,
+        context: *anyopaque,
         request: *core.http.Request,
     ) !core.http.Response {
-        const self: *QueuedOutcomeTransport = @alignCast(@fieldParentPtr("transport", transport));
+        const self: *QueuedOutcomeTransport = @ptrCast(@alignCast(context));
         const index = @min(self.call_count, self.steps.len - 1);
         self.call_count += 1;
         if (self.capture_body) {
@@ -1531,6 +1519,12 @@ fn queueMessageJson(allocator: std.mem.Allocator, xml: []const u8) ![]u8 {
     return core.base64.decode(allocator, outer);
 }
 
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+fn testRuntime(transport: core.http.HttpTransport) core.http.HttpRuntime {
+    return core.http.HttpRuntime.init(transport, testing_crypto_provider.asProvider());
+}
+
 test "queued bytes upload uses gzip message envelope and isolated SAS requests" {
     const allocator = std.testing.allocator;
     var executor = QueuedTestExecutor{};
@@ -1538,7 +1532,7 @@ test "queued bytes upload uses gzip message envelope and isolated SAS requests" 
     defer manager.deinit();
     var transport = core.http.MockTransport.init(allocator, 201, "");
     defer transport.deinit();
-    var client = QueuedIngestClient.initWithResourceManager(&manager, transport.asTransport());
+    var client = QueuedIngestClient.init(testRuntime(transport.asTransport()), .{ .resource_manager = &manager });
 
     var result = try client.ingest(
         allocator,
@@ -1602,7 +1596,7 @@ test "queued existing blob does not upload and keeps raw size optional" {
     defer manager.deinit();
     var transport = core.http.MockTransport.init(allocator, 201, "");
     defer transport.deinit();
-    var client = QueuedIngestClient.initWithResourceManager(&manager, transport.asTransport());
+    var client = QueuedIngestClient.init(testRuntime(transport.asTransport()), .{ .resource_manager = &manager });
 
     var result = try client.ingest(
         allocator,
@@ -1629,7 +1623,7 @@ test "queued unknown-length readers block upload and omit raw data size" {
         defer manager.deinit();
         var transport = core.http.MockTransport.init(allocator, 201, "");
         defer transport.deinit();
-        var client = QueuedIngestClient.initWithResourceManager(&manager, transport.asTransport());
+        var client = QueuedIngestClient.init(testRuntime(transport.asTransport()), .{ .resource_manager = &manager });
         var reader = std.Io.Reader.fixed("unknown reader\n");
 
         var result = try client.ingest(
@@ -1669,7 +1663,7 @@ test "queued table reporting creates a reference entity before queue acceptance"
         .capture_body = true,
     };
     defer transport.deinit();
-    var client = QueuedIngestClient.initWithResourceManager(&manager, transport.asTransport());
+    var client = QueuedIngestClient.init(testRuntime(transport.asTransport()), .{ .resource_manager = &manager });
 
     var result = try client.ingest(
         allocator,
@@ -1717,7 +1711,7 @@ test "queued unknown queue outcome never exposes a tracking handle" {
         .unknown,
     };
     var transport = QueuedOutcomeTransport{ .allocator = allocator, .steps = &steps };
-    var client = QueuedIngestClient.initWithResourceManager(&manager, transport.asTransport());
+    var client = QueuedIngestClient.init(testRuntime(transport.asTransport()), .{ .resource_manager = &manager });
     var result = try client.ingest(
         allocator,
         .{ .database = "DB", .table = "Table" },
@@ -1781,7 +1775,7 @@ test "queued file reader and replay reader sources submit through temporary blob
         defer manager.deinit();
         var transport = core.http.MockTransport.init(allocator, 201, "");
         defer transport.deinit();
-        var client = QueuedIngestClient.initWithResourceManager(&manager, transport.asTransport());
+        var client = QueuedIngestClient.init(testRuntime(transport.asTransport()), .{ .resource_manager = &manager });
         var result = try client.ingest(
             allocator,
             .{ .database = "DB", .table = "Table" },
@@ -1832,7 +1826,7 @@ test "queued retries known blob rejection with a stable ID and reports resources
         .{ .status = 201 },
     };
     var transport = QueuedOutcomeTransport{ .allocator = allocator, .steps = &steps };
-    var client = QueuedIngestClient.initWithResourceManager(&manager, transport.asTransport());
+    var client = QueuedIngestClient.init(testRuntime(transport.asTransport()), .{ .resource_manager = &manager });
 
     var result = try client.ingest(
         allocator,
@@ -1863,7 +1857,7 @@ test "queued one-shot reader does not retry after a Blob request" {
     };
     var transport = QueuedOutcomeTransport{ .allocator = allocator, .steps = &steps };
     var reader = std.Io.Reader.fixed("reader\n");
-    var client = QueuedIngestClient.initWithResourceManager(&manager, transport.asTransport());
+    var client = QueuedIngestClient.init(testRuntime(transport.asTransport()), .{ .resource_manager = &manager });
 
     var result = try client.ingest(
         allocator,
@@ -1892,7 +1886,7 @@ test "queued queue rejection is known and queue transport ambiguity is never dup
             .{ .status = 403 },
         };
         var transport = QueuedOutcomeTransport{ .allocator = allocator, .steps = &steps };
-        var client = QueuedIngestClient.initWithResourceManager(&manager, transport.asTransport());
+        var client = QueuedIngestClient.init(testRuntime(transport.asTransport()), .{ .resource_manager = &manager });
         var result = try client.ingest(
             allocator,
             .{ .database = "DB", .table = "Table" },
@@ -1917,7 +1911,7 @@ test "queued queue rejection is known and queue transport ambiguity is never dup
             .{ .status = 201 },
         };
         var transport = QueuedOutcomeTransport{ .allocator = allocator, .steps = &steps };
-        var client = QueuedIngestClient.initWithResourceManager(&manager, transport.asTransport());
+        var client = QueuedIngestClient.init(testRuntime(transport.asTransport()), .{ .resource_manager = &manager });
         var result = try client.ingest(
             allocator,
             .{ .database = "DB", .table = "Table" },
@@ -1935,6 +1929,7 @@ test "queued source IDs are canonical nonzero UUIDs" {
     const allocator = std.testing.allocator;
     const normalized = try makeLogicalSourceId(
         allocator,
+        testing_crypto_provider.asProvider(),
         "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
     );
     defer allocator.free(normalized);
@@ -1944,14 +1939,14 @@ test "queued source IDs are canonical nonzero UUIDs" {
     );
     try std.testing.expectError(
         error.InvalidQueuedSourceId,
-        makeLogicalSourceId(allocator, "not-a-uuid"),
+        makeLogicalSourceId(allocator, testing_crypto_provider.asProvider(), "not-a-uuid"),
     );
     try std.testing.expectError(
         error.InvalidQueuedSourceId,
-        makeLogicalSourceId(allocator, "00000000-0000-0000-0000-000000000000"),
+        makeLogicalSourceId(allocator, testing_crypto_provider.asProvider(), "00000000-0000-0000-0000-000000000000"),
     );
 
-    const generated = try makeLogicalSourceId(allocator, null);
+    const generated = try makeLogicalSourceId(allocator, testing_crypto_provider.asProvider(), null);
     defer allocator.free(generated);
     try validateQueuedSourceId(generated);
     try std.testing.expectEqual(@as(u8, '4'), generated[14]);
@@ -1964,7 +1959,7 @@ test "queued validation rejects invalid policies before requests" {
     defer manager.deinit();
     var transport = core.http.MockTransport.init(allocator, 201, "");
     defer transport.deinit();
-    var client = QueuedIngestClient.initWithResourceManager(&manager, transport.asTransport());
+    var client = QueuedIngestClient.init(testRuntime(transport.asTransport()), .{ .resource_manager = &manager });
     const target: StreamingIngestTarget = .{ .database = "DB", .table = "Table" };
     const source: StreamingIngestSource = .{ .bytes = "data" };
     const source_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -2042,7 +2037,7 @@ test "queued precompressed files preserve their extension and raw-size honesty" 
     defer manager.deinit();
     var transport = core.http.MockTransport.init(allocator, 201, "");
     defer transport.deinit();
-    var client = QueuedIngestClient.initWithResourceManager(&manager, transport.asTransport());
+    var client = QueuedIngestClient.init(testRuntime(transport.asTransport()), .{ .resource_manager = &manager });
     var result = try client.ingest(
         allocator,
         .{ .database = "DB", .table = "Table" },
@@ -2105,7 +2100,7 @@ test "queued rejection retries without reopening a one-shot reader" {
     };
     var transport = QueuedOutcomeTransport{ .allocator = allocator, .steps = &steps };
     var reader = std.Io.Reader.fixed("reader\n");
-    var client = QueuedIngestClient.initWithResourceManager(&manager, transport.asTransport());
+    var client = QueuedIngestClient.init(testRuntime(transport.asTransport()), .{ .resource_manager = &manager });
     var result = try client.ingest(
         allocator,
         .{ .database = "DB", .table = "Table" },
@@ -2141,7 +2136,7 @@ test "queued result diagnostics use the caller allocator" {
     defer manager.deinit();
     var transport = core.http.MockTransport.init(allocator, 201, "");
     defer transport.deinit();
-    var client = QueuedIngestClient.initWithResourceManager(&manager, transport.asTransport());
+    var client = QueuedIngestClient.init(testRuntime(transport.asTransport()), .{ .resource_manager = &manager });
     var result = try client.ingest(
         allocator,
         .{ .database = "DB", .table = "Table" },
@@ -2192,7 +2187,7 @@ test "queued compatibility result transfers resource-manager Kusto errors" {
     defer manager.deinit();
     var transport = core.http.MockTransport.init(allocator, 201, "");
     defer transport.deinit();
-    var client = QueuedIngestClient.initWithResourceManager(&manager, transport.asTransport());
+    var client = QueuedIngestClient.init(testRuntime(transport.asTransport()), .{ .resource_manager = &manager });
     var result = try client.ingestFromBlobResult(
         allocator,
         .{ .database = "DB", .table = "Table", .format = .json },
@@ -2220,7 +2215,7 @@ test "queued compatibility result keeps storage rejection explicit" {
     defer manager.deinit();
     var transport = core.http.MockTransport.init(allocator, 403, "denied");
     defer transport.deinit();
-    var client = QueuedIngestClient.initWithResourceManager(&manager, transport.asTransport());
+    var client = QueuedIngestClient.init(testRuntime(transport.asTransport()), .{ .resource_manager = &manager });
     var result = try client.ingestFromBlobResult(
         allocator,
         .{
