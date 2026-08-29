@@ -1,8 +1,15 @@
 const std = @import("std");
 
+/// Single source of truth for the package version: the manifest.
+const package_version = @import("build.zig.zon").version;
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
+    const options = b.addOptions();
+    options.addOption([]const u8, "version", package_version);
+    const options_mod = options.createModule();
 
     const core_dep = b.dependency("azure_sdk_core", .{
         .target = target,
@@ -51,6 +58,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "azure_sdk_amqp", .module = amqp_mod },
             .{ .name = "uamqp", .module = uamqp_mod },
             .{ .name = "serde", .module = serde_mod },
+            .{ .name = "build_options", .module = options_mod },
         },
     });
 
@@ -66,6 +74,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "azure_sdk_amqp", .module = amqp_mod },
                 .{ .name = "uamqp", .module = uamqp_mod },
                 .{ .name = "serde", .module = serde_mod },
+                .{ .name = "build_options", .module = options_mod },
             },
         }),
     });

@@ -10,6 +10,8 @@ const checkpoint = @import("checkpoint.zig");
 const event_data = @import("event_data.zig");
 const errors = @import("errors.zig");
 
+pub const version: []const u8 = @import("build_options").version;
+
 pub const ConnectionStringProperties = messaging_common.ConnectionStringProperties;
 pub const Checkpoint = checkpoint.Checkpoint;
 pub const PartitionOwnership = checkpoint.PartitionOwnership;
@@ -1205,7 +1207,6 @@ pub const ConsumerPartitionOpener = struct {
     fn closePartition(o: *PartitionOpener, client: *PartitionClient) void {
         const self: *ConsumerPartitionOpener = @fieldParentPtr("opener", o);
         client.close(self.deadline_ms) catch {};
-        client.deinit();
         client.allocator.destroy(client);
     }
 };
@@ -1374,6 +1375,10 @@ pub const HubConnection = struct {
 };
 
 // ─────────────────────── Tests ───────────────────────
+
+test "package version comes from the manifest" {
+    try std.testing.expectEqualStrings("0.6.0", version);
+}
 
 // Zig only analyses a file it is told to. Re-exporting a type is not
 // telling it: the decl is lazy, so the file's tests silently do not exist.
