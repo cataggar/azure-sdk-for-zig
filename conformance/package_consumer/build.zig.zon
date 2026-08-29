@@ -1,0 +1,12 @@
+.{
+    .name = .azure_sdk_core_symcrypt_consumer,
+    .version = "0.0.0",
+    .fingerprint = 0x3b8201e43e1af300,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "consumer.zig",
+    },
+}

@@ -7,35 +7,363 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: core-symcrypt-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SYMCRYPT_COMMIT: 286762b7730e2b780678f5ab11fef2b1bad639e0
+  ZIG_SYMCRYPT_COMMIT: 9b3c94a2a4e0d98e055f0d908e11e1d7031b9a4b
+
 jobs:
   package-test:
+    name: package-test (${{ matrix.os }})
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
-          - macos-latest
-    name: package-test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+        include:
+          - os: ubuntu-latest
+            runner: ubuntu-24.04
+            platform: linux
+            target: x86_64-linux-gnu
+            arch: x86_64
+          - os: windows-latest
+            runner: windows-2025
+            platform: windows
+            target: x86_64-windows-msvc
+            arch: x86_64
+          - os: macos-latest
+            runner: macos-latest
+            platform: macos
+            target: x86_64-macos
+            arch: x86_64
     steps:
-      - uses: actions/checkout@v4
-      - name: Install Zig via ghr
-        uses: cataggar/ghr/actions/install@v0.7.0
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
-          tools: |
-            cataggar/zig@v0.16.0 RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
-      - name: Check formatting
+          persist-credentials: false
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
+        with:
+          version: 0.16.0
+      - name: Check source and package tree
         shell: bash
-        run: git ls-files -z -- '*.zig' 'build.zig.zon' | xargs -0 zig fmt --check
-      - name: Run package tests
+        run: |
+          set -euo pipefail
+          zig build source-check -Dsource_only=true --summary all
+          zig build package-check -Dsource_only=true --summary all
+      - name: Confirm unsupported macOS native diagnostic
+        if: matrix.platform == 'macos'
         shell: bash
-        run: zig build test --summary all
-      - name: Build examples
+        run: |
+          set -euo pipefail
+          if zig build test > unsupported-native.log 2>&1; then
+            cat unsupported-native.log
+            echo "macOS native linkage unexpectedly succeeded" >&2
+            exit 1
+          fi
+          cat unsupported-native.log
+          grep -F "unsupported azure_sdk_core_symcrypt target" unsupported-native.log
+          grep -F "x86_64-linux-gnu, aarch64-linux-gnu, x86_64-windows-msvc, aarch64-windows-msvc" unsupported-native.log
+          rm unsupported-native.log
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        if: matrix.platform != 'macos'
+        with:
+          repository: cataggar/zig-symcrypt
+          ref: ${{ env.ZIG_SYMCRYPT_COMMIT }}
+          path: .zig-symcrypt-ci
+          persist-credentials: false
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        if: matrix.platform != 'macos'
+        with:
+          repository: microsoft/SymCrypt
+          ref: ${{ env.SYMCRYPT_COMMIT }}
+          path: .symcrypt-ci-source
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - name: Prepare pinned Linux build tools
+        if: matrix.platform == 'linux'
         shell: bash
-        run: echo "No examples configured"
-      - name: Compile live tests
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends cmake ninja-build python3-pyelftools
+          git -C .symcrypt-ci-source submodule update --init --depth 1 \
+            3rdparty/jitterentropy-library
+      - name: Build verified Linux fixtures
+        if: matrix.platform == 'linux'
         shell: bash
-        run: echo "No live tests configured"
+        run: |
+          set -euo pipefail
+          .zig-symcrypt-ci/tools/build-linux-fixtures.sh \
+            "$GITHUB_WORKSPACE/.symcrypt-ci-source" \
+            "$GITHUB_WORKSPACE/.symcrypt-ci/${{ matrix.arch }}" \
+            "${{ matrix.arch }}"
+      - name: Validate Linux dynamic adapter
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$GITHUB_WORKSPACE/.symcrypt-ci/${{ matrix.arch }}"
+          include="$GITHUB_WORKSPACE/.zig-symcrypt-ci/vendor/symcrypt/include"
+          common=(
+            "-Dtarget=${{ matrix.target }}"
+            "-Dlinkage=dynamic"
+            "-Dsymcrypt_include_dir=$include"
+            "-Dsymcrypt_provenance=$fixture/provenance.json"
+            "-Dsymcrypt_libraries=$fixture/lib/libsymcrypt_plus.a"
+            "-Dsymcrypt_libraries=$fixture/module/generic/libsymcrypt.so"
+          )
+          zig build headers-check -Dheaders_only=true \
+            "-Dtarget=${{ matrix.target }}" "-Dsymcrypt_include_dir=$include" \
+            --summary all
+          zig build headers-check -Dheaders_only=true -Dsymcrypt_checked=true \
+            "-Dtarget=${{ matrix.target }}" "-Dsymcrypt_include_dir=$include" \
+            --summary all
+          zig build provenance-check "${common[@]}" --summary all
+          for optimize in Debug ReleaseSafe; do
+            zig build test "-Doptimize=$optimize" "${common[@]}" --summary all
+          done
+          zig build example-run -Doptimize=ReleaseSafe "${common[@]}" --summary all
+          zig build package-consumer-check -Doptimize=ReleaseSafe \
+            "${common[@]}" --summary all
+      - name: Validate Linux static adapter
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$GITHUB_WORKSPACE/.symcrypt-ci/${{ matrix.arch }}"
+          include="$GITHUB_WORKSPACE/.zig-symcrypt-ci/vendor/symcrypt/include"
+          common=(
+            "-Dtarget=${{ matrix.target }}"
+            "-Dlinkage=static"
+            "-Dsymcrypt_include_dir=$include"
+            "-Dsymcrypt_provenance=$fixture/provenance.json"
+            "-Dsymcrypt_libraries=$fixture/lib/libsymcrypt_plus.a"
+            "-Dsymcrypt_libraries=$fixture/lib/libsymcrypt_posixusermode.a"
+            "-Dsymcrypt_libraries=$fixture/lib/libsymcrypt_common.a"
+            "-Dsymcrypt_libraries=$fixture/lib/libsymcrypt_mlkem.a"
+          )
+          zig build provenance-check "${common[@]}" --summary all
+          for optimize in Debug ReleaseSafe; do
+            zig build test "-Doptimize=$optimize" "${common[@]}" --summary all
+          done
+          zig build example-run -Doptimize=ReleaseSafe "${common[@]}" --summary all
+          zig build package-consumer-check -Doptimize=ReleaseSafe \
+            "${common[@]}" --summary all
+      - name: Build verified Windows fixtures
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          ./.zig-symcrypt-ci/tools/build-windows-fixtures.ps1 `
+            -Source "$env:GITHUB_WORKSPACE/.symcrypt-ci-source" `
+            -Output "$env:GITHUB_WORKSPACE/.symcrypt-ci/${{ matrix.arch }}" `
+            -Architecture "${{ matrix.arch }}"
+      - name: Validate Windows dynamic adapter
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $fixture = "$env:GITHUB_WORKSPACE/.symcrypt-ci/${{ matrix.arch }}"
+          $include = "$env:GITHUB_WORKSPACE/.zig-symcrypt-ci/vendor/symcrypt/include"
+          $common = @(
+            "-Dtarget=${{ matrix.target }}",
+            "-Dlinkage=dynamic",
+            "-Dsymcrypt_include_dir=$include",
+            "-Dsymcrypt_provenance=$fixture/provenance.json",
+            "-Dsymcrypt_libraries=$fixture/lib/symcrypt_plus_NoCIL.lib",
+            "-Dsymcrypt_libraries=$fixture/dll/symcrypt_zig_103_13.lib"
+          )
+          zig build headers-check -Dheaders_only=true `
+            "-Dtarget=${{ matrix.target }}" "-Dsymcrypt_include_dir=$include" `
+            --summary all
+          if ($LASTEXITCODE -ne 0) { throw "FRE header check failed" }
+          zig build headers-check -Dheaders_only=true -Dsymcrypt_checked=true `
+            "-Dtarget=${{ matrix.target }}" "-Dsymcrypt_include_dir=$include" `
+            --summary all
+          if ($LASTEXITCODE -ne 0) { throw "checked header check failed" }
+          zig build provenance-check @common --summary all
+          if ($LASTEXITCODE -ne 0) { throw "dynamic provenance failed" }
+          foreach ($optimize in @("Debug", "ReleaseSafe")) {
+            zig build test "-Doptimize=$optimize" @common --summary all
+            if ($LASTEXITCODE -ne 0) { throw "dynamic $optimize tests failed" }
+          }
+          zig build example-run -Doptimize=ReleaseSafe @common --summary all
+          if ($LASTEXITCODE -ne 0) { throw "dynamic example failed" }
+          zig build package-consumer-check -Doptimize=ReleaseSafe @common --summary all
+          if ($LASTEXITCODE -ne 0) { throw "dynamic package consumer failed" }
+      - name: Validate Windows static adapter
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $fixture = "$env:GITHUB_WORKSPACE/.symcrypt-ci/${{ matrix.arch }}"
+          $include = "$env:GITHUB_WORKSPACE/.zig-symcrypt-ci/vendor/symcrypt/include"
+          $common = @(
+            "-Dtarget=${{ matrix.target }}",
+            "-Dlinkage=static",
+            "-Dsymcrypt_include_dir=$include",
+            "-Dsymcrypt_provenance=$fixture/provenance.json",
+            "-Dsymcrypt_libraries=$fixture/lib/symcrypt_plus_NoCIL.lib",
+            "-Dsymcrypt_libraries=$fixture/lib/symcrypt_static_NoCIL.lib"
+          )
+          zig build provenance-check @common --summary all
+          if ($LASTEXITCODE -ne 0) { throw "static provenance failed" }
+          foreach ($optimize in @("Debug", "ReleaseSafe")) {
+            zig build test "-Doptimize=$optimize" @common --summary all
+            if ($LASTEXITCODE -ne 0) { throw "static $optimize tests failed" }
+          }
+          zig build example-run -Doptimize=ReleaseSafe @common --summary all
+          if ($LASTEXITCODE -ne 0) { throw "static example failed" }
+          zig build package-consumer-check -Doptimize=ReleaseSafe @common --summary all
+          if ($LASTEXITCODE -ne 0) { throw "static package consumer failed" }
+
+  architecture-test:
+    name: architecture-test (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            target: aarch64-linux-gnu
+            arch: aarch64
+            runner: ubuntu-24.04-arm
+          - platform: windows
+            target: aarch64-windows-msvc
+            arch: aarch64
+            runner: windows-11-vs2026-arm
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          repository: cataggar/zig-symcrypt
+          ref: ${{ env.ZIG_SYMCRYPT_COMMIT }}
+          path: .zig-symcrypt-ci
+          persist-credentials: false
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          repository: microsoft/SymCrypt
+          ref: ${{ env.SYMCRYPT_COMMIT }}
+          path: .symcrypt-ci-source
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
+        with:
+          version: 0.16.0
+      - name: Use verified x86-64 Zig under Windows Arm64 emulation
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $tools = "$env:GITHUB_WORKSPACE/.tools"
+          $archive = "$tools/zig-x86_64-windows-0.16.0.zip"
+          $directory = "$tools/zig-x86_64"
+          New-Item -ItemType Directory -Force -Path $tools | Out-Null
+          Invoke-WebRequest `
+            -Uri "https://ziglang.org/download/0.16.0/zig-x86_64-windows-0.16.0.zip" `
+            -OutFile $archive
+          $actual = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          $expected = "68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e"
+          if ($actual -ne $expected) {
+            throw "x86-64 Zig archive SHA-256 mismatch: found $actual, expected $expected"
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $directory
+          (Join-Path $directory "zig-x86_64-windows-0.16.0") |
+            Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Prepare pinned Linux build tools
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends cmake ninja-build python3-pyelftools
+          git -C .symcrypt-ci-source submodule update --init --depth 1 \
+            3rdparty/jitterentropy-library
+      - name: Build and validate Linux Arm64
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          .zig-symcrypt-ci/tools/build-linux-fixtures.sh \
+            "$GITHUB_WORKSPACE/.symcrypt-ci-source" \
+            "$GITHUB_WORKSPACE/.symcrypt-ci/${{ matrix.arch }}" \
+            "${{ matrix.arch }}"
+          fixture="$GITHUB_WORKSPACE/.symcrypt-ci/${{ matrix.arch }}"
+          include="$GITHUB_WORKSPACE/.zig-symcrypt-ci/vendor/symcrypt/include"
+          dynamic=(
+            "-Dtarget=${{ matrix.target }}"
+            "-Dtarget_can_run=true"
+            "-Dlinkage=dynamic"
+            "-Dsymcrypt_include_dir=$include"
+            "-Dsymcrypt_provenance=$fixture/provenance.json"
+            "-Dsymcrypt_libraries=$fixture/lib/libsymcrypt_plus.a"
+            "-Dsymcrypt_libraries=$fixture/module/generic/libsymcrypt.so"
+          )
+          static=(
+            "-Dtarget=${{ matrix.target }}"
+            "-Dtarget_can_run=true"
+            "-Dlinkage=static"
+            "-Dsymcrypt_include_dir=$include"
+            "-Dsymcrypt_provenance=$fixture/provenance.json"
+            "-Dsymcrypt_libraries=$fixture/lib/libsymcrypt_plus.a"
+            "-Dsymcrypt_libraries=$fixture/lib/libsymcrypt_posixusermode.a"
+            "-Dsymcrypt_libraries=$fixture/lib/libsymcrypt_common.a"
+            "-Dsymcrypt_libraries=$fixture/lib/libsymcrypt_mlkem.a"
+          )
+          for optimize in Debug ReleaseSafe; do
+            zig build test "-Doptimize=$optimize" "${dynamic[@]}" --summary all
+            zig build test "-Doptimize=$optimize" "${static[@]}" --summary all
+          done
+          zig build example-run -Doptimize=ReleaseSafe "${dynamic[@]}" --summary all
+          zig build example-run -Doptimize=ReleaseSafe "${static[@]}" --summary all
+          zig build package-consumer-check -Doptimize=ReleaseSafe \
+            "${dynamic[@]}" --summary all
+          zig build package-consumer-check -Doptimize=ReleaseSafe \
+            "${static[@]}" --summary all
+      - name: Build verified Windows Arm64 fixtures
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          ./.zig-symcrypt-ci/tools/build-windows-fixtures.ps1 `
+            -Source "$env:GITHUB_WORKSPACE/.symcrypt-ci-source" `
+            -Output "$env:GITHUB_WORKSPACE/.symcrypt-ci/${{ matrix.arch }}" `
+            -Architecture "${{ matrix.arch }}"
+      - name: Validate Windows Arm64
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $fixture = "$env:GITHUB_WORKSPACE/.symcrypt-ci/${{ matrix.arch }}"
+          $include = "$env:GITHUB_WORKSPACE/.zig-symcrypt-ci/vendor/symcrypt/include"
+          $dynamic = @(
+            "-Dtarget=${{ matrix.target }}",
+            "-Dtarget_can_run=true",
+            "-Dlinkage=dynamic",
+            "-Dsymcrypt_include_dir=$include",
+            "-Dsymcrypt_provenance=$fixture/provenance.json",
+            "-Dsymcrypt_libraries=$fixture/lib/symcrypt_plus_NoCIL.lib",
+            "-Dsymcrypt_libraries=$fixture/dll/symcrypt_zig_103_13.lib"
+          )
+          $static = @(
+            "-Dtarget=${{ matrix.target }}",
+            "-Dtarget_can_run=true",
+            "-Dlinkage=static",
+            "-Dsymcrypt_include_dir=$include",
+            "-Dsymcrypt_provenance=$fixture/provenance.json",
+            "-Dsymcrypt_libraries=$fixture/lib/symcrypt_plus_NoCIL.lib",
+            "-Dsymcrypt_libraries=$fixture/lib/symcrypt_static_NoCIL.lib"
+          )
+          foreach ($optimize in @("Debug", "ReleaseSafe")) {
+            zig build test "-Doptimize=$optimize" @dynamic --summary all
+            if ($LASTEXITCODE -ne 0) { throw "dynamic Arm64 $optimize tests failed" }
+            zig build test "-Doptimize=$optimize" @static --summary all
+            if ($LASTEXITCODE -ne 0) { throw "static Arm64 $optimize tests failed" }
+          }
+          zig build example-run -Doptimize=ReleaseSafe @dynamic --summary all
+          if ($LASTEXITCODE -ne 0) { throw "dynamic Arm64 example failed" }
+          zig build example-run -Doptimize=ReleaseSafe @static --summary all
+          if ($LASTEXITCODE -ne 0) { throw "static Arm64 example failed" }
+          zig build package-consumer-check -Doptimize=ReleaseSafe @dynamic --summary all
+          if ($LASTEXITCODE -ne 0) { throw "dynamic Arm64 package consumer failed" }
+          zig build package-consumer-check -Doptimize=ReleaseSafe @static --summary all
+          if ($LASTEXITCODE -ne 0) { throw "static Arm64 package consumer failed" }

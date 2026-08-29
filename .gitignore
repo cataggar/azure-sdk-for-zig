@@ -2,3 +2,8 @@ zig-cache/
 zig-out/
 zig-pkg/
 .zig-cache/
+.agent-scratch/
+.symcrypt-ci/
+.symcrypt-ci-source/
+.zig-symcrypt-ci/
+.zig-verified-runs/
