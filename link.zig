@@ -97,13 +97,6 @@ fn remainingToDeliveryLimit(limit: u32, count: u32) u32 {
     return if (remaining > 0) @intCast(remaining) else 0;
 }
 
-fn senderSettleModesCompatible(
-    actual: perf.SenderSettleMode,
-    desired: perf.SenderSettleMode,
-) bool {
-    return actual == .mixed or desired == .mixed or actual == desired;
-}
-
 pub const Session = struct {
     allocator: Allocator,
     driver: *Driver,
@@ -564,12 +557,9 @@ pub const Session = struct {
         // Match by link name: the peer echoes it and picks its own handle.
         for (self.senders.items) |s| {
             if (s.awaiting_attach and !s.poisoned and std.mem.eql(u8, s.name, a.name)) {
-                // The sender declares the actual mode. A receiver's field is
-                // only its desired preference; omission decodes as mixed and
-                // must not silently rewrite settled into unsettled or vice
-                // versa.
-                if (!senderSettleModesCompatible(s.snd_settle_mode, a.snd_settle_mode))
-                    return error.MalformedFrame;
+                // `openSender` initiated this link, so its Attach declared the
+                // actual mode. The receiver's response is advisory even when
+                // it expresses the opposite fixed preference.
                 s.remote_handle = a.handle;
                 s.max_message_size = a.max_message_size;
                 s.rcv_settle_mode = a.rcv_settle_mode;
@@ -730,9 +720,9 @@ pub const SenderOptions = struct {
     /// The entity the messages go to, such as `eh` or `eh/Partitions/3`.
     target_address: []const u8,
     source_address: ?[]const u8 = null,
-    /// Actual sender settlement mode. The receiver's Attach carries only its
-    /// desired preference: mixed/omitted accepts this selection, while a
-    /// conflicting fixed preference rejects the Attach.
+    /// Actual sender settlement mode. For this locally initiated link, the
+    /// receiver's Attach carries only an advisory desired preference and
+    /// cannot replace this selection.
     snd_settle_mode: perf.SenderSettleMode = .mixed,
     rcv_settle_mode: perf.ReceiverSettleMode = .first,
     desired_capabilities: ?[]const []const u8 = null,
@@ -4112,7 +4102,7 @@ test "an omitted receiver preference does not pre-settle an unsettled sender" {
     try testing.expect(!(decoded.performative.transfer.settled orelse false));
 }
 
-test "a conflicting fixed receiver settlement preference rejects Attach" {
+test "a conflicting receiver preference preserves actual mode and other links" {
     const Case = struct {
         local: perf.SenderSettleMode,
         remote: perf.SenderSettleMode,
@@ -4130,11 +4120,35 @@ test "a conflicting fixed receiver settlement preference rejects Attach" {
 
         try scriptHandshake(peer, 65536);
         try peer.push(0, .{ .attach = .{
+            .name = "survivor",
+            .handle = 10,
+            .role = .receiver,
+            .initial_delivery_count = 0,
+        } });
+        try peer.push(0, .{ .flow = .{
+            .next_incoming_id = 0,
+            .incoming_window = 1000,
+            .next_outgoing_id = 1,
+            .outgoing_window = 1000,
+            .handle = 10,
+            .delivery_count = 0,
+            .link_credit = 1,
+        } });
+        try peer.push(0, .{ .attach = .{
             .name = "producer",
-            .handle = 0,
+            .handle = 11,
             .role = .receiver,
             .snd_settle_mode = case.remote,
             .initial_delivery_count = 0,
+        } });
+        try peer.push(0, .{ .flow = .{
+            .next_incoming_id = 0,
+            .incoming_window = 1000,
+            .next_outgoing_id = 1,
+            .outgoing_window = 1000,
+            .handle = 11,
+            .delivery_count = 0,
+            .link_credit = 1,
         } });
 
         var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
@@ -4142,19 +4156,47 @@ test "a conflicting fixed receiver settlement preference rejects Attach" {
         var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
         defer fixture.deinit();
 
-        try testing.expectError(error.MalformedFrame, openSender(&fixture.session, .{
+        const survivor = try openSender(&fixture.session, .{
+            .name = "survivor",
+            .target_address = "other",
+            .snd_settle_mode = .settled,
+        }, 10_000);
+        const sender = try openSender(&fixture.session, .{
             .name = "producer",
             .target_address = "entity",
             .snd_settle_mode = case.local,
-        }, 10_000));
-        try testing.expectEqual(connection.State.err, driver.state);
-        try testing.expect(fixture.session.ended);
+        }, 10_000);
+        _ = try fixture.session.pump(10_000);
 
+        try testing.expectEqual(connection.State.opened, driver.state);
+        try testing.expect(!fixture.session.ended);
+        try testing.expect(survivor.attached);
+        try testing.expect(sender.attached);
+        try testing.expectEqual(case.local, sender.snd_settle_mode);
+
+        mem.clearWritten();
+        _ = try survivor.sendBytesAsync("other", .{}, 10_000);
+        _ = try sender.sendBytesAsync("actual", .{}, 10_000);
         var frames = try EmittedFrames.parse(allocator, mem.written());
         defer frames.deinit();
         const transfers = try frames.of(allocator, perf.descriptor.transfer);
         defer allocator.free(transfers);
-        try testing.expectEqual(@as(usize, 0), transfers.len);
+        try testing.expectEqual(@as(usize, 2), transfers.len);
+
+        var survivor_transfer = try perf.decode(allocator, transfers[0]);
+        defer survivor_transfer.deinit();
+        try testing.expect(survivor_transfer.performative.transfer.settled orelse false);
+
+        var actual_transfer = try perf.decode(allocator, transfers[1]);
+        defer actual_transfer.deinit();
+        try testing.expectEqual(
+            case.local == .settled,
+            actual_transfer.performative.transfer.settled orelse false,
+        );
+        try testing.expectEqual(
+            @as(usize, if (case.local == .settled) 0 else 1),
+            sender.inFlight(),
+        );
     }
 }
 
