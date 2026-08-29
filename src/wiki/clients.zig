@@ -21,74 +21,26 @@ fn responseStatusExpected(status: u16, expected: []const u16) bool {
 }
 const default_endpoint = "https://dev.azure.com";
 const default_api_version = "7.2-preview";
-const auth_scopes: []const []const u8 = &.{"{endpoint}/.default"};
 
 pub const WikiClient = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
-    allocator: std.mem.Allocator,
-    auth_policy: ?*core.pipeline.BearerTokenAuthPolicy,
-    policy_ptrs: []*core.pipeline.HttpPolicy,
+    pipeline: core.http.HttpPipeline,
 
     pub const InitOptions = struct {
-        credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
         endpoint: []const u8 = default_endpoint,
         api_version: []const u8 = default_api_version,
     };
 
-    pub const PipelineOptions = struct {
-        endpoint: []const u8 = default_endpoint,
-        api_version: []const u8 = default_api_version,
-    };
-
-    pub fn init(allocator: std.mem.Allocator, options: InitOptions) !WikiClient {
-        const auth_policy = try allocator.create(core.pipeline.BearerTokenAuthPolicy);
-        errdefer allocator.destroy(auth_policy);
-        auth_policy.* = core.pipeline.BearerTokenAuthPolicy.init(
-            allocator,
-            options.credential,
-            auth_scopes,
-        );
-
-        const policy_ptrs = try allocator.alloc(*core.pipeline.HttpPolicy, 1);
-        errdefer allocator.free(policy_ptrs);
-        policy_ptrs[0] = auth_policy.asPolicy();
-
-        return .{
-            .allocator = allocator,
-            .endpoint = options.endpoint,
-            .api_version = options.api_version,
-            .auth_policy = auth_policy,
-            .policy_ptrs = policy_ptrs,
-            .pipeline = .{
-                .policies = policy_ptrs,
-                .transport_impl = options.transport,
-            },
-        };
-    }
-    pub fn initWithPipeline(
-        allocator: std.mem.Allocator,
-        pipeline: core.pipeline.HttpPipeline,
-        options: PipelineOptions,
+    pub fn init(
+        pipeline: core.http.HttpPipeline,
+        options: InitOptions,
     ) WikiClient {
         return .{
-            .allocator = allocator,
             .endpoint = options.endpoint,
             .api_version = options.api_version,
-            .auth_policy = null,
-            .policy_ptrs = &.{},
             .pipeline = pipeline,
         };
-    }
-
-    pub fn deinit(self: *@This()) void {
-        if (self.auth_policy) |auth_policy| {
-            auth_policy.deinit();
-            self.allocator.destroy(auth_policy);
-            self.allocator.free(self.policy_ptrs);
-        }
     }
 
     pub fn wikis(self: *@This()) Wikis {
@@ -143,7 +95,7 @@ pub const WikiClient = struct {
 pub const Wikis = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets all wikis in a project or collection.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.WikiV2List {
         @setEvalBranchQuota(100_000);
@@ -323,7 +275,7 @@ pub const Wikis = struct {
 pub const Attachments = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const CreateResult = union(enum) {
         status_201: struct {
@@ -416,7 +368,7 @@ pub const Attachments = struct {
 pub const PageMoves = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const CreateResult = union(enum) {
         status_201: struct {
@@ -514,7 +466,7 @@ pub const PageMoves = struct {
 pub const Pages = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const DeletePageResult = union(enum) {
         status_200: struct {
@@ -1208,7 +1160,7 @@ pub const Pages = struct {
 pub const PageStats = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Returns page detail corresponding to Page ID.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, wiki_identifier: []const u8, page_id: i32, page_views_for_days: ?i32) !models.WikiPageDetail {
         @setEvalBranchQuota(100_000);
@@ -1255,7 +1207,7 @@ pub const PageStats = struct {
 pub const PagesBatch = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Returns pageable list of Wiki Pages
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, wiki_identifier: []const u8, version_descriptor_version: ?[]const u8, @"version_descriptor.version_options": ?enums.GetRequestVersionDescriptorVersionOptions, @"version_descriptor.version_type": ?enums.GetRequestVersionDescriptorVersionType, body: models.WikiPagesBatchRequest) !models.WikiPageDetailList {
         @setEvalBranchQuota(100_000);

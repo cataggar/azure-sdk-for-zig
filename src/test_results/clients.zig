@@ -21,74 +21,26 @@ fn responseStatusExpected(status: u16, expected: []const u16) bool {
 }
 const default_endpoint = "https://vstmr.dev.azure.com";
 const default_api_version = "7.2-preview";
-const auth_scopes: []const []const u8 = &.{"{endpoint}/.default"};
 
 pub const TestResultsClient = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
-    allocator: std.mem.Allocator,
-    auth_policy: ?*core.pipeline.BearerTokenAuthPolicy,
-    policy_ptrs: []*core.pipeline.HttpPolicy,
+    pipeline: core.http.HttpPipeline,
 
     pub const InitOptions = struct {
-        credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
         endpoint: []const u8 = default_endpoint,
         api_version: []const u8 = default_api_version,
     };
 
-    pub const PipelineOptions = struct {
-        endpoint: []const u8 = default_endpoint,
-        api_version: []const u8 = default_api_version,
-    };
-
-    pub fn init(allocator: std.mem.Allocator, options: InitOptions) !TestResultsClient {
-        const auth_policy = try allocator.create(core.pipeline.BearerTokenAuthPolicy);
-        errdefer allocator.destroy(auth_policy);
-        auth_policy.* = core.pipeline.BearerTokenAuthPolicy.init(
-            allocator,
-            options.credential,
-            auth_scopes,
-        );
-
-        const policy_ptrs = try allocator.alloc(*core.pipeline.HttpPolicy, 1);
-        errdefer allocator.free(policy_ptrs);
-        policy_ptrs[0] = auth_policy.asPolicy();
-
-        return .{
-            .allocator = allocator,
-            .endpoint = options.endpoint,
-            .api_version = options.api_version,
-            .auth_policy = auth_policy,
-            .policy_ptrs = policy_ptrs,
-            .pipeline = .{
-                .policies = policy_ptrs,
-                .transport_impl = options.transport,
-            },
-        };
-    }
-    pub fn initWithPipeline(
-        allocator: std.mem.Allocator,
-        pipeline: core.pipeline.HttpPipeline,
-        options: PipelineOptions,
+    pub fn init(
+        pipeline: core.http.HttpPipeline,
+        options: InitOptions,
     ) TestResultsClient {
         return .{
-            .allocator = allocator,
             .endpoint = options.endpoint,
             .api_version = options.api_version,
-            .auth_policy = null,
-            .policy_ptrs = &.{},
             .pipeline = pipeline,
         };
-    }
-
-    pub fn deinit(self: *@This()) void {
-        if (self.auth_policy) |auth_policy| {
-            auth_policy.deinit();
-            self.allocator.destroy(auth_policy);
-            self.allocator.free(self.policy_ptrs);
-        }
     }
 
     pub fn codecoverage(self: *@This()) Codecoverage {
@@ -423,7 +375,7 @@ pub const TestResultsClient = struct {
 pub const Codecoverage = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// http://(tfsserver):8080/tfs/DefaultCollection/_apis/test/CodeCoverage?buildId=10&deltaBuildId=9 Request: build id and delta build id (optional)
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, delta_build_id: ?i32) !models.CodeCoverageSummary {
         @setEvalBranchQuota(100_000);
@@ -575,7 +527,7 @@ pub const Codecoverage = struct {
 pub const Filecoverage = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const GetResult = union(enum) {
         status_200: struct {
@@ -644,7 +596,7 @@ pub const Filecoverage = struct {
 pub const Status = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const GetResult = union(enum) {
         status_200: struct {
@@ -716,7 +668,7 @@ pub const Status = struct {
 pub const Extensionfields = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Returns List of custom test fields for the given custom test field scope.
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, scope_filter: enums.QueryRequestScopeFilter) !models.CustomTestFieldDefinitionList {
         @setEvalBranchQuota(100_000);
@@ -863,7 +815,7 @@ pub const Extensionfields = struct {
 pub const Metrics = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get summary of test results.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, pipeline_id: i32, stage_name: ?[]const u8, phase_name: ?[]const u8, job_name: ?[]const u8, metric_names: ?[]const u8, group_by_node: ?bool) !models.PipelineTestMetrics {
         @setEvalBranchQuota(100_000);
@@ -936,7 +888,7 @@ pub const Metrics = struct {
 pub const Resultdetailsbybuild = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, publish_context: ?[]const u8, group_by: ?[]const u8, @"$filter": ?[]const u8, @"$orderby": ?[]const u8, should_include_results: ?bool, query_run_summary_for_in_progress: ?bool) !models.TestResultsDetails {
         @setEvalBranchQuota(100_000);
@@ -1014,7 +966,7 @@ pub const Resultdetailsbybuild = struct {
 pub const Resultdetailsbyrelease = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, release_env_id: i32, publish_context: ?[]const u8, group_by: ?[]const u8, @"$filter": ?[]const u8, @"$orderby": ?[]const u8, should_include_results: ?bool, query_run_summary_for_in_progress: ?bool) !models.TestResultsDetails {
         @setEvalBranchQuota(100_000);
@@ -1094,7 +1046,7 @@ pub const Resultdetailsbyrelease = struct {
 pub const Resultgroupsbybuild = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const ListResult = union(enum) {
         status_200: struct {
@@ -1178,7 +1130,7 @@ pub const Resultgroupsbybuild = struct {
 pub const Resultgroupsbyrelease = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const ListResult = union(enum) {
         status_200: struct {
@@ -1267,7 +1219,7 @@ pub const Resultgroupsbyrelease = struct {
 pub const Results = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn getTestResultsByQuery(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.TestResultsQuery) !models.TestResultsQuery {
         @setEvalBranchQuota(100_000);
@@ -1547,7 +1499,7 @@ pub const Results = struct {
 pub const History = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.ResultsFilter) !models.TestResultHistory {
         @setEvalBranchQuota(100_000);
@@ -1589,7 +1541,7 @@ pub const History = struct {
 pub const ResultMetaData = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get list of test Result meta data details for corresponding testcasereferenceId
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, details_to_include: ?enums.QueryRequestDetailsToInclude, body: []const []const u8) !models.TestResultMetaDataList {
         @setEvalBranchQuota(100_000);
@@ -1676,7 +1628,7 @@ pub const ResultMetaData = struct {
 pub const TestHistory = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get history of a test method using TestHistoryQuery
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.TestHistoryQuery) !models.TestHistoryQuery {
         @setEvalBranchQuota(100_000);
@@ -1718,7 +1670,7 @@ pub const TestHistory = struct {
 pub const Workitems = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const DeleteResult = union(enum) {
         status_200: struct {
@@ -1917,7 +1869,7 @@ pub const Workitems = struct {
 pub const Resultsbybuild = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const ListResult = union(enum) {
         status_200: struct {
@@ -2009,7 +1961,7 @@ pub const Resultsbybuild = struct {
 pub const Resultsbypipeline = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get a list of results.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, pipeline_id: i32, stage_name: ?[]const u8, phase_name: ?[]const u8, job_name: ?[]const u8, outcomes: ?[]const u8, include_all_build_runs: ?bool, @"$top": ?i32, continuation_token: ?[]const u8) !models.ShallowTestCaseResultList {
         @setEvalBranchQuota(100_000);
@@ -2088,7 +2040,7 @@ pub const Resultsbypipeline = struct {
 pub const Resultsbyrelease = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const ListResult = union(enum) {
         status_200: struct {
@@ -2185,7 +2137,7 @@ pub const Resultsbyrelease = struct {
 pub const ResultsgroupDetails = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get all the available groups details and for these groups get failed and aborted results.
     pub fn testResultsGroupDetails(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, pipeline_id: i32, stage_name: ?[]const u8, phase_name: ?[]const u8, job_name: ?[]const u8, should_include_failed_and_aborted_results: ?bool, query_group_summary_for_in_progress: ?bool) !models.TestResultsDetails {
         @setEvalBranchQuota(100_000);
@@ -2256,7 +2208,7 @@ pub const ResultsgroupDetails = struct {
 pub const Resultsummarybybuild = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, publish_context: ?[]const u8, include_failure_details: ?bool, build_to_compare_branch_name: ?[]const u8, build_to_compare_build_system: ?[]const u8, build_to_compare_definition_id: ?i32, build_to_compare_id: ?i32, build_to_compare_number: ?[]const u8, build_to_compare_repository_id: ?[]const u8, build_to_compare_uri: ?[]const u8) !models.TestResultSummary {
         @setEvalBranchQuota(100_000);
@@ -2353,7 +2305,7 @@ pub const Resultsummarybybuild = struct {
 pub const Resultsummarybypipeline = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get summary of test results.
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, pipeline_id: i32, stage_name: ?[]const u8, phase_name: ?[]const u8, job_name: ?[]const u8, include_failure_details: ?bool) !models.TestResultSummary {
         @setEvalBranchQuota(100_000);
@@ -2419,7 +2371,7 @@ pub const Resultsummarybypipeline = struct {
 pub const Resultsummarybyrelease = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn queryTestResultsReportForRelease(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32, release_env_id: i32, publish_context: ?[]const u8, include_failure_details: ?bool, release_to_compare_attempt: ?i32, release_to_compare_creation_date: ?[]const u8, release_to_compare_definition_id: ?i32, release_to_compare_environment_creation_date: ?[]const u8, release_to_compare_environment_definition_id: ?i32, release_to_compare_environment_definition_name: ?[]const u8, release_to_compare_environment_id: ?i32, release_to_compare_environment_name: ?[]const u8, release_to_compare_id: ?i32, release_to_compare_name: ?[]const u8) !models.TestResultSummary {
         @setEvalBranchQuota(100_000);
@@ -2569,7 +2521,7 @@ pub const Resultsummarybyrelease = struct {
 pub const Resultsummarybyrequirement = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_ids: ?[]const u8, body: models.TestResultsContext) !models.TestSummaryForWorkItemList {
         @setEvalBranchQuota(100_000);
@@ -2618,7 +2570,7 @@ pub const Resultsummarybyrequirement = struct {
 pub const ResultTrendByBuild = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.TestResultTrendFilter) !models.AggregatedDataForResultTrendList {
         @setEvalBranchQuota(100_000);
@@ -2660,7 +2612,7 @@ pub const ResultTrendByBuild = struct {
 pub const ResultTrendByRelease = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.TestResultTrendFilter) !models.AggregatedDataForResultTrendList {
         @setEvalBranchQuota(100_000);
@@ -2702,7 +2654,7 @@ pub const ResultTrendByRelease = struct {
 pub const Runs = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_uri: ?[]const u8, owner: ?[]const u8, tmi_run_id: ?[]const u8, plan_id: ?i32, include_run_details: ?bool, automated: ?bool, @"$skip": ?i32, @"$top": ?i32) !models.TestRunList {
         @setEvalBranchQuota(100_000);
@@ -2937,7 +2889,7 @@ pub const Runs = struct {
 pub const Attachments = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const GetTestRunAttachmentZipResult = union(enum) {
         status_200: struct {
@@ -3291,7 +3243,7 @@ pub const Attachments = struct {
 pub const MessageLogs = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get test run message logs
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32) !models.TestMessageLogDetailsList {
         @setEvalBranchQuota(100_000);
@@ -3331,7 +3283,7 @@ pub const MessageLogs = struct {
 pub const ResultDocument = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn publishTestResultDocument(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, body: models.TestResultDocument) !models.TestResultDocument {
         @setEvalBranchQuota(100_000);
@@ -3375,7 +3327,7 @@ pub const ResultDocument = struct {
 pub const Testlog = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get list of test result attachments reference
     pub fn getTestResultLogs(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, result_id: i32, directory_path: ?[]const u8, file_name_prefix: ?[]const u8, fetch_meta_data: ?bool, top: ?i32, continuation_token: ?[]const u8) !models.TestLogList {
         @setEvalBranchQuota(100_000);
@@ -3572,7 +3524,7 @@ pub const Testlog = struct {
 pub const Testlogstoreendpoint = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get SAS Uri of a test results attachment
     pub fn getTestLogStoreEndpointDetailsForResultLog(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, result_id: i32, file_path: []const u8) !models.TestLogStoreEndpointDetails {
         @setEvalBranchQuota(100_000);
@@ -3839,7 +3791,7 @@ pub const Testlogstoreendpoint = struct {
 pub const Bugs = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, test_case_result_id: i32) !models.WorkItemReferenceList {
         @setEvalBranchQuota(100_000);
@@ -3881,7 +3833,7 @@ pub const Bugs = struct {
 pub const SimilarTestResults = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets the list of results whose failure matches with the provided one.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, test_result_id: i32, test_sub_result_id: i32, @"$top": ?i32, continuation_token: ?[]const u8) !models.TestCaseResultList {
         @setEvalBranchQuota(100_000);
@@ -3931,7 +3883,7 @@ pub const SimilarTestResults = struct {
 pub const Runsummary = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get test run summary, used when we want to get summary of a run by outcome. Test run should be in completed state.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32) !models.TestRunStatistic {
         @setEvalBranchQuota(100_000);
@@ -3971,7 +3923,7 @@ pub const Runsummary = struct {
 pub const Statistics = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get test run statistics , used when we want to get summary of a run by outcome.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32) !models.TestRunStatistic {
         @setEvalBranchQuota(100_000);
@@ -4011,7 +3963,7 @@ pub const Statistics = struct {
 pub const Tags = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Update tags of a run, Tags can be Added and Deleted
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, body: models.TestTagsUpdateModel) !models.TestTagList {
         @setEvalBranchQuota(100_000);
@@ -4089,7 +4041,7 @@ pub const Tags = struct {
 pub const Testattachments = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Deletes the attachment with the specified filename for the specified runId from the LogStore.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, run_id: i32, filename: []const u8) !void {
         @setEvalBranchQuota(100_000);
@@ -4241,7 +4193,7 @@ pub const Testattachments = struct {
 pub const Settings = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get TestResultsSettings data
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, settings_type: ?enums.GetRequestSettingsType) !models.TestResultsSettings {
         @setEvalBranchQuota(100_000);
@@ -4322,7 +4274,7 @@ pub const Settings = struct {
 pub const Tagsummary = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get all the tags in a build.
     pub fn getTestTagSummaryForBuild(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32) !models.TestTagSummary {
         @setEvalBranchQuota(100_000);
@@ -4362,7 +4314,7 @@ pub const Tagsummary = struct {
 pub const Testai = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const CompleteGitHubAuthResult = union(enum) {
         status_200: struct {
@@ -4422,7 +4374,7 @@ pub const Testai = struct {
 pub const Testfailuretype = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Returns the list of test failure types.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.TestResultFailureTypeList {
         @setEvalBranchQuota(100_000);
@@ -4529,7 +4481,7 @@ pub const Testfailuretype = struct {
 pub const Testsettings = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const CreateResult = union(enum) {
         status_200: struct {

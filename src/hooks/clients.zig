@@ -21,74 +21,26 @@ fn responseStatusExpected(status: u16, expected: []const u16) bool {
 }
 const default_endpoint = "https://dev.azure.com";
 const default_api_version = "7.2-preview";
-const auth_scopes: []const []const u8 = &.{"{endpoint}/.default"};
 
 pub const ServiceHooksClient = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
-    allocator: std.mem.Allocator,
-    auth_policy: ?*core.pipeline.BearerTokenAuthPolicy,
-    policy_ptrs: []*core.pipeline.HttpPolicy,
+    pipeline: core.http.HttpPipeline,
 
     pub const InitOptions = struct {
-        credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
         endpoint: []const u8 = default_endpoint,
         api_version: []const u8 = default_api_version,
     };
 
-    pub const PipelineOptions = struct {
-        endpoint: []const u8 = default_endpoint,
-        api_version: []const u8 = default_api_version,
-    };
-
-    pub fn init(allocator: std.mem.Allocator, options: InitOptions) !ServiceHooksClient {
-        const auth_policy = try allocator.create(core.pipeline.BearerTokenAuthPolicy);
-        errdefer allocator.destroy(auth_policy);
-        auth_policy.* = core.pipeline.BearerTokenAuthPolicy.init(
-            allocator,
-            options.credential,
-            auth_scopes,
-        );
-
-        const policy_ptrs = try allocator.alloc(*core.pipeline.HttpPolicy, 1);
-        errdefer allocator.free(policy_ptrs);
-        policy_ptrs[0] = auth_policy.asPolicy();
-
-        return .{
-            .allocator = allocator,
-            .endpoint = options.endpoint,
-            .api_version = options.api_version,
-            .auth_policy = auth_policy,
-            .policy_ptrs = policy_ptrs,
-            .pipeline = .{
-                .policies = policy_ptrs,
-                .transport_impl = options.transport,
-            },
-        };
-    }
-    pub fn initWithPipeline(
-        allocator: std.mem.Allocator,
-        pipeline: core.pipeline.HttpPipeline,
-        options: PipelineOptions,
+    pub fn init(
+        pipeline: core.http.HttpPipeline,
+        options: InitOptions,
     ) ServiceHooksClient {
         return .{
-            .allocator = allocator,
             .endpoint = options.endpoint,
             .api_version = options.api_version,
-            .auth_policy = null,
-            .policy_ptrs = &.{},
             .pipeline = pipeline,
         };
-    }
-
-    pub fn deinit(self: *@This()) void {
-        if (self.auth_policy) |auth_policy| {
-            auth_policy.deinit();
-            self.allocator.destroy(auth_policy);
-            self.allocator.free(self.policy_ptrs);
-        }
     }
 
     pub fn consumers(self: *@This()) Consumers {
@@ -135,7 +87,7 @@ pub const ServiceHooksClient = struct {
 pub const Consumers = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get a list of available service hook consumer services. Optionally filter by consumers that support at least one event type from the specific publisher.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, publisher_id: ?[]const u8) !models.ConsumerList {
         @setEvalBranchQuota(100_000);
@@ -297,7 +249,7 @@ pub const Consumers = struct {
 pub const Notifications = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Query for notifications. A notification includes details about the event, the request to and the response from the consumer service.
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.NotificationsQuery) !models.NotificationsQuery {
         @setEvalBranchQuota(100_000);
@@ -461,7 +413,7 @@ pub const Notifications = struct {
 pub const Publishers = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get a list of publishers.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !models.PublisherList {
         @setEvalBranchQuota(100_000);
@@ -665,7 +617,7 @@ pub const Publishers = struct {
 pub const Subscriptions = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get a list of subscriptions.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, publisher_id: ?[]const u8, event_type: ?[]const u8, consumer_id: ?[]const u8, consumer_action_id: ?[]const u8) !models.SubscriptionList {
         @setEvalBranchQuota(100_000);
@@ -896,7 +848,7 @@ pub const Subscriptions = struct {
 pub const Diagnostics = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, subscription_id: []const u8) !models.SubscriptionDiagnostics {
         @setEvalBranchQuota(100_000);

@@ -21,74 +21,26 @@ fn responseStatusExpected(status: u16, expected: []const u16) bool {
 }
 const default_endpoint = "https://dev.azure.com";
 const default_api_version = "7.2-preview";
-const auth_scopes: []const []const u8 = &.{"{endpoint}/.default"};
 
 pub const WorkItemTrackingClient = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
-    allocator: std.mem.Allocator,
-    auth_policy: ?*core.pipeline.BearerTokenAuthPolicy,
-    policy_ptrs: []*core.pipeline.HttpPolicy,
+    pipeline: core.http.HttpPipeline,
 
     pub const InitOptions = struct {
-        credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
         endpoint: []const u8 = default_endpoint,
         api_version: []const u8 = default_api_version,
     };
 
-    pub const PipelineOptions = struct {
-        endpoint: []const u8 = default_endpoint,
-        api_version: []const u8 = default_api_version,
-    };
-
-    pub fn init(allocator: std.mem.Allocator, options: InitOptions) !WorkItemTrackingClient {
-        const auth_policy = try allocator.create(core.pipeline.BearerTokenAuthPolicy);
-        errdefer allocator.destroy(auth_policy);
-        auth_policy.* = core.pipeline.BearerTokenAuthPolicy.init(
-            allocator,
-            options.credential,
-            auth_scopes,
-        );
-
-        const policy_ptrs = try allocator.alloc(*core.pipeline.HttpPolicy, 1);
-        errdefer allocator.free(policy_ptrs);
-        policy_ptrs[0] = auth_policy.asPolicy();
-
-        return .{
-            .allocator = allocator,
-            .endpoint = options.endpoint,
-            .api_version = options.api_version,
-            .auth_policy = auth_policy,
-            .policy_ptrs = policy_ptrs,
-            .pipeline = .{
-                .policies = policy_ptrs,
-                .transport_impl = options.transport,
-            },
-        };
-    }
-    pub fn initWithPipeline(
-        allocator: std.mem.Allocator,
-        pipeline: core.pipeline.HttpPipeline,
-        options: PipelineOptions,
+    pub fn init(
+        pipeline: core.http.HttpPipeline,
+        options: InitOptions,
     ) WorkItemTrackingClient {
         return .{
-            .allocator = allocator,
             .endpoint = options.endpoint,
             .api_version = options.api_version,
-            .auth_policy = null,
-            .policy_ptrs = &.{},
             .pipeline = pipeline,
         };
-    }
-
-    pub fn deinit(self: *@This()) void {
-        if (self.auth_policy) |auth_policy| {
-            auth_policy.deinit();
-            self.allocator.destroy(auth_policy);
-            self.allocator.free(self.policy_ptrs);
-        }
     }
 
     pub fn processes(self: *@This()) Processes {
@@ -199,7 +151,7 @@ pub const WorkItemTrackingClient = struct {
 pub const Processes = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get list of all processes including system and inherited.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, @"$expand": ?enums.ListRequestExpand) !models.ProcessInfoList {
         @setEvalBranchQuota(100_000);
@@ -382,7 +334,7 @@ pub const Processes = struct {
 pub const Behaviors = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Returns a list of all behaviors in the process.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, @"$expand": ?enums.ListRequestExpand1) !models.ProcessBehaviorList {
         @setEvalBranchQuota(100_000);
@@ -575,7 +527,7 @@ pub const Behaviors = struct {
 pub const WorkItemTypes = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Returns a list of all work item types in a process.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, @"$expand": ?enums.ListRequestExpand2) !models.ProcessWorkItemTypeList {
         @setEvalBranchQuota(100_000);
@@ -768,7 +720,7 @@ pub const WorkItemTypes = struct {
 pub const Fields = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Returns a list of all fields in a work item type.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8) !models.ProcessWorkItemTypeFieldList {
         @setEvalBranchQuota(100_000);
@@ -964,7 +916,7 @@ pub const Fields = struct {
 pub const Layout = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets the form layout.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8) !models.FormLayout {
         @setEvalBranchQuota(100_000);
@@ -1004,7 +956,7 @@ pub const Layout = struct {
 pub const Controls = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Creates a control in a group.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, group_id: []const u8, body: models.Control) !models.Control {
         @setEvalBranchQuota(100_000);
@@ -1178,7 +1130,7 @@ pub const Controls = struct {
 pub const Pages = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Updates a page on the work item form
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, body: models.Page) !models.Page {
         @setEvalBranchQuota(100_000);
@@ -1295,7 +1247,7 @@ pub const Pages = struct {
 pub const Groups = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Adds a group to the work item form.
     pub fn add(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8, page_id: []const u8, section_id: []const u8, body: models.Group) !models.Group {
         @setEvalBranchQuota(100_000);
@@ -1474,7 +1426,7 @@ pub const Groups = struct {
 pub const SystemControls = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets edited system controls for a work item type in a process. To get all system controls (base + edited) use layout API(s)
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8) !models.ControlList {
         @setEvalBranchQuota(100_000);
@@ -1590,7 +1542,7 @@ pub const SystemControls = struct {
 pub const Rules = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Returns a list of all rules in the work item type of the process.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8) !models.ProcessRuleList {
         @setEvalBranchQuota(100_000);
@@ -1779,7 +1731,7 @@ pub const Rules = struct {
 pub const States = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Returns a list of all state definitions in a work item type of the process.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name: []const u8) !models.WorkItemStateResultModelList {
         @setEvalBranchQuota(100_000);
@@ -2008,7 +1960,7 @@ pub const States = struct {
 pub const WorkItemTypesBehaviors = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Returns a list of all behaviors for the work item type of the process.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, process_id: []const u8, wit_ref_name_for_behaviors: []const u8) !models.WorkItemTypeBehaviorList {
         @setEvalBranchQuota(100_000);
@@ -2195,7 +2147,7 @@ pub const WorkItemTypesBehaviors = struct {
 pub const Lists = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Returns meta data of the picklist.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !models.PickListMetadataList {
         @setEvalBranchQuota(100_000);

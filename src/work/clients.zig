@@ -21,74 +21,26 @@ fn responseStatusExpected(status: u16, expected: []const u16) bool {
 }
 const default_endpoint = "https://dev.azure.com";
 const default_api_version = "7.2-preview";
-const auth_scopes: []const []const u8 = &.{"{endpoint}/.default"};
 
 pub const WorkClient = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
-    allocator: std.mem.Allocator,
-    auth_policy: ?*core.pipeline.BearerTokenAuthPolicy,
-    policy_ptrs: []*core.pipeline.HttpPolicy,
+    pipeline: core.http.HttpPipeline,
 
     pub const InitOptions = struct {
-        credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
         endpoint: []const u8 = default_endpoint,
         api_version: []const u8 = default_api_version,
     };
 
-    pub const PipelineOptions = struct {
-        endpoint: []const u8 = default_endpoint,
-        api_version: []const u8 = default_api_version,
-    };
-
-    pub fn init(allocator: std.mem.Allocator, options: InitOptions) !WorkClient {
-        const auth_policy = try allocator.create(core.pipeline.BearerTokenAuthPolicy);
-        errdefer allocator.destroy(auth_policy);
-        auth_policy.* = core.pipeline.BearerTokenAuthPolicy.init(
-            allocator,
-            options.credential,
-            auth_scopes,
-        );
-
-        const policy_ptrs = try allocator.alloc(*core.pipeline.HttpPolicy, 1);
-        errdefer allocator.free(policy_ptrs);
-        policy_ptrs[0] = auth_policy.asPolicy();
-
-        return .{
-            .allocator = allocator,
-            .endpoint = options.endpoint,
-            .api_version = options.api_version,
-            .auth_policy = auth_policy,
-            .policy_ptrs = policy_ptrs,
-            .pipeline = .{
-                .policies = policy_ptrs,
-                .transport_impl = options.transport,
-            },
-        };
-    }
-    pub fn initWithPipeline(
-        allocator: std.mem.Allocator,
-        pipeline: core.pipeline.HttpPipeline,
-        options: PipelineOptions,
+    pub fn init(
+        pipeline: core.http.HttpPipeline,
+        options: InitOptions,
     ) WorkClient {
         return .{
-            .allocator = allocator,
             .endpoint = options.endpoint,
             .api_version = options.api_version,
-            .auth_policy = null,
-            .policy_ptrs = &.{},
             .pipeline = pipeline,
         };
-    }
-
-    pub fn deinit(self: *@This()) void {
-        if (self.auth_policy) |auth_policy| {
-            auth_policy.deinit();
-            self.allocator.destroy(auth_policy);
-            self.allocator.free(self.policy_ptrs);
-        }
     }
 
     pub fn boardcolumns(self: *@This()) Boardcolumns {
@@ -303,7 +255,7 @@ pub const WorkClient = struct {
 pub const Boardcolumns = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get available board columns in a project
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.BoardSuggestedValueList {
         @setEvalBranchQuota(100_000);
@@ -341,7 +293,7 @@ pub const Boardcolumns = struct {
 pub const Boardrows = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get available board rows in a project
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.BoardSuggestedValueList {
         @setEvalBranchQuota(100_000);
@@ -379,7 +331,7 @@ pub const Boardrows = struct {
 pub const Iterationcapacities = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get an iteration's capacity for all teams in iteration
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, iteration_id: []const u8) !models.IterationCapacity {
         @setEvalBranchQuota(100_000);
@@ -419,7 +371,7 @@ pub const Iterationcapacities = struct {
 pub const Plans = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get the information for all the plans configured for the given team
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.PlanList {
         @setEvalBranchQuota(100_000);
@@ -598,7 +550,7 @@ pub const Plans = struct {
 pub const Deliverytimeline = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get Delivery View Data
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, id: []const u8, revision: ?i32, start_date: ?[]const u8, end_date: ?[]const u8) !models.DeliveryViewData {
         @setEvalBranchQuota(100_000);
@@ -657,7 +609,7 @@ pub const Deliverytimeline = struct {
 pub const PredefinedQueries = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Retrieves the set of known queries
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.PredefinedQueryList {
         @setEvalBranchQuota(100_000);
@@ -739,7 +691,7 @@ pub const PredefinedQueries = struct {
 pub const Processconfiguration = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get process configuration
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.ProcessConfiguration {
         @setEvalBranchQuota(100_000);
@@ -777,7 +729,7 @@ pub const Processconfiguration = struct {
 pub const Backlogconfiguration = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets backlog configuration for a team
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8) !models.BacklogConfiguration {
         @setEvalBranchQuota(100_000);
@@ -817,7 +769,7 @@ pub const Backlogconfiguration = struct {
 pub const Backlogs = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// List all backlog levels
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8) !models.BacklogLevelConfigurationList {
         @setEvalBranchQuota(100_000);
@@ -929,7 +881,7 @@ pub const Backlogs = struct {
 pub const Boards = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get boards
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8) !models.BoardReferenceList {
         @setEvalBranchQuota(100_000);
@@ -1045,7 +997,7 @@ pub const Boards = struct {
 pub const Boardusersettings = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get board user settings for a board id
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8) !models.BoardUserSettings {
         @setEvalBranchQuota(100_000);
@@ -1127,7 +1079,7 @@ pub const Boardusersettings = struct {
 pub const Cardrulesettings = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get board card Rule settings for the board id or board by name
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8) !models.BoardCardRuleSettings {
         @setEvalBranchQuota(100_000);
@@ -1246,7 +1198,7 @@ pub const Cardrulesettings = struct {
 pub const Cardsettings = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get board card settings for the board id or board by name
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8) !models.BoardCardSettings {
         @setEvalBranchQuota(100_000);
@@ -1365,7 +1317,7 @@ pub const Cardsettings = struct {
 pub const Chartimages = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const GetBoardChartImageResult = union(enum) {
         status_200: struct {
@@ -1608,7 +1560,7 @@ pub const Chartimages = struct {
 pub const Charts = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get board charts
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8) !models.BoardChartReferenceList {
         @setEvalBranchQuota(100_000);
@@ -1730,7 +1682,7 @@ pub const Charts = struct {
 pub const Columns = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get columns on a board
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8) !models.BoardColumnList {
         @setEvalBranchQuota(100_000);
@@ -1812,7 +1764,7 @@ pub const Columns = struct {
 pub const Rows = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get rows on a board
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, board: []const u8, team: []const u8) !models.BoardRowList {
         @setEvalBranchQuota(100_000);
@@ -1894,7 +1846,7 @@ pub const Rows = struct {
 pub const Boardparents = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Returns the list of parent field filter model for the given list of workitem ids
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, child_backlog_context_category_ref_name: []const u8, workitem_ids: []const u8, team: []const u8) !models.ParentChildWIMapList {
         @setEvalBranchQuota(100_000);
@@ -1942,7 +1894,7 @@ pub const Boardparents = struct {
 pub const Workitemsorder = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Reorder Sprint Backlog/Taskboard Work Items
     pub fn reorderIterationWorkItems(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, iteration_id: []const u8, body: models.ReorderOperation) !models.ReorderResultList {
         @setEvalBranchQuota(100_000);
@@ -2026,7 +1978,7 @@ pub const Workitemsorder = struct {
 pub const TaskboardColumnsOperations = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8) !models.TaskboardColumns {
         @setEvalBranchQuota(100_000);
@@ -2104,7 +2056,7 @@ pub const TaskboardColumnsOperations = struct {
 pub const TaskboardWorkItems = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, iteration_id: []const u8) !models.TaskboardWorkItemColumnList {
         @setEvalBranchQuota(100_000);
@@ -2187,7 +2139,7 @@ pub const TaskboardWorkItems = struct {
 pub const Teamsettings = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get a team's settings
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8) !models.TeamSetting {
         @setEvalBranchQuota(100_000);
@@ -2265,7 +2217,7 @@ pub const Teamsettings = struct {
 pub const Iterations = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get a team's iterations using timeframe filter
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, @"$timeframe": ?[]const u8) !models.TeamSettingsIterationList {
         @setEvalBranchQuota(100_000);
@@ -2457,7 +2409,7 @@ pub const Iterations = struct {
 pub const Capacities = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get a team's capacity including total capacity and days off
     pub fn getCapacitiesWithIdentityRefAndTotals(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, iteration_id: []const u8, team: []const u8) !models.TeamCapacity {
         @setEvalBranchQuota(100_000);
@@ -2619,7 +2571,7 @@ pub const Capacities = struct {
 pub const Teamdaysoff = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get team's days off for an iteration
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, iteration_id: []const u8, team: []const u8) !models.TeamSettingsDaysOff {
         @setEvalBranchQuota(100_000);
@@ -2701,7 +2653,7 @@ pub const Teamdaysoff = struct {
 pub const Teamfieldvalues = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get a collection of team field values
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8) !models.TeamFieldValues {
         @setEvalBranchQuota(100_000);

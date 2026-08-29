@@ -21,74 +21,26 @@ fn responseStatusExpected(status: u16, expected: []const u16) bool {
 }
 const default_endpoint = "https://dev.azure.com";
 const default_api_version = "7.2-preview";
-const auth_scopes: []const []const u8 = &.{"{endpoint}/.default"};
 
 pub const BuildClient = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
-    allocator: std.mem.Allocator,
-    auth_policy: ?*core.pipeline.BearerTokenAuthPolicy,
-    policy_ptrs: []*core.pipeline.HttpPolicy,
+    pipeline: core.http.HttpPipeline,
 
     pub const InitOptions = struct {
-        credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
         endpoint: []const u8 = default_endpoint,
         api_version: []const u8 = default_api_version,
     };
 
-    pub const PipelineOptions = struct {
-        endpoint: []const u8 = default_endpoint,
-        api_version: []const u8 = default_api_version,
-    };
-
-    pub fn init(allocator: std.mem.Allocator, options: InitOptions) !BuildClient {
-        const auth_policy = try allocator.create(core.pipeline.BearerTokenAuthPolicy);
-        errdefer allocator.destroy(auth_policy);
-        auth_policy.* = core.pipeline.BearerTokenAuthPolicy.init(
-            allocator,
-            options.credential,
-            auth_scopes,
-        );
-
-        const policy_ptrs = try allocator.alloc(*core.pipeline.HttpPolicy, 1);
-        errdefer allocator.free(policy_ptrs);
-        policy_ptrs[0] = auth_policy.asPolicy();
-
-        return .{
-            .allocator = allocator,
-            .endpoint = options.endpoint,
-            .api_version = options.api_version,
-            .auth_policy = auth_policy,
-            .policy_ptrs = policy_ptrs,
-            .pipeline = .{
-                .policies = policy_ptrs,
-                .transport_impl = options.transport,
-            },
-        };
-    }
-    pub fn initWithPipeline(
-        allocator: std.mem.Allocator,
-        pipeline: core.pipeline.HttpPipeline,
-        options: PipelineOptions,
+    pub fn init(
+        pipeline: core.http.HttpPipeline,
+        options: InitOptions,
     ) BuildClient {
         return .{
-            .allocator = allocator,
             .endpoint = options.endpoint,
             .api_version = options.api_version,
-            .auth_policy = null,
-            .policy_ptrs = &.{},
             .pipeline = pipeline,
         };
-    }
-
-    pub fn deinit(self: *@This()) void {
-        if (self.auth_policy) |auth_policy| {
-            auth_policy.deinit();
-            self.allocator.destroy(auth_policy);
-            self.allocator.free(self.policy_ptrs);
-        }
     }
 
     pub fn controllers(self: *@This()) Controllers {
@@ -319,7 +271,7 @@ pub const BuildClient = struct {
 pub const Controllers = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets controller, optionally filtered by name
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, name: ?[]const u8) !models.BuildControllerList {
         @setEvalBranchQuota(100_000);
@@ -394,7 +346,7 @@ pub const Controllers = struct {
 pub const ResourceUsage = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets information about build resources in the system.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !models.BuildResourceUsage {
         @setEvalBranchQuota(100_000);
@@ -430,7 +382,7 @@ pub const ResourceUsage = struct {
 pub const History = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Returns the retention history for the project collection. This includes pipelines that have custom retention rules that may prevent the retention job from cleaning them up, runs per pipeline with retention type, files associated with pipelines owned by the collection with retention type, and the number of files per pipeline.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, days_to_lookback: ?i32) !models.BuildRetentionHistory {
         @setEvalBranchQuota(100_000);
@@ -471,7 +423,7 @@ pub const History = struct {
 pub const Badge = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const GetResult = union(enum) {
         status_200: struct {
@@ -602,7 +554,7 @@ pub const Badge = struct {
 pub const Authorizedresources = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"type": ?[]const u8, id: ?[]const u8) !models.DefinitionResourceReferenceList {
         @setEvalBranchQuota(100_000);
@@ -690,7 +642,7 @@ pub const Authorizedresources = struct {
 pub const Builds = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const ListResult = union(enum) {
         status_200: struct {
@@ -1515,7 +1467,7 @@ pub const Builds = struct {
 pub const Attachments = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const GetResult = union(enum) {
         status_200: struct {
@@ -1626,7 +1578,7 @@ pub const Attachments = struct {
 pub const Artifacts = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets all artifacts for a build.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32) !models.BuildArtifactList {
         @setEvalBranchQuota(100_000);
@@ -1704,7 +1656,7 @@ pub const Artifacts = struct {
 pub const Properties = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets properties for a build.
     pub fn getBuildProperties(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, filter: ?[]const u8) !models.PropertiesCollection {
         @setEvalBranchQuota(100_000);
@@ -1868,7 +1820,7 @@ pub const Properties = struct {
 pub const Report = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const GetResult = union(enum) {
         status_200: struct {
@@ -1941,7 +1893,7 @@ pub const Report = struct {
 pub const Stages = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Update a build stage
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, build_id: i32, stage_ref_name: []const u8, project: []const u8, body: models.UpdateStageParameters) !void {
         @setEvalBranchQuota(100_000);
@@ -1986,7 +1938,7 @@ pub const Stages = struct {
 pub const Tags = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets the tags for a build.
     pub fn getBuildTags(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32) ![]const []const u8 {
         @setEvalBranchQuota(100_000);
@@ -2427,7 +2379,7 @@ pub const Tags = struct {
 pub const TimelineOperations = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets details for a build
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, timeline_id: []const u8, change_id: ?i32, plan_id: ?[]const u8) !models.Timeline {
         @setEvalBranchQuota(100_000);
@@ -2481,7 +2433,7 @@ pub const TimelineOperations = struct {
 pub const StageTimeline = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets the timeline for a build filtered to a specific stage.
     pub fn getBuildStageTimeline(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, build_id: i32, timeline_id: []const u8, stage_name: []const u8, change_id: ?i32, plan_id: ?[]const u8) !models.Timeline {
         @setEvalBranchQuota(100_000);
@@ -2585,7 +2537,7 @@ pub const StageTimeline = struct {
 pub const Definitions = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const ListResult = union(enum) {
         status_200: struct {
@@ -3013,7 +2965,7 @@ pub const Definitions = struct {
 pub const Metrics = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets build metrics for a definition.
     pub fn getDefinitionMetrics(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: i32, min_metrics_time: ?[]const u8) !models.BuildMetricList {
         @setEvalBranchQuota(100_000);
@@ -3101,7 +3053,7 @@ pub const Metrics = struct {
 pub const Resources = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: i32) !models.DefinitionResourceReferenceList {
         @setEvalBranchQuota(100_000);
@@ -3179,7 +3131,7 @@ pub const Resources = struct {
 pub const Yaml = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Converts a definition to YAML, optionally at a specific revision.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: i32, revision: ?i32, min_metrics_time: ?[]const u8, property_filters: ?[]const u8, include_latest_builds: ?bool) !models.YamlBuild {
         @setEvalBranchQuota(100_000);
@@ -3243,7 +3195,7 @@ pub const Yaml = struct {
 pub const Templates = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets all definition templates.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.BuildDefinitionTemplateList {
         @setEvalBranchQuota(100_000);
@@ -3386,7 +3338,7 @@ pub const Templates = struct {
 pub const Folders = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Deletes a definition folder. Definitions and their corresponding builds will also be deleted.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, path: []const u8) !void {
         @setEvalBranchQuota(100_000);
@@ -3548,7 +3500,7 @@ pub const Folders = struct {
 pub const GeneralSettings = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets pipeline general settings.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.PipelineGeneralSettings {
         @setEvalBranchQuota(100_000);
@@ -3622,7 +3574,7 @@ pub const GeneralSettings = struct {
 pub const Latest = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets the latest build for a definition, optionally scoped to a specific branch.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition: []const u8, branch_name: ?[]const u8) !models.Build {
         @setEvalBranchQuota(100_000);
@@ -3669,7 +3621,7 @@ pub const Latest = struct {
 pub const Options = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets all build definition options supported by the system.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.BuildOptionDefinitionList {
         @setEvalBranchQuota(100_000);
@@ -3707,7 +3659,7 @@ pub const Options = struct {
 pub const Retention = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets the project's retention settings.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.ProjectRetentionSetting {
         @setEvalBranchQuota(100_000);
@@ -3781,7 +3733,7 @@ pub const Retention = struct {
 pub const Leases = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Removes specific retention leases.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, ids: []const u8) !void {
         @setEvalBranchQuota(100_000);
@@ -3966,7 +3918,7 @@ pub const Leases = struct {
 pub const Settings = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets the build settings.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.BuildSettings {
         @setEvalBranchQuota(100_000);
@@ -4040,7 +3992,7 @@ pub const Settings = struct {
 pub const Status = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const GetResult = union(enum) {
         status_200: struct {
@@ -4133,7 +4085,7 @@ pub const Status = struct {
 pub const SourceProviders = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const GetFileContentsResult = union(enum) {
         status_200: struct {

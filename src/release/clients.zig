@@ -21,74 +21,26 @@ fn responseStatusExpected(status: u16, expected: []const u16) bool {
 }
 const default_endpoint = "https://vsrm.dev.azure.com";
 const default_api_version = "7.2-preview";
-const auth_scopes: []const []const u8 = &.{"{endpoint}/.default"};
 
 pub const ReleaseClient = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
-    allocator: std.mem.Allocator,
-    auth_policy: ?*core.pipeline.BearerTokenAuthPolicy,
-    policy_ptrs: []*core.pipeline.HttpPolicy,
+    pipeline: core.http.HttpPipeline,
 
     pub const InitOptions = struct {
-        credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
         endpoint: []const u8 = default_endpoint,
         api_version: []const u8 = default_api_version,
     };
 
-    pub const PipelineOptions = struct {
-        endpoint: []const u8 = default_endpoint,
-        api_version: []const u8 = default_api_version,
-    };
-
-    pub fn init(allocator: std.mem.Allocator, options: InitOptions) !ReleaseClient {
-        const auth_policy = try allocator.create(core.pipeline.BearerTokenAuthPolicy);
-        errdefer allocator.destroy(auth_policy);
-        auth_policy.* = core.pipeline.BearerTokenAuthPolicy.init(
-            allocator,
-            options.credential,
-            auth_scopes,
-        );
-
-        const policy_ptrs = try allocator.alloc(*core.pipeline.HttpPolicy, 1);
-        errdefer allocator.free(policy_ptrs);
-        policy_ptrs[0] = auth_policy.asPolicy();
-
-        return .{
-            .allocator = allocator,
-            .endpoint = options.endpoint,
-            .api_version = options.api_version,
-            .auth_policy = auth_policy,
-            .policy_ptrs = policy_ptrs,
-            .pipeline = .{
-                .policies = policy_ptrs,
-                .transport_impl = options.transport,
-            },
-        };
-    }
-    pub fn initWithPipeline(
-        allocator: std.mem.Allocator,
-        pipeline: core.pipeline.HttpPipeline,
-        options: PipelineOptions,
+    pub fn init(
+        pipeline: core.http.HttpPipeline,
+        options: InitOptions,
     ) ReleaseClient {
         return .{
-            .allocator = allocator,
             .endpoint = options.endpoint,
             .api_version = options.api_version,
-            .auth_policy = null,
-            .policy_ptrs = &.{},
             .pipeline = pipeline,
         };
-    }
-
-    pub fn deinit(self: *@This()) void {
-        if (self.auth_policy) |auth_policy| {
-            auth_policy.deinit();
-            self.allocator.destroy(auth_policy);
-            self.allocator.free(self.policy_ptrs);
-        }
     }
 
     pub fn approvals(self: *@This()) Approvals {
@@ -159,7 +111,7 @@ pub const ReleaseClient = struct {
 pub const Approvals = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get a list of approvals
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, assigned_to_filter: ?[]const u8, status_filter: ?enums.ListRequestStatusFilter, release_ids_filter: ?[]const u8, type_filter: ?enums.ListRequestTypeFilter, top: ?i32, continuation_token: ?i32, query_order: ?enums.ListRequestQueryOrder, include_my_group_approvals: ?bool) !models.ReleaseApprovalList {
         @setEvalBranchQuota(100_000);
@@ -285,7 +237,7 @@ pub const Approvals = struct {
 pub const Definitions = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const ListResult = union(enum) {
         status_200: struct {
@@ -704,7 +656,7 @@ pub const Definitions = struct {
 pub const Deployments = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get a list of deployments
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, definition_id: ?i32, definition_environment_id: ?i32, created_by: ?[]const u8, min_modified_time: ?[]const u8, max_modified_time: ?[]const u8, deployment_status: ?enums.ListRequestDeploymentStatus, operation_status: ?enums.ListRequestOperationStatus, latest_attempts_only: ?bool, query_order: ?enums.ListRequestQueryOrder2, @"$top": ?i32, continuation_token: ?i32, created_for: ?[]const u8, min_started_time: ?[]const u8, max_started_time: ?[]const u8, source_branch: ?[]const u8) !models.DeploymentList {
         @setEvalBranchQuota(100_000);
@@ -837,7 +789,7 @@ pub const Deployments = struct {
 pub const Folders = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Deletes a definition folder for given folder name and path and all it's existing definitions.
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, path: []const u8) !void {
         @setEvalBranchQuota(100_000);
@@ -993,7 +945,7 @@ pub const Folders = struct {
 pub const Gates = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Updates the gate for a deployment.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, gate_step_id: i32, body: models.GateUpdateMetadata) !models.ReleaseGates {
         @setEvalBranchQuota(100_000);
@@ -1037,7 +989,7 @@ pub const Gates = struct {
 pub const Releases = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const GetReleaseRevisionResult = union(enum) {
         status_200: struct {
@@ -1606,7 +1558,7 @@ pub const Releases = struct {
 pub const Attachments = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const GetReleaseTaskAttachmentContentResult = union(enum) {
         status_200: struct {
@@ -1844,7 +1796,7 @@ pub const Attachments = struct {
 pub const ManualInterventions = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// List all manual interventions for a given release.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, release_id: i32) !models.ManualInterventionList {
         @setEvalBranchQuota(100_000);

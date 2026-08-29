@@ -21,74 +21,26 @@ fn responseStatusExpected(status: u16, expected: []const u16) bool {
 }
 const default_endpoint = "https://vssps.dev.azure.com";
 const default_api_version = "7.2-preview";
-const auth_scopes: []const []const u8 = &.{"{endpoint}/.default"};
 
 pub const GraphClient = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
-    allocator: std.mem.Allocator,
-    auth_policy: ?*core.pipeline.BearerTokenAuthPolicy,
-    policy_ptrs: []*core.pipeline.HttpPolicy,
+    pipeline: core.http.HttpPipeline,
 
     pub const InitOptions = struct {
-        credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
         endpoint: []const u8 = default_endpoint,
         api_version: []const u8 = default_api_version,
     };
 
-    pub const PipelineOptions = struct {
-        endpoint: []const u8 = default_endpoint,
-        api_version: []const u8 = default_api_version,
-    };
-
-    pub fn init(allocator: std.mem.Allocator, options: InitOptions) !GraphClient {
-        const auth_policy = try allocator.create(core.pipeline.BearerTokenAuthPolicy);
-        errdefer allocator.destroy(auth_policy);
-        auth_policy.* = core.pipeline.BearerTokenAuthPolicy.init(
-            allocator,
-            options.credential,
-            auth_scopes,
-        );
-
-        const policy_ptrs = try allocator.alloc(*core.pipeline.HttpPolicy, 1);
-        errdefer allocator.free(policy_ptrs);
-        policy_ptrs[0] = auth_policy.asPolicy();
-
-        return .{
-            .allocator = allocator,
-            .endpoint = options.endpoint,
-            .api_version = options.api_version,
-            .auth_policy = auth_policy,
-            .policy_ptrs = policy_ptrs,
-            .pipeline = .{
-                .policies = policy_ptrs,
-                .transport_impl = options.transport,
-            },
-        };
-    }
-    pub fn initWithPipeline(
-        allocator: std.mem.Allocator,
-        pipeline: core.pipeline.HttpPipeline,
-        options: PipelineOptions,
+    pub fn init(
+        pipeline: core.http.HttpPipeline,
+        options: InitOptions,
     ) GraphClient {
         return .{
-            .allocator = allocator,
             .endpoint = options.endpoint,
             .api_version = options.api_version,
-            .auth_policy = null,
-            .policy_ptrs = &.{},
             .pipeline = pipeline,
         };
-    }
-
-    pub fn deinit(self: *@This()) void {
-        if (self.auth_policy) |auth_policy| {
-            auth_policy.deinit();
-            self.allocator.destroy(auth_policy);
-            self.allocator.free(self.policy_ptrs);
-        }
     }
 
     pub fn descriptors(self: *@This()) Descriptors {
@@ -191,7 +143,7 @@ pub const GraphClient = struct {
 pub const Descriptors = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Resolve a storage key to a descriptor
     pub fn get(self: *@This(), alloc: std.mem.Allocator, storage_key: []const u8, organization: []const u8) !models.GraphDescriptorResult {
         @setEvalBranchQuota(100_000);
@@ -229,7 +181,7 @@ pub const Descriptors = struct {
 pub const Groups = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const ListResult = union(enum) {
         status_200: struct {
@@ -459,7 +411,7 @@ pub const Groups = struct {
 pub const Memberships = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const CheckMembershipExistenceResult = union(enum) {
         status_200: struct {
@@ -671,7 +623,7 @@ pub const Memberships = struct {
 pub const MembershipStates = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Check whether a subject is active or inactive.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, subject_descriptor: []const u8) !models.GraphMembershipState {
         @setEvalBranchQuota(100_000);
@@ -709,7 +661,7 @@ pub const MembershipStates = struct {
 pub const RequestAccess = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn requestAccess(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.JToken) !void {
         @setEvalBranchQuota(100_000);
@@ -748,7 +700,7 @@ pub const RequestAccess = struct {
 pub const ServicePrincipals = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const ListResult = union(enum) {
         status_200: struct {
@@ -928,7 +880,7 @@ pub const ServicePrincipals = struct {
 pub const StorageKeys = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Resolve a descriptor to a storage key.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, subject_descriptor: []const u8, organization: []const u8) !models.GraphStorageKeyResult {
         @setEvalBranchQuota(100_000);
@@ -966,7 +918,7 @@ pub const StorageKeys = struct {
 pub const SubjectLookup = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Resolve descriptors to users, groups or scopes (Subjects) in a batch.
     pub fn lookupSubjects(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.GraphSubjectLookup) !std.json.ArrayHashMap(models.GraphSubject) {
         @setEvalBranchQuota(100_000);
@@ -1006,7 +958,7 @@ pub const SubjectLookup = struct {
 pub const SubjectQuery = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Search for Azure Devops users, or/and groups. Results will be returned in a batch with no more than 100 graph subjects.
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, body: models.GraphSubjectQuery) !models.GraphSubjectList {
         @setEvalBranchQuota(100_000);
@@ -1046,7 +998,7 @@ pub const SubjectQuery = struct {
 pub const Avatars = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn delete(self: *@This(), alloc: std.mem.Allocator, subject_descriptor: []const u8, organization: []const u8) !void {
         @setEvalBranchQuota(100_000);
@@ -1164,7 +1116,7 @@ pub const Avatars = struct {
 pub const Users = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const ListResult = union(enum) {
         status_200: struct {
@@ -1387,7 +1339,7 @@ pub const Users = struct {
 pub const ProviderInfo = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn get(self: *@This(), alloc: std.mem.Allocator, user_descriptor: []const u8, organization: []const u8) !models.GraphProviderInfo {
         @setEvalBranchQuota(100_000);

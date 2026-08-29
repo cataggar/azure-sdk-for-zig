@@ -21,74 +21,26 @@ fn responseStatusExpected(status: u16, expected: []const u16) bool {
 }
 const default_endpoint = "https://dev.azure.com";
 const default_api_version = "7.2-preview";
-const auth_scopes: []const []const u8 = &.{"{endpoint}/.default"};
 
 pub const DistributedTaskClient = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
-    allocator: std.mem.Allocator,
-    auth_policy: ?*core.pipeline.BearerTokenAuthPolicy,
-    policy_ptrs: []*core.pipeline.HttpPolicy,
+    pipeline: core.http.HttpPipeline,
 
     pub const InitOptions = struct {
-        credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
         endpoint: []const u8 = default_endpoint,
         api_version: []const u8 = default_api_version,
     };
 
-    pub const PipelineOptions = struct {
-        endpoint: []const u8 = default_endpoint,
-        api_version: []const u8 = default_api_version,
-    };
-
-    pub fn init(allocator: std.mem.Allocator, options: InitOptions) !DistributedTaskClient {
-        const auth_policy = try allocator.create(core.pipeline.BearerTokenAuthPolicy);
-        errdefer allocator.destroy(auth_policy);
-        auth_policy.* = core.pipeline.BearerTokenAuthPolicy.init(
-            allocator,
-            options.credential,
-            auth_scopes,
-        );
-
-        const policy_ptrs = try allocator.alloc(*core.pipeline.HttpPolicy, 1);
-        errdefer allocator.free(policy_ptrs);
-        policy_ptrs[0] = auth_policy.asPolicy();
-
-        return .{
-            .allocator = allocator,
-            .endpoint = options.endpoint,
-            .api_version = options.api_version,
-            .auth_policy = auth_policy,
-            .policy_ptrs = policy_ptrs,
-            .pipeline = .{
-                .policies = policy_ptrs,
-                .transport_impl = options.transport,
-            },
-        };
-    }
-    pub fn initWithPipeline(
-        allocator: std.mem.Allocator,
-        pipeline: core.pipeline.HttpPipeline,
-        options: PipelineOptions,
+    pub fn init(
+        pipeline: core.http.HttpPipeline,
+        options: InitOptions,
     ) DistributedTaskClient {
         return .{
-            .allocator = allocator,
             .endpoint = options.endpoint,
             .api_version = options.api_version,
-            .auth_policy = null,
-            .policy_ptrs = &.{},
             .pipeline = pipeline,
         };
-    }
-
-    pub fn deinit(self: *@This()) void {
-        if (self.auth_policy) |auth_policy| {
-            auth_policy.deinit();
-            self.allocator.destroy(auth_policy);
-            self.allocator.free(self.policy_ptrs);
-        }
     }
 
     pub fn elasticpools(self: *@This()) Elasticpools {
@@ -263,7 +215,7 @@ pub const DistributedTaskClient = struct {
 pub const Elasticpools = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get a list of all Elastic Pools.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !models.ElasticPoolList {
         @setEvalBranchQuota(100_000);
@@ -422,7 +374,7 @@ pub const Elasticpools = struct {
 pub const Elasticpoollogs = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get elastic pool diagnostics logs for a specified Elastic Pool.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32, @"$top": ?i32) !models.ElasticPoolLogList {
         @setEvalBranchQuota(100_000);
@@ -465,7 +417,7 @@ pub const Elasticpoollogs = struct {
 pub const Nodes = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get a list of ElasticNodes currently in the ElasticPool
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32, @"$state": ?enums.ListRequestState) !models.ElasticNodeList {
         @setEvalBranchQuota(100_000);
@@ -548,7 +500,7 @@ pub const Nodes = struct {
 pub const Webhooks = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Triggers a pipeline run of pipelines which have a webhook resource defined with specified WebHook Name property of the WebHook service connection.
     pub fn receiveExternalEvent(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, web_hook_id: []const u8) !void {
         @setEvalBranchQuota(100_000);
@@ -585,7 +537,7 @@ pub const Webhooks = struct {
 pub const Events = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Send a pipeline job event to be processed by the execution plan.
     pub fn postEvent(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, scope_identifier: []const u8, hub_name: []const u8, plan_id: []const u8, body: models.JobEvent) !void {
         @setEvalBranchQuota(100_000);
@@ -630,7 +582,7 @@ pub const Events = struct {
 pub const Oidctoken = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, scope_identifier: []const u8, hub_name: []const u8, plan_id: []const u8, job_id: []const u8, service_connection_id: ?[]const u8, body: std.json.ArrayHashMap([]const u8)) !models.TaskHubOidcToken {
         @setEvalBranchQuota(100_000);
@@ -685,7 +637,7 @@ pub const Oidctoken = struct {
 pub const Logs = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Create a log and connect it to a pipeline run's execution plan.
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, scope_identifier: []const u8, hub_name: []const u8, plan_id: []const u8, body: models.TaskLog) !models.TaskLog {
         @setEvalBranchQuota(100_000);
@@ -771,7 +723,7 @@ pub const Logs = struct {
 pub const Records = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Update timeline records if they already exist, otherwise create new ones for the same timeline.
     pub fn update(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, scope_identifier: []const u8, hub_name: []const u8, plan_id: []const u8, timeline_id: []const u8, body: models.VssJsonCollectionWrapper) !models.TimelineRecordList {
         @setEvalBranchQuota(100_000);
@@ -819,7 +771,7 @@ pub const Records = struct {
 pub const Agentclouds = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !models.TaskAgentCloudList {
         @setEvalBranchQuota(100_000);
@@ -989,7 +941,7 @@ pub const Agentclouds = struct {
 pub const Requests = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, agent_cloud_id: i32) !models.TaskAgentCloudRequestList {
         @setEvalBranchQuota(100_000);
@@ -1027,7 +979,7 @@ pub const Requests = struct {
 pub const Agentcloudtypes = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get agent cloud types.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !models.TaskAgentCloudTypeList {
         @setEvalBranchQuota(100_000);
@@ -1063,7 +1015,7 @@ pub const Agentcloudtypes = struct {
 pub const Pools = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get a list of agent pools.
     pub fn getAgentPoolsByIds(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_ids: []const u8, action_filter: ?enums.GetAgentPoolsByIdsRequestActionFilter) !models.TaskAgentPoolList {
         @setEvalBranchQuota(100_000);
@@ -1257,7 +1209,7 @@ pub const Pools = struct {
 pub const Agents = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get a list of agents.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_id: i32, agent_name: ?[]const u8, include_capabilities: ?bool, include_assigned_request: ?bool, include_last_completed_request: ?bool, property_filters: ?[]const u8, demands: ?[]const u8) !models.TaskAgentList {
         @setEvalBranchQuota(100_000);
@@ -1532,7 +1484,7 @@ pub const Agents = struct {
 pub const Poolpermissions = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const HasPoolPermissionsResult = union(enum) {
         status_200: struct {
@@ -1590,7 +1542,7 @@ pub const Poolpermissions = struct {
 pub const Variablegroups = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Add a variable group.
     pub fn shareVariableGroup(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, variable_group_id: i32, body: []const models.VariableGroupProjectReference) !void {
         @setEvalBranchQuota(100_000);
@@ -1811,7 +1763,7 @@ pub const Variablegroups = struct {
 pub const Yamlschema = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// GET the Yaml schema used for Yaml file validation.
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, validate_task_names: ?bool) !models.GetResponse {
         @setEvalBranchQuota(100_000);
@@ -1852,7 +1804,7 @@ pub const Yamlschema = struct {
 pub const Deploymentgroups = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const ListResult = union(enum) {
         status_200: struct {
@@ -2111,7 +2063,7 @@ pub const Deploymentgroups = struct {
 pub const Targets = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const ListResult = union(enum) {
         status_200: struct {
@@ -2357,7 +2309,7 @@ pub const Targets = struct {
 pub const Queues = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get a list of agent queues by pool ids
     pub fn getAgentQueuesForPools(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, pool_ids: []const u8, project: []const u8, action_filter: ?enums.GetAgentQueuesForPoolsRequestActionFilter) !models.TaskAgentQueueList {
         @setEvalBranchQuota(100_000);
@@ -2521,7 +2473,7 @@ pub const Queues = struct {
 pub const Securefiles = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get secure files
     pub fn getSecureFilesByNames(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, secure_file_names: []const u8, include_download_tickets: ?bool, action_filter: ?enums.GetSecureFilesByNamesRequestActionFilter) !models.SecureFileList {
         @setEvalBranchQuota(100_000);
@@ -2769,7 +2721,7 @@ pub const Securefiles = struct {
 pub const Taskgroups = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const ListResult = union(enum) {
         status_200: struct {

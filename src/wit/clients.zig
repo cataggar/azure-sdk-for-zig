@@ -21,74 +21,26 @@ fn responseStatusExpected(status: u16, expected: []const u16) bool {
 }
 const default_endpoint = "https://dev.azure.com";
 const default_api_version = "7.2-preview";
-const auth_scopes: []const []const u8 = &.{"{endpoint}/.default"};
 
 pub const WorkItemTrackingClient = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
-    allocator: std.mem.Allocator,
-    auth_policy: ?*core.pipeline.BearerTokenAuthPolicy,
-    policy_ptrs: []*core.pipeline.HttpPolicy,
+    pipeline: core.http.HttpPipeline,
 
     pub const InitOptions = struct {
-        credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
         endpoint: []const u8 = default_endpoint,
         api_version: []const u8 = default_api_version,
     };
 
-    pub const PipelineOptions = struct {
-        endpoint: []const u8 = default_endpoint,
-        api_version: []const u8 = default_api_version,
-    };
-
-    pub fn init(allocator: std.mem.Allocator, options: InitOptions) !WorkItemTrackingClient {
-        const auth_policy = try allocator.create(core.pipeline.BearerTokenAuthPolicy);
-        errdefer allocator.destroy(auth_policy);
-        auth_policy.* = core.pipeline.BearerTokenAuthPolicy.init(
-            allocator,
-            options.credential,
-            auth_scopes,
-        );
-
-        const policy_ptrs = try allocator.alloc(*core.pipeline.HttpPolicy, 1);
-        errdefer allocator.free(policy_ptrs);
-        policy_ptrs[0] = auth_policy.asPolicy();
-
-        return .{
-            .allocator = allocator,
-            .endpoint = options.endpoint,
-            .api_version = options.api_version,
-            .auth_policy = auth_policy,
-            .policy_ptrs = policy_ptrs,
-            .pipeline = .{
-                .policies = policy_ptrs,
-                .transport_impl = options.transport,
-            },
-        };
-    }
-    pub fn initWithPipeline(
-        allocator: std.mem.Allocator,
-        pipeline: core.pipeline.HttpPipeline,
-        options: PipelineOptions,
+    pub fn init(
+        pipeline: core.http.HttpPipeline,
+        options: InitOptions,
     ) WorkItemTrackingClient {
         return .{
-            .allocator = allocator,
             .endpoint = options.endpoint,
             .api_version = options.api_version,
-            .auth_policy = null,
-            .policy_ptrs = &.{},
             .pipeline = pipeline,
         };
-    }
-
-    pub fn deinit(self: *@This()) void {
-        if (self.auth_policy) |auth_policy| {
-            auth_policy.deinit();
-            self.allocator.destroy(auth_policy);
-            self.allocator.free(self.policy_ptrs);
-        }
     }
 
     pub fn artifactLinkTypes(self: *@This()) ArtifactLinkTypes {
@@ -351,7 +303,7 @@ pub const WorkItemTrackingClient = struct {
 pub const ArtifactLinkTypes = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get the list of work item tracking outbound artifact link types.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !models.WorkArtifactLinkList {
         @setEvalBranchQuota(100_000);
@@ -387,7 +339,7 @@ pub const ArtifactLinkTypes = struct {
 pub const WorkItemIcons = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const GetResult = union(enum) {
         status_200: struct {
@@ -493,7 +445,7 @@ pub const WorkItemIcons = struct {
 pub const WorkItemRelationTypes = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets the work item relation types.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !models.WorkItemRelationTypeList {
         @setEvalBranchQuota(100_000);
@@ -561,7 +513,7 @@ pub const WorkItemRelationTypes = struct {
 pub const WorkItemTransitions = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Returns the next state on the given work item IDs.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, ids: []const u8, action: ?[]const u8) !models.WorkItemNextStateOnTransitionList {
         @setEvalBranchQuota(100_000);
@@ -608,7 +560,7 @@ pub const WorkItemTransitions = struct {
 pub const AccountMyWorkRecentActivity = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets recent work item activities
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8) !models.AccountRecentActivityWorkItemModel2List {
         @setEvalBranchQuota(100_000);
@@ -644,7 +596,7 @@ pub const AccountMyWorkRecentActivity = struct {
 pub const GithubConnections = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets a list of github connections
     pub fn getGithubConnections(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.GitHubConnectionModelList {
         @setEvalBranchQuota(100_000);
@@ -754,7 +706,7 @@ pub const GithubConnections = struct {
 pub const ArtifactUriQueryOperations = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Queries work items linked to a given list of artifact URI.
     pub fn query(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.ArtifactUriQuery) !models.ArtifactUriQueryResult {
         @setEvalBranchQuota(100_000);
@@ -796,7 +748,7 @@ pub const ArtifactUriQueryOperations = struct {
 pub const Attachments = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const GetResult = union(enum) {
         status_200: struct {
@@ -1008,7 +960,7 @@ pub const Attachments = struct {
 pub const ClassificationNodes = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets root classification nodes under the project.
     pub fn getRootNodes(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"$depth": ?i32) !models.WorkItemClassificationNodeList {
         @setEvalBranchQuota(100_000);
@@ -1212,7 +1164,7 @@ pub const ClassificationNodes = struct {
 pub const Fields = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Returns information for all fields. The project ID/name parameter is optional.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"$expand": ?enums.ListRequestExpand) !models.WorkItemField2List {
         @setEvalBranchQuota(100_000);
@@ -1398,7 +1350,7 @@ pub const Fields = struct {
 pub const ProjectProcessMigration = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Migrates a project to a different process within the same OOB type. For example, you can only migrate a project from agile/custom-agile to agile/custom-agile.
     pub fn migrateProjectsProcess(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.ProcessIdModel) !models.ProcessMigrationResultModel {
         @setEvalBranchQuota(100_000);
@@ -1440,7 +1392,7 @@ pub const ProjectProcessMigration = struct {
 pub const Queries = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets the root queries and their children
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"$expand": ?enums.ListRequestExpand1, @"$depth": ?i32, @"$include_deleted": ?bool) !models.QueryHierarchyItemList {
         @setEvalBranchQuota(100_000);
@@ -1706,7 +1658,7 @@ pub const Queries = struct {
 pub const Recyclebin = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets a list of the IDs and the URLs of the deleted the work items in the Recycle Bin.
     pub fn getDeletedWorkItemShallowReferences(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.WorkItemDeleteShallowReferenceList {
         @setEvalBranchQuota(100_000);
@@ -1849,7 +1801,7 @@ pub const Recyclebin = struct {
 pub const ReportingWorkItemLinks = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get a batch of work item links
     pub fn get(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, link_types: ?[]const u8, types: ?[]const u8, continuation_token: ?[]const u8, start_date_time: ?[]const u8) !models.ReportingWorkItemLinksBatch {
         @setEvalBranchQuota(100_000);
@@ -1915,7 +1867,7 @@ pub const ReportingWorkItemLinks = struct {
 pub const ReportingWorkItemRevisions = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get a batch of work item revisions with the option of including deleted items
     pub fn readReportingRevisionsGet(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, fields: ?[]const u8, types: ?[]const u8, continuation_token: ?[]const u8, start_date_time: ?[]const u8, include_identity_ref: ?bool, include_deleted: ?bool, include_tag_ref: ?bool, include_latest_only: ?bool, @"$expand": ?enums.ReadReportingRevisionsGetRequestExpand, include_discussion_changes_only: ?bool, @"$max_page_size": ?i32) !models.ReportingWorkItemRevisionsBatch {
         @setEvalBranchQuota(100_000);
@@ -2075,7 +2027,7 @@ pub const ReportingWorkItemRevisions = struct {
 pub const WorkItemRevisionsDiscussions = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn readReportingDiscussions(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, continuation_token: ?[]const u8, @"$max_page_size": ?i32) !models.ReportingWorkItemRevisionsBatch {
         @setEvalBranchQuota(100_000);
@@ -2125,7 +2077,7 @@ pub const WorkItemRevisionsDiscussions = struct {
 pub const SendMail = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// RESTful method to send mail for selected/queried work items.
     pub fn sendMail(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.SendMailBody) !void {
         @setEvalBranchQuota(100_000);
@@ -2166,7 +2118,7 @@ pub const SendMail = struct {
 pub const Tags = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get all the tags for the project.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.WorkItemTagDefinitionList {
         @setEvalBranchQuota(100_000);
@@ -2309,7 +2261,7 @@ pub const Tags = struct {
 pub const TempQueries = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Creates a temporary query Learn more about Work Item Query Language (WIQL) syntax [here](https://docs.microsoft.com/en-us/vsts/collaborate/wiql-syntax?toc=/vsts/work/track/toc.json&bc=/vsts/work/track/breadcrumb/toc.json&view=vsts).
     pub fn create(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, body: models.TemporaryQueryRequestModel) !models.TemporaryQueryResponseModel {
         @setEvalBranchQuota(100_000);
@@ -2351,7 +2303,7 @@ pub const TempQueries = struct {
 pub const WorkItems = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Returns a list of work items (Maximum 200)
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, ids: []const u8, project: []const u8, fields: ?[]const u8, as_of: ?[]const u8, @"$expand": ?enums.ListRequestExpand2, error_policy: ?enums.ListRequestErrorPolicy) !models.WorkItemList {
         @setEvalBranchQuota(100_000);
@@ -2762,7 +2714,7 @@ pub const WorkItems = struct {
 pub const Revisions = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Returns the list of fully hydrated work item revisions, paged.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32, project: []const u8, @"$top": ?i32, @"$skip": ?i32, @"$expand": ?enums.ListRequestExpand3) !models.WorkItemList {
         @setEvalBranchQuota(100_000);
@@ -2862,7 +2814,7 @@ pub const Revisions = struct {
 pub const Updates = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Returns the deltas between work item revisions
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, id: i32, project: []const u8, @"$top": ?i32, @"$skip": ?i32) !models.WorkItemUpdateList {
         @setEvalBranchQuota(100_000);
@@ -2948,7 +2900,7 @@ pub const Updates = struct {
 pub const Comments = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Returns a list of work item comments by ids.
     pub fn getCommentsBatch(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_id: i32, ids: []const u8, include_deleted: ?bool, @"$expand": ?enums.GetCommentsBatchRequestExpand) !models.CommentList {
         @setEvalBranchQuota(100_000);
@@ -3165,7 +3117,7 @@ pub const Comments = struct {
 pub const CommentsReactions = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets reactions of a comment.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_id: i32, comment_id: i32) !models.CommentReactionList {
         @setEvalBranchQuota(100_000);
@@ -3283,7 +3235,7 @@ pub const CommentsReactions = struct {
 pub const CommentReactionsEngagedUsers = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get users who reacted on the comment.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_id: i32, comment_id: i32, reaction_type: enums.ListRequestReactionType, @"$top": ?i32, @"$skip": ?i32) !models.IdentityRefList {
         @setEvalBranchQuota(100_000);
@@ -3337,7 +3289,7 @@ pub const CommentReactionsEngagedUsers = struct {
 pub const CommentsVersions = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, work_item_id: i32, comment_id: i32) !models.CommentVersionList {
         @setEvalBranchQuota(100_000);
@@ -3417,7 +3369,7 @@ pub const CommentsVersions = struct {
 pub const WorkItemTypeCategories = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get all work item type categories.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.WorkItemTypeCategoryList {
         @setEvalBranchQuota(100_000);
@@ -3489,7 +3441,7 @@ pub const WorkItemTypeCategories = struct {
 pub const WorkItemTypes = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Returns the list of work item types
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8) !models.WorkItemTypeList {
         @setEvalBranchQuota(100_000);
@@ -3561,7 +3513,7 @@ pub const WorkItemTypes = struct {
 pub const WorkItemTypesField = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Get a list of fields for a work item type with detailed references.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"type": []const u8, @"$expand": ?enums.ListRequestExpand4) !models.WorkItemTypeFieldWithReferencesList {
         @setEvalBranchQuota(100_000);
@@ -3651,7 +3603,7 @@ pub const WorkItemTypesField = struct {
 pub const WorkItemTypeStates = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Returns the state names and colors for a work item type.
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, @"type": []const u8) !models.WorkItemStateColorList {
         @setEvalBranchQuota(100_000);
@@ -3691,7 +3643,7 @@ pub const WorkItemTypeStates = struct {
 pub const Templates = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
     /// Gets template
     pub fn list(self: *@This(), alloc: std.mem.Allocator, organization: []const u8, project: []const u8, team: []const u8, workitemtypename: ?[]const u8) !models.WorkItemTemplateReferenceList {
         @setEvalBranchQuota(100_000);
@@ -3887,7 +3839,7 @@ pub const Templates = struct {
 pub const WiqlOperations = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const GetResult = union(enum) {
         status_200: struct {
