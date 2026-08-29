@@ -1,31 +1,72 @@
 const std = @import("std");
 const core = @import("azure_sdk_core");
 
+// ─────────────────────── ShareServiceClient ──────────────────
+
+pub const ShareServiceClientOptions = struct {
+    api_version: []const u8 = "2024-11-04",
+};
+
+/// Account-scoped Azure Files client.
+///
+/// The endpoint, option strings, pipeline policy storage, and the backend
+/// contexts borrowed by `pipeline.runtime` must outlive this client and every
+/// client derived from it.
+pub const ShareServiceClient = struct {
+    endpoint: []const u8,
+    api_version: []const u8,
+    pipeline: core.http.HttpPipeline,
+
+    pub fn init(
+        pipeline: core.http.HttpPipeline,
+        endpoint: []const u8,
+        options: ShareServiceClientOptions,
+    ) ShareServiceClient {
+        return .{
+            .endpoint = endpoint,
+            .api_version = options.api_version,
+            .pipeline = pipeline,
+        };
+    }
+
+    pub fn getShareClient(self: *const ShareServiceClient, share_name: []const u8) ShareClient {
+        return .{
+            .endpoint = self.endpoint,
+            .share_name = share_name,
+            .api_version = self.api_version,
+            .pipeline = self.pipeline,
+        };
+    }
+};
+
 // ─────────────────────────── ShareClient ──────────────────────
 
 pub const ShareClientOptions = struct {
     api_version: []const u8 = "2024-11-04",
 };
 
+/// Share-scoped Azure Files client.
+///
+/// The endpoint, share name, option strings, pipeline policy storage, and the
+/// backend contexts borrowed by `pipeline.runtime` must outlive this client
+/// and every client derived from it.
 pub const ShareClient = struct {
     endpoint: []const u8,
     share_name: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub fn init(
+        pipeline: core.http.HttpPipeline,
         endpoint: []const u8,
         share_name: []const u8,
-        credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
         options: ShareClientOptions,
     ) ShareClient {
-        _ = credential;
         return .{
             .endpoint = endpoint,
             .share_name = share_name,
             .api_version = options.api_version,
-            .pipeline = .{ .policies = &.{}, .transport_impl = transport },
+            .pipeline = pipeline,
         };
     }
 
@@ -85,7 +126,7 @@ pub const ShareClient = struct {
         return error.AzureRequestFailed;
     }
 
-    pub fn getDirectoryClient(self: *ShareClient, directory_name: []const u8) ShareDirectoryClient {
+    pub fn getDirectoryClient(self: *const ShareClient, directory_name: []const u8) ShareDirectoryClient {
         return .{
             .endpoint = self.endpoint,
             .share_name = self.share_name,
@@ -98,12 +139,37 @@ pub const ShareClient = struct {
 
 // ────────────────────── ShareDirectoryClient ──────────────────
 
+pub const ShareDirectoryClientOptions = struct {
+    api_version: []const u8 = "2024-11-04",
+};
+
+/// Directory-scoped Azure Files client.
+///
+/// The endpoint, names, option strings, pipeline policy storage, and the
+/// backend contexts borrowed by `pipeline.runtime` must outlive this client
+/// and every client derived from it.
 pub const ShareDirectoryClient = struct {
     endpoint: []const u8,
     share_name: []const u8,
     directory_name: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
+
+    pub fn init(
+        pipeline: core.http.HttpPipeline,
+        endpoint: []const u8,
+        share_name: []const u8,
+        directory_name: []const u8,
+        options: ShareDirectoryClientOptions,
+    ) ShareDirectoryClient {
+        return .{
+            .endpoint = endpoint,
+            .share_name = share_name,
+            .directory_name = directory_name,
+            .api_version = options.api_version,
+            .pipeline = pipeline,
+        };
+    }
 
     /// PUT /share/directory?restype=directory
     pub fn create(self: *ShareDirectoryClient, allocator: std.mem.Allocator) !void {
@@ -162,7 +228,7 @@ pub const ShareDirectoryClient = struct {
         return error.AzureRequestFailed;
     }
 
-    pub fn getFileClient(self: *ShareDirectoryClient, file_name: []const u8) ShareFileClient {
+    pub fn getFileClient(self: *const ShareDirectoryClient, file_name: []const u8) ShareFileClient {
         return .{
             .endpoint = self.endpoint,
             .share_name = self.share_name,
@@ -176,13 +242,40 @@ pub const ShareDirectoryClient = struct {
 
 // ──────────────────────── ShareFileClient ─────────────────────
 
+pub const ShareFileClientOptions = struct {
+    api_version: []const u8 = "2024-11-04",
+};
+
+/// File-scoped Azure Files client.
+///
+/// The endpoint, names, option strings, pipeline policy storage, and the
+/// transport and crypto backend contexts borrowed by `pipeline.runtime` must
+/// outlive this client.
 pub const ShareFileClient = struct {
     endpoint: []const u8,
     share_name: []const u8,
     directory_name: []const u8,
     file_name: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
+
+    pub fn init(
+        pipeline: core.http.HttpPipeline,
+        endpoint: []const u8,
+        share_name: []const u8,
+        directory_name: []const u8,
+        file_name: []const u8,
+        options: ShareFileClientOptions,
+    ) ShareFileClient {
+        return .{
+            .endpoint = endpoint,
+            .share_name = share_name,
+            .directory_name = directory_name,
+            .file_name = file_name,
+            .api_version = options.api_version,
+            .pipeline = pipeline,
+        };
+    }
 
     /// PUT /share/dir/file (create with x-ms-type: file and x-ms-content-length)
     pub fn create(self: *ShareFileClient, allocator: std.mem.Allocator, content_length: u64) !void {
@@ -311,39 +404,73 @@ test "ShareFileClient create and download" {
     var mock_create = core.http.MockTransport.init(allocator, 201, "");
     defer mock_create.deinit();
 
-    const identity = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
-    );
-    defer cred_mock.deinit();
-    var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
-
-    var share = ShareClient.init(
-        "https://myaccount.file.core.windows.net",
-        "myshare",
-        cred.asCredential(),
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    const runtime = core.http.HttpRuntime.init(
         mock_create.asTransport(),
+        crypto.asProvider(),
+    );
+    const pipeline = core.http.HttpPipeline.init(runtime, &.{});
+    var service = ShareServiceClient.init(
+        pipeline,
+        "https://myaccount.file.core.windows.net",
         .{},
     );
+    var share = service.getShareClient("myshare");
 
     try share.create(allocator);
     try std.testing.expect(std.mem.find(u8, mock_create.last_url.?, "myshare?restype=share") != null);
 
     // Create directory and file
     var dir = share.getDirectoryClient("mydir");
-
-    var mock_dir = core.http.MockTransport.init(allocator, 201, "");
-    defer mock_dir.deinit();
-    dir.pipeline = .{ .policies = &.{}, .transport_impl = mock_dir.asTransport() };
     try dir.create(allocator);
 
     var file = dir.getFileClient("readme.txt");
-
-    var mock_dl = core.http.MockTransport.init(allocator, 200, "file content here");
-    defer mock_dl.deinit();
-    file.pipeline = .{ .policies = &.{}, .transport_impl = mock_dl.asTransport() };
+    mock_create.response_status = 200;
+    mock_create.response_body = "file content here";
 
     const content = try file.download(allocator);
     defer allocator.free(content);
     try std.testing.expectEqualStrings("file content here", content);
+}
+
+test "constructors and derived clients preserve the selected runtime providers" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(allocator, 200, "");
+    defer transport.deinit();
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    const runtime = core.http.HttpRuntime.init(transport.asTransport(), crypto.asProvider());
+    const pipeline = core.http.HttpPipeline.init(runtime, &.{});
+
+    var service = ShareServiceClient.init(pipeline, "https://example.file.core.windows.net", .{});
+    var share = service.getShareClient("share");
+    var directory = share.getDirectoryClient("directory");
+    const file = directory.getFileClient("file");
+
+    inline for (.{ service.pipeline, share.pipeline, directory.pipeline, file.pipeline }) |client_pipeline| {
+        try std.testing.expectEqual(runtime.transport.context, client_pipeline.runtime.transport.context);
+        try std.testing.expectEqual(runtime.transport.vtable, client_pipeline.runtime.transport.vtable);
+        try std.testing.expectEqual(runtime.crypto.context, client_pipeline.runtime.crypto.context);
+        try std.testing.expectEqual(runtime.crypto.vtable, client_pipeline.runtime.crypto.vtable);
+    }
+
+    const direct_share = ShareClient.init(pipeline, service.endpoint, "share", .{});
+    const direct_directory = ShareDirectoryClient.init(
+        pipeline,
+        service.endpoint,
+        "share",
+        "directory",
+        .{},
+    );
+    const direct_file = ShareFileClient.init(
+        pipeline,
+        service.endpoint,
+        "share",
+        "directory",
+        "file",
+        .{},
+    );
+    inline for (.{ direct_share.pipeline, direct_directory.pipeline, direct_file.pipeline }) |client_pipeline| {
+        try std.testing.expectEqual(runtime.transport.context, client_pipeline.runtime.transport.context);
+        try std.testing.expectEqual(runtime.crypto.context, client_pipeline.runtime.crypto.context);
+    }
 }
