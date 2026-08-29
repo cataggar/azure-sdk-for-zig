@@ -376,6 +376,8 @@ pub const Driver = struct {
 
     fn runSasl(self: *Driver, deadline_ms: i64) ConnectionError!void {
         try self.exchangeHeader(&frame.sasl_header, deadline_ms);
+        var completed = false;
+        defer if (!completed) self.invalidate();
 
         {
             const inbound = try self.receiveFrame(deadline_ms);
@@ -412,15 +414,18 @@ pub const Driver = struct {
         };
         if (outcome.code != .ok) return error.SaslFailed;
         processed = true;
+        completed = true;
     }
 
     fn exchangeHeader(self: *Driver, header: *const [8]u8, deadline_ms: i64) ConnectionError!void {
         try self.emitRaw(header);
-        var consumed = false;
-        errdefer if (consumed) self.invalidate();
+        var completed = false;
+        defer if (!completed) self.invalidate();
         var received: [8]u8 = undefined;
+        var consumed = false;
         try self.readExactTracked(&received, deadline_ms, &consumed);
         if (!std.mem.eql(u8, &received, header)) return error.ProtocolMismatch;
+        completed = true;
     }
 
     fn sendOpen(self: *Driver) ConnectionError!void {
@@ -472,9 +477,9 @@ pub const Driver = struct {
             .handle_max = options.handle_max,
         } });
 
-        const inbound = try self.receiveFrame(deadline_ms);
         var processed = false;
         defer if (!processed) self.invalidate();
+        const inbound = try self.receiveFrame(deadline_ms);
         var decoded = try self.decodeBody(inbound.body);
         defer decoded.deinit();
         switch (decoded.performative) {
@@ -505,9 +510,9 @@ pub const Driver = struct {
     /// Send `end` on `channel` and wait for the peer's `end`.
     pub fn endSession(self: *Driver, channel: u16, deadline_ms: i64) ConnectionError!void {
         try self.sendPerformative(.amqp, channel, .{ .end = .{} });
-        const inbound = try self.receiveFrame(deadline_ms);
         var processed = false;
         defer if (!processed) self.invalidate();
+        const inbound = try self.receiveFrame(deadline_ms);
         var decoded = try self.decodeBody(inbound.body);
         defer decoded.deinit();
         switch (decoded.performative) {
@@ -1095,6 +1100,95 @@ test "a mismatched protocol header is rejected" {
     var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
     defer driver.deinit();
     try testing.expectError(error.ProtocolMismatch, driver.open(10_000));
+}
+
+test "a zero-byte protocol-header timeout terminalizes without duplicate emission" {
+    const Phase = enum { amqp, sasl, amqp_after_sasl };
+    inline for (std.meta.tags(Phase)) |phase| {
+        const allocator = testing.allocator;
+        var mem = MemoryTransport.init(allocator);
+        defer mem.deinit();
+        var clock: ManualClock = .{ .auto_advance_ms = 1 };
+        const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+        var options = test_options;
+        if (phase != .amqp) options.sasl = .anonymous;
+        if (phase == .amqp_after_sasl) {
+            try peer.pushHeader(&frame.sasl_header);
+            try peer.push(.sasl, 0, .{
+                .sasl_mechanisms = .{ .sasl_server_mechanisms = &.{"ANONYMOUS"} },
+            });
+            try peer.push(.sasl, 0, .{ .sasl_outcome = .{ .code = .ok } });
+        }
+        mem.starve = true;
+
+        var driver = try Driver.init(allocator, mem.transport(), clock.clock(), options);
+        defer driver.deinit();
+        try testing.expectError(error.Timeout, driver.open(10));
+        try testing.expectEqual(State.err, driver.state);
+        try testing.expect(mem.closed);
+        const written = mem.written().len;
+        try testing.expect(written >= frame.amqp_header.len);
+
+        try testing.expectError(error.InvalidState, driver.open(20));
+        try testing.expectEqual(written, mem.written().len);
+    }
+}
+
+test "zero-byte Begin and End timeouts cannot re-emit controls" {
+    const Phase = enum { begin, end };
+    inline for (std.meta.tags(Phase)) |phase| {
+        const allocator = testing.allocator;
+        var mem = MemoryTransport.init(allocator);
+        defer mem.deinit();
+        var clock: ManualClock = .{ .auto_advance_ms = 1 };
+        const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+        try peer.pushHeader(&frame.amqp_header);
+        try peer.push(.amqp, 0, .{ .open = .{ .container_id = "service-bus" } });
+        if (phase == .end) {
+            try peer.push(.amqp, 7, .{ .begin = .{
+                .remote_channel = 0,
+                .next_outgoing_id = 1,
+                .incoming_window = 100,
+                .outgoing_window = 100,
+            } });
+        }
+        mem.starve = true;
+
+        var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+        defer driver.deinit();
+        try driver.open(10);
+        if (phase == .end) {
+            _ = try driver.beginSession(0, .{}, 10);
+        }
+
+        mem.clearWritten();
+        const deadline = clock.millis + 10;
+        switch (phase) {
+            .begin => try testing.expectError(
+                error.Timeout,
+                driver.beginSession(0, .{}, deadline),
+            ),
+            .end => try testing.expectError(error.Timeout, driver.endSession(0, deadline)),
+        }
+        try testing.expectEqual(State.err, driver.state);
+        try testing.expect(mem.closed);
+        const written = mem.written().len;
+        try testing.expect(written > 0);
+
+        switch (phase) {
+            .begin => try testing.expectError(
+                error.InvalidState,
+                driver.beginSession(0, .{}, deadline + 10),
+            ),
+            .end => try testing.expectError(
+                error.ConnectionClosed,
+                driver.endSession(0, deadline + 10),
+            ),
+        }
+        try testing.expectEqual(written, mem.written().len);
+    }
 }
 
 test "a peer that closes with a condition surfaces it" {

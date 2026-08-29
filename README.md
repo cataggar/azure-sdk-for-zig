@@ -187,14 +187,15 @@ budget, that budget is advertised and enforced as the effective
 message this receiver would have to reject.
 
 `max_buffered_bytes` separately bounds the aggregate payload retained in the
-ready queue and the delivery currently being reassembled. It is unbounded by
-default so the existing 300-credit Event Hubs and Service Bus window never
-promises traffic the receiver would later reject. Set it explicitly to opt in
-to an aggregate ceiling; `default_max_buffered_bytes` provides a recommended
-256 MiB value. With a finite budget, credit is capped conservatively and a
-multi-frame delivery reserves its full legal size: ready bytes plus that
-reservation plus all outstanding credit can never exceed the aggregate
-budget. A sender that ignores the capped credit is detached with
+ready queue and the delivery currently being reassembled. The default is a
+finite 256 MiB (`default_max_buffered_bytes`); null explicitly opts out and
+makes the caller responsible for bounding retention above this layer. With a
+finite budget, credit is capped conservatively and a multi-frame delivery
+reserves its full legal size: ready bytes plus that reservation plus all
+outstanding credit can never exceed the aggregate budget. The default 128 MiB
+message limit therefore grants at most two deliveries at once. Service clients
+that know a smaller protocol maximum should set both limits explicitly to gain
+a deeper safe window. A sender that ignores the capped credit is detached with
 `amqp:resource-limit-exceeded` before the crossing chunk is retained.
 
 `issueCredit` also preserves one-shot manual receive requests. If a custom byte
@@ -204,10 +205,9 @@ just to restate the same requested count.
 
 The delivery already returned to the caller is outside the aggregate budget
 and remains valid until the next successful `receive`; it is still bounded by
-`max_message_size`. Callers that require an aggregate memory ceiling must set
-`max_buffered_bytes`; callers that know a service's smaller message limit
-should set `max_message_size` too, which permits proportionally more of the
-requested prefetch window under that ceiling.
+`max_message_size`. Callers that know a service's smaller message limit should
+set it explicitly, which permits proportionally more of the requested prefetch
+window under the aggregate ceiling.
 
 Credit and delivery count are charged on the initial transfer, exactly once.
 A continuation may omit `delivery-id` or repeat the initial value without
@@ -228,6 +228,13 @@ later send to reuse that byte stream could flush a corrupt partial frame.
 Protocol-header and heartbeat writes follow the same rule. Likewise, an error
 after any inbound frame header byte is consumed closes the connection; an
 unread body can no longer be parsed from a known boundary.
+
+An acknowledgement timeout after a successfully emitted SASL or AMQP protocol
+header, Begin, or End is terminal at the corresponding connection/session
+scope. A retry cannot emit a duplicate control onto a stream where the peer may
+already have advanced. Attach uses the same invariant: if its response does not
+arrive, the session and transport are invalidated before the half-attached
+object is destroyed, so a delayed response cannot bind a same-name replacement.
 
 Every initial transfer, including aborted and pre-settled transfers, is checked
 against unsettled delivery ids active across every receiver on the session. An
@@ -250,6 +257,14 @@ not emit a duplicate terminal frame. Later sender and receiver operations fail
 without emission. Remote Detach is acknowledged with `closed = true` and
 terminally poisons only the named link, even when the peer requested suspension
 with `closed = false`; resumable link state is not retained.
+
+Receiver settlement follows the mode negotiated on Attach. In
+receiver-settle-mode `first`, the receiver disposition carries `settled = true`
+and releases the delivery ids immediately. In mode `second`, it carries
+`settled = false`; the ids remain active until a sender-role disposition
+acknowledges the range with `settled = true`. Timeout leaves that pending state
+intact, while terminal emission failure, detach, or deinitialization releases
+it safely.
 
 Settling one delivery at a time costs a frame per message, which at a 300-deep
 prefetch is 300 frames of bookkeeping. A disposition can name a `first`..`last`
