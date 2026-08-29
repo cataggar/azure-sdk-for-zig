@@ -6,13 +6,14 @@
 const std = @import("std");
 const serde = @import("serde");
 const core = @import("azure_sdk_core");
+const pipeline_mod = @import("azure_sdk_keyvault_pipeline");
+const test_support = if (@import("builtin").is_test)
+    @import("azure_sdk_keyvault_test_support")
+else
+    struct {};
 
-const HttpPipeline = core.pipeline.HttpPipeline;
-const HttpPolicy = core.pipeline.HttpPolicy;
-const RetryPolicy = core.pipeline.RetryPolicy;
-const BearerTokenAuthPolicy = core.pipeline.BearerTokenAuthPolicy;
+const HttpPipeline = core.http.HttpPipeline;
 const Request = core.http.Request;
-const HttpTransport = core.http.HttpTransport;
 const TokenCredential = core.credentials.TokenCredential;
 const Result = core.errors.Result;
 
@@ -118,11 +119,7 @@ pub const Tag = struct {
     value: []const u8,
 };
 
-pub const RetryOptions = struct {
-    max_retries: u32 = 3,
-    initial_delay_ms: u64 = 800,
-    max_delay_ms: u64 = 60_000,
-};
+pub const RetryOptions = pipeline_mod.RetryOptions;
 
 pub const KeyClientOptions = struct {
     retry: RetryOptions = .{},
@@ -249,75 +246,39 @@ pub const Signature = struct {
     }
 };
 
-const PipelineState = struct {
-    allocator: std.mem.Allocator,
-    scope: []u8,
-    scopes: [1][]const u8,
-    retry: RetryPolicy,
-    auth: BearerTokenAuthPolicy,
-    policies: [2]*HttpPolicy,
-
-    fn create(
-        allocator: std.mem.Allocator,
-        credential: *TokenCredential,
-        retry_options: RetryOptions,
-        scope: []const u8,
-    ) !*PipelineState {
-        const self = try allocator.create(PipelineState);
-        errdefer allocator.destroy(self);
-        const owned_scope = try allocator.dupe(u8, scope);
-        errdefer allocator.free(owned_scope);
-        var retry = RetryPolicy.init();
-        retry.max_retries = retry_options.max_retries;
-        retry.initial_delay_ms = retry_options.initial_delay_ms;
-        retry.max_delay_ms = retry_options.max_delay_ms;
-        self.allocator = allocator;
-        self.scope = owned_scope;
-        self.scopes = .{self.scope};
-        self.retry = retry;
-        self.auth = BearerTokenAuthPolicy.init(allocator, credential, &self.scopes);
-        self.policies = .{ self.retry.asPolicy(), self.auth.asPolicy() };
-        return self;
-    }
-
-    fn pipeline(self: *PipelineState, transport: *HttpTransport) HttpPipeline {
-        return .{ .transport_impl = transport, .policies = &self.policies };
-    }
-
-    fn deinit(self: *PipelineState) void {
-        const allocator = self.allocator;
-        self.auth.deinit();
-        allocator.free(self.scope);
-        allocator.destroy(self);
-    }
-};
-
+/// Client for Key Vault key management operations.
+///
+/// Runtime descriptors are copied by value. Their borrowed transport and
+/// crypto contexts and the credential must outlive this client, all derived
+/// cryptography clients and pagers, and every in-flight call. Derived clients
+/// and pagers must be deinitialized before this client. The caller must
+/// serialize every operation sharing this client's pipeline state, including
+/// operations from derived clients and pagers.
 pub const KeyClient = struct {
     vault_url: []u8,
-    transport: *HttpTransport,
-    pipeline_state: *PipelineState,
+    pipeline_state: *pipeline_mod.PipelineState,
     allocator: std.mem.Allocator,
 
     pub fn init(
         allocator: std.mem.Allocator,
         vault_url: []const u8,
         credential: *TokenCredential,
-        transport: *HttpTransport,
+        runtime: core.http.HttpRuntime,
         options: KeyClientOptions,
     ) !KeyClient {
         const normalized_url = std.mem.trimEnd(u8, vault_url, "/");
         try validateVaultUrl(normalized_url);
         const owned_url = try allocator.dupe(u8, normalized_url);
         errdefer allocator.free(owned_url);
-        const pipeline_state = try PipelineState.create(
+        const pipeline_state = try pipeline_mod.PipelineState.create(
             allocator,
             credential,
+            runtime,
             options.retry,
             options.scope,
         );
         return .{
             .vault_url = owned_url,
-            .transport = transport,
             .pipeline_state = pipeline_state,
             .allocator = allocator,
         };
@@ -330,7 +291,22 @@ pub const KeyClient = struct {
     }
 
     fn pipeline(self: *KeyClient) HttpPipeline {
-        return self.pipeline_state.pipeline(self.transport);
+        return self.pipeline_state.pipeline;
+    }
+
+    /// Creates a cryptography client that borrows this client's authenticated
+    /// pipeline state. The returned client must not outlive this `KeyClient`.
+    pub fn getCryptographyClient(
+        self: *KeyClient,
+        allocator: std.mem.Allocator,
+        key_id: []const u8,
+    ) !CryptographyClient {
+        try validateContinuationUrl(self.vault_url, key_id);
+        return CryptographyClient.initBorrowed(
+            allocator,
+            key_id,
+            self.pipeline_state,
+        );
     }
 
     pub fn createRsaKey(
@@ -557,45 +533,70 @@ pub const KeyClient = struct {
     }
 };
 
+/// Client for Key Vault service-side cryptography payload operations.
+///
+/// These operations send caller-provided digests to Key Vault; they do not
+/// perform local hashing and are independent of transport TLS. The selected
+/// runtime crypto provider remains available to pipeline policies and
+/// credentials. A directly initialized client owns its pipeline state; a
+/// client returned by `KeyClient.getCryptographyClient` borrows that state and
+/// must be deinitialized before its parent. The caller must serialize its
+/// operations with every other operation sharing the same pipeline state.
 pub const CryptographyClient = struct {
     key_id: []u8,
-    transport: *HttpTransport,
-    pipeline_state: *PipelineState,
+    pipeline_state: *pipeline_mod.PipelineState,
+    owns_pipeline_state: bool,
     allocator: std.mem.Allocator,
 
     pub fn init(
         allocator: std.mem.Allocator,
         key_id: []const u8,
         credential: *TokenCredential,
-        transport: *HttpTransport,
+        runtime: core.http.HttpRuntime,
         options: CryptographyClientOptions,
     ) !CryptographyClient {
         const parsed_key_id = try parseKeyId(key_id);
         if (parsed_key_id.version == null) return error.VersionedKeyIdRequired;
         const owned_key_id = try allocator.dupe(u8, key_id);
         errdefer allocator.free(owned_key_id);
-        const pipeline_state = try PipelineState.create(
+        const pipeline_state = try pipeline_mod.PipelineState.create(
             allocator,
             credential,
+            runtime,
             options.retry,
             options.scope,
         );
         return .{
             .key_id = owned_key_id,
-            .transport = transport,
             .pipeline_state = pipeline_state,
+            .owns_pipeline_state = true,
+            .allocator = allocator,
+        };
+    }
+
+    fn initBorrowed(
+        allocator: std.mem.Allocator,
+        key_id: []const u8,
+        pipeline_state: *pipeline_mod.PipelineState,
+    ) !CryptographyClient {
+        const parsed_key_id = try parseKeyId(key_id);
+        if (parsed_key_id.version == null) return error.VersionedKeyIdRequired;
+        return .{
+            .key_id = try allocator.dupe(u8, key_id),
+            .pipeline_state = pipeline_state,
+            .owns_pipeline_state = false,
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *CryptographyClient) void {
         self.allocator.free(self.key_id);
-        self.pipeline_state.deinit();
+        if (self.owns_pipeline_state) self.pipeline_state.deinit();
         self.* = undefined;
     }
 
     fn pipeline(self: *CryptographyClient) HttpPipeline {
-        return self.pipeline_state.pipeline(self.transport);
+        return self.pipeline_state.pipeline;
     }
 
     pub fn sign(
@@ -663,6 +664,8 @@ pub const KeyPager = struct {
     vault_url: []u8,
     allocator: std.mem.Allocator,
 
+    /// Copies the pipeline runtime descriptors and borrows their backend and
+    /// policy contexts. The originating client must outlive this pager.
     fn init(
         pipeline: HttpPipeline,
         initial_url: []const u8,
@@ -1030,27 +1033,7 @@ fn validateVaultUrl(vault_url: []const u8) !void {
 }
 
 fn validateContinuationUrl(vault_url: []const u8, next_url: []const u8) !void {
-    const expected = std.Uri.parse(vault_url) catch return error.InvalidContinuationUrl;
-    const candidate = std.Uri.parse(next_url) catch return error.InvalidContinuationUrl;
-    if (!std.ascii.eqlIgnoreCase(candidate.scheme, "https") or
-        candidate.host == null or
-        candidate.user != null or
-        candidate.password != null or
-        candidate.fragment != null)
-    {
-        return error.InvalidContinuationUrl;
-    }
-
-    var expected_host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
-    var candidate_host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
-    const expected_host = expected.getHost(&expected_host_buffer) catch
-        return error.InvalidContinuationUrl;
-    const candidate_host = candidate.getHost(&candidate_host_buffer) catch
-        return error.InvalidContinuationUrl;
-    if (!std.ascii.eqlIgnoreCase(expected_host.bytes, candidate_host.bytes))
-        return error.InvalidContinuationUrl;
-    if ((expected.port orelse 443) != (candidate.port orelse 443))
-        return error.InvalidContinuationUrl;
+    return pipeline_mod.validateHttpsOrigin(vault_url, next_url);
 }
 
 fn validatePathSegment(value: []const u8) !void {
@@ -1079,22 +1062,14 @@ test "typed key values map to Key Vault wire values" {
 
 test "create RSA key authenticates, escapes JSON, and disables retries" {
     const allocator = std.testing.allocator;
-    var credential_mock = core.http.MockTransport.init(allocator, 200, credential_response);
-    defer credential_mock.deinit();
-    var credential = core.identity.ClientSecretCredential.init(
-        allocator,
-        credential_mock.asTransport(),
-        "tenant",
-        "client",
-        "secret",
-    );
+    var credential = test_support.StaticCredential{};
     var service_mock = core.http.MockTransport.init(allocator, 200, key_response);
     defer service_mock.deinit();
     var client = try KeyClient.init(
         allocator,
         "https://vault.example/",
         credential.asCredential(),
-        service_mock.asTransport(),
+        test_support.runtime(service_mock.asTransport()),
         .{ .scope = "https://vault.usgovcloudapi.net/.default" },
     );
     defer client.deinit();
@@ -1108,11 +1083,10 @@ test "create RSA key authenticates, escapes JSON, and disables retries" {
         "https://vault.example/keys/ssh-ca/create?api-version=2025-07-01",
         service_mock.last_url.?,
     );
-    try std.testing.expect(std.mem.indexOf(
-        u8,
-        credential_mock.last_body.?,
-        "scope=https%3A%2F%2Fvault.usgovcloudapi.net%2F.default",
-    ) != null);
+    try std.testing.expectEqualStrings(
+        "https://vault.usgovcloudapi.net/.default",
+        credential.last_scope.?,
+    );
     try std.testing.expectEqualStrings("Bearer test-token", service_mock.last_headers.get("Authorization").?);
     try std.testing.expectEqualStrings(
         "{\"kty\":\"RSA\",\"key_size\":3072,\"key_ops\":[\"sign\",\"verify\"],\"attributes\":{\"enabled\":true,\"exportable\":false},\"tags\":{\"operation-id\":\"quoted \\\"value\\\"\"}}",
@@ -1134,22 +1108,14 @@ test "create RSA key authenticates, escapes JSON, and disables retries" {
 
 test "version-aware get and version listing preserve tags" {
     const allocator = std.testing.allocator;
-    var credential_mock = core.http.MockTransport.init(allocator, 200, credential_response);
-    defer credential_mock.deinit();
-    var credential = core.identity.ClientSecretCredential.init(
-        allocator,
-        credential_mock.asTransport(),
-        "tenant",
-        "client",
-        "secret",
-    );
+    var credential = test_support.StaticCredential{};
     var service_mock = core.http.MockTransport.init(allocator, 200, key_response);
     defer service_mock.deinit();
     var client = try KeyClient.init(
         allocator,
         "https://vault.example",
         credential.asCredential(),
-        service_mock.asTransport(),
+        test_support.runtime(service_mock.asTransport()),
         .{},
     );
     defer client.deinit();
@@ -1180,15 +1146,7 @@ test "version-aware get and version listing preserve tags" {
 
 test "RS512 signing uses exact digest and returns decoded signature bytes" {
     const allocator = std.testing.allocator;
-    var credential_mock = core.http.MockTransport.init(allocator, 200, credential_response);
-    defer credential_mock.deinit();
-    var credential = core.identity.ClientSecretCredential.init(
-        allocator,
-        credential_mock.asTransport(),
-        "tenant",
-        "client",
-        "secret",
-    );
+    var credential = test_support.StaticCredential{};
     var service_mock = core.http.MockTransport.init(
         allocator,
         200,
@@ -1199,7 +1157,7 @@ test "RS512 signing uses exact digest and returns decoded signature bytes" {
         allocator,
         "https://vault.example/keys/ssh-ca/version1",
         credential.asCredential(),
-        service_mock.asTransport(),
+        test_support.runtime(service_mock.asTransport()),
         .{},
     );
     defer client.deinit();
@@ -1220,15 +1178,7 @@ test "RS512 signing uses exact digest and returns decoded signature bytes" {
 
 test "Key Vault service errors remain structured" {
     const allocator = std.testing.allocator;
-    var credential_mock = core.http.MockTransport.init(allocator, 200, credential_response);
-    defer credential_mock.deinit();
-    var credential = core.identity.ClientSecretCredential.init(
-        allocator,
-        credential_mock.asTransport(),
-        "tenant",
-        "client",
-        "secret",
-    );
+    var credential = test_support.StaticCredential{};
     var service_mock = core.http.MockTransport.init(
         allocator,
         403,
@@ -1239,7 +1189,7 @@ test "Key Vault service errors remain structured" {
         allocator,
         "https://vault.example/keys/ssh-ca/version1",
         credential.asCredential(),
-        service_mock.asTransport(),
+        test_support.runtime(service_mock.asTransport()),
         .{ .retry = .{ .max_retries = 0 } },
     );
     defer client.deinit();
@@ -1288,15 +1238,7 @@ test "Key Vault service errors remain structured" {
 
 test "get retries transient responses but create does not" {
     const allocator = std.testing.allocator;
-    var credential_mock = core.http.MockTransport.init(allocator, 200, credential_response);
-    defer credential_mock.deinit();
-    var credential = core.identity.ClientSecretCredential.init(
-        allocator,
-        credential_mock.asTransport(),
-        "tenant",
-        "client",
-        "secret",
-    );
+    var credential = test_support.StaticCredential{};
     var service_mock = core.http.SequenceMockTransport.init(allocator, &.{
         .{ .status = 500, .body = "{}" },
         .{ .status = 200, .body = key_response },
@@ -1305,7 +1247,7 @@ test "get retries transient responses but create does not" {
         allocator,
         "https://vault.example",
         credential.asCredential(),
-        service_mock.asTransport(),
+        test_support.runtime(service_mock.asTransport()),
         .{ .retry = .{ .initial_delay_ms = 0 } },
     );
     defer client.deinit();
@@ -1332,22 +1274,14 @@ test "SSH CA validation rejects release policies and exportability" {
 
 test "unsafe SSH CA create options fail before the network call" {
     const allocator = std.testing.allocator;
-    var credential_mock = core.http.MockTransport.init(allocator, 200, credential_response);
-    defer credential_mock.deinit();
-    var credential = core.identity.ClientSecretCredential.init(
-        allocator,
-        credential_mock.asTransport(),
-        "tenant",
-        "client",
-        "secret",
-    );
+    var credential = test_support.StaticCredential{};
     var service_mock = core.http.MockTransport.init(allocator, 200, key_response);
     defer service_mock.deinit();
     var client = try KeyClient.init(
         allocator,
         "https://vault.example",
         credential.asCredential(),
-        service_mock.asTransport(),
+        test_support.runtime(service_mock.asTransport()),
         .{},
     );
     defer client.deinit();
@@ -1371,20 +1305,12 @@ test "unsafe SSH CA create options fail before the network call" {
         }),
     );
     try std.testing.expect(service_mock.last_url == null);
-    try std.testing.expect(credential_mock.last_url == null);
+    try std.testing.expectEqual(@as(usize, 0), credential.calls);
 }
 
 test "KeyClient requires an HTTPS vault origin" {
     const allocator = std.testing.allocator;
-    var credential_mock = core.http.MockTransport.init(allocator, 200, credential_response);
-    defer credential_mock.deinit();
-    var credential = core.identity.ClientSecretCredential.init(
-        allocator,
-        credential_mock.asTransport(),
-        "tenant",
-        "client",
-        "secret",
-    );
+    var credential = test_support.StaticCredential{};
     var service_mock = core.http.MockTransport.init(allocator, 200, key_response);
     defer service_mock.deinit();
 
@@ -1394,7 +1320,7 @@ test "KeyClient requires an HTTPS vault origin" {
             allocator,
             "http://vault.example",
             credential.asCredential(),
-            service_mock.asTransport(),
+            test_support.runtime(service_mock.asTransport()),
             .{},
         ),
     );
@@ -1404,7 +1330,7 @@ test "KeyClient requires an HTTPS vault origin" {
             allocator,
             "https://user@vault.example",
             credential.asCredential(),
-            service_mock.asTransport(),
+            test_support.runtime(service_mock.asTransport()),
             .{},
         ),
     );
@@ -1412,15 +1338,7 @@ test "KeyClient requires an HTTPS vault origin" {
 
 test "cryptography requires a version and verifies the response key id" {
     const allocator = std.testing.allocator;
-    var credential_mock = core.http.MockTransport.init(allocator, 200, credential_response);
-    defer credential_mock.deinit();
-    var credential = core.identity.ClientSecretCredential.init(
-        allocator,
-        credential_mock.asTransport(),
-        "tenant",
-        "client",
-        "secret",
-    );
+    var credential = test_support.StaticCredential{};
     var service_mock = core.http.MockTransport.init(
         allocator,
         200,
@@ -1434,7 +1352,7 @@ test "cryptography requires a version and verifies the response key id" {
             allocator,
             "https://vault.example/keys/ssh-ca",
             credential.asCredential(),
-            service_mock.asTransport(),
+            test_support.runtime(service_mock.asTransport()),
             .{},
         ),
     );
@@ -1443,7 +1361,7 @@ test "cryptography requires a version and verifies the response key id" {
         allocator,
         "https://vault.example/keys/ssh-ca/version1",
         credential.asCredential(),
-        service_mock.asTransport(),
+        test_support.runtime(service_mock.asTransport()),
         .{},
     );
     defer client.deinit();
@@ -1456,15 +1374,7 @@ test "cryptography requires a version and verifies the response key id" {
 
 test "sign retries throttling responses" {
     const allocator = std.testing.allocator;
-    var credential_mock = core.http.MockTransport.init(allocator, 200, credential_response);
-    defer credential_mock.deinit();
-    var credential = core.identity.ClientSecretCredential.init(
-        allocator,
-        credential_mock.asTransport(),
-        "tenant",
-        "client",
-        "secret",
-    );
+    var credential = test_support.StaticCredential{};
     var service_mock = core.http.SequenceMockTransport.init(allocator, &.{
         .{ .status = 429, .body = "{\"error\":{\"code\":\"Throttled\"}}" },
         .{
@@ -1476,7 +1386,7 @@ test "sign retries throttling responses" {
         allocator,
         "https://vault.example/keys/ssh-ca/version1",
         credential.asCredential(),
-        service_mock.asTransport(),
+        test_support.runtime(service_mock.asTransport()),
         .{ .retry = .{ .initial_delay_ms = 0 } },
     );
     defer client.deinit();
@@ -1489,15 +1399,7 @@ test "sign retries throttling responses" {
 
 test "key pager rejects cross-origin continuation URLs" {
     const allocator = std.testing.allocator;
-    var credential_mock = core.http.MockTransport.init(allocator, 200, credential_response);
-    defer credential_mock.deinit();
-    var credential = core.identity.ClientSecretCredential.init(
-        allocator,
-        credential_mock.asTransport(),
-        "tenant",
-        "client",
-        "secret",
-    );
+    var credential = test_support.StaticCredential{};
     var service_mock = core.http.MockTransport.init(
         allocator,
         200,
@@ -1508,7 +1410,7 @@ test "key pager rejects cross-origin continuation URLs" {
         allocator,
         "https://vault.example",
         credential.asCredential(),
-        service_mock.asTransport(),
+        test_support.runtime(service_mock.asTransport()),
         .{},
     );
     defer client.deinit();
@@ -1524,15 +1426,7 @@ test "key pager rejects cross-origin continuation URLs" {
 
 test "delete preserves structured Azure errors" {
     const allocator = std.testing.allocator;
-    var credential_mock = core.http.MockTransport.init(allocator, 200, credential_response);
-    defer credential_mock.deinit();
-    var credential = core.identity.ClientSecretCredential.init(
-        allocator,
-        credential_mock.asTransport(),
-        "tenant",
-        "client",
-        "secret",
-    );
+    var credential = test_support.StaticCredential{};
     var service_mock = core.http.MockTransport.init(
         allocator,
         404,
@@ -1543,7 +1437,7 @@ test "delete preserves structured Azure errors" {
         allocator,
         "https://vault.example",
         credential.asCredential(),
-        service_mock.asTransport(),
+        test_support.runtime(service_mock.asTransport()),
         .{},
     );
     defer client.deinit();
@@ -1559,9 +1453,165 @@ test "delete preserves structured Azure errors" {
     }
 }
 
-const credential_response =
-    \\{"access_token":"test-token","expires_in":3600,"token_type":"Bearer"}
-;
+const CryptoSpy = struct {
+    random_calls: usize = 0,
+    fail_random: bool = false,
+
+    const vtable: core.crypto.CryptoProvider.VTable = .{
+        .random_bytes = &randomBytes,
+        .md5 = &md5,
+        .sha256 = &sha256,
+        .hmac_sha256 = &hmacSha256,
+        .sha256_init = &sha256Init,
+    };
+
+    fn asProvider(self: *CryptoSpy) core.crypto.CryptoProvider {
+        return .{ .context = self, .vtable = &vtable };
+    }
+
+    fn randomBytes(context: *anyopaque, out: []u8) !void {
+        const self: *CryptoSpy = @ptrCast(@alignCast(context));
+        self.random_calls += 1;
+        if (self.fail_random) return error.SelectedCryptoFailure;
+        @memset(out, 0xa5);
+    }
+
+    fn md5(_: *anyopaque, _: []const u8, _: *core.crypto.Md5Digest) !void {
+        return error.UnexpectedLocalCryptography;
+    }
+
+    fn sha256(_: *anyopaque, _: []const u8, _: *core.crypto.Sha256Digest) !void {
+        return error.UnexpectedLocalCryptography;
+    }
+
+    fn hmacSha256(
+        _: *anyopaque,
+        _: []const u8,
+        _: []const u8,
+        _: *core.crypto.HmacSha256Digest,
+    ) !void {
+        return error.UnexpectedLocalCryptography;
+    }
+
+    fn sha256Init(
+        _: *anyopaque,
+        _: std.mem.Allocator,
+    ) !core.crypto.Sha256Operation {
+        return error.UnexpectedLocalCryptography;
+    }
+};
+
+test "derived cryptography client and pager preserve runtime providers" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(
+        allocator,
+        200,
+        "{\"kid\":\"https://vault.example/keys/ssh-ca/version1\",\"value\":\"-__-\"}",
+    );
+    defer transport.deinit();
+    var crypto_spy = CryptoSpy{};
+    const runtime = core.http.HttpRuntime.init(
+        transport.asTransport(),
+        crypto_spy.asProvider(),
+    );
+    var credential = test_support.StaticCredential{};
+    var client = try KeyClient.init(
+        allocator,
+        "https://vault.example",
+        credential.asCredential(),
+        runtime,
+        .{ .retry = .{ .max_retries = 0 } },
+    );
+    defer client.deinit();
+
+    var cryptography = try client.getCryptographyClient(
+        allocator,
+        "https://vault.example/keys/ssh-ca/version1",
+    );
+    defer cryptography.deinit();
+    try std.testing.expect(!cryptography.owns_pipeline_state);
+    try std.testing.expectEqual(client.pipeline_state, cryptography.pipeline_state);
+    try std.testing.expectEqual(
+        runtime.transport.context,
+        cryptography.pipeline().runtime.transport.context,
+    );
+    try std.testing.expectEqual(
+        runtime.crypto.context,
+        cryptography.pipeline().runtime.crypto.context,
+    );
+
+    const digest = [_]u8{0} ** 64;
+    var signature = try cryptography.sign(allocator, .rs512, &digest);
+    defer signature.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), crypto_spy.random_calls);
+
+    transport.response_body = key_list_response;
+    var pager = try client.listKeys(allocator, null);
+    defer pager.deinit();
+    try std.testing.expectEqual(
+        runtime.transport.context,
+        pager.inner.pipeline.runtime.transport.context,
+    );
+    try std.testing.expectEqual(
+        runtime.crypto.context,
+        pager.inner.pipeline.runtime.crypto.context,
+    );
+}
+
+test "selected crypto failure prevents derived cryptography transport dispatch" {
+    const allocator = std.testing.allocator;
+    var transport = core.http.MockTransport.init(
+        allocator,
+        200,
+        "{\"kid\":\"https://vault.example/keys/ssh-ca/version1\",\"value\":\"-__-\"}",
+    );
+    defer transport.deinit();
+    var crypto_spy = CryptoSpy{ .fail_random = true };
+    const runtime = core.http.HttpRuntime.init(
+        transport.asTransport(),
+        crypto_spy.asProvider(),
+    );
+    var credential = test_support.StaticCredential{};
+    var client = try KeyClient.init(
+        allocator,
+        "https://vault.example",
+        credential.asCredential(),
+        runtime,
+        .{ .retry = .{ .max_retries = 0 } },
+    );
+    defer client.deinit();
+    var cryptography = try client.getCryptographyClient(
+        allocator,
+        "https://vault.example/keys/ssh-ca/version1",
+    );
+    defer cryptography.deinit();
+
+    var request = Request.init(
+        allocator,
+        .POST,
+        "https://vault.example/keys/ssh-ca/version1/sign?api-version=2025-07-01",
+    );
+    defer request.deinit();
+    try request.setHeader("Authorization", "unchanged");
+    var derived_pipeline = cryptography.pipeline();
+    try std.testing.expectError(
+        error.SelectedCryptoFailure,
+        derived_pipeline.send(&request),
+    );
+    try std.testing.expectEqualStrings(
+        "unchanged",
+        request.getHeader("Authorization").?,
+    );
+
+    const digest = [_]u8{0} ** 64;
+    try std.testing.expectError(
+        error.SelectedCryptoFailure,
+        cryptography.sign(allocator, .rs512, &digest),
+    );
+    try std.testing.expectEqual(@as(usize, 2), crypto_spy.random_calls);
+    try std.testing.expectEqual(@as(usize, 0), credential.calls);
+    try std.testing.expectEqual(@as(usize, 0), transport.call_count);
+}
 
 const key_response =
     \\{"key":{"kid":"https://vault.example/keys/ssh-ca/version1","kty":"RSA","key_ops":["sign","verify"],"n":"gAE","e":"AQAB"},"attributes":{"enabled":true,"exportable":false,"recoveryLevel":"Recoverable+Purgeable"},"tags":{"operation-id":"quoted \"value\""},"managed":false}

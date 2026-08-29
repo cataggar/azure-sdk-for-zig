@@ -16,12 +16,29 @@ pub fn build(b: *std.Build) void {
     });
     const serde_mod = serde_dep.module("serde");
 
+    const pipeline_mod = b.createModule(.{
+        .root_source_file = b.path("pipeline.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "azure_sdk_core", .module = core_mod },
+        },
+    });
+    const test_support_mod = b.createModule(.{
+        .root_source_file = b.path("test_support.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "azure_sdk_core", .module = core_mod },
+        },
+    });
+
     _ = b.addModule("azure_sdk_keyvault", .{
         .root_source_file = b.path("root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "azure_sdk_core", .module = core_mod },
             .{ .name = "serde", .module = serde_mod },
+            .{ .name = "azure_sdk_keyvault_pipeline", .module = pipeline_mod },
+            .{ .name = "azure_sdk_keyvault_test_support", .module = test_support_mod },
         },
     });
 
@@ -41,6 +58,8 @@ pub fn build(b: *std.Build) void {
                 .imports = &.{
                     .{ .name = "azure_sdk_core", .module = core_mod },
                     .{ .name = "serde", .module = serde_mod },
+                    .{ .name = "azure_sdk_keyvault_pipeline", .module = pipeline_mod },
+                    .{ .name = "azure_sdk_keyvault_test_support", .module = test_support_mod },
                 },
             }),
         });

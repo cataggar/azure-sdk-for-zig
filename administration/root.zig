@@ -1,6 +1,11 @@
 const std = @import("std");
 const core = @import("azure_sdk_core");
 const serde = @import("serde");
+const pipeline_mod = @import("azure_sdk_keyvault_pipeline");
+const test_support = if (@import("builtin").is_test)
+    @import("azure_sdk_keyvault_test_support")
+else
+    struct {};
 
 /// Pager type returned by `listSettings`.
 pub const AdminSettingPager = core.pager.PipelinePager(AdminSetting);
@@ -14,25 +19,42 @@ pub const AdminSetting = struct {
 
 pub const BackupClientOptions = struct {
     api_version: []const u8 = "7.6-preview.2",
+    retry: pipeline_mod.RetryOptions = .{},
+    scope: []const u8 = pipeline_mod.default_scope,
 };
 
+/// Runtime descriptors are copied by value. Their borrowed transport and
+/// crypto contexts and the credential must outlive this client and every
+/// in-flight operation. The caller must serialize every operation sharing
+/// this client's pipeline state.
 pub const BackupClient = struct {
     vault_url: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline_state: *pipeline_mod.PipelineState,
 
     pub fn init(
+        allocator: std.mem.Allocator,
         vault_url: []const u8,
         credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
+        runtime: core.http.HttpRuntime,
         options: BackupClientOptions,
-    ) BackupClient {
-        _ = credential;
+    ) !BackupClient {
         return .{
             .vault_url = vault_url,
             .api_version = options.api_version,
-            .pipeline = .{ .policies = &.{}, .transport_impl = transport },
+            .pipeline_state = try pipeline_mod.PipelineState.create(
+                allocator,
+                credential,
+                runtime,
+                options.retry,
+                options.scope,
+            ),
         };
+    }
+
+    pub fn deinit(self: *BackupClient) void {
+        self.pipeline_state.deinit();
+        self.* = undefined;
     }
 
     /// POST /backup?api-version=... — begins a full backup (LRO stub returning operation ID).
@@ -73,7 +95,7 @@ pub const BackupClient = struct {
         try req.setHeader("Accept", "application/json");
         req.body = body;
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
@@ -124,7 +146,7 @@ pub const BackupClient = struct {
         try req.setHeader("Accept", "application/json");
         req.body = body;
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
@@ -143,7 +165,13 @@ pub const BackupClient = struct {
         allocator: std.mem.Allocator,
         operation_url: []const u8,
     ) !core.lro.PollResult {
-        return core.lro.pollUntilDone(allocator, &self.pipeline, operation_url, 2000, 60);
+        return core.lro.pollUntilDone(
+            allocator,
+            &self.pipeline_state.pipeline,
+            operation_url,
+            2000,
+            60,
+        );
     }
 
     /// Wait for a restore operation to complete by polling the operation URL.
@@ -152,28 +180,56 @@ pub const BackupClient = struct {
         allocator: std.mem.Allocator,
         operation_url: []const u8,
     ) !core.lro.PollResult {
-        return core.lro.pollUntilDone(allocator, &self.pipeline, operation_url, 2000, 60);
+        return core.lro.pollUntilDone(
+            allocator,
+            &self.pipeline_state.pipeline,
+            operation_url,
+            2000,
+            60,
+        );
     }
 };
 
 // ──────────────────────── SettingsClient ──────────────────────
 
+pub const SettingsClientOptions = struct {
+    api_version: []const u8 = "7.6-preview.2",
+    retry: pipeline_mod.RetryOptions = .{},
+    scope: []const u8 = pipeline_mod.default_scope,
+};
+
+/// Runtime descriptors are copied by value. Their borrowed transport and
+/// crypto contexts and the credential must outlive this client and every
+/// pager returned by it. The caller must serialize every operation sharing
+/// this client's pipeline state, including pager operations.
 pub const SettingsClient = struct {
     vault_url: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline_state: *pipeline_mod.PipelineState,
 
     pub fn init(
+        allocator: std.mem.Allocator,
         vault_url: []const u8,
         credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
-    ) SettingsClient {
-        _ = credential;
+        runtime: core.http.HttpRuntime,
+        options: SettingsClientOptions,
+    ) !SettingsClient {
         return .{
             .vault_url = vault_url,
-            .api_version = "7.6-preview.2",
-            .pipeline = .{ .policies = &.{}, .transport_impl = transport },
+            .api_version = options.api_version,
+            .pipeline_state = try pipeline_mod.PipelineState.create(
+                allocator,
+                credential,
+                runtime,
+                options.retry,
+                options.scope,
+            ),
         };
+    }
+
+    pub fn deinit(self: *SettingsClient) void {
+        self.pipeline_state.deinit();
+        self.* = undefined;
     }
 
     /// GET /settings/{name}?api-version=...
@@ -203,7 +259,7 @@ pub const SettingsClient = struct {
         defer req.deinit();
         try req.setHeader("Accept", "application/json");
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
@@ -250,7 +306,7 @@ pub const SettingsClient = struct {
         try req.setHeader("Accept", "application/json");
         req.body = body;
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (resp.isSuccess()) return .{ .ok = {} };
@@ -273,7 +329,7 @@ pub const SettingsClient = struct {
         defer allocator.free(url);
 
         return AdminSettingPager.init(
-            self.pipeline,
+            self.pipeline_state.pipeline,
             url,
             allocator,
             &parseAdminSettingListPage,
@@ -343,19 +399,15 @@ test "BackupClient beginBackup" {
     );
     defer mock.deinit();
 
-    const identity = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
-    );
-    defer cred_mock.deinit();
-    var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
-
-    var client = BackupClient.init(
+    var credential = test_support.StaticCredential{};
+    var client = try BackupClient.init(
+        allocator,
         "https://vault.managedhsm.azure.net",
-        cred.asCredential(),
-        mock.asTransport(),
+        credential.asCredential(),
+        test_support.runtime(mock.asTransport()),
         .{},
     );
+    defer client.deinit();
 
     const op_id = try client.beginBackup(allocator, "https://storage.blob.core.windows.net/backup", "sas-token");
     defer allocator.free(op_id);
@@ -372,18 +424,15 @@ test "SettingsClient getSetting" {
     );
     defer mock.deinit();
 
-    const identity2 = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
-    );
-    defer cred_mock.deinit();
-    var cred = identity2.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
-
-    var client = SettingsClient.init(
+    var credential = test_support.StaticCredential{};
+    var client = try SettingsClient.init(
+        allocator,
         "https://vault.managedhsm.azure.net",
-        cred.asCredential(),
-        mock.asTransport(),
+        credential.asCredential(),
+        test_support.runtime(mock.asTransport()),
+        .{},
     );
+    defer client.deinit();
 
     const value = try client.getSetting(allocator, "AllowKeyManagementOperationsThroughARM");
     defer allocator.free(value);
