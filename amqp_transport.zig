@@ -27,8 +27,26 @@ const management = @import("management.zig");
 
 const Allocator = std.mem.Allocator;
 
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+var testing_http_context: u8 = 0;
+
+const testing_http_vtable: core.http.HttpTransport.VTable = .{
+    .send = struct {
+        fn send(_: *anyopaque, _: *core.http.Request) !core.http.Response {
+            return error.UnexpectedHttpRequest;
+        }
+    }.send,
+};
+
+fn testingRuntime() core.http.HttpRuntime {
+    return .init(
+        .{ .context = &testing_http_context, .vtable = &testing_http_vtable },
+        testing_crypto_provider.asProvider(),
+    );
+}
+
 /// Version reported to the service in the `open` properties.
-pub const sdk_version = "0.1.0";
+pub const sdk_version = "0.2.0";
 
 /// The product half of the user agent, matching the other SDKs' shape.
 pub const user_agent_product = "azsdk-zig-servicebus";
@@ -75,8 +93,16 @@ pub const Credential = union(enum) {
         };
     }
 
-    pub fn getToken(self: *Credential, ctx: core.context.Context) !core.credentials.AccessToken {
-        return self.tokenCredential().getToken(.{ .scopes = &.{token_scope} }, ctx);
+    pub fn getToken(
+        self: *Credential,
+        ctx: core.context.Context,
+        runtime: core.http.HttpRuntime,
+    ) !core.credentials.AccessToken {
+        return self.tokenCredential().getToken(
+            .{ .scopes = &.{token_scope} },
+            ctx,
+            runtime,
+        );
     }
 };
 
@@ -89,6 +115,7 @@ pub const Credential = union(enum) {
 /// still outlives the borrow.
 const TokenSource = struct {
     credential: *Credential,
+    runtime: core.http.HttpRuntime,
     ctx: core.context.Context = .none,
     held: ?core.credentials.AccessToken = null,
 
@@ -103,7 +130,7 @@ const TokenSource = struct {
         _ = audience;
 
         self.release();
-        var token = try self.credential.getToken(self.ctx);
+        var token = try self.credential.getToken(self.ctx, self.runtime);
         errdefer token.deinit();
         self.held = token;
 
@@ -309,6 +336,9 @@ const server_timeout_buffer_ms: i64 = 1000;
 /// so initialise it in place and never copy it afterwards.
 pub const AmqpTransport = struct {
     allocator: Allocator,
+    /// Copied by value. Its HTTP and crypto backend contexts are borrowed and
+    /// must outlive this transport and every operation.
+    runtime: core.http.HttpRuntime,
     /// Required to dial. Unused when a session is supplied instead.
     io: ?std.Io = null,
     fully_qualified_namespace: []const u8,
@@ -357,6 +387,7 @@ pub const AmqpTransport = struct {
 
     pub const Options = struct {
         allocator: Allocator,
+        runtime: core.http.HttpRuntime,
         io: ?std.Io = null,
         fully_qualified_namespace: []const u8,
         credential: Credential,
@@ -369,6 +400,7 @@ pub const AmqpTransport = struct {
     pub fn init(self: *AmqpTransport, options: Options) void {
         self.* = .{
             .allocator = options.allocator,
+            .runtime = options.runtime,
             .io = options.io,
             .fully_qualified_namespace = options.fully_qualified_namespace,
             .credential = options.credential,
@@ -377,7 +409,10 @@ pub const AmqpTransport = struct {
         };
         self.encode_buf = amqp.encoder.Buffer.initDynamic(options.allocator);
         self.scratch = .init(options.allocator);
-        self.token_source = .{ .credential = &self.credential };
+        self.token_source = .{
+            .credential = &self.credential,
+            .runtime = options.runtime,
+        };
     }
 
     /// Initialise from a connection string, parsing it exactly once.
@@ -393,6 +428,7 @@ pub const AmqpTransport = struct {
         allocator: Allocator,
         io: ?std.Io,
         connection_string: []const u8,
+        runtime: core.http.HttpRuntime,
         options: ConnectionOptions,
     ) !?[]const u8 {
         const properties = try sb.ConnectionStringProperties.parse(connection_string);
@@ -423,6 +459,7 @@ pub const AmqpTransport = struct {
 
         self.init(.{
             .allocator = allocator,
+            .runtime = runtime,
             .io = io,
             .fully_qualified_namespace = properties.fully_qualified_namespace,
             .credential = .{ .sas = sas },
@@ -1507,8 +1544,9 @@ const StubCredential = struct {
         c: *core.credentials.TokenCredential,
         request_context: core.credentials.TokenRequestContext,
         ctx: core.context.Context,
+        runtime: core.http.HttpRuntime,
     ) anyerror!core.credentials.AccessToken {
-        _ = .{ request_context, ctx };
+        _ = .{ request_context, ctx, runtime };
         const self: *StubCredential = @alignCast(@fieldParentPtr("credential", c));
         self.calls += 1;
         // Borrowed, so `deinit` frees nothing — the transport must not assume
@@ -1533,8 +1571,9 @@ const OwningStubCredential = struct {
         c: *core.credentials.TokenCredential,
         request_context: core.credentials.TokenRequestContext,
         ctx: core.context.Context,
+        runtime: core.http.HttpRuntime,
     ) anyerror!core.credentials.AccessToken {
-        _ = .{ request_context, ctx };
+        _ = .{ request_context, ctx, runtime };
         const self: *OwningStubCredential = @alignCast(@fieldParentPtr("credential", c));
         self.calls += 1;
         return .{
@@ -1542,6 +1581,54 @@ const OwningStubCredential = struct {
             .expires_on = stub_token_expires_on,
             .allocator = self.allocator,
         };
+    }
+};
+
+const CryptoSpy = struct {
+    hmac_calls: usize = 0,
+    fail_hmac: bool = false,
+
+    const vtable: core.crypto.CryptoProvider.VTable = .{
+        .random_bytes = &randomBytes,
+        .md5 = &md5,
+        .sha256 = &sha256,
+        .hmac_sha256 = &hmacSha256,
+        .sha256_init = &sha256Init,
+    };
+
+    fn asProvider(self: *CryptoSpy) core.crypto.CryptoProvider {
+        return .{ .context = self, .vtable = &vtable };
+    }
+
+    fn randomBytes(_: *anyopaque, _: []u8) !void {
+        return error.UnexpectedCryptoOperation;
+    }
+
+    fn md5(_: *anyopaque, _: []const u8, _: *core.crypto.Md5Digest) !void {
+        return error.UnexpectedCryptoOperation;
+    }
+
+    fn sha256(_: *anyopaque, _: []const u8, _: *core.crypto.Sha256Digest) !void {
+        return error.UnexpectedCryptoOperation;
+    }
+
+    fn hmacSha256(
+        context: *anyopaque,
+        _: []const u8,
+        _: []const u8,
+        out: *core.crypto.HmacSha256Digest,
+    ) !void {
+        const self: *CryptoSpy = @ptrCast(@alignCast(context));
+        self.hmac_calls += 1;
+        @memset(out, 0xa5);
+        if (self.fail_hmac) return error.SelectedCryptoFailure;
+    }
+
+    fn sha256Init(
+        _: *anyopaque,
+        _: std.mem.Allocator,
+    ) !core.crypto.Sha256Operation {
+        return error.UnexpectedCryptoOperation;
     }
 };
 
@@ -1749,6 +1836,7 @@ const Harness = struct {
         }, 10_000);
         self.transport.init(.{
             .allocator = self.allocator,
+            .runtime = testingRuntime(),
             .fully_qualified_namespace = "ns.servicebus.windows.net",
             .credential = .{ .token = &self.credential.credential },
             .connection = options,
@@ -2059,7 +2147,13 @@ test "a connection string is parsed once and yields its entity path" {
         "SharedAccessKey=c2VjcmV0;EntityPath=orders";
 
     var t: AmqpTransport = undefined;
-    const entity = try t.initFromConnectionString(allocator, null, cs, .{});
+    const entity = try t.initFromConnectionString(
+        allocator,
+        null,
+        cs,
+        testingRuntime(),
+        .{},
+    );
     defer t.deinit();
 
     try testing.expectEqualStrings("orders", entity.?);
@@ -2068,13 +2162,58 @@ test "a connection string is parsed once and yields its entity path" {
     try testing.expect(t.options.use_tls);
 }
 
+test "connection string SAS preserves the runtime and provider failures are atomic" {
+    const allocator = testing.allocator;
+    const cs = "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=root;" ++
+        "SharedAccessKey=c2VjcmV0;EntityPath=orders";
+    var crypto = CryptoSpy{};
+    const runtime = core.http.HttpRuntime.init(
+        .{ .context = &testing_http_context, .vtable = &testing_http_vtable },
+        crypto.asProvider(),
+    );
+
+    var transport: AmqpTransport = undefined;
+    _ = try transport.initFromConnectionString(
+        allocator,
+        null,
+        cs,
+        runtime,
+        .{},
+    );
+    defer transport.deinit();
+
+    try testing.expectEqual(runtime.transport.context, transport.runtime.transport.context);
+    try testing.expectEqual(runtime.transport.vtable, transport.runtime.transport.vtable);
+    try testing.expectEqual(runtime.crypto.context, transport.runtime.crypto.context);
+    try testing.expectEqual(runtime.crypto.vtable, transport.runtime.crypto.vtable);
+
+    const provider = transport.token_source.provider();
+    _ = try provider.getToken(transport.owned_audience.?);
+    try testing.expectEqual(@as(usize, 1), crypto.hmac_calls);
+    try testing.expect(transport.token_source.held != null);
+
+    crypto.fail_hmac = true;
+    try testing.expectError(
+        error.SelectedCryptoFailure,
+        provider.getToken(transport.owned_audience.?),
+    );
+    try testing.expectEqual(@as(usize, 2), crypto.hmac_calls);
+    try testing.expect(transport.token_source.held == null);
+}
+
 test "the emulator's connection string turns TLS off" {
     const allocator = testing.allocator;
     const cs = "Endpoint=sb://localhost;SharedAccessKeyName=root;" ++
         "SharedAccessKey=c2VjcmV0;UseDevelopmentEmulator=true";
 
     var t: AmqpTransport = undefined;
-    _ = try t.initFromConnectionString(allocator, null, cs, .{});
+    _ = try t.initFromConnectionString(
+        allocator,
+        null,
+        cs,
+        testingRuntime(),
+        .{},
+    );
     defer t.deinit();
 
     try testing.expect(!t.options.use_tls);
@@ -2087,6 +2226,7 @@ test "dialling without an io implementation is refused, not crashed" {
     var t: AmqpTransport = undefined;
     t.init(.{
         .allocator = allocator,
+        .runtime = testingRuntime(),
         .fully_qualified_namespace = "ns.servicebus.windows.net",
         .credential = .{ .token = &credential.credential },
     });
@@ -2428,6 +2568,7 @@ test "the emulator's audience names plaintext AMQP" {
         allocator,
         null,
         "Endpoint=sb://localhost;SharedAccessKeyName=root;SharedAccessKey=c2VjcmV0;UseDevelopmentEmulator=true;EntityPath=orders",
+        testingRuntime(),
         .{},
     );
     defer transport.deinit();

@@ -18,6 +18,34 @@ either.
 Administration runs over the `azure_sdk_core` HTTP pipeline against the
 management REST API and is unrelated to the AMQP path.
 
+```zig
+var http_transport = core.http.StdHttpTransport.init(allocator, io);
+defer http_transport.deinit();
+var crypto = core.crypto.StdCryptoProvider.init(io);
+const runtime = core.http.HttpRuntime.init(
+    http_transport.asTransport(),
+    crypto.asProvider(),
+);
+var credential = core.identity.ClientSecretCredential.init(
+    allocator,
+    tenant_id,
+    client_id,
+    client_secret,
+);
+var admin = try sb.ServiceBusAdministrationClient.init(
+    allocator,
+    "contoso.servicebus.windows.net",
+    credential.asCredential(),
+    runtime,
+    .{},
+);
+defer admin.deinit();
+```
+
+The administration client copies the runtime descriptors into its pipeline.
+The credential and both runtime backend contexts are borrowed and must outlive
+the client and all in-flight operations.
+
 ## Layout
 
 | file | what |
@@ -69,7 +97,13 @@ one encode buffer. Nothing dials until the first operation needs the wire.
 ```zig
 var transport: sb.AmqpTransport = undefined;
 // The entity path the string named, if it named one.
-const entity = try transport.initFromConnectionString(allocator, io, connection_string, .{});
+const entity = try transport.initFromConnectionString(
+    allocator,
+    io,
+    connection_string,
+    runtime,
+    .{},
+);
 defer transport.deinit();
 
 var client = sb.ServiceBusSenderClient.init(
@@ -81,6 +115,11 @@ var client = sb.ServiceBusSenderClient.init(
 
 The connection string is parsed once, here, and the transport borrows from it
 — so it has to outlive the transport.
+
+`runtime` is a `core.http.HttpRuntime`. The transport copies both descriptors
+by value and borrows their backend contexts. Those contexts must outlive the
+transport and every operation. AMQP TLS certificate validation remains
+configured separately through `ConnectionOptions.tls.bundle`.
 
 Authentication is the transport's, not the client's: a client carries no
 credential, because the claim that authorises a link is put by `$cbs` and

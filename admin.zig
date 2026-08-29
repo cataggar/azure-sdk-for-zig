@@ -45,24 +45,69 @@ pub const AdministrationClientOptions = struct {
     api_version: []const u8 = "2021-05",
 };
 
+const token_scope = "https://servicebus.azure.net/.default";
+
+const PipelineState = struct {
+    allocator: std.mem.Allocator,
+    auth_policy: core.http.BearerTokenAuthPolicy,
+    policies: [1]*core.http.HttpPolicy,
+    pipeline: core.http.HttpPipeline,
+
+    fn create(
+        allocator: std.mem.Allocator,
+        credential: *core.credentials.TokenCredential,
+        runtime: core.http.HttpRuntime,
+    ) !*PipelineState {
+        const state = try allocator.create(PipelineState);
+        state.allocator = allocator;
+        state.auth_policy = core.http.BearerTokenAuthPolicy.init(
+            allocator,
+            credential,
+            &.{token_scope},
+        );
+        state.policies[0] = state.auth_policy.asPolicy();
+        state.pipeline = core.http.HttpPipeline.init(runtime, &state.policies);
+        return state;
+    }
+
+    fn deinit(self: *PipelineState) void {
+        const allocator = self.allocator;
+        self.auth_policy.deinit();
+        allocator.destroy(self);
+    }
+};
+
 /// Manages Service Bus queues, topics, and subscriptions via REST API.
+///
+/// The credential and runtime backend contexts are borrowed and must outlive
+/// the client and every in-flight operation. The runtime descriptors are
+/// copied by value into the pipeline state.
 pub const ServiceBusAdministrationClient = struct {
     fully_qualified_namespace: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline_state: *PipelineState,
 
     pub fn init(
+        allocator: std.mem.Allocator,
         fully_qualified_namespace: []const u8,
         credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
+        runtime: core.http.HttpRuntime,
         options: AdministrationClientOptions,
-    ) ServiceBusAdministrationClient {
-        _ = credential;
+    ) !ServiceBusAdministrationClient {
         return .{
             .fully_qualified_namespace = fully_qualified_namespace,
             .api_version = options.api_version,
-            .pipeline = .{ .policies = &.{}, .transport_impl = transport },
+            .pipeline_state = try PipelineState.create(
+                allocator,
+                credential,
+                runtime,
+            ),
         };
+    }
+
+    pub fn deinit(self: *ServiceBusAdministrationClient) void {
+        self.pipeline_state.deinit();
+        self.* = undefined;
     }
 
     // ── Queue operations ──
@@ -91,7 +136,7 @@ pub const ServiceBusAdministrationClient = struct {
         try req.setHeader("Content-Type", "application/atom+xml;type=entry;charset=utf-8");
         req.body = body;
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (resp.isSuccess()) return .{ .ok = {} };
@@ -114,7 +159,7 @@ pub const ServiceBusAdministrationClient = struct {
         var req = core.http.Request.init(allocator, .DELETE, url);
         defer req.deinit();
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (resp.isSuccess()) return .{ .ok = {} };
@@ -137,7 +182,7 @@ pub const ServiceBusAdministrationClient = struct {
         var req = core.http.Request.init(allocator, .GET, url);
         defer req.deinit();
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
@@ -176,7 +221,7 @@ pub const ServiceBusAdministrationClient = struct {
         try req.setHeader("Content-Type", "application/atom+xml;type=entry;charset=utf-8");
         req.body = body;
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (resp.isSuccess()) return .{ .ok = {} };
@@ -199,7 +244,7 @@ pub const ServiceBusAdministrationClient = struct {
         var req = core.http.Request.init(allocator, .DELETE, url);
         defer req.deinit();
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (resp.isSuccess()) return .{ .ok = {} };
@@ -222,7 +267,7 @@ pub const ServiceBusAdministrationClient = struct {
         var req = core.http.Request.init(allocator, .GET, url);
         defer req.deinit();
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
@@ -261,7 +306,7 @@ pub const ServiceBusAdministrationClient = struct {
         try req.setHeader("Content-Type", "application/atom+xml;type=entry;charset=utf-8");
         req.body = body;
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (resp.isSuccess()) return .{ .ok = {} };
@@ -389,33 +434,159 @@ fn parseSubscriptionNames(allocator: std.mem.Allocator, body: []const u8, topic_
 
 // ───────────────────── Tests ─────────────────────
 
+const StubCredential = struct {
+    credential: core.credentials.TokenCredential = .{ .getTokenFn = getToken },
+    calls: usize = 0,
+    use_runtime_crypto: bool = false,
+
+    fn asCredential(self: *StubCredential) *core.credentials.TokenCredential {
+        return &self.credential;
+    }
+
+    fn getToken(
+        credential: *core.credentials.TokenCredential,
+        _: core.credentials.TokenRequestContext,
+        _: core.context.Context,
+        runtime: core.http.HttpRuntime,
+    ) !core.credentials.AccessToken {
+        const self: *StubCredential = @alignCast(
+            @fieldParentPtr("credential", credential),
+        );
+        self.calls += 1;
+        if (self.use_runtime_crypto) {
+            var byte: [1]u8 = undefined;
+            try runtime.crypto.randomBytes(&byte);
+        }
+        return .{
+            .token = "test-token",
+            .expires_on = 7_258_118_400,
+        };
+    }
+};
+
+fn testRuntime(
+    transport: core.http.HttpTransport,
+    crypto: core.crypto.CryptoProvider,
+) core.http.HttpRuntime {
+    return .init(transport, crypto);
+}
+
+const FailingCryptoProvider = struct {
+    random_calls: usize = 0,
+
+    const vtable: core.crypto.CryptoProvider.VTable = .{
+        .random_bytes = &randomBytes,
+        .md5 = &md5,
+        .sha256 = &sha256,
+        .hmac_sha256 = &hmacSha256,
+        .sha256_init = &sha256Init,
+    };
+
+    fn asProvider(self: *FailingCryptoProvider) core.crypto.CryptoProvider {
+        return .{ .context = self, .vtable = &vtable };
+    }
+
+    fn randomBytes(context: *anyopaque, out: []u8) !void {
+        const self: *FailingCryptoProvider = @ptrCast(@alignCast(context));
+        self.random_calls += 1;
+        @memset(out, 0xa5);
+        return error.SelectedCryptoFailure;
+    }
+
+    fn md5(_: *anyopaque, _: []const u8, _: *core.crypto.Md5Digest) !void {
+        return error.UnexpectedCryptoOperation;
+    }
+
+    fn sha256(_: *anyopaque, _: []const u8, _: *core.crypto.Sha256Digest) !void {
+        return error.UnexpectedCryptoOperation;
+    }
+
+    fn hmacSha256(
+        _: *anyopaque,
+        _: []const u8,
+        _: []const u8,
+        _: *core.crypto.HmacSha256Digest,
+    ) !void {
+        return error.UnexpectedCryptoOperation;
+    }
+
+    fn sha256Init(
+        _: *anyopaque,
+        _: std.mem.Allocator,
+    ) !core.crypto.Sha256Operation {
+        return error.UnexpectedCryptoOperation;
+    }
+};
+
+test "AdministrationClient preserves runtime and provider failures are atomic" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200, "");
+    defer mock.deinit();
+    var crypto = FailingCryptoProvider{};
+    const runtime = testRuntime(mock.asTransport(), crypto.asProvider());
+    var credential = StubCredential{ .use_runtime_crypto = true };
+    var admin = try ServiceBusAdministrationClient.init(
+        allocator,
+        "ns.servicebus.windows.net",
+        credential.asCredential(),
+        runtime,
+        .{},
+    );
+    defer admin.deinit();
+
+    try std.testing.expectEqual(
+        runtime.transport.context,
+        admin.pipeline_state.pipeline.runtime.transport.context,
+    );
+    try std.testing.expectEqual(
+        runtime.crypto.context,
+        admin.pipeline_state.pipeline.runtime.crypto.context,
+    );
+    try std.testing.expectError(
+        error.SelectedCryptoFailure,
+        admin.createQueue(allocator, "testqueue"),
+    );
+    try std.testing.expectEqual(@as(usize, 1), credential.calls);
+    try std.testing.expectEqual(@as(usize, 1), crypto.random_calls);
+    try std.testing.expectEqual(@as(usize, 0), mock.call_count);
+    try std.testing.expect(mock.last_headers.get("Authorization") == null);
+}
+
 test "AdministrationClient createQueue" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 201, "<entry/>");
     defer mock.deinit();
-    const identity = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    var credential = StubCredential{};
+    var admin = try ServiceBusAdministrationClient.init(
+        allocator,
+        "ns.servicebus.windows.net",
+        credential.asCredential(),
+        testRuntime(mock.asTransport(), crypto.asProvider()),
+        .{},
     );
-    defer cred_mock.deinit();
-    var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
-    var admin = ServiceBusAdministrationClient.init("ns.servicebus.windows.net", cred.asCredential(), mock.asTransport(), .{});
+    defer admin.deinit();
     try admin.createQueue(allocator, "testqueue");
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "testqueue") != null);
     try std.testing.expectEqual(core.http.Method.PUT, mock.last_method.?);
+    try std.testing.expect(mock.last_headers.get("Authorization") != null);
+    try std.testing.expectEqual(@as(usize, 1), credential.calls);
 }
 
 test "AdministrationClient deleteQueue" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 200, "");
     defer mock.deinit();
-    const identity = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    var credential = StubCredential{};
+    var admin = try ServiceBusAdministrationClient.init(
+        allocator,
+        "ns.servicebus.windows.net",
+        credential.asCredential(),
+        testRuntime(mock.asTransport(), crypto.asProvider()),
+        .{},
     );
-    defer cred_mock.deinit();
-    var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
-    var admin = ServiceBusAdministrationClient.init("ns.servicebus.windows.net", cred.asCredential(), mock.asTransport(), .{});
+    defer admin.deinit();
     try admin.deleteQueue(allocator, "testqueue");
     try std.testing.expectEqual(core.http.Method.DELETE, mock.last_method.?);
 }
@@ -427,13 +598,16 @@ test "AdministrationClient listQueues" {
     ;
     var mock = core.http.MockTransport.init(allocator, 200, body);
     defer mock.deinit();
-    const identity = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    var credential = StubCredential{};
+    var admin = try ServiceBusAdministrationClient.init(
+        allocator,
+        "ns.servicebus.windows.net",
+        credential.asCredential(),
+        testRuntime(mock.asTransport(), crypto.asProvider()),
+        .{},
     );
-    defer cred_mock.deinit();
-    var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
-    var admin = ServiceBusAdministrationClient.init("ns.servicebus.windows.net", cred.asCredential(), mock.asTransport(), .{});
+    defer admin.deinit();
     const queues = try admin.listQueues(allocator);
     defer {
         for (queues) |q| allocator.free(q.name);
@@ -448,13 +622,16 @@ test "AdministrationClient createSubscription" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 201, "<entry/>");
     defer mock.deinit();
-    const identity = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    var credential = StubCredential{};
+    var admin = try ServiceBusAdministrationClient.init(
+        allocator,
+        "ns.servicebus.windows.net",
+        credential.asCredential(),
+        testRuntime(mock.asTransport(), crypto.asProvider()),
+        .{},
     );
-    defer cred_mock.deinit();
-    var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
-    var admin = ServiceBusAdministrationClient.init("ns.servicebus.windows.net", cred.asCredential(), mock.asTransport(), .{});
+    defer admin.deinit();
     try admin.createSubscription(allocator, "mytopic", "mysub");
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "mytopic/subscriptions/mysub") != null);
 }

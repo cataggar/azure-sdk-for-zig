@@ -22,6 +22,17 @@ const amqp = @import("azure_sdk_amqp");
 
 const perf = core.perf;
 
+var runtime_io: std.Io = undefined;
+var unused_http_context: u8 = 0;
+
+const unused_http_vtable: core.http.HttpTransport.VTable = .{
+    .send = struct {
+        fn send(_: *anyopaque, _: *core.http.Request) !core.http.Response {
+            return error.UnexpectedHttpRequest;
+        }
+    }.send,
+};
+
 /// Representative Service Bus payload: a small JSON order.
 const small_body = "{\"order\":\"SO-4821\",\"total\":19.95,\"currency\":\"USD\"}";
 
@@ -221,8 +232,9 @@ const BenchCredential = struct {
         c: *core.credentials.TokenCredential,
         request_context: core.credentials.TokenRequestContext,
         ctx: core.context.Context,
+        runtime: core.http.HttpRuntime,
     ) anyerror!core.credentials.AccessToken {
-        _ = .{ c, request_context, ctx };
+        _ = .{ c, request_context, ctx, runtime };
         return .{ .token = "bench-jwt", .expires_on = bench_token_expires_on };
     }
 };
@@ -358,9 +370,15 @@ fn receiveScripted(allocator: std.mem.Allocator, script: []const u8, count: u32)
     defer session.deinit();
 
     var credential: BenchCredential = .{};
+    var crypto_provider = core.crypto.StdCryptoProvider.init(runtime_io);
+    const runtime = core.http.HttpRuntime.init(
+        .{ .context = &unused_http_context, .vtable = &unused_http_vtable },
+        crypto_provider.asProvider(),
+    );
     var transport: sb.AmqpTransport = undefined;
     transport.init(.{
         .allocator = allocator,
+        .runtime = runtime,
         .fully_qualified_namespace = bench_options.hostname.?,
         .credential = .{ .token = &credential.credential },
         // No prefetch window, so the link is granted exactly what is asked
@@ -411,6 +429,7 @@ fn benchScriptPush(allocator: std.mem.Allocator) !void {
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
     const io = init.io;
+    runtime_io = io;
 
     const annotations = [_]amqp.MapEntry{.{
         .key = .{ .symbol = sb.annotation.sequence_number },
