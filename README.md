@@ -198,10 +198,17 @@ that know a smaller protocol maximum should set both limits explicitly to gain
 a deeper safe window. A sender that ignores the capped credit is detached with
 `amqp:resource-limit-exceeded` before the crossing chunk is retained.
 
-`issueCredit` also preserves one-shot manual receive requests. If a custom byte
-budget cannot safely put the whole request on the wire, the remainder is held
-and issued automatically as queued deliveries leave, so callers need not loop
-just to restate the same requested count.
+`issueCredit(count)` requests `count` additional completed application
+deliveries. In manual mode (`prefetch = 0`), if an authorized initial or
+continued transfer is aborted, it does not satisfy the request: exactly that
+consumed slot returns to deferred demand, and `receive` emits bounded
+replacement credit from inside its pump before waiting for the next transfer.
+Repeated aborts therefore keep live plus deferred demand constant. If a custom
+byte or settlement-slot budget cannot safely put the whole request on the
+wire, the remainder is held and issued automatically as capacity returns, so
+callers need not loop just to restate the same requested count. Prefetch links
+continue to replenish only through their automatic window and do not also
+restore manual abort demand.
 
 Credit issuance is transactional with its `Flow` frame. The prospective
 credit, deferred request, and overrun debt are committed only after the whole

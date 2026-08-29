@@ -1660,6 +1660,9 @@ pub const Receiver = struct {
     partial_tag: std.ArrayList(u8) = .empty,
     partial_settled: bool = false,
     partial_rcv_settle_mode: perf.ReceiverSettleMode = .first,
+    /// This in-progress delivery consumed one application delivery requested
+    /// through manual credit. An abort restores exactly this one request.
+    partial_manual_demand: bool = false,
     /// Unsettled ids owned by this link, mirrored in the session-wide map so
     /// reuse is rejected across every receiver on the channel.
     unsettled_ids: std.ArrayList(IncomingUnsettled) = .empty,
@@ -1738,6 +1741,7 @@ pub const Receiver = struct {
         self.partial_id = null;
         self.partial_settled = false;
         self.partial_rcv_settle_mode = self.rcv_settle_mode;
+        self.partial_manual_demand = false;
     }
 
     fn clearPartialAndFree(self: *Receiver) void {
@@ -1750,6 +1754,7 @@ pub const Receiver = struct {
         self.partial_id = null;
         self.partial_settled = false;
         self.partial_rcv_settle_mode = self.rcv_settle_mode;
+        self.partial_manual_demand = false;
     }
 
     /// A consumed transfer cannot be replayed. Any failure incorporating it
@@ -1773,13 +1778,18 @@ pub const Receiver = struct {
         }) catch {};
     }
 
-    fn chargeDeliveryStart(self: *Receiver) void {
+    fn chargeDeliveryStart(self: *Receiver) bool {
         self.delivery_count +%= 1;
         if (self.credit == 0) {
             self.overrun +|= 1;
-        } else {
-            self.credit -= 1;
+            return false;
         }
+        self.credit -= 1;
+        return self.prefetch == 0 and !self.drain;
+    }
+
+    fn restoreAbortedManualDemand(self: *Receiver, consumed: bool) void {
+        if (consumed and !self.drain) self.deferred_credit +|= 1;
     }
 
     fn ensurePartialCapacity(self: *Receiver, needed: usize) Allocator.Error!void {
@@ -1894,7 +1904,9 @@ pub const Receiver = struct {
                 }
             }
             if (t.aborted) {
+                const restore_demand = self.partial_manual_demand;
                 self.clearPartialAndFree();
+                self.restoreAbortedManualDemand(restore_demand);
                 return;
             }
         } else {
@@ -1905,7 +1917,7 @@ pub const Receiver = struct {
             try self.refuseOverrun();
             // Link credit and delivery-count are consumed by the initial
             // transfer, whether the delivery later completes or is aborted.
-            self.chargeDeliveryStart();
+            const manual_demand = self.chargeDeliveryStart();
 
             const id = t.delivery_id.?;
             if (self.session.incoming_deliveries.contains(id)) {
@@ -1920,7 +1932,10 @@ pub const Receiver = struct {
                     self.poisonAfterConsumedTransfer();
                     return err;
                 };
-            if (t.aborted) return;
+            if (t.aborted) {
+                self.restoreAbortedManualDemand(manual_demand);
+                return;
+            }
             if (!settled) {
                 if (self.unsettled_ids.items.len >= self.max_unsettled_deliveries) {
                     try self.refuseSettlementLimit();
@@ -1960,6 +1975,7 @@ pub const Receiver = struct {
             self.partial_id = t.delivery_id.?;
             self.partial_settled = settled;
             self.partial_rcv_settle_mode = settle_mode;
+            self.partial_manual_demand = manual_demand;
             if (!self.partialReservationFits()) try self.refuseBufferLimit();
             if (t.delivery_tag) |tag| {
                 self.partial_tag.appendSlice(self.allocator, tag) catch |err| {
@@ -2004,6 +2020,7 @@ pub const Receiver = struct {
         const id = self.partial_id.?;
         const settled = self.partial_settled;
         self.partial_id = null;
+        self.partial_manual_demand = false;
 
         try self.enqueue(id, tag, payload, settled);
     }
@@ -2095,11 +2112,14 @@ pub const Receiver = struct {
         return self.reservedBufferedBytes(message_size) <= limit;
     }
 
-    /// Grant `count` more credit to the peer.
+    /// Request `count` additional application deliveries from the peer.
     ///
-    /// Anything the peer already took beyond its last grant is charged against
-    /// this one, so credit stays a running authorisation rather than resetting
-    /// and forgiving the overrun.
+    /// In manual mode (`prefetch = 0`), an authorized transfer that is later
+    /// aborted does not satisfy that request: `receive` reissues its one slot
+    /// from inside the pump. Completed deliveries do satisfy it. In prefetch
+    /// mode the automatic window, rather than manual demand replacement, owns
+    /// replenishment. Aggregate bytes, unsettled slots, and overrun debt may
+    /// defer or reduce what can be authorized on the wire at once.
     pub fn issueCredit(self: *Receiver, count: u32) LinkError!void {
         if (self.poisoned or !self.attached or self.detach_sent or self.session.ended)
             return error.LinkDetached;
@@ -7480,6 +7500,121 @@ test "prefetch replenishment commits only a completely emitted Flow" {
     }
 }
 
+fn abortedReplacementFlowFailureIsTransactional(failure: CreditFlowFailure) !void {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = std.math.maxInt(u32),
+        .aborted = true,
+    }, "");
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "partition/0",
+        .prefetch = 0,
+        .max_message_size = 16,
+        .max_buffered_bytes = 16,
+    }, 10_000);
+
+    receiver.delivery_count = std.math.maxInt(u32);
+    receiver.delivery_limit = receiver.delivery_count;
+    try receiver.issueCredit(1);
+    try testing.expectEqual(@as(u32, 0), receiver.delivery_limit);
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(u32, 0), receiver.delivery_count);
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    try testing.expectEqual(@as(u32, 1), receiver.deferred_credit);
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 0,
+        .delivery_tag = "replacement",
+        .settled = true,
+    }, "event");
+
+    const before = receiver.creditState();
+    const before_limit = receiver.delivery_limit;
+    mem.clearWritten();
+    const writes_before = mem.write_count;
+    var switching = SwitchAllocator{ .child = allocator };
+    switch (failure) {
+        .encode_oom => {
+            driver.allocator = switching.allocator();
+            switching.failing = true;
+        },
+        .pre_write => mem.fail_write = true,
+        .partial_write => mem.fail_write_after = writes_before + 1,
+        .flush => mem.fail_flush = true,
+    }
+
+    const result = receiver.receive(10_000);
+    switching.failing = false;
+    driver.allocator = allocator;
+    mem.fail_write = false;
+    mem.fail_write_after = null;
+    mem.fail_flush = false;
+
+    switch (failure) {
+        .encode_oom => try testing.expectError(error.OutOfMemory, result),
+        .pre_write, .partial_write, .flush => try testing.expectError(error.WriteFailed, result),
+    }
+    try testing.expectEqual(before.credit, receiver.credit);
+    try testing.expectEqual(before.deferred_credit, receiver.deferred_credit);
+    try testing.expectEqual(before.overrun, receiver.overrun);
+    try testing.expectEqual(before_limit, receiver.delivery_limit);
+    try testing.expectEqual(@as(usize, 0), mem.written().len);
+    try testing.expectEqual(@as(usize, 0), mem.pending.items.len);
+
+    if (failure == .encode_oom) {
+        try testing.expectEqual(connection.State.opened, driver.state);
+        const delivery = try receiver.receive(10_000);
+        try testing.expectEqualStrings("event", delivery.payload);
+        try testing.expectEqual(@as(u32, 0), receiver.credit);
+        try testing.expectEqual(@as(u32, 0), receiver.deferred_credit);
+        try testing.expectEqual(@as(u32, 1), receiver.delivery_limit);
+        try testing.expectEqual(@as(u32, 1), receiver.delivery_count);
+
+        var frames = try EmittedFrames.parse(allocator, mem.written());
+        defer frames.deinit();
+        const flows = try frames.of(allocator, perf.descriptor.flow);
+        defer allocator.free(flows);
+        try testing.expectEqual(@as(usize, 1), flows.len);
+        var decoded = try perf.decode(allocator, flows[0]);
+        defer decoded.deinit();
+        try testing.expectEqual(@as(u32, 0), decoded.performative.flow.delivery_count.?);
+        try testing.expectEqual(@as(u32, 1), decoded.performative.flow.link_credit.?);
+        return;
+    }
+
+    try testing.expectEqual(connection.State.err, driver.state);
+    try testing.expect(mem.closed);
+    try testing.expectError(error.ConnectionClosed, receiver.receive(10_000));
+    try testing.expectEqual(before.credit, receiver.credit);
+    try testing.expectEqual(before.deferred_credit, receiver.deferred_credit);
+    try testing.expectEqual(before_limit, receiver.delivery_limit);
+}
+
+test "aborted replacement Flow is transactional across failure and wrap" {
+    inline for (std.meta.tags(CreditFlowFailure)) |failure| {
+        try abortedReplacementFlowFailureIsTransactional(failure);
+    }
+}
+
 test "drain state commits only after its Flow is emitted" {
     const allocator = testing.allocator;
     var mem = MemoryTransport.init(allocator);
@@ -9862,6 +9997,383 @@ test "one bounded manual credit request is issued repeatedly until satisfied" {
     try testing.expect(receiver.deferred_credit < 298);
 }
 
+test "manual batch larger than its live window survives aborted deliveries" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    var delivery_id: u32 = 0;
+    for (0..12) |i| {
+        if (i % 4 == 0) {
+            try peer.pushTransfer(0, .{
+                .handle = 0,
+                .delivery_id = delivery_id,
+                .aborted = true,
+            }, "");
+            delivery_id += 1;
+        }
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = delivery_id,
+            .delivery_tag = "t",
+            .settled = true,
+        }, "x");
+        delivery_id += 1;
+    }
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "partition/0",
+        .prefetch = 0,
+        .max_message_size = 1,
+        .max_buffered_bytes = 8,
+    }, 10_000);
+
+    try receiver.issueCredit(12);
+    try testing.expectEqual(@as(u32, 8), receiver.credit);
+    try testing.expectEqual(@as(u32, 4), receiver.deferred_credit);
+    for (0..12) |_| {
+        const delivery = try receiver.receive(10_000);
+        try testing.expectEqualStrings("x", delivery.payload);
+        try expectReceiverAccounting(receiver);
+    }
+
+    try testing.expectEqual(@as(u32, 15), receiver.delivery_count);
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    try testing.expectEqual(@as(u32, 0), receiver.deferred_credit);
+    try testing.expectEqual(@as(u32, 0), receiver.overrun);
+    try testing.expectEqual(@as(usize, 0), receiver.ready.items.len);
+    try testing.expectEqual(@as(usize, 0), receiver.unsettled_ids.items.len);
+    try testing.expect(receiver.attached);
+}
+
+test "repeated manual aborts keep live plus deferred demand bounded" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    for (0..64) |i| {
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = @intCast(i),
+            .aborted = true,
+        }, "");
+    }
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "partition/0",
+        .prefetch = 0,
+        .max_message_size = 16,
+        .max_buffered_bytes = 16,
+    }, 10_000);
+
+    try receiver.issueCredit(1);
+    const partial_capacity = receiver.partial.capacity;
+    const ready_capacity = receiver.ready.capacity;
+    const unsettled_capacity = receiver.unsettled_ids.capacity;
+    mem.clearWritten();
+    for (0..64) |_| {
+        _ = try fixture.session.pump(10_000);
+        try testing.expectEqual(@as(u32, 0), receiver.credit);
+        try testing.expectEqual(@as(u32, 1), receiver.deferred_credit);
+        try testing.expectEqual(@as(u64, 0), receiver.bufferedBytes());
+        try testing.expectEqual(@as(?u32, null), receiver.partial_id);
+        try testing.expectEqual(@as(usize, 0), receiver.ready.items.len);
+        try testing.expectEqual(@as(usize, 0), receiver.unsettled_ids.items.len);
+        try testing.expectEqual(partial_capacity, receiver.partial.capacity);
+        try testing.expectEqual(ready_capacity, receiver.ready.capacity);
+        try testing.expectEqual(unsettled_capacity, receiver.unsettled_ids.capacity);
+        try testing.expectEqual(
+            @as(u32, 1),
+            receiver.credit + receiver.deferred_credit +
+                @intFromBool(receiver.partial_manual_demand),
+        );
+
+        try receiver.replenish();
+        try testing.expectEqual(@as(u32, 1), receiver.credit);
+        try testing.expectEqual(@as(u32, 0), receiver.deferred_credit);
+        try testing.expectEqual(
+            @as(u32, 1),
+            receiver.credit + receiver.deferred_credit +
+                @intFromBool(receiver.partial_manual_demand),
+        );
+    }
+
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 64,
+        .delivery_tag = "valid",
+        .settled = true,
+    }, "event");
+    _ = try fixture.session.pump(10_000);
+    const delivery = try receiver.receive(10_000);
+    try testing.expectEqualStrings("event", delivery.payload);
+    try testing.expectEqual(@as(u32, 65), receiver.delivery_count);
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    try testing.expectEqual(@as(u32, 0), receiver.deferred_credit);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const flows = try frames.of(allocator, perf.descriptor.flow);
+    defer allocator.free(flows);
+    try testing.expectEqual(@as(usize, 64), flows.len);
+}
+
+test "an unauthorized aborted overrun cannot mint replacement demand" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    for (0..2) |i| {
+        try peer.pushTransfer(0, .{
+            .handle = 0,
+            .delivery_id = @intCast(i),
+            .aborted = true,
+        }, "");
+    }
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "partition/0",
+        .prefetch = 0,
+        .max_message_size = 16,
+        .max_buffered_bytes = 16,
+    }, 10_000);
+
+    try receiver.issueCredit(1);
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(u32, 1), receiver.deferred_credit);
+    try testing.expectEqual(@as(u32, 0), receiver.overrun);
+
+    // The second abort was never authorized. It is protocol debt and cannot
+    // create a second unit of application demand.
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(u32, 1), receiver.deferred_credit);
+    try testing.expectEqual(@as(u32, 1), receiver.overrun);
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    try testing.expectEqual(@as(u32, 2), receiver.delivery_count);
+}
+
+test "draining an aborted manual slot does not recreate application demand" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 0,
+        .aborted = true,
+    }, "");
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "partition/0",
+        .prefetch = 0,
+        .max_message_size = 16,
+        .max_buffered_bytes = 16,
+    }, 10_000);
+
+    try receiver.issueCredit(1);
+    mem.clearWritten();
+    try receiver.drainCredit(10_000);
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    try testing.expectEqual(@as(u32, 0), receiver.deferred_credit);
+    try testing.expect(!receiver.drain);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const flows = try frames.of(allocator, perf.descriptor.flow);
+    defer allocator.free(flows);
+    try testing.expectEqual(@as(usize, 1), flows.len);
+    var decoded = try perf.decode(allocator, flows[0]);
+    defer decoded.deinit();
+    try testing.expect(decoded.performative.flow.drain);
+    try testing.expectEqual(@as(u32, 1), decoded.performative.flow.link_credit.?);
+}
+
+test "prefetch abort replenishment does not also create manual demand" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 0,
+        .aborted = true,
+    }, "");
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 1,
+        .delivery_tag = "valid",
+        .settled = true,
+    }, "event");
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "partition/0",
+        .prefetch = 1,
+        .max_message_size = 16,
+        .max_buffered_bytes = 16,
+    }, 10_000);
+
+    mem.clearWritten();
+    const delivery = try receiver.receive(10_000);
+    try testing.expectEqualStrings("event", delivery.payload);
+    try testing.expectEqual(@as(u32, 0), receiver.deferred_credit);
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const flows = try frames.of(allocator, perf.descriptor.flow);
+    defer allocator.free(flows);
+    try testing.expectEqual(@as(usize, 1), flows.len);
+    var decoded = try perf.decode(allocator, flows[0]);
+    defer decoded.deinit();
+    try testing.expectEqual(@as(u32, 1), decoded.performative.flow.link_credit.?);
+}
+
+test "aborted manual demand remains bounded by byte and settlement slots" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 10,
+        .aborted = true,
+    }, "");
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 11,
+        .delivery_tag = "valid",
+    }, "1234567890");
+    try peer.push(0, .{ .disposition = .{
+        .role = .sender,
+        .first = 11,
+        .settled = true,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "partition/0",
+        .prefetch = 0,
+        .max_message_size = 10,
+        .max_buffered_bytes = 10,
+        .rcv_settle_mode = .second,
+        .max_unsettled_deliveries = 1,
+    }, 10_000);
+
+    try receiver.issueCredit(3);
+    try testing.expectEqual(@as(u32, 1), receiver.credit);
+    try testing.expectEqual(@as(u32, 2), receiver.deferred_credit);
+    mem.clearWritten();
+
+    const delivery = try receiver.receive(10_000);
+    try testing.expectEqual(@as(u32, 11), delivery.id);
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    try testing.expectEqual(@as(u32, 2), receiver.deferred_credit);
+    try testing.expectEqual(@as(usize, 1), receiver.unsettled_ids.items.len);
+    try receiver.accept(delivery);
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    try testing.expectEqual(@as(u32, 2), receiver.deferred_credit);
+
+    _ = try fixture.session.pump(10_000);
+    try testing.expectEqual(@as(usize, 0), receiver.unsettled_ids.items.len);
+    try testing.expectEqual(@as(u32, 1), receiver.credit);
+    try testing.expectEqual(@as(u32, 1), receiver.deferred_credit);
+    try expectReceiverAccounting(receiver);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const flows = try frames.of(allocator, perf.descriptor.flow);
+    defer allocator.free(flows);
+    try testing.expectEqual(@as(usize, 2), flows.len);
+    for (flows) |body| {
+        var decoded = try perf.decode(allocator, body);
+        defer decoded.deinit();
+        try testing.expectEqual(@as(u32, 1), decoded.performative.flow.link_credit.?);
+    }
+}
+
 test "a credit-ignoring sender cannot cross the aggregate buffered budget" {
     const allocator = testing.allocator;
     var mem = MemoryTransport.init(allocator);
@@ -10042,6 +10554,133 @@ test "an aborted multi-frame delivery consumes credit once and is not queued" {
     const delivery = try receiver.receive(10_000);
     try testing.expectEqual(@as(u32, 1), delivery.id);
     try testing.expectEqualStrings("good", delivery.payload);
+}
+
+test "manual one-credit receive replaces an initial aborted transfer in-pump" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 0,
+        .delivery_tag = "aborted",
+        .aborted = true,
+    }, "");
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 1,
+        .delivery_tag = "valid",
+        .settled = true,
+    }, "event");
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "partition/0",
+        .prefetch = 0,
+        .max_message_size = 16,
+        .max_buffered_bytes = 16,
+    }, 10_000);
+
+    try receiver.issueCredit(1);
+    mem.clearWritten();
+    const delivery = try receiver.receive(10_000);
+    try testing.expectEqual(@as(u32, 1), delivery.id);
+    try testing.expectEqualStrings("event", delivery.payload);
+    try testing.expectEqual(@as(u32, 2), receiver.delivery_count);
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    try testing.expectEqual(@as(u32, 0), receiver.deferred_credit);
+    try testing.expectEqual(@as(usize, 0), mem.reads_with_pending_writes);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const flows = try frames.of(allocator, perf.descriptor.flow);
+    defer allocator.free(flows);
+    try testing.expectEqual(@as(usize, 1), flows.len);
+    var decoded = try perf.decode(allocator, flows[0]);
+    defer decoded.deinit();
+    try testing.expectEqual(@as(u32, 1), decoded.performative.flow.delivery_count.?);
+    try testing.expectEqual(@as(u32, 1), decoded.performative.flow.link_credit.?);
+}
+
+test "manual one-credit receive replaces an aborted continuation in-pump" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "consumer",
+        .handle = 0,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 7,
+        .delivery_tag = "aborted",
+        .more = true,
+    }, "prefix");
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 7,
+        .aborted = true,
+    }, "");
+    try peer.pushTransfer(0, .{
+        .handle = 0,
+        .delivery_id = 8,
+        .delivery_tag = "valid",
+        .settled = true,
+    }, "replacement");
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+    const receiver = try openReceiver(&fixture.session, .{
+        .name = "consumer",
+        .source_address = "partition/0",
+        .prefetch = 0,
+        .max_message_size = 16,
+        .max_buffered_bytes = 16,
+    }, 10_000);
+
+    try receiver.issueCredit(1);
+    mem.clearWritten();
+    const delivery = try receiver.receive(10_000);
+    try testing.expectEqual(@as(u32, 8), delivery.id);
+    try testing.expectEqualStrings("replacement", delivery.payload);
+    try testing.expectEqual(@as(u64, 0), receiver.bufferedBytes());
+    try testing.expectEqual(@as(u32, 2), receiver.delivery_count);
+    try testing.expectEqual(@as(u32, 0), receiver.credit);
+    try testing.expectEqual(@as(u32, 0), receiver.deferred_credit);
+    try testing.expectEqual(@as(?u32, null), receiver.partial_id);
+    try testing.expectEqual(@as(usize, 0), mem.reads_with_pending_writes);
+
+    var frames = try EmittedFrames.parse(allocator, mem.written());
+    defer frames.deinit();
+    const flows = try frames.of(allocator, perf.descriptor.flow);
+    defer allocator.free(flows);
+    try testing.expectEqual(@as(usize, 1), flows.len);
+    var decoded = try perf.decode(allocator, flows[0]);
+    defer decoded.deinit();
+    try testing.expectEqual(@as(u32, 1), decoded.performative.flow.delivery_count.?);
+    try testing.expectEqual(@as(u32, 1), decoded.performative.flow.link_credit.?);
 }
 
 test "continuations may repeat the original delivery id without consuming credit" {
