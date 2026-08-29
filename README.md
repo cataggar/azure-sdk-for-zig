@@ -148,6 +148,33 @@ const delivery = try receiver.receive(deadline_ms);
 try receiver.accept(delivery);
 ```
 
+If a peer rejects `openSender` or `openReceiver` with the protocol-defined
+null target/source Attach followed by Detach, the call keeps pumping through
+the Detach and still returns `error.LinkDetached`. The session retains the
+peer's service-defined AMQP condition, description, and info map after the
+temporary link is removed:
+
+```zig
+const receiver = amqp.openReceiver(&session, options, deadline_ms) catch |err| {
+    if (err == error.LinkDetached) {
+        if (session.failedLinkOpen()) |diagnostic| {
+            std.log.err("link rejected: {s}", .{diagnostic.condition()});
+        }
+    }
+    return err;
+};
+```
+
+`failedLinkOpen` borrows session-owned diagnostics. They remain valid until the
+next sender/receiver open attempt, `takeFailedLinkOpen`, or session
+deinitialization. `takeFailedLinkOpen` instead transfers an owned value that
+the caller must `deinit`; taking also clears the session slot. Every open
+attempt clears the prior value before doing any allocation, and a successful
+open leaves it empty, so diagnostics cannot leak across retries or link names.
+Sessions and their diagnostic access are caller serialized, like the rest of
+the synchronous link API. Conditions are deliberately not interpreted by this
+package; service clients may map conditions they understand.
+
 `delivery` stays valid until the next `receive` returns, so copy anything you
 need to keep. Prefetched deliveries queue up and are drained with a cursor
 rather than by shifting the queue, which keeps a deep prefetch window linear.
