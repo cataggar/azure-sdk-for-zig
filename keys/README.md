@@ -7,3 +7,9 @@ Azure Key Vault Keys clients:
 
 These clients are exposed through `azure_sdk_keyvault.keys` and version with
 the [`azure_sdk_keyvault`](../README.md) package.
+
+`KeyClient.getCryptographyClient` returns a derived client that borrows the
+parent's authenticated pipeline and selected transport/crypto providers. The
+derived client must be deinitialized before its parent. `CryptographyClient`
+sends digests to the Key Vault service; it does not replace runtime
+cryptography or transport TLS.

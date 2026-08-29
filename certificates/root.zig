@@ -1,6 +1,11 @@
 const std = @import("std");
 const core = @import("azure_sdk_core");
 const serde = @import("serde");
+const pipeline_mod = @import("azure_sdk_keyvault_pipeline");
+const test_support = if (@import("builtin").is_test)
+    @import("azure_sdk_keyvault_test_support")
+else
+    struct {};
 
 // ─────────────────────────── Models ───────────────────────────
 
@@ -29,25 +34,41 @@ pub const KeyVaultCertificate = struct {
 
 pub const CertificateClientOptions = struct {
     api_version: []const u8 = "7.6-preview.2",
+    retry: pipeline_mod.RetryOptions = .{},
+    scope: []const u8 = pipeline_mod.default_scope,
 };
 
+/// Runtime descriptors are copied by value. Their borrowed transport and
+/// crypto contexts and the credential must outlive this client and every
+/// pager returned by it.
 pub const CertificateClient = struct {
     vault_url: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline_state: *pipeline_mod.PipelineState,
 
     pub fn init(
+        allocator: std.mem.Allocator,
         vault_url: []const u8,
         credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
+        runtime: core.http.HttpRuntime,
         options: CertificateClientOptions,
-    ) CertificateClient {
-        _ = credential;
+    ) !CertificateClient {
         return .{
             .vault_url = vault_url,
             .api_version = options.api_version,
-            .pipeline = .{ .policies = &.{}, .transport_impl = transport },
+            .pipeline_state = try pipeline_mod.PipelineState.create(
+                allocator,
+                credential,
+                runtime,
+                options.retry,
+                options.scope,
+            ),
         };
+    }
+
+    pub fn deinit(self: *CertificateClient) void {
+        self.pipeline_state.deinit();
+        self.* = undefined;
     }
 
     /// GET /certificates/{name}?api-version=...
@@ -73,7 +94,7 @@ pub const CertificateClient = struct {
         defer req.deinit();
         try req.setHeader("Accept", "application/json");
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
@@ -122,7 +143,7 @@ pub const CertificateClient = struct {
         try req.setHeader("Accept", "application/json");
         req.body = body;
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
@@ -157,7 +178,7 @@ pub const CertificateClient = struct {
         var req = core.http.Request.init(allocator, .DELETE, url);
         defer req.deinit();
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (resp.isSuccess()) return .{ .ok = {} };
@@ -176,7 +197,7 @@ pub const CertificateClient = struct {
         defer allocator.free(url);
 
         return CertificatePager.init(
-            self.pipeline,
+            self.pipeline_state.pipeline,
             url,
             allocator,
             &parseCertificateListPage,
@@ -285,19 +306,15 @@ test "CertificateClient getCertificate" {
     var mock = core.http.MockTransport.init(allocator, 200, body);
     defer mock.deinit();
 
-    const identity = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
-    );
-    defer cred_mock.deinit();
-    var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
-
-    var client = CertificateClient.init(
+    var credential = test_support.StaticCredential{};
+    var client = try CertificateClient.init(
+        allocator,
         "https://vault.azure.net",
-        cred.asCredential(),
-        mock.asTransport(),
+        credential.asCredential(),
+        test_support.runtime(mock.asTransport()),
         .{},
     );
+    defer client.deinit();
 
     const cert = try client.getCertificate(allocator, "mycert");
     defer allocator.free(cert.id.?);

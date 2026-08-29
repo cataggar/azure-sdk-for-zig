@@ -1,8 +1,11 @@
 const std = @import("std");
 const core = @import("azure_sdk_core");
 const serde = @import("serde");
-
-const Context = core.context.Context;
+const pipeline_mod = @import("azure_sdk_keyvault_pipeline");
+const test_support = if (@import("builtin").is_test)
+    @import("azure_sdk_keyvault_test_support")
+else
+    struct {};
 
 /// Pager type returned by `listSecrets`.
 pub const SecretNamePager = core.pager.PipelinePager([]const u8);
@@ -48,28 +51,44 @@ pub const DeletedSecret = struct {
 
 pub const SecretClientOptions = struct {
     api_version: []const u8 = "7.6-preview.2",
+    retry: pipeline_mod.RetryOptions = .{},
+    scope: []const u8 = pipeline_mod.default_scope,
 };
 
 /// Client for Azure Key Vault Secrets.
 ///
-/// All REST calls go through the HTTP pipeline with bearer-token auth.
+/// Runtime descriptors are copied by value. Their borrowed transport and
+/// crypto contexts and the credential must outlive this client and every
+/// pager returned by it. Keep the client alive until its pagers are
+/// deinitialized.
 pub const SecretClient = struct {
     vault_url: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline_state: *pipeline_mod.PipelineState,
 
     pub fn init(
+        allocator: std.mem.Allocator,
         vault_url: []const u8,
         credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
+        runtime: core.http.HttpRuntime,
         options: SecretClientOptions,
-    ) SecretClient {
-        _ = credential;
+    ) !SecretClient {
         return .{
             .vault_url = vault_url,
             .api_version = options.api_version,
-            .pipeline = .{ .policies = &.{}, .transport_impl = transport },
+            .pipeline_state = try pipeline_mod.PipelineState.create(
+                allocator,
+                credential,
+                runtime,
+                options.retry,
+                options.scope,
+            ),
         };
+    }
+
+    pub fn deinit(self: *SecretClient) void {
+        self.pipeline_state.deinit();
+        self.* = undefined;
     }
 
     /// GET /secrets/{name}?api-version=...
@@ -109,7 +128,7 @@ pub const SecretClient = struct {
         defer req.deinit();
         try req.setHeader("Accept", "application/json");
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
@@ -153,7 +172,7 @@ pub const SecretClient = struct {
         try req.setHeader("Accept", "application/json");
         req.body = body;
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
@@ -189,7 +208,7 @@ pub const SecretClient = struct {
         defer req.deinit();
         try req.setHeader("Accept", "application/json");
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
@@ -224,7 +243,7 @@ pub const SecretClient = struct {
         var req = core.http.Request.init(allocator, .DELETE, url);
         defer req.deinit();
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (resp.status_code == 204 or resp.isSuccess()) {
@@ -259,7 +278,7 @@ pub const SecretClient = struct {
         defer req.deinit();
         try req.setHeader("Accept", "application/json");
 
-        var resp = try self.pipeline.send(&req);
+        var resp = try self.pipeline_state.pipeline.send(&req);
         defer resp.deinit();
 
         if (!resp.isSuccess()) {
@@ -323,7 +342,7 @@ pub const SecretClient = struct {
         defer allocator.free(url);
 
         return SecretNamePager.init(
-            self.pipeline,
+            self.pipeline_state.pipeline,
             url,
             allocator,
             &parseSecretListPage,
@@ -420,19 +439,16 @@ test "SecretClient getSecretResult: ok path" {
     var mock = core.http.MockTransport.init(allocator, 200, body);
     defer mock.deinit();
 
-    const identity = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
-    );
-    defer cred_mock.deinit();
-    var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
+    var credential = test_support.StaticCredential{};
 
-    var client = SecretClient.init(
+    var client = try SecretClient.init(
+        allocator,
         "https://myvault.vault.azure.net",
-        cred.asCredential(),
-        mock.asTransport(),
+        credential.asCredential(),
+        test_support.runtime(mock.asTransport()),
         .{},
     );
+    defer client.deinit();
 
     var r = try client.getSecretResult(allocator, "mysecret");
     defer r.deinit(allocator);
@@ -449,19 +465,16 @@ test "SecretClient getSecretResult: err path surfaces SecretNotFound code" {
     var mock = core.http.MockTransport.init(allocator, 404, body);
     defer mock.deinit();
 
-    const identity = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
-    );
-    defer cred_mock.deinit();
-    var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
+    var credential = test_support.StaticCredential{};
 
-    var client = SecretClient.init(
+    var client = try SecretClient.init(
+        allocator,
         "https://myvault.vault.azure.net",
-        cred.asCredential(),
-        mock.asTransport(),
+        credential.asCredential(),
+        test_support.runtime(mock.asTransport()),
         .{},
     );
+    defer client.deinit();
 
     var r = try client.getSecretResult(allocator, "missing");
     defer r.deinit(allocator);
@@ -477,19 +490,16 @@ test "SecretClient getSecretResult: err path with no parseable body" {
     var mock = core.http.MockTransport.init(allocator, 500, "Internal Server Error");
     defer mock.deinit();
 
-    const identity = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
-    );
-    defer cred_mock.deinit();
-    var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
+    var credential = test_support.StaticCredential{};
 
-    var client = SecretClient.init(
+    var client = try SecretClient.init(
+        allocator,
         "https://myvault.vault.azure.net",
-        cred.asCredential(),
-        mock.asTransport(),
+        credential.asCredential(),
+        test_support.runtime(mock.asTransport()),
         .{},
     );
+    defer client.deinit();
 
     var r = try client.getSecretResult(allocator, "boom");
     defer r.deinit(allocator);
@@ -512,19 +522,16 @@ test "SecretClient getSecret" {
     var mock = core.http.MockTransport.init(allocator, 200, body);
     defer mock.deinit();
 
-    const identity = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
-    );
-    defer cred_mock.deinit();
-    var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
+    var credential = test_support.StaticCredential{};
 
-    var client = SecretClient.init(
+    var client = try SecretClient.init(
+        allocator,
         "https://myvault.vault.azure.net",
-        cred.asCredential(),
-        mock.asTransport(),
+        credential.asCredential(),
+        test_support.runtime(mock.asTransport()),
         .{},
     );
+    defer client.deinit();
 
     const secret = try client.getSecret(allocator, "mysecret");
     defer allocator.free(secret.value.?);
@@ -543,19 +550,16 @@ test "SecretClient setSecret" {
     );
     defer mock.deinit();
 
-    const identity2 = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
-    );
-    defer cred_mock.deinit();
-    var cred = identity2.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
+    var credential = test_support.StaticCredential{};
 
-    var client = SecretClient.init(
+    var client = try SecretClient.init(
+        allocator,
         "https://v.vault.azure.net",
-        cred.asCredential(),
-        mock.asTransport(),
+        credential.asCredential(),
+        test_support.runtime(mock.asTransport()),
         .{},
     );
+    defer client.deinit();
 
     const secret = try client.setSecret(allocator, "s", "new-val");
     defer allocator.free(secret.value.?);
@@ -573,19 +577,16 @@ test "SecretClient getSecret 404" {
     var mock = core.http.MockTransport.init(allocator, 404, body);
     defer mock.deinit();
 
-    const identity3 = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
-    );
-    defer cred_mock.deinit();
-    var cred = identity3.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
+    var credential = test_support.StaticCredential{};
 
-    var client = SecretClient.init(
+    var client = try SecretClient.init(
+        allocator,
         "https://myvault.vault.azure.net",
-        cred.asCredential(),
-        mock.asTransport(),
+        credential.asCredential(),
+        test_support.runtime(mock.asTransport()),
         .{},
     );
+    defer client.deinit();
 
     const result = client.getSecret(allocator, "nonexistent");
     try std.testing.expectError(error.SecretNotFound, result);
@@ -598,19 +599,16 @@ test "SecretClient setSecret failure" {
     );
     defer mock.deinit();
 
-    const identity4 = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
-    );
-    defer cred_mock.deinit();
-    var cred = identity4.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
+    var credential = test_support.StaticCredential{};
 
-    var client = SecretClient.init(
+    var client = try SecretClient.init(
+        allocator,
         "https://myvault.vault.azure.net",
-        cred.asCredential(),
-        mock.asTransport(),
+        credential.asCredential(),
+        test_support.runtime(mock.asTransport()),
         .{},
     );
+    defer client.deinit();
 
     const result = client.setSecret(allocator, "s", "val");
     try std.testing.expectError(error.SetSecretFailed, result);
@@ -624,19 +622,16 @@ test "SecretClient listSecrets" {
     var mock = core.http.MockTransport.init(allocator, 200, body);
     defer mock.deinit();
 
-    const identity5 = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
-    );
-    defer cred_mock.deinit();
-    var cred = identity5.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
+    var credential = test_support.StaticCredential{};
 
-    var client = SecretClient.init(
+    var client = try SecretClient.init(
+        allocator,
         "https://v.vault.azure.net",
-        cred.asCredential(),
-        mock.asTransport(),
+        credential.asCredential(),
+        test_support.runtime(mock.asTransport()),
         .{},
     );
+    defer client.deinit();
 
     var pager = try client.listSecrets(allocator);
     defer pager.deinit();
