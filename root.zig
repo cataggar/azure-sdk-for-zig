@@ -2,9 +2,16 @@ const std = @import("std");
 const core = @import("azure_sdk_core");
 const serde = @import("serde");
 
+/// Microsoft Entra ID scope for the Azure App Configuration data plane.
+pub const auth_scopes: []const []const u8 = &.{"https://azconfig.io/.default"};
+
 // ─────────────────────────── Models ───────────────────────────
 
 /// Pager type returned by `listSettings`.
+///
+/// The pager copies the client's pipeline while borrowing its policy,
+/// transport, and crypto-provider contexts. Those contexts must outlive the
+/// pager and every `next` call.
 pub const SettingPager = core.pager.PipelinePager(ConfigurationSetting);
 
 pub const ConfigurationSetting = struct {
@@ -35,19 +42,22 @@ pub const ConfigurationClientOptions = struct {
 pub const ConfigurationClient = struct {
     endpoint: []const u8,
     api_version: []const u8,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
+    /// Constructs a client by copying `pipeline`.
+    ///
+    /// The endpoint and API version, the pipeline's policy pointers, and its
+    /// runtime transport and crypto-provider contexts are borrowed. They must
+    /// outlive this client, every pager derived from it, and all operations.
     pub fn init(
         endpoint: []const u8,
-        credential: *core.credentials.TokenCredential,
-        transport: *core.http.HttpTransport,
+        pipeline: core.http.HttpPipeline,
         options: ConfigurationClientOptions,
     ) ConfigurationClient {
-        _ = credential;
         return .{
             .endpoint = endpoint,
             .api_version = options.api_version,
-            .pipeline = .{ .policies = &.{}, .transport_impl = transport },
+            .pipeline = pipeline,
         };
     }
 
@@ -291,25 +301,147 @@ fn parseSettingListPage(allocator: std.mem.Allocator, body: []const u8) !core.pa
 
 // ─────────────────────────── Tests ────────────────────────────
 
-test "ConfigurationClient getSetting" {
+const RoutingCryptoProvider = struct {
+    calls: usize = 0,
+    fail: bool = false,
+
+    const vtable: core.crypto.CryptoProvider.VTable = .{
+        .random_bytes = &randomBytes,
+        .md5 = &md5,
+        .sha256 = &sha256,
+        .hmac_sha256 = &hmacSha256,
+        .sha256_init = &sha256Init,
+    };
+
+    fn asProvider(self: *@This()) core.crypto.CryptoProvider {
+        return .{ .context = self, .vtable = &vtable };
+    }
+
+    fn record(self: *@This()) !void {
+        self.calls += 1;
+        if (self.fail) return error.ProviderFailure;
+    }
+
+    fn randomBytes(context: *anyopaque, out: []u8) !void {
+        const self: *@This() = @ptrCast(@alignCast(context));
+        @memset(out, 0x5a);
+        try self.record();
+    }
+
+    fn md5(
+        _: *anyopaque,
+        _: []const u8,
+        _: *core.crypto.Md5Digest,
+    ) !void {
+        return error.UnexpectedCryptoOperation;
+    }
+
+    fn sha256(
+        context: *anyopaque,
+        _: []const u8,
+        out: *core.crypto.Sha256Digest,
+    ) !void {
+        const self: *@This() = @ptrCast(@alignCast(context));
+        @memset(out, 0x5a);
+        try self.record();
+    }
+
+    fn hmacSha256(
+        _: *anyopaque,
+        _: []const u8,
+        _: []const u8,
+        _: *core.crypto.HmacSha256Digest,
+    ) !void {
+        return error.UnexpectedCryptoOperation;
+    }
+
+    fn sha256Init(
+        _: *anyopaque,
+        _: std.mem.Allocator,
+    ) !core.crypto.Sha256Operation {
+        return error.UnexpectedCryptoOperation;
+    }
+};
+
+const RuntimeCredential = struct {
+    credential: core.credentials.TokenCredential = .{ .getTokenFn = &getToken },
+    expected_transport_context: *anyopaque,
+    expected_crypto_context: *anyopaque,
+    calls: usize = 0,
+
+    fn init(runtime: core.http.HttpRuntime) RuntimeCredential {
+        return .{
+            .expected_transport_context = runtime.transport.context,
+            .expected_crypto_context = runtime.crypto.context,
+        };
+    }
+
+    fn asCredential(self: *@This()) *core.credentials.TokenCredential {
+        return &self.credential;
+    }
+
+    fn getToken(
+        credential: *core.credentials.TokenCredential,
+        request_context: core.credentials.TokenRequestContext,
+        _: core.context.Context,
+        runtime: core.http.HttpRuntime,
+    ) anyerror!core.credentials.AccessToken {
+        const self: *@This() = @alignCast(
+            @fieldParentPtr("credential", credential),
+        );
+        self.calls += 1;
+        if (runtime.transport.context != self.expected_transport_context)
+            return error.TransportProviderNotPreserved;
+        if (runtime.crypto.context != self.expected_crypto_context)
+            return error.CryptoProviderNotPreserved;
+        if (request_context.scopes.len != auth_scopes.len or
+            !std.mem.eql(u8, request_context.scopes[0], auth_scopes[0]))
+        {
+            return error.UnexpectedAuthScope;
+        }
+        _ = try runtime.crypto.sha256("app-configuration-token");
+        return .{
+            .token = "test-token",
+            .expires_on = std.math.maxInt(i64),
+        };
+    }
+};
+
+fn testPipeline(
+    transport: core.http.HttpTransport,
+    crypto_provider: core.crypto.CryptoProvider,
+    policies: []*core.http.HttpPolicy,
+) core.http.HttpPipeline {
+    return core.http.HttpPipeline.init(
+        core.http.HttpRuntime.init(transport, crypto_provider),
+        policies,
+    );
+}
+
+test "ConfigurationClient bearer auth preserves the selected runtime" {
     const allocator = std.testing.allocator;
     const body =
         \\{"key":"mykey","value":"myvalue","label":"prod","etag":"etag-1","last_modified":"2025-01-01T00:00:00Z"}
     ;
     var mock = core.http.MockTransport.init(allocator, 200, body);
     defer mock.deinit();
-
-    const identity = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
+    var crypto_provider = RoutingCryptoProvider{};
+    const runtime = core.http.HttpRuntime.init(
+        mock.asTransport(),
+        crypto_provider.asProvider(),
     );
-    defer cred_mock.deinit();
-    var cred = identity.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
+    var credential = RuntimeCredential.init(runtime);
+    var auth_policy = core.http.BearerTokenAuthPolicy.init(
+        allocator,
+        credential.asCredential(),
+        auth_scopes,
+    );
+    defer auth_policy.deinit();
+    var policies = [_]*core.http.HttpPolicy{auth_policy.asPolicy()};
 
     var client = ConfigurationClient.init(
         "https://myconfig.azconfig.io",
-        cred.asCredential(),
-        mock.asTransport(),
+        core.http.HttpPipeline.init(runtime, &policies),
         .{},
     );
 
@@ -323,26 +455,67 @@ test "ConfigurationClient getSetting" {
     try std.testing.expectEqualStrings("myvalue", setting.value.?);
     try std.testing.expectEqualStrings("prod", setting.label.?);
     try std.testing.expect(std.mem.find(u8, mock.last_url.?, "kv/mykey?label=prod") != null);
+    try std.testing.expectEqualStrings("Bearer test-token", mock.last_headers.get("Authorization").?);
+    try std.testing.expectEqual(@as(usize, 1), credential.calls);
+    try std.testing.expectEqual(@as(usize, 1), crypto_provider.calls);
+    try std.testing.expectEqual(
+        runtime.transport.context,
+        client.pipeline.runtime.transport.context,
+    );
+    try std.testing.expectEqual(
+        runtime.crypto.context,
+        client.pipeline.runtime.crypto.context,
+    );
 }
 
-test "ConfigurationClient setSetting and listSettings" {
+test "ConfigurationClient auth provider failure is atomic" {
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 200, "{}");
+    defer mock.deinit();
+    var crypto_provider = RoutingCryptoProvider{ .fail = true };
+    const runtime = core.http.HttpRuntime.init(
+        mock.asTransport(),
+        crypto_provider.asProvider(),
+    );
+    var credential = RuntimeCredential.init(runtime);
+    var auth_policy = core.http.BearerTokenAuthPolicy.init(
+        allocator,
+        credential.asCredential(),
+        auth_scopes,
+    );
+    defer auth_policy.deinit();
+    var policies = [_]*core.http.HttpPolicy{auth_policy.asPolicy()};
+    var client = ConfigurationClient.init(
+        "https://myconfig.azconfig.io",
+        core.http.HttpPipeline.init(runtime, &policies),
+        .{},
+    );
+
+    try std.testing.expectError(
+        error.ProviderFailure,
+        client.getSetting(allocator, "mykey", null),
+    );
+    try std.testing.expectEqual(@as(usize, 1), credential.calls);
+    try std.testing.expectEqual(@as(usize, 1), crypto_provider.calls);
+    try std.testing.expectEqual(@as(usize, 0), mock.call_count);
+    try std.testing.expect(mock.last_headers.get("Authorization") == null);
+}
+
+test "ConfigurationClient setSetting" {
     const allocator = std.testing.allocator;
     var mock_set = core.http.MockTransport.init(allocator, 200,
         \\{"key":"app.color","value":"blue"}
     );
     defer mock_set.deinit();
-
-    const identity2 = @import("azure_sdk_core").identity;
-    var cred_mock = core.http.MockTransport.init(allocator, 200,
-        \\{"access_token":"t","expires_in":3600}
-    );
-    defer cred_mock.deinit();
-    var cred = identity2.ClientSecretCredential.init(allocator, cred_mock.asTransport(), "t", "c", "s");
+    var crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
 
     var client = ConfigurationClient.init(
         "https://myconfig.azconfig.io",
-        cred.asCredential(),
-        mock_set.asTransport(),
+        testPipeline(
+            mock_set.asTransport(),
+            crypto_provider.asProvider(),
+            &.{},
+        ),
         .{},
     );
 
@@ -351,16 +524,38 @@ test "ConfigurationClient setSetting and listSettings" {
 
     try std.testing.expectEqualStrings("blue", setting.value.?);
     try std.testing.expectEqual(core.http.Method.PUT, mock_set.last_method.?);
+}
 
-    // Switch to list mock
+test "SettingPager preserves runtime and propagates provider failure" {
+    const allocator = std.testing.allocator;
     var mock_list = core.http.MockTransport.init(allocator, 200,
-        \\{"items":[{"key":"app.color","value":"blue"},{"key":"app.size","value":"large"}]}
+        \\{"items":[{"key":"app.color","value":"blue"},{"key":"app.size","value":"large"}],"@nextLink":"https://myconfig.azconfig.io/kv?after=2"}
     );
     defer mock_list.deinit();
-    client.pipeline = .{ .policies = &.{}, .transport_impl = mock_list.asTransport() };
+    var crypto_provider = RoutingCryptoProvider{};
+    var request_id_policy = core.http.RequestIdPolicy.init();
+    var policies = [_]*core.http.HttpPolicy{request_id_policy.asPolicy()};
+    const pipeline = testPipeline(
+        mock_list.asTransport(),
+        crypto_provider.asProvider(),
+        &policies,
+    );
+    var client = ConfigurationClient.init(
+        "https://myconfig.azconfig.io",
+        pipeline,
+        .{},
+    );
 
     var pager = try client.listSettings(allocator, "app.*");
     defer pager.deinit();
+    try std.testing.expectEqual(
+        pipeline.runtime.transport.context,
+        pager.pipeline.runtime.transport.context,
+    );
+    try std.testing.expectEqual(
+        pipeline.runtime.crypto.context,
+        pager.pipeline.runtime.crypto.context,
+    );
 
     const settings = (try pager.next()) orelse return error.ExpectedPage;
     defer {
@@ -373,4 +568,12 @@ test "ConfigurationClient setSetting and listSettings" {
 
     try std.testing.expectEqual(@as(usize, 2), settings.len);
     try std.testing.expectEqualStrings("app.color", settings[0].key);
+    try std.testing.expectEqual(@as(usize, 1), crypto_provider.calls);
+    try std.testing.expectEqual(@as(usize, 1), mock_list.call_count);
+    try std.testing.expect(mock_list.last_headers.get("x-ms-client-request-id") != null);
+
+    crypto_provider.fail = true;
+    try std.testing.expectError(error.ProviderFailure, pager.next());
+    try std.testing.expectEqual(@as(usize, 2), crypto_provider.calls);
+    try std.testing.expectEqual(@as(usize, 1), mock_list.call_count);
 }
