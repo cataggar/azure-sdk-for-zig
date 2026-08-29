@@ -5,6 +5,12 @@
 
 const std = @import("std");
 const core = @import("azure_sdk_core");
+
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+fn testingRuntime(http_transport: core.http.HttpTransport) core.http.HttpRuntime {
+    return .init(http_transport, testing_crypto_provider.asProvider());
+}
 const entity = @import("entity.zig");
 const entity_codec = @import("entity_codec.zig");
 const errors = @import("errors.zig");
@@ -479,7 +485,11 @@ pub fn submitResult(
     var batch_boundary: [38]u8 = undefined;
     var changeset_boundary: [42]u8 = undefined;
     const boundaries = transaction_options.boundaries orelse
-        try randomBoundaries(&batch_boundary, &changeset_boundary);
+        try randomBoundaries(
+            protocol.pipeline.runtime.crypto,
+            &batch_boundary,
+            &changeset_boundary,
+        );
     var serialized = try serializeWithEndpoint(
         builder,
         allocator,
@@ -549,10 +559,13 @@ pub fn submitResult(
     ) catch return error.TransactionOutcomeUnknown;
 }
 
-fn randomBoundaries(batch: *[38]u8, changeset: *[42]u8) !Boundaries {
+fn randomBoundaries(
+    crypto_provider: core.crypto.CryptoProvider,
+    batch: *[38]u8,
+    changeset: *[42]u8,
+) !Boundaries {
     var bytes: [32]u8 = undefined;
-    var threaded: std.Io.Threaded = .init_single_threaded;
-    try threaded.io().randomSecure(&bytes);
+    try crypto_provider.randomBytes(&bytes);
     const batch_slice = std.fmt.bufPrint(batch, "batch_{x}", .{bytes[0..16]}) catch unreachable;
     const changeset_slice = std.fmt.bufPrint(
         changeset,
@@ -562,10 +575,64 @@ fn randomBoundaries(batch: *[38]u8, changeset: *[42]u8) !Boundaries {
     return .{ .batch = batch_slice, .changeset = changeset_slice };
 }
 
+const BoundaryCryptoProvider = struct {
+    random_calls: usize = 0,
+    fail: bool = false,
+
+    const vtable: core.crypto.CryptoProvider.VTable = .{
+        .random_bytes = &randomBytes,
+        .md5 = &md5,
+        .sha256 = &sha256,
+        .hmac_sha256 = &hmacSha256,
+        .sha256_init = &sha256Init,
+    };
+
+    fn provider(self: *@This()) core.crypto.CryptoProvider {
+        return .{ .context = self, .vtable = &vtable };
+    }
+
+    fn randomBytes(context: *anyopaque, out: []u8) !void {
+        const self: *@This() = @ptrCast(@alignCast(context));
+        self.random_calls += 1;
+        if (self.fail) return error.ProviderFailure;
+        for (out, 0..) |*byte, index| byte.* = @truncate(index);
+    }
+
+    fn md5(_: *anyopaque, _: []const u8, _: *core.crypto.Md5Digest) !void {
+        return error.Unused;
+    }
+
+    fn sha256(_: *anyopaque, _: []const u8, _: *core.crypto.Sha256Digest) !void {
+        return error.Unused;
+    }
+
+    fn hmacSha256(
+        _: *anyopaque,
+        _: []const u8,
+        _: []const u8,
+        _: *core.crypto.HmacSha256Digest,
+    ) !void {
+        return error.Unused;
+    }
+
+    fn sha256Init(
+        _: *anyopaque,
+        _: std.mem.Allocator,
+    ) !core.crypto.Sha256Operation {
+        return error.Unused;
+    }
+};
+
 test "generated multipart boundaries are valid and distinct" {
     var batch: [38]u8 = undefined;
     var changeset: [42]u8 = undefined;
-    const boundaries = try randomBoundaries(&batch, &changeset);
+    var provider = BoundaryCryptoProvider{};
+    const boundaries = try randomBoundaries(
+        provider.provider(),
+        &batch,
+        &changeset,
+    );
+    try std.testing.expectEqual(@as(usize, 1), provider.random_calls);
     try std.testing.expectEqual(@as(usize, 38), boundaries.batch.len);
     try std.testing.expectEqual(@as(usize, 42), boundaries.changeset.len);
     try std.testing.expect(!std.mem.eql(u8, boundaries.batch, boundaries.changeset));
@@ -1126,6 +1193,94 @@ const transaction_response_headers = &[_]core.http.MockTransport.HeaderPair{
     .{ .name = "x-ms-request-id", .value = "outer-request" },
 };
 
+test "automatic transaction boundaries use the selected runtime provider" {
+    const client_mod = @import("client.zig");
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 202, one_success_body);
+    defer mock.deinit();
+    mock.response_headers_list = transaction_response_headers;
+    var crypto = BoundaryCryptoProvider{};
+    const runtime = core.http.HttpRuntime.init(
+        mock.asTransport(),
+        crypto.provider(),
+    );
+    var client = try client_mod.TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=SECRET&sp=a",
+        "People",
+        runtime,
+        .{},
+    );
+    defer client.deinit();
+    var builder = TransactionBuilder.init(allocator);
+    defer builder.deinit();
+    try builder.delete("p", "r", "*");
+
+    var result = try client.submitTransactionResult(allocator, &builder, .{
+        .protocol = .{ .client_request_id = "automatic-boundary-test" },
+    });
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), crypto.random_calls);
+    try std.testing.expectEqual(@as(usize, 1), mock.call_count);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        mock.last_body.?,
+        "batch_000102030405060708090a0b0c0d0e0f",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        mock.last_body.?,
+        "changeset_101112131415161718191a1b1c1d1e1f",
+    ) != null);
+}
+
+test "boundary provider failure prevents send and explicit boundaries bypass it" {
+    const client_mod = @import("client.zig");
+    const allocator = std.testing.allocator;
+    var mock = core.http.MockTransport.init(allocator, 202, one_success_body);
+    defer mock.deinit();
+    mock.response_headers_list = transaction_response_headers;
+    var crypto = BoundaryCryptoProvider{ .fail = true };
+    const runtime = core.http.HttpRuntime.init(
+        mock.asTransport(),
+        crypto.provider(),
+    );
+    var client = try client_mod.TableClient.initWithSasUrl(
+        allocator,
+        "https://account.table.core.windows.net?sv=1&sig=SECRET&sp=a",
+        "People",
+        runtime,
+        .{},
+    );
+    defer client.deinit();
+    var builder = TransactionBuilder.init(allocator);
+    defer builder.deinit();
+    try builder.delete("p", "r", "*");
+
+    try std.testing.expectError(
+        error.ProviderFailure,
+        client.submitTransactionResult(allocator, &builder, .{
+            .protocol = .{ .client_request_id = "boundary-failure-test" },
+        }),
+    );
+    try std.testing.expectEqual(@as(usize, 1), crypto.random_calls);
+    try std.testing.expectEqual(@as(usize, 0), mock.call_count);
+
+    var result = try client.submitTransactionResult(allocator, &builder, .{
+        .protocol = .{ .client_request_id = "explicit-boundary-test" },
+        .boundaries = .{ .batch = "batch", .changeset = "changeset" },
+    });
+    defer result.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), crypto.random_calls);
+    try std.testing.expectEqual(@as(usize, 1), mock.call_count);
+    try std.testing.expect(std.mem.startsWith(
+        u8,
+        mock.last_body.?,
+        "--batch\r\nContent-Type: multipart/mixed; boundary=changeset\r\n",
+    ));
+}
+
 fn expectIndeterminateTransactionResponse(
     status: u16,
     headers: []const core.http.MockTransport.HeaderPair,
@@ -1141,7 +1296,7 @@ fn expectIndeterminateTransactionResponse(
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=SECRET&sp=a",
         "People",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{},
     );
     defer client.deinit();
@@ -1204,7 +1359,7 @@ test "submitted transaction inner failure remains a precise indexed TableError" 
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=SECRET&sp=a",
         "People",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{},
     );
     defer client.deinit();
@@ -1234,6 +1389,7 @@ const TestCredential = struct {
         _: *core.credentials.TokenCredential,
         _: core.credentials.TokenRequestContext,
         _: core.context.Context,
+        _: core.http.HttpRuntime,
     ) anyerror!core.credentials.AccessToken {
         return .{ .token = "transaction-token", .expires_on = std.math.maxInt(i64) };
     }
@@ -1282,7 +1438,7 @@ fn expectTransactionRedirectRejected(
             "https://account.table.core.windows.net",
             "People",
             &test_credential.credential,
-            transport.asTransport(),
+            testingRuntime(transport.asTransport()),
             .{},
         ),
         .shared_key => try client_mod.TableClient.initWithSharedKey(
@@ -1290,14 +1446,14 @@ fn expectTransactionRedirectRejected(
             "https://account.table.core.windows.net",
             "People",
             &shared_credential,
-            transport.asTransport(),
+            testingRuntime(transport.asTransport()),
             .{},
         ),
         .sas => try client_mod.TableClient.initWithSasUrl(
             allocator,
             "https://account.table.core.windows.net?sv=1&sig=SECRET&sp=a",
             "People",
-            transport.asTransport(),
+            testingRuntime(transport.asTransport()),
             .{},
         ),
     };
@@ -1347,31 +1503,31 @@ test "transaction 307 and 308 redirects are rejected without replay for every au
 
 const PreTransportOncePolicy = struct {
     calls: usize = 0,
-    policy: core.pipeline.HttpPolicy = .{ .processFn = &process },
+    policy: core.http.HttpPolicy = .{ .processFn = &process },
 
     fn process(
-        policy: *core.pipeline.HttpPolicy,
+        policy: *core.http.HttpPolicy,
         req: *core.http.Request,
-        next: []*core.pipeline.HttpPolicy,
-        transport: *core.http.HttpTransport,
+        next: []*core.http.HttpPolicy,
+        runtime: core.http.HttpRuntime,
     ) anyerror!core.http.Response {
         const self: *PreTransportOncePolicy = @alignCast(@fieldParentPtr("policy", policy));
         self.calls += 1;
         if (self.calls == 1) return error.InjectedPreTransportFailure;
-        if (next.len == 0) return transport.send(req);
-        return next[0].process(req, next[1..], transport);
+        if (next.len == 0) return runtime.transport.send(req);
+        return next[0].process(req, next[1..], runtime);
     }
 };
 
 const AlwaysFailPreTransportPolicy = struct {
     calls: usize = 0,
-    policy: core.pipeline.HttpPolicy = .{ .processFn = &process },
+    policy: core.http.HttpPolicy = .{ .processFn = &process },
 
     fn process(
-        policy: *core.pipeline.HttpPolicy,
+        policy: *core.http.HttpPolicy,
         _: *core.http.Request,
-        _: []*core.pipeline.HttpPolicy,
-        _: *core.http.HttpTransport,
+        _: []*core.http.HttpPolicy,
+        _: core.http.HttpRuntime,
     ) anyerror!core.http.Response {
         const self: *AlwaysFailPreTransportPolicy = @alignCast(
             @fieldParentPtr("policy", policy),
@@ -1384,19 +1540,18 @@ const AlwaysFailPreTransportPolicy = struct {
 const FailingTransactionTransport = struct {
     calls: usize = 0,
     failure: anyerror = error.InjectedTransportFailure,
-    transport: core.http.HttpTransport = .{ .sendFn = &send },
 
-    fn asTransport(self: *FailingTransactionTransport) *core.http.HttpTransport {
-        return &self.transport;
+    const vtable: core.http.HttpTransport.VTable = .{ .send = &send };
+
+    fn asTransport(self: *FailingTransactionTransport) core.http.HttpTransport {
+        return .{ .context = self, .vtable = &vtable };
     }
 
     fn send(
-        transport: *core.http.HttpTransport,
+        context: *anyopaque,
         _: *core.http.Request,
     ) anyerror!core.http.Response {
-        const self: *FailingTransactionTransport = @alignCast(
-            @fieldParentPtr("transport", transport),
-        );
+        const self: *FailingTransactionTransport = @ptrCast(@alignCast(context));
         self.calls += 1;
         return self.failure;
     }
@@ -1417,7 +1572,7 @@ test "transaction POST retries pretransport failure but not ambiguous transport 
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=SECRET&sp=a",
         "People",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{ .retry = .{ .max_retries = 1, .initial_delay_ms = 0, .max_delay_ms = 0 } },
     );
     defer client.deinit();
@@ -1438,7 +1593,7 @@ test "transaction POST retries pretransport failure but not ambiguous transport 
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=SECRET&sp=a",
         "People",
-        failing.asTransport(),
+        testingRuntime(failing.asTransport()),
         .{ .retry = .{ .max_retries = 5, .initial_delay_ms = 0, .max_delay_ms = 0 } },
     );
     defer failing_client.deinit();
@@ -1455,7 +1610,7 @@ test "transaction POST retries pretransport failure but not ambiguous transport 
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=SECRET&sp=a",
         "People",
-        timed_out.asTransport(),
+        testingRuntime(timed_out.asTransport()),
         .{},
     );
     defer timeout_client.deinit();
@@ -1479,7 +1634,7 @@ test "transaction pretransport retries honor operation time budget" {
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=SECRET&sp=a",
         "People",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{ .retry = .{ .max_retries = 5, .initial_delay_ms = 50, .max_delay_ms = 50 } },
     );
     defer client.deinit();
@@ -1516,7 +1671,7 @@ test "transaction submission uses bearer and SharedKey authentication" {
         "https://account.table.core.windows.net",
         "People",
         &test_credential.credential,
-        bearer_mock.asTransport(),
+        testingRuntime(bearer_mock.asTransport()),
         .{},
     );
     defer bearer.deinit();
@@ -1543,7 +1698,7 @@ test "transaction submission uses bearer and SharedKey authentication" {
         "https://account.table.core.windows.net",
         "People",
         &credential,
-        shared_mock.asTransport(),
+        testingRuntime(shared_mock.asTransport()),
         .{},
     );
     defer shared.deinit();
@@ -1567,7 +1722,7 @@ test "transaction validation occurs before transport" {
         allocator,
         "https://account.table.core.windows.net?sv=1&sig=SECRET&sp=a",
         "People",
-        mock.asTransport(),
+        testingRuntime(mock.asTransport()),
         .{},
     );
     defer client.deinit();

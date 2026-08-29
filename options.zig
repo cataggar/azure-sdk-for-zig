@@ -13,7 +13,7 @@ pub const ProtocolOptions = struct {
     /// End-to-end client budget. A blocking in-flight send may exceed it.
     operation_timeout_ms: ?u64 = null,
     /// Per-call policies run before the client's configured pipeline.
-    policies: []const *core.pipeline.HttpPolicy = &.{},
+    policies: []const *core.http.HttpPolicy = &.{},
 };
 
 pub const QueryEntitiesOptions = struct {
@@ -91,8 +91,6 @@ pub const UpsertEntityOptions = struct {
     mode: UpdateMode = .merge,
 };
 
-/// Explicit boundaries are primarily useful for deterministic wire tests.
-/// Normal transaction submissions generate unpredictable MIME boundaries.
 pub const SetServicePropertiesOptions = struct {
     protocol: ProtocolOptions = .{},
 };
@@ -103,6 +101,9 @@ pub const GetStatisticsOptions = struct {
     protocol: ProtocolOptions = .{},
 };
 
+/// Explicit boundaries are primarily useful for deterministic wire tests.
+/// Normal transaction submissions generate unpredictable MIME boundaries
+/// through the client's borrowed runtime crypto provider.
 pub const TransactionBoundaries = struct {
     batch: []const u8,
     changeset: []const u8,
@@ -110,6 +111,8 @@ pub const TransactionBoundaries = struct {
 
 pub const TransactionOptions = struct {
     protocol: ProtocolOptions = .{},
+    /// Explicit boundaries bypass runtime randomness for deterministic
+    /// fixtures. Both values are borrowed for the submission call.
     boundaries: ?TransactionBoundaries = null,
 };
 
@@ -138,7 +141,7 @@ pub const TableClientOptions = struct {
     operation_timeout_ms: ?u64 = null,
     /// Policies run once per retry. SAS query authentication is appended only
     /// after these policies, immediately before the transport.
-    policies: []const *core.pipeline.HttpPolicy = &.{},
+    policies: []const *core.http.HttpPolicy = &.{},
 };
 
 pub const TableServiceClientOptions = TableClientOptions;

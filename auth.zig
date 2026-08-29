@@ -3,6 +3,16 @@
 const std = @import("std");
 const core = @import("azure_sdk_core");
 
+fn wipe(bytes: []u8) void {
+    const volatile_bytes: []volatile u8 = bytes;
+    @memset(volatile_bytes, 0);
+}
+
+fn wipeAndFree(allocator: std.mem.Allocator, bytes: []u8) void {
+    wipe(bytes);
+    allocator.free(bytes);
+}
+
 /// Microsoft Entra scope for Azure Storage data-plane requests.
 pub const storage_scope = "https://storage.azure.com/.default";
 
@@ -21,7 +31,7 @@ pub const SharedKeyCredential = struct {
             error.OutOfMemory => return err,
             else => return error.InvalidAccountKey,
         };
-        errdefer allocator.free(key);
+        errdefer wipeAndFree(allocator, key);
         if (key.len == 0) return error.InvalidAccountKey;
         return .{
             .allocator = allocator,
@@ -32,7 +42,7 @@ pub const SharedKeyCredential = struct {
 
     pub fn deinit(self: *SharedKeyCredential) void {
         self.allocator.free(self.account_name);
-        self.allocator.free(self.key);
+        wipeAndFree(self.allocator, self.key);
         self.* = undefined;
     }
 
@@ -42,9 +52,9 @@ pub const SharedKeyCredential = struct {
             error.OutOfMemory => return err,
             else => return error.InvalidAccountKey,
         };
-        errdefer self.allocator.free(replacement);
+        errdefer wipeAndFree(self.allocator, replacement);
         if (replacement.len == 0) return error.InvalidAccountKey;
-        self.allocator.free(self.key);
+        wipeAndFree(self.allocator, self.key);
         self.key = replacement;
     }
 
@@ -56,9 +66,15 @@ pub const SharedKeyCredential = struct {
     pub fn sign(
         self: *const SharedKeyCredential,
         allocator: std.mem.Allocator,
+        crypto_provider: core.crypto.CryptoProvider,
         canonical: []const u8,
     ) ![]u8 {
-        return core.base64.hmacSha256Base64(allocator, self.key, canonical);
+        return core.base64.hmacSha256Base64(
+            allocator,
+            crypto_provider,
+            self.key,
+            canonical,
+        );
     }
 
     pub fn format(_: SharedKeyCredential, writer: anytype) !void {
@@ -71,21 +87,21 @@ pub const SharedKeyCredential = struct {
 pub const SharedKeyLitePolicy = struct {
     credential: *SharedKeyCredential,
     api_version: []const u8,
-    policy: core.pipeline.HttpPolicy = .{ .processFn = &process },
+    policy: core.http.HttpPolicy = .{ .processFn = &process },
 
     pub fn init(credential: *SharedKeyCredential, api_version: []const u8) SharedKeyLitePolicy {
         return .{ .credential = credential, .api_version = api_version };
     }
 
-    pub fn asPolicy(self: *SharedKeyLitePolicy) *core.pipeline.HttpPolicy {
+    pub fn asPolicy(self: *SharedKeyLitePolicy) *core.http.HttpPolicy {
         return &self.policy;
     }
 
     fn process(
-        policy: *core.pipeline.HttpPolicy,
+        policy: *core.http.HttpPolicy,
         request: *core.http.Request,
-        next: []*core.pipeline.HttpPolicy,
-        transport: *core.http.HttpTransport,
+        next: []*core.http.HttpPolicy,
+        runtime: core.http.HttpRuntime,
     ) anyerror!core.http.Response {
         const self: *SharedKeyLitePolicy = @alignCast(@fieldParentPtr("policy", policy));
         var date: [32]u8 = undefined;
@@ -110,17 +126,21 @@ pub const SharedKeyLitePolicy = struct {
             .{ date_value, canonical },
         );
         defer request.allocator.free(to_sign);
-        const signature = try self.credential.sign(request.allocator, to_sign);
-        defer request.allocator.free(signature);
+        const signature = try self.credential.sign(
+            request.allocator,
+            runtime.crypto,
+            to_sign,
+        );
+        defer wipeAndFree(request.allocator, signature);
         const authorization = try std.fmt.allocPrint(
             request.allocator,
             "SharedKeyLite {s}:{s}",
             .{ self.credential.account_name, signature },
         );
-        defer request.allocator.free(authorization);
+        defer wipeAndFree(request.allocator, authorization);
         try request.setHeader("Authorization", authorization);
-        if (next.len == 0) return transport.send(request);
-        return next[0].process(request, next[1..], transport);
+        if (next.len == 0) return runtime.transport.send(request);
+        return next[0].process(request, next[1..], runtime);
     }
 };
 
@@ -212,8 +232,65 @@ fn formatHttpDate(buffer: *[32]u8, timestamp: i64) []const u8 {
     ) catch unreachable;
 }
 
+const TestCryptoProvider = struct {
+    calls: usize = 0,
+    fail: bool = false,
+    key: [64]u8 = undefined,
+    key_len: usize = 0,
+    message: [512]u8 = undefined,
+    message_len: usize = 0,
+
+    const vtable: core.crypto.CryptoProvider.VTable = .{
+        .random_bytes = &randomBytes,
+        .md5 = &md5,
+        .sha256 = &sha256,
+        .hmac_sha256 = &hmacSha256,
+        .sha256_init = &sha256Init,
+    };
+
+    fn provider(self: *@This()) core.crypto.CryptoProvider {
+        return .{ .context = self, .vtable = &vtable };
+    }
+
+    fn randomBytes(_: *anyopaque, _: []u8) !void {
+        return error.Unused;
+    }
+
+    fn md5(_: *anyopaque, _: []const u8, _: *core.crypto.Md5Digest) !void {
+        return error.Unused;
+    }
+
+    fn sha256(_: *anyopaque, _: []const u8, _: *core.crypto.Sha256Digest) !void {
+        return error.Unused;
+    }
+
+    fn hmacSha256(
+        context: *anyopaque,
+        key: []const u8,
+        message: []const u8,
+        out: *core.crypto.HmacSha256Digest,
+    ) !void {
+        const self: *@This() = @ptrCast(@alignCast(context));
+        self.calls += 1;
+        self.key_len = key.len;
+        @memcpy(self.key[0..key.len], key);
+        self.message_len = message.len;
+        @memcpy(self.message[0..message.len], message);
+        @memset(out, 0xa5);
+        if (self.fail) return error.ProviderFailure;
+    }
+
+    fn sha256Init(
+        _: *anyopaque,
+        _: std.mem.Allocator,
+    ) !core.crypto.Sha256Operation {
+        return error.Unused;
+    }
+};
+
 test "published Tables SharedKeyLite vector" {
     const allocator = std.testing.allocator;
+    var provider = core.crypto.StdCryptoProvider.init(std.testing.io);
     const resource = try canonicalizedResource(
         allocator,
         "account-name",
@@ -223,11 +300,82 @@ test "published Tables SharedKeyLite vector" {
     try std.testing.expectEqualStrings("/account-name/?comp=properties", resource);
     const signature = try core.base64.hmacSha256Base64(
         allocator,
+        provider.asProvider(),
         "account-key",
         "Thu, 23 Apr 2020 09:43:37 GMT\n/account-name/?comp=properties",
     );
     defer allocator.free(signature);
     try std.testing.expectEqualStrings("tW8SGePdivpFOEJfTxikbSwjdDWkpxSTfFtqUMED3v8=", signature);
+}
+
+test "SharedKeyLite uses the selected runtime crypto provider" {
+    const allocator = std.testing.allocator;
+    var credential = try SharedKeyCredential.init(
+        allocator,
+        "account",
+        "YWNjb3VudC1rZXk=",
+    );
+    defer credential.deinit();
+    var policy = SharedKeyLitePolicy.init(&credential, "2019-02-02");
+    var mock = core.http.MockTransport.init(allocator, 200, "{}");
+    defer mock.deinit();
+    var spy = TestCryptoProvider{};
+    var policies = [_]*core.http.HttpPolicy{policy.asPolicy()};
+    var pipeline = core.http.HttpPipeline.init(
+        .init(mock.asTransport(), spy.provider()),
+        &policies,
+    );
+    var request = core.http.Request.init(
+        allocator,
+        .GET,
+        "https://account.table.core.windows.net/Tables?comp=list",
+    );
+    defer request.deinit();
+
+    var response = try pipeline.send(&request);
+    defer response.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), spy.calls);
+    try std.testing.expectEqualStrings("account-key", spy.key[0..spy.key_len]);
+    try std.testing.expect(std.mem.endsWith(
+        u8,
+        spy.message[0..spy.message_len],
+        "\n/account/Tables?comp=list",
+    ));
+    try std.testing.expectEqual(@as(usize, 1), mock.call_count);
+}
+
+test "SharedKeyLite provider failure preserves authorization and skips transport" {
+    const allocator = std.testing.allocator;
+    var credential = try SharedKeyCredential.init(
+        allocator,
+        "account",
+        "YWNjb3VudC1rZXk=",
+    );
+    defer credential.deinit();
+    var policy = SharedKeyLitePolicy.init(&credential, "2019-02-02");
+    var mock = core.http.MockTransport.init(allocator, 200, "{}");
+    defer mock.deinit();
+    var fault = TestCryptoProvider{ .fail = true };
+    var policies = [_]*core.http.HttpPolicy{policy.asPolicy()};
+    var pipeline = core.http.HttpPipeline.init(
+        .init(mock.asTransport(), fault.provider()),
+        &policies,
+    );
+    var request = core.http.Request.init(
+        allocator,
+        .GET,
+        "https://account.table.core.windows.net/Tables",
+    );
+    defer request.deinit();
+    try request.setHeader("Authorization", "unchanged");
+
+    try std.testing.expectError(error.ProviderFailure, pipeline.send(&request));
+    try std.testing.expectEqualStrings(
+        "unchanged",
+        request.getHeader("Authorization").?,
+    );
+    try std.testing.expectEqual(@as(usize, 0), mock.call_count);
 }
 
 test "canonical resource includes paths and only decoded comp" {

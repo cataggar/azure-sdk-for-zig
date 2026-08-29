@@ -1,5 +1,11 @@
 const std = @import("std");
 const core = @import("azure_sdk_core");
+
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+fn testingRuntime(http_transport: core.http.HttpTransport) core.http.HttpRuntime {
+    return .init(http_transport, testing_crypto_provider.asProvider());
+}
 const errors = @import("errors.zig");
 const protocol = @import("azure_rest_data_tables");
 const serde = @import("serde");
@@ -30,7 +36,7 @@ pub const ProtocolClient = struct {
     api_version: []u8,
     mutation_retry: options.RetryOptions,
     default_operation_timeout_ms: ?u64,
-    pipeline: core.pipeline.HttpPipeline,
+    pipeline: core.http.HttpPipeline,
 
     pub const InitOptions = struct {
         api_version: []const u8 = options.latest_api_version,
@@ -42,7 +48,7 @@ pub const ProtocolClient = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         endpoint: []const u8,
-        http_pipeline: core.pipeline.HttpPipeline,
+        http_pipeline: core.http.HttpPipeline,
         init_options: InitOptions,
     ) !ProtocolClient {
         try request.validateApiVersion(init_options.api_version);
@@ -112,8 +118,7 @@ pub const ProtocolClient = struct {
 
         var call = try self.beginCall(arena_allocator, query_options.protocol, null);
         defer call.deinit();
-        var generated = protocol.TablesClient.initWithPipeline(
-            arena_allocator,
+        var generated = protocol.TablesClient.init(
             call.pipeline,
             .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version },
         );
@@ -159,8 +164,7 @@ pub const ProtocolClient = struct {
 
         var call = try self.beginCall(arena_allocator, query_options.protocol, null);
         defer call.deinit();
-        var generated = protocol.TablesClient.initWithPipeline(
-            arena_allocator,
+        var generated = protocol.TablesClient.init(
             call.pipeline,
             .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version },
         );
@@ -209,8 +213,7 @@ pub const ProtocolClient = struct {
 
         var call = try self.beginEntityCall(arena_allocator, query_options.protocol);
         errdefer call.deinit();
-        var generated = protocol.TablesClient.initWithPipeline(
-            arena_allocator,
+        var generated = protocol.TablesClient.init(
             call.pipeline,
             .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version },
         );
@@ -262,7 +265,7 @@ pub const ProtocolClient = struct {
             query_options.protocol.timeout,
         );
         errdefer call.deinit();
-        var generated = protocol.TablesClient.initWithPipeline(arena_allocator, call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
+        var generated = protocol.TablesClient.init(call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
         var table = generated.table();
         const value = table.query(arena_allocator, query_options.protocol.client_request_id, query_options.protocol.metadata, query_options.top, query_options.select, query_options.filter, query_options.continuation_token) catch |err| {
             const table_error = try self.tableErrorFromGeneratedFailure(allocator, &call, err);
@@ -286,7 +289,7 @@ pub const ProtocolClient = struct {
         const arena_allocator = arena.allocator();
         var call = try self.beginCall(arena_allocator, create_options.protocol, create_options.protocol.timeout);
         errdefer call.deinit();
-        var generated = protocol.TablesClient.initWithPipeline(arena_allocator, call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
+        var generated = protocol.TablesClient.init(call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
         var table = generated.table();
         const value = table.create(arena_allocator, create_options.protocol.client_request_id, create_options.protocol.metadata, .{ .table_name = table_name }, create_options.prefer) catch |err| {
             const table_error = try self.tableErrorFromGeneratedFailure(allocator, &call, err);
@@ -310,7 +313,7 @@ pub const ProtocolClient = struct {
         const arena_allocator = arena.allocator();
         var call = try self.beginCall(arena_allocator, delete_options.protocol, delete_options.protocol.timeout);
         errdefer call.deinit();
-        var generated = protocol.TablesClient.initWithPipeline(arena_allocator, call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
+        var generated = protocol.TablesClient.init(call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
         var table = generated.table();
         const value = table.delete(arena_allocator, delete_options.protocol.client_request_id, table_name) catch |err| {
             const table_error = try self.tableErrorFromGeneratedFailure(allocator, &call, err);
@@ -347,7 +350,7 @@ pub const ProtocolClient = struct {
             get_options.protocol.policies,
         );
         errdefer call.deinit();
-        var generated = protocol.TablesClient.initWithPipeline(arena_allocator, call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
+        var generated = protocol.TablesClient.init(call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
         var table = generated.table();
         const generated_value = table.getAccessPolicy(
             arena_allocator,
@@ -414,7 +417,7 @@ pub const ProtocolClient = struct {
         const table_acl = try service_models.toWire(arena_allocator, identifiers);
         var call = try self.beginCall(arena_allocator, set_options.protocol, null);
         errdefer call.deinit();
-        var generated = protocol.TablesClient.initWithPipeline(arena_allocator, call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
+        var generated = protocol.TablesClient.init(call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
         var table = generated.table();
         const value = table.setAccessPolicy(
             arena_allocator,
@@ -469,7 +472,7 @@ pub const ProtocolClient = struct {
         const body_policy = try arena_allocator.create(BodyOverridePolicy);
         body_policy.* = .{ .body = entity_json };
         const call_policies = try arena_allocator.alloc(
-            *core.pipeline.HttpPolicy,
+            *core.http.HttpPolicy,
             add_options.protocol.policies.len + 1,
         );
         @memcpy(call_policies[0..add_options.protocol.policies.len], add_options.protocol.policies);
@@ -478,8 +481,7 @@ pub const ProtocolClient = struct {
         protocol_options.policies = call_policies;
         var call = try self.beginEntityCall(arena_allocator, protocol_options);
         errdefer call.deinit();
-        var generated = protocol.TablesClient.initWithPipeline(
-            arena_allocator,
+        var generated = protocol.TablesClient.init(
             call.pipeline,
             .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version },
         );
@@ -537,8 +539,7 @@ pub const ProtocolClient = struct {
 
         var call = try self.beginEntityCall(arena_allocator, query_options.protocol);
         errdefer call.deinit();
-        var generated = protocol.TablesClient.initWithPipeline(
-            arena_allocator,
+        var generated = protocol.TablesClient.init(
             call.pipeline,
             .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version },
         );
@@ -598,8 +599,7 @@ pub const ProtocolClient = struct {
 
         var call = try self.beginEntityCall(arena_allocator, delete_options.protocol);
         errdefer call.deinit();
-        var generated = protocol.TablesClient.initWithPipeline(
-            arena_allocator,
+        var generated = protocol.TablesClient.init(
             call.pipeline,
             .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version },
         );
@@ -670,7 +670,7 @@ pub const ProtocolClient = struct {
         const body_policy = try arena_allocator.create(BodyOverridePolicy);
         body_policy.* = .{ .body = entity_json };
         const call_policies = try arena_allocator.alloc(
-            *core.pipeline.HttpPolicy,
+            *core.http.HttpPolicy,
             protocol_options_input.policies.len + 1,
         );
         @memcpy(
@@ -686,8 +686,7 @@ pub const ProtocolClient = struct {
             if_match != null and !std.mem.eql(u8, if_match.?, "*"),
         );
         errdefer call.deinit();
-        var generated = protocol.TablesClient.initWithPipeline(
-            arena_allocator,
+        var generated = protocol.TablesClient.init(
             call.pipeline,
             .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version },
         );
@@ -805,7 +804,7 @@ pub const ProtocolClient = struct {
         const body_policy = try arena_allocator.create(BodyOverridePolicy);
         body_policy.* = .{ .body = body_xml };
         const call_policies = try arena_allocator.alloc(
-            *core.pipeline.HttpPolicy,
+            *core.http.HttpPolicy,
             call_options.policies.len + 1,
         );
         @memcpy(call_policies[0..call_options.policies.len], call_options.policies);
@@ -814,7 +813,7 @@ pub const ProtocolClient = struct {
         body_options.policies = call_policies;
         var call = try self.beginCall(arena_allocator, body_options, null);
         errdefer call.deinit();
-        var generated = protocol.TablesClient.initWithPipeline(arena_allocator, call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
+        var generated = protocol.TablesClient.init(call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
         var service = generated.service();
         const value = service.setProperties(arena_allocator, call_options.client_request_id, call_options.timeout, properties) catch |err| {
             // The generated XML serializer maps its allocation failure to
@@ -844,7 +843,7 @@ pub const ProtocolClient = struct {
         const arena_allocator = arena.allocator();
         var call = try self.beginCall(arena_allocator, call_options, null);
         errdefer call.deinit();
-        var generated = protocol.TablesClient.initWithPipeline(arena_allocator, call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
+        var generated = protocol.TablesClient.init(call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
         var service = generated.service();
         const value = service.getProperties(arena_allocator, call_options.client_request_id, call_options.timeout) catch |err| {
             const table_error = try self.tableErrorFromGeneratedFailure(allocator, &call, err);
@@ -873,7 +872,7 @@ pub const ProtocolClient = struct {
         const arena_allocator = arena.allocator();
         var call = try self.beginCall(arena_allocator, call_options, null);
         errdefer call.deinit();
-        var generated = protocol.TablesClient.initWithPipeline(arena_allocator, call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
+        var generated = protocol.TablesClient.init(call.pipeline, .{ .endpoint = self.endpoint.base_url, .api_version = self.api_version });
         var service = generated.service();
         const value = service.getStatistics(arena_allocator, call_options.client_request_id, call_options.timeout) catch |err| {
             const table_error = try self.tableErrorFromGeneratedFailure(allocator, &call, err);
@@ -944,20 +943,20 @@ pub const ProtocolClient = struct {
 
 const BodyOverridePolicy = struct {
     body: []const u8,
-    policy: core.pipeline.HttpPolicy = .{ .processFn = &process },
+    policy: core.http.HttpPolicy = .{ .processFn = &process },
 
     // Generated serializers cannot represent all SDK wire adaptations, such
     // as validated JSON annotations and omission-aware XML optionals.
     fn process(
-        policy: *core.pipeline.HttpPolicy,
+        policy: *core.http.HttpPolicy,
         req: *core.http.Request,
-        next: []*core.pipeline.HttpPolicy,
-        transport: *core.http.HttpTransport,
+        next: []*core.http.HttpPolicy,
+        runtime: core.http.HttpRuntime,
     ) anyerror!core.http.Response {
         const self: *BodyOverridePolicy = @alignCast(@fieldParentPtr("policy", policy));
         req.body = self.body;
-        if (next.len == 0) return transport.send(req);
-        return next[0].process(req, next[1..], transport);
+        if (next.len == 0) return runtime.transport.send(req);
+        return next[0].process(req, next[1..], runtime);
     }
 };
 
@@ -978,18 +977,18 @@ fn errorsFromMetadata(
 }
 
 const HeaderPolicy = struct {
-    policy: core.pipeline.HttpPolicy = .{ .processFn = &process },
+    policy: core.http.HttpPolicy = .{ .processFn = &process },
 
     fn process(
-        policy: *core.pipeline.HttpPolicy,
+        policy: *core.http.HttpPolicy,
         req: *core.http.Request,
-        next: []*core.pipeline.HttpPolicy,
-        transport: *core.http.HttpTransport,
+        next: []*core.http.HttpPolicy,
+        runtime: core.http.HttpRuntime,
     ) anyerror!core.http.Response {
         _ = policy;
         try req.setHeader("x-test-policy", "applied");
-        if (next.len == 0) return transport.send(req);
-        return next[0].process(req, next[1..], transport);
+        if (next.len == 0) return runtime.transport.send(req);
+        return next[0].process(req, next[1..], runtime);
     }
 };
 
@@ -1005,10 +1004,7 @@ test "generated query receives SDK options and preserves SAS bytes" {
         .{ .name = "x-extra", .value = "first" },
         .{ .name = "x-extra", .value = "second" },
     };
-    const base_pipeline: core.pipeline.HttpPipeline = .{
-        .policies = &.{},
-        .transport_impl = mock.asTransport(),
-    };
+    const base_pipeline = core.http.HttpPipeline.init(testingRuntime(mock.asTransport()), &.{});
     var client = try ProtocolClient.init(
         allocator,
         "https://account.table.core.windows.net/?sv=1%2F2&sig=a+b%3D&sp=r",
@@ -1052,10 +1048,7 @@ test "invalid generated call inputs fail before transport" {
     const allocator = std.testing.allocator;
     var mock = core.http.MockTransport.init(allocator, 200, "{}");
     defer mock.deinit();
-    const base_pipeline: core.pipeline.HttpPipeline = .{
-        .policies = &.{},
-        .transport_impl = mock.asTransport(),
-    };
+    const base_pipeline = core.http.HttpPipeline.init(testingRuntime(mock.asTransport()), &.{});
     var client = try ProtocolClient.init(
         allocator,
         "https://account.table.core.windows.net",
@@ -1094,10 +1087,7 @@ test "queryEntities retains its source-compatible raw response signature" {
         .{ .name = "Date", .value = "Sun, 26 Jul 2026 00:00:00 GMT" },
         .{ .name = "Content-Type", .value = "application/json" },
     };
-    const base_pipeline: core.pipeline.HttpPipeline = .{
-        .policies = &.{},
-        .transport_impl = mock.asTransport(),
-    };
+    const base_pipeline = core.http.HttpPipeline.init(testingRuntime(mock.asTransport()), &.{});
     var client = try ProtocolClient.init(
         allocator,
         "https://account.table.core.windows.net",

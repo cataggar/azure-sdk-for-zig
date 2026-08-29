@@ -1,7 +1,24 @@
 //! Account and table SAS values, validation, canonical signing, and encoding.
 const std = @import("std");
+const core = @import("azure_sdk_core");
 const auth = @import("auth.zig");
 const request = @import("request.zig");
+
+var testing_crypto_provider = core.crypto.StdCryptoProvider.init(std.testing.io);
+
+fn testingCrypto() core.crypto.CryptoProvider {
+    return testing_crypto_provider.asProvider();
+}
+
+fn wipe(bytes: []u8) void {
+    const volatile_bytes: []volatile u8 = bytes;
+    @memset(volatile_bytes, 0);
+}
+
+fn wipeAndFree(allocator: std.mem.Allocator, bytes: []u8) void {
+    wipe(bytes);
+    allocator.free(bytes);
+}
 
 /// The newest stable Azure Tables contract version. A newer general Storage
 /// version is not a newer Tables data-plane contract.
@@ -179,6 +196,7 @@ pub const AccountSignatureValues = struct {
         self: AccountSignatureValues,
         allocator: std.mem.Allocator,
         credential: *const auth.SharedKeyCredential,
+        crypto_provider: core.crypto.CryptoProvider,
     ) !QueryParameters {
         try self.validate();
 
@@ -211,8 +229,8 @@ pub const AccountSignatureValues = struct {
             },
         );
         defer allocator.free(string_to_sign);
-        const signature = try credential.sign(allocator, string_to_sign);
-        defer allocator.free(signature);
+        const signature = try credential.sign(allocator, crypto_provider, string_to_sign);
+        defer wipeAndFree(allocator, signature);
 
         var query: std.ArrayList(u8) = .empty;
         errdefer query.deinit(allocator);
@@ -279,6 +297,7 @@ pub const TableSignatureValues = struct {
         self: TableSignatureValues,
         allocator: std.mem.Allocator,
         credential: *const auth.SharedKeyCredential,
+        crypto_provider: core.crypto.CryptoProvider,
     ) !QueryParameters {
         try self.validate();
 
@@ -339,8 +358,8 @@ pub const TableSignatureValues = struct {
             },
         );
         defer allocator.free(string_to_sign);
-        const signature = try credential.sign(allocator, string_to_sign);
-        defer allocator.free(signature);
+        const signature = try credential.sign(allocator, crypto_provider, string_to_sign);
+        defer wipeAndFree(allocator, signature);
 
         var query: std.ArrayList(u8) = .empty;
         errdefer query.deinit(allocator);
@@ -419,7 +438,7 @@ pub const QueryParameters = struct {
     encoded_query: []u8,
 
     pub fn deinit(self: *QueryParameters) void {
-        self.allocator.free(self.encoded_query);
+        wipeAndFree(self.allocator, self.encoded_query);
         self.* = undefined;
     }
 
@@ -619,12 +638,12 @@ test "stored SAS identifiers count Unicode scalar values" {
     var ascii = try (TableSignatureValues{
         .tableName = "People",
         .accessPolicy = .{ .stored = "a" ** 64 },
-    }).sign(allocator, &credential);
+    }).sign(allocator, &credential, testingCrypto());
     ascii.deinit();
     var multibyte = try (TableSignatureValues{
         .tableName = "People",
         .accessPolicy = .{ .stored = "雪" ** 64 },
-    }).sign(allocator, &credential);
+    }).sign(allocator, &credential, testingCrypto());
     multibyte.deinit();
 
     const invalid = [_][]const u8{ "a" ** 65, "雪" ** 65, "\xff" };
@@ -634,7 +653,7 @@ test "stored SAS identifiers count Unicode scalar values" {
             (TableSignatureValues{
                 .tableName = "People",
                 .accessPolicy = .{ .stored = identifier },
-            }).sign(allocator, &credential),
+            }).sign(allocator, &credential, testingCrypto()),
         );
     }
 }
@@ -660,7 +679,7 @@ test "Azure Go SDK table SAS vector adapted to a valid table name" {
             .startTime = .fromUnixSeconds(1_699_455_845),
             .expiryTime = .fromUnixSeconds(1_699_459_445),
         } },
-    }).sign(allocator, &credential);
+    }).sign(allocator, &credential, testingCrypto());
     defer parameters.deinit();
     const encoded = try parameters.encode(allocator);
     defer allocator.free(encoded);
@@ -687,7 +706,7 @@ test "official account SAS canonical form and SDK ordering" {
         .resourceTypes = .{ .service = true, .container = true, .object = true },
         .startTime = .fromUnixSeconds(1_699_455_845),
         .expiryTime = .fromUnixSeconds(1_699_459_445),
-    }).sign(allocator, &credential);
+    }).sign(allocator, &credential, testingCrypto());
     defer parameters.deinit();
     const encoded = try parameters.encode(allocator);
     defer allocator.free(encoded);
@@ -710,7 +729,7 @@ test "stored policy omits inline access fields and signs exact canonical values"
         .startRowKey = "00",
         .endPartitionKey = "Z",
         .endRowKey = "99",
-    }).sign(allocator, &credential);
+    }).sign(allocator, &credential, testingCrypto());
     defer parameters.deinit();
     const encoded = try parameters.encode(allocator);
     defer allocator.free(encoded);
@@ -729,7 +748,7 @@ test "partition-only bounds have exact canonical signature" {
         .accessPolicy = .{ .stored = "policy" },
         .startPartitionKey = "A",
         .endPartitionKey = "Z",
-    }).sign(allocator, &credential);
+    }).sign(allocator, &credential, testingCrypto());
     defer parameters.deinit();
     const encoded = try parameters.encode(allocator);
     defer allocator.free(encoded);
@@ -766,7 +785,7 @@ test "all absent partition-only and partition-row bound combinations are valid" 
                 .startRowKey = start.row,
                 .endPartitionKey = end.partition,
                 .endRowKey = end.row,
-            }).sign(allocator, &credential);
+            }).sign(allocator, &credential, testingCrypto());
             parameters.deinit();
         }
     }
@@ -782,7 +801,7 @@ test "SAS validation rejects missing fields combinations and reversed ranges" {
             .permissions = .{},
             .resourceTypes = .{ .service = true },
             .expiryTime = .fromUnixSeconds(2),
-        }).sign(allocator, &credential),
+        }).sign(allocator, &credential, testingCrypto()),
     );
     try std.testing.expectError(
         error.InvalidSasPermissionResourceCombination,
@@ -790,7 +809,7 @@ test "SAS validation rejects missing fields combinations and reversed ranges" {
             .permissions = .{ .add = true },
             .resourceTypes = .{ .service = true },
             .expiryTime = .fromUnixSeconds(2),
-        }).sign(allocator, &credential),
+        }).sign(allocator, &credential, testingCrypto()),
     );
     try std.testing.expectError(
         error.MissingSasServices,
@@ -799,7 +818,7 @@ test "SAS validation rejects missing fields combinations and reversed ranges" {
             .services = .{},
             .resourceTypes = .{ .service = true },
             .expiryTime = .fromUnixSeconds(2),
-        }).sign(allocator, &credential),
+        }).sign(allocator, &credential, testingCrypto()),
     );
     try std.testing.expectError(
         error.MissingSasResourceTypes,
@@ -807,7 +826,7 @@ test "SAS validation rejects missing fields combinations and reversed ranges" {
             .permissions = .{ .read = true },
             .resourceTypes = .{},
             .expiryTime = .fromUnixSeconds(2),
-        }).sign(allocator, &credential),
+        }).sign(allocator, &credential, testingCrypto()),
     );
     try std.testing.expectError(
         error.MissingSasExpiry,
@@ -815,7 +834,7 @@ test "SAS validation rejects missing fields combinations and reversed ranges" {
             .permissions = .{ .read = true },
             .resourceTypes = .{ .service = true },
             .expiryTime = null,
-        }).sign(allocator, &credential),
+        }).sign(allocator, &credential, testingCrypto()),
     );
     try std.testing.expectError(
         error.InvalidSasPermissionResourceCombination,
@@ -823,7 +842,7 @@ test "SAS validation rejects missing fields combinations and reversed ranges" {
             .permissions = .{ .read = true },
             .resourceTypes = .{ .container = true },
             .expiryTime = .fromUnixSeconds(2),
-        }).sign(allocator, &credential),
+        }).sign(allocator, &credential, testingCrypto()),
     );
     try std.testing.expectError(
         error.InvalidSasTimeRange,
@@ -834,14 +853,14 @@ test "SAS validation rejects missing fields combinations and reversed ranges" {
                 .startTime = .fromUnixSeconds(2),
                 .expiryTime = .fromUnixSeconds(2),
             } },
-        }).sign(allocator, &credential),
+        }).sign(allocator, &credential, testingCrypto()),
     );
     try std.testing.expectError(
         error.InvalidSasIdentifier,
         (TableSignatureValues{
             .tableName = "People",
             .accessPolicy = .{ .stored = "" },
-        }).sign(allocator, &credential),
+        }).sign(allocator, &credential, testingCrypto()),
     );
     try std.testing.expectError(
         error.InvalidSasKeyRange,
@@ -852,7 +871,7 @@ test "SAS validation rejects missing fields combinations and reversed ranges" {
             .startRowKey = "0",
             .endPartitionKey = "a",
             .endRowKey = "0",
-        }).sign(allocator, &credential),
+        }).sign(allocator, &credential, testingCrypto()),
     );
     try std.testing.expectError(
         error.InvalidSasKeyRange,
@@ -860,7 +879,7 @@ test "SAS validation rejects missing fields combinations and reversed ranges" {
             .tableName = "People",
             .accessPolicy = .{ .stored = "policy" },
             .endRowKey = "z",
-        }).sign(allocator, &credential),
+        }).sign(allocator, &credential, testingCrypto()),
     );
     try std.testing.expectError(
         error.InvalidSasKeyRange,
@@ -871,7 +890,7 @@ test "SAS validation rejects missing fields combinations and reversed ranges" {
             .startRowKey = "z",
             .endPartitionKey = "a",
             .endRowKey = "a",
-        }).sign(allocator, &credential),
+        }).sign(allocator, &credential, testingCrypto()),
     );
     try std.testing.expectError(
         error.InvalidSasKeyRange,
@@ -879,7 +898,7 @@ test "SAS validation rejects missing fields combinations and reversed ranges" {
             .tableName = "People",
             .accessPolicy = .{ .stored = "policy" },
             .startRowKey = "a",
-        }).sign(allocator, &credential),
+        }).sign(allocator, &credential, testingCrypto()),
     );
     try std.testing.expectError(
         error.InvalidSasIPRange,
@@ -918,7 +937,7 @@ test "SAS value and query formatting redact all sensitive values" {
             .expiryTime = .fromUnixSeconds(1_699_459_445),
         } },
     };
-    var parameters = try values.sign(allocator, &credential);
+    var parameters = try values.sign(allocator, &credential, testingCrypto());
     defer parameters.deinit();
     var output: std.Io.Writer.Allocating = .init(allocator);
     defer output.deinit();
@@ -942,7 +961,7 @@ fn testSasSigningAllocationFailures(allocator: std.mem.Allocator) !void {
         .startTime = .fromUnixSeconds(1_699_455_845),
         .expiryTime = .fromUnixSeconds(1_699_459_445),
         .ipRange = try IPRange.parse("192.0.2.1", "192.0.2.20"),
-    }).sign(allocator, &credential);
+    }).sign(allocator, &credential, testingCrypto());
     defer account_parameters.deinit();
     const account_url = try account_parameters.appendToUrl(
         allocator,
@@ -961,7 +980,7 @@ fn testSasSigningAllocationFailures(allocator: std.mem.Allocator) !void {
         .startRowKey = "0",
         .endPartitionKey = "Z",
         .endRowKey = "9",
-    }).sign(allocator, &credential);
+    }).sign(allocator, &credential, testingCrypto());
     defer parameters.deinit();
     const url = try parameters.appendToUrl(
         allocator,

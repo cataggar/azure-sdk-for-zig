@@ -21,10 +21,12 @@ pub fn main(init: std.process.Init) !void {
 
     var transport = core.http.StdHttpTransport.init(allocator, init.io);
     defer transport.deinit();
+    var crypto = core.crypto.StdCryptoProvider.init(init.io);
+    const runtime = core.http.HttpRuntime.init(transport.asTransport(), crypto.asProvider());
     var service = try tables.TableServiceClient.initFromConnectionString(
         allocator,
         connection_string,
-        transport.asTransport(),
+        runtime,
         .{},
     );
     defer service.deinit();
@@ -52,7 +54,7 @@ pub fn main(init: std.process.Init) !void {
             var secondary = try tables.TableServiceClient.initFromConnectionString(
                 allocator,
                 secondary_connection_string,
-                transport.asTransport(),
+                runtime,
                 .{},
             );
             defer secondary.deinit();

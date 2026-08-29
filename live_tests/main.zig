@@ -67,7 +67,9 @@ test "live Entra, Shared Key, SAS, ACL, properties, and statistics" {
 
     var transport = core.http.StdHttpTransport.init(allocator, std.testing.io);
     defer transport.deinit();
-    try entraSmoke(allocator, config, &transport);
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    const runtime = core.http.HttpRuntime.init(transport.asTransport(), crypto.asProvider());
+    try entraSmoke(allocator, config, runtime);
 
     var shared_key = try tables.SharedKeyCredential.init(
         allocator,
@@ -79,7 +81,7 @@ test "live Entra, Shared Key, SAS, ACL, properties, and statistics" {
         allocator,
         config.endpoint,
         &shared_key,
-        transport.asTransport(),
+        runtime,
         .{},
     );
     defer service.deinit();
@@ -94,13 +96,13 @@ test "live Entra, Shared Key, SAS, ACL, properties, and statistics" {
         defer table.deinit();
         try aclSmoke(&table, allocator);
     }
-    try sasSmoke(&service, allocator, &transport);
+    try sasSmoke(&service, allocator, runtime);
     try serviceAdministrationSmoke(
         allocator,
         &service,
         config.secondary_endpoint,
         &shared_key,
-        &transport,
+        runtime,
     );
     var deleted = try service.deleteTable(allocator, table_name, .{});
     defer deleted.deinit();
@@ -111,14 +113,14 @@ test "live Entra, Shared Key, SAS, ACL, properties, and statistics" {
 fn entraSmoke(
     allocator: std.mem.Allocator,
     config: Config,
-    transport: *core.http.StdHttpTransport,
+    runtime: core.http.HttpRuntime,
 ) !void {
     var credential = core.env_token.EnvTokenCredential.init(allocator, config.bearer);
     var service = try tables.TableServiceClient.initWithToken(
         allocator,
         config.endpoint,
         credential.asCredential(),
-        transport.asTransport(),
+        runtime,
         .{},
     );
     defer service.deinit();
@@ -149,7 +151,7 @@ fn aclSmoke(client: *tables.TableClient, allocator: std.mem.Allocator) !void {
 fn sasSmoke(
     service: *tables.TableServiceClient,
     allocator: std.mem.Allocator,
-    transport: *core.http.StdHttpTransport,
+    runtime: core.http.HttpRuntime,
 ) !void {
     var threaded: std.Io.Threaded = .init_single_threaded;
     const now: i64 = @intCast(@divTrunc(
@@ -165,7 +167,7 @@ fn sasSmoke(
     var sas = try tables.TableServiceClient.initWithSasUrl(
         allocator,
         sas_url,
-        transport.asTransport(),
+        runtime,
         .{},
     );
     defer sas.deinit();
@@ -179,13 +181,13 @@ fn serviceAdministrationSmoke(
     primary: *tables.TableServiceClient,
     secondary_endpoint: []const u8,
     shared_key: *tables.SharedKeyCredential,
-    transport: *core.http.StdHttpTransport,
+    runtime: core.http.HttpRuntime,
 ) !void {
     var statistics_client = try tables.TableServiceClient.initWithSharedKey(
         allocator,
         secondary_endpoint,
         shared_key,
-        transport.asTransport(),
+        runtime,
         .{},
     );
     defer statistics_client.deinit();

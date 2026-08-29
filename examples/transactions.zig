@@ -17,11 +17,13 @@ pub fn main(init: std.process.Init) !void {
 
     var transport = core.http.StdHttpTransport.init(allocator, init.io);
     defer transport.deinit();
+    var crypto = core.crypto.StdCryptoProvider.init(init.io);
+    const runtime = core.http.HttpRuntime.init(transport.asTransport(), crypto.asProvider());
     var client = try tables.TableClient.initFromConnectionString(
         allocator,
         connection_string,
         table_name,
-        transport.asTransport(),
+        runtime,
         .{},
     );
     defer client.deinit();

@@ -8,6 +8,12 @@ pub const development_account_name = "devstoreaccount1";
 pub const development_account_key =
     "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
 
+fn wipeAndFree(allocator: std.mem.Allocator, bytes: []u8) void {
+    const volatile_bytes: []volatile u8 = bytes;
+    @memset(volatile_bytes, 0);
+    allocator.free(bytes);
+}
+
 pub const Parsed = struct {
     allocator: std.mem.Allocator,
     endpoint: []u8,
@@ -16,10 +22,10 @@ pub const Parsed = struct {
     sas: ?[]u8 = null,
 
     pub fn deinit(self: *Parsed) void {
-        self.allocator.free(self.endpoint);
+        wipeAndFree(self.allocator, self.endpoint);
         self.allocator.free(self.account_name);
-        if (self.account_key) |value| self.allocator.free(value);
-        if (self.sas) |value| self.allocator.free(value);
+        if (self.account_key) |value| wipeAndFree(self.allocator, value);
+        if (self.sas) |value| wipeAndFree(self.allocator, value);
         self.* = undefined;
     }
 
@@ -105,7 +111,7 @@ pub fn parse(allocator: std.mem.Allocator, value: []const u8) !Parsed {
     if (account_key) |key| {
         const decoded = @import("azure_sdk_core").base64.decode(allocator, key) catch
             return error.InvalidAccountKey;
-        defer allocator.free(decoded);
+        defer wipeAndFree(allocator, decoded);
         if (decoded.len == 0) return error.InvalidAccountKey;
     }
     if (table_endpoint != null and suffix != null)
@@ -172,6 +178,53 @@ fn development(allocator: std.mem.Allocator) !Parsed {
     };
 }
 
+const TestCryptoProvider = struct {
+    inner: core.crypto.CryptoProvider,
+    hmac_calls: usize = 0,
+
+    const vtable: core.crypto.CryptoProvider.VTable = .{
+        .random_bytes = &randomBytes,
+        .md5 = &md5,
+        .sha256 = &sha256,
+        .hmac_sha256 = &hmacSha256,
+        .sha256_init = &sha256Init,
+    };
+
+    fn provider(self: *@This()) core.crypto.CryptoProvider {
+        return .{ .context = self, .vtable = &vtable };
+    }
+
+    fn randomBytes(_: *anyopaque, _: []u8) !void {
+        return error.Unused;
+    }
+
+    fn md5(_: *anyopaque, _: []const u8, _: *core.crypto.Md5Digest) !void {
+        return error.Unused;
+    }
+
+    fn sha256(_: *anyopaque, _: []const u8, _: *core.crypto.Sha256Digest) !void {
+        return error.Unused;
+    }
+
+    fn hmacSha256(
+        context: *anyopaque,
+        key: []const u8,
+        message: []const u8,
+        out: *core.crypto.HmacSha256Digest,
+    ) !void {
+        const self: *@This() = @ptrCast(@alignCast(context));
+        self.hmac_calls += 1;
+        out.* = try self.inner.hmacSha256(key, message);
+    }
+
+    fn sha256Init(
+        _: *anyopaque,
+        _: std.mem.Allocator,
+    ) !core.crypto.Sha256Operation {
+        return error.Unused;
+    }
+};
+
 test "parse documented Storage and Azurite connection strings" {
     const allocator = std.testing.allocator;
     var azure = try parse(allocator, "DefaultEndpointsProtocol=https;AccountName=account;AccountKey=YQ==;EndpointSuffix=core.windows.net");
@@ -202,18 +255,31 @@ test "parse documented Storage and Azurite connection strings" {
 
 test "documented Azurite account key signs the SharedKeyLite vector" {
     const allocator = std.testing.allocator;
+    var provider = core.crypto.StdCryptoProvider.init(std.testing.io);
     const key = try core.base64.decode(allocator, development_account_key);
-    defer allocator.free(key);
+    defer wipeAndFree(allocator, key);
     const signature = try core.base64.hmacSha256Base64(
         allocator,
+        provider.asProvider(),
         key,
         "Thu, 23 Apr 2020 09:43:37 GMT\n/devstoreaccount1/?comp=properties",
     );
-    defer allocator.free(signature);
+    defer wipeAndFree(allocator, signature);
     try std.testing.expectEqualStrings(
         "DKy2WIvWLvpXbgT2cc0NqjkcHYoV3AdwfcMHgV8UYd8=",
         signature,
     );
+
+    var selected = TestCryptoProvider{ .inner = provider.asProvider() };
+    const selected_signature = try core.base64.hmacSha256Base64(
+        allocator,
+        selected.provider(),
+        key,
+        "Thu, 23 Apr 2020 09:43:37 GMT\n/devstoreaccount1/?comp=properties",
+    );
+    defer wipeAndFree(allocator, selected_signature);
+    try std.testing.expectEqualStrings(signature, selected_signature);
+    try std.testing.expectEqual(@as(usize, 1), selected.hmac_calls);
 }
 
 test "connection strings support explicit endpoints and harmless trailing semicolons" {
