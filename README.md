@@ -234,7 +234,10 @@ payload, so the link grants and replenishes at most eight credits at a time.
 A negative value disables prefetch and requests exactly the credit each receive
 needs; requests larger than eight are issued in bounded windows as deliveries
 release buffer space. Neither the requested prefetch nor a single receive may
-exceed 5000, the session's incoming window.
+exceed 5000, the session's incoming window. The receiver also bounds unsettled
+delivery-id bookkeeping at 5000, allowing the largest public batch to remain
+unsettled until its result and selector are ready for one atomic settlement;
+the eight-credit and byte windows continue to bound live payload retention.
 
 A receive that asks for more events than arrive returns the ones that did
 rather than failing: a quiet partition is not an error.
@@ -441,7 +444,10 @@ partition's selector when it drops a client, so a reattach continues past
 the last sequence number handed to the caller instead of replaying from the
 configured start position. For the same reason, a receive that fails partway
 through a batch returns the events that did arrive rather than discarding
-them; the next call finds the link dead and recovers it.
+them when the wire fails. A local decode or allocation failure cannot return a
+valid batch, so it terminally detaches without advancing the selector; the
+next processor cycle reopens from the unchanged checkpoint and replays those
+sequences.
 
 ## Distributed consumption
 
@@ -468,12 +474,17 @@ while (running) {
     }
     std.Thread.sleep(@intCast(processor.nextIntervalMs() * std.time.ns_per_ms));
 }
+try processor.close();
 ```
 
 `runOnce` is one balancing cycle rather than a thread, so the caller owns
-the loop and its shutdown. `nextIntervalMs` applies Go's 0.8–1.3 jitter to
-the update interval, which keeps a fleet that started together from
-rebalancing in lockstep.
+the loop and its shutdown. `close` is fallible and retryable: a detach timeout
+keeps the reader registered until its acknowledgement arrives. Call it while
+the connection is alive; `deinit` then releases local allocations. If the
+connection must be terminated after an ambiguous close, `deinit` does not
+dereference the native receivers the connection already destroyed.
+`nextIntervalMs` applies Go's 0.8–1.3 jitter to the update interval, which
+keeps a fleet that started together from rebalancing in lockstep.
 
 Two strategies decide how fast a processor grows:
 

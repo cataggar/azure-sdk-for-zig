@@ -10,6 +10,7 @@
 //! `nextPartitionClient` is `NextPartitionClient`.
 
 const std = @import("std");
+const amqp = @import("azure_sdk_amqp");
 const checkpoint_types = @import("checkpoint.zig");
 const errors = @import("errors.zig");
 const event_data = @import("event_data.zig");
@@ -79,11 +80,16 @@ pub const ProcessorPartitionClient = struct {
     store: *CheckpointStore,
     details: OwnershipDetails,
     opener: *PartitionOpener,
-    closed: bool = false,
+    link_closed: bool = false,
+    finalized: bool = false,
     /// Set when the broker says another processor took the partition. The
     /// processor releases rather than retries: the whole point of an owner
     /// level is that the newer reader wins.
     ownership_lost: bool = false,
+    /// A local post-consumption failure made the link terminal without
+    /// advancing its selector. The next balancing cycle replaces this reader
+    /// so the broker can replay from the checkpoint.
+    recoverable_failure: bool = false,
 
     pub fn partitionId(self: *const ProcessorPartitionClient) []const u8 {
         return self.partition_id;
@@ -96,9 +102,13 @@ pub const ProcessorPartitionClient = struct {
         allocator: Allocator,
         count: u32,
     ) ![]ReceivedEventData {
+        if (self.link_closed) return error.LinkDetached;
         return self.client.receiveEvents(allocator, count) catch |err| {
             if (self.client.last_error) |info| {
                 if (info.code == .ownership_lost) self.ownership_lost = true;
+            }
+            if (!self.ownership_lost and self.client.terminal) {
+                self.recoverable_failure = true;
             }
             return err;
         };
@@ -124,19 +134,19 @@ pub const ProcessorPartitionClient = struct {
     /// intact so the caller can retry the same close handshake.
     pub fn close(self: *ProcessorPartitionClient) !void {
         try self.closeReader();
-        self.finishClose();
     }
 
     fn closeReader(self: *ProcessorPartitionClient) !void {
-        if (self.closed) return;
+        if (self.link_closed) return;
         try self.opener.close(self.client);
+        self.link_closed = true;
     }
 
     fn finishClose(self: *ProcessorPartitionClient) void {
-        if (self.closed) return;
+        if (self.finalized) return;
         self.allocator.free(self.partition_id);
         self.partition_id = &.{};
-        self.closed = true;
+        self.finalized = true;
     }
 };
 
@@ -152,7 +162,14 @@ pub const Processor = struct {
     clients: std.StringArrayHashMapUnmanaged(*ProcessorPartitionClient) = .empty,
     /// Newly opened readers waiting to be handed out.
     pending: std.ArrayList(*ProcessorPartitionClient) = .empty,
+    /// Partitions whose broker link reported ownership loss. They are not
+    /// reopened while the store still claims them for this processor; seeing
+    /// a cycle where another owner holds them clears the suppression.
+    suppressed: std.StringHashMapUnmanaged(void) = .empty,
     deadline_ms: i64 = 60_000,
+    closing: bool = false,
+    relinquished: bool = false,
+    deinitialized: bool = false,
 
     pub fn init(
         allocator: Allocator,
@@ -181,36 +198,71 @@ pub const Processor = struct {
         };
     }
 
-    /// Close every reader and drop the ownership records.
+    /// Detach every reader while its connection is still alive.
     ///
-    /// Relinquishing is best effort: a processor whose store has gone away
-    /// still has to stop cleanly, and the records expire on their own.
-    /// A reader whose detach is ambiguous remains owned so another `deinit`
-    /// call can finish it after the session receives the acknowledgement.
-    pub fn deinit(self: *Processor) void {
-        var held: std.ArrayList([]const u8) = .empty;
-        defer held.deinit(self.allocator);
-        for (self.clients.keys()) |id| held.append(self.allocator, id) catch {};
-        self.balancer.relinquish(held.items) catch {};
+    /// An ambiguous detach is returned and its wrapper remains owned, so this
+    /// operation can be retried after the session receives more frames.
+    /// Relinquishing is best effort; ownership records also expire naturally.
+    pub fn close(self: *Processor) !void {
+        if (self.deinitialized) return;
+        self.closing = true;
+        self.relinquish();
 
+        var first_error: ?anyerror = null;
         var index: usize = 0;
         while (index < self.clients.count()) {
             const id = self.clients.keys()[index];
-            self.releasePartition(id) catch {
-                // An ambiguous detach must retain the wrapper and client so a
-                // later deinit can finish the same close handshake.
+            self.releasePartition(id) catch |err| {
+                if (first_error == null) first_error = err;
                 index += 1;
                 continue;
             };
         }
-        if (self.clients.count() == 0) {
-            self.clients.deinit(self.allocator);
-            self.pending.deinit(self.allocator);
+        if (first_error) |err| return err;
+    }
+
+    /// Release all processor-owned allocations.
+    ///
+    /// Call `close` first while the connection is usable. If closing remains
+    /// ambiguous, terminate the owning connection/session before `deinit`;
+    /// this method never dereferences a native receiver and leaves its final
+    /// destruction to that owner.
+    pub fn deinit(self: *Processor) void {
+        if (self.deinitialized) return;
+        self.relinquish();
+
+        for (self.clients.values()) |client| {
+            if (!client.link_closed) {
+                client.client.deinit();
+                client.client.allocator.destroy(client.client);
+            }
+            client.finishClose();
+            self.allocator.destroy(client);
         }
+        self.clients.deinit(self.allocator);
+        self.pending.deinit(self.allocator);
+        var suppressed = self.suppressed.keyIterator();
+        while (suppressed.next()) |id| self.allocator.free(id.*);
+        self.suppressed.deinit(self.allocator);
+        self.deinitialized = true;
+    }
+
+    fn relinquish(self: *Processor) void {
+        if (self.relinquished) return;
+        var held: std.ArrayList([]const u8) = .empty;
+        defer held.deinit(self.allocator);
+        for (self.clients.keys()) |id| held.append(self.allocator, id) catch {};
+        var suppressed = self.suppressed.keyIterator();
+        while (suppressed.next()) |id| {
+            if (!self.clients.contains(id.*)) held.append(self.allocator, id.*) catch {};
+        }
+        self.balancer.relinquish(held.items) catch {};
+        self.relinquished = true;
     }
 
     /// One balancing cycle: claim, renew, open, and release.
     pub fn runOnce(self: *Processor) !void {
+        if (self.closing or self.deinitialized) return error.ProcessorClosed;
         const partition_ids = try self.opener.partitionIds(self.allocator);
         defer freePartitionIds(self.allocator, partition_ids);
 
@@ -218,6 +270,7 @@ pub const Processor = struct {
         defer checkpoint_types.freeOwnerships(self.allocator, claimed);
 
         try self.releaseUnclaimed(claimed);
+        try self.clearUnclaimedSuppressions(claimed);
 
         const checkpoints = try self.store.listCheckpoints(
             self.allocator,
@@ -228,7 +281,8 @@ pub const Processor = struct {
         defer checkpoint_types.freeCheckpoints(self.allocator, checkpoints);
 
         for (claimed) |ownership| {
-            if (self.clients.contains(ownership.partition_id)) continue;
+            if (self.clients.contains(ownership.partition_id) or
+                self.suppressed.contains(ownership.partition_id)) continue;
             try self.openPartition(ownership.partition_id, checkpoints);
         }
     }
@@ -250,11 +304,44 @@ pub const Processor = struct {
                     break;
                 }
             }
-            if (kept and !client.ownership_lost) continue;
+            if (kept and !client.ownership_lost and !client.recoverable_failure) continue;
+            if (client.ownership_lost) try self.suppress(id);
             try dropped.append(self.allocator, id);
         }
 
         for (dropped.items) |id| try self.releasePartition(id);
+    }
+
+    fn suppress(self: *Processor, partition_id: []const u8) !void {
+        if (self.suppressed.contains(partition_id)) return;
+        const owned = try self.allocator.dupe(u8, partition_id);
+        errdefer self.allocator.free(owned);
+        try self.suppressed.put(self.allocator, owned, {});
+    }
+
+    fn clearUnclaimedSuppressions(
+        self: *Processor,
+        claimed: []const checkpoint_types.PartitionOwnership,
+    ) !void {
+        var cleared: std.ArrayList([]const u8) = .empty;
+        defer cleared.deinit(self.allocator);
+
+        var it = self.suppressed.keyIterator();
+        while (it.next()) |id| {
+            var still_claimed = false;
+            for (claimed) |ownership| {
+                if (std.mem.eql(u8, ownership.partition_id, id.*)) {
+                    still_claimed = true;
+                    break;
+                }
+            }
+            if (!still_claimed) try cleared.append(self.allocator, id.*);
+        }
+
+        for (cleared.items) |id| {
+            const removed = self.suppressed.fetchRemove(id) orelse continue;
+            self.allocator.free(removed.key);
+        }
     }
 
     fn releasePartition(self: *Processor, partition_id: []const u8) !void {
@@ -434,7 +521,6 @@ const FakeOpener = struct {
         const client = try allocator.create(PartitionClient);
         client.* = .{
             .allocator = allocator,
-            .receiver = undefined,
             .filter_expression = &.{},
             .prefetch = 0,
             .owner_level = null,
@@ -453,6 +539,116 @@ const FakeOpener = struct {
         client.allocator.destroy(client);
     }
 };
+
+const AmqpTestOpener = struct {
+    session: *amqp.Session,
+    opens: usize = 0,
+    closes: usize = 0,
+    filter_bufs: [4][128]u8 = undefined,
+    filter_lens: [4]usize = @splat(0),
+    opener: PartitionOpener = .{
+        .partitionIdsFn = partitionIds,
+        .openFn = open,
+        .closeFn = close,
+    },
+
+    const source = "my-hub/ConsumerGroups/$default/Partitions/0";
+    const instance_id = "processor-test";
+    const link_name = source ++ "-receiver-" ++ instance_id;
+
+    fn partitionIds(_: *PartitionOpener, allocator: Allocator) anyerror![][]const u8 {
+        const ids = try allocator.alloc([]const u8, 1);
+        errdefer allocator.free(ids);
+        ids[0] = try allocator.dupe(u8, "0");
+        return ids;
+    }
+
+    fn open(
+        o: *PartitionOpener,
+        allocator: Allocator,
+        _: []const u8,
+        position: EventPosition,
+        options: PartitionClientOptions,
+    ) anyerror!*PartitionClient {
+        const self: *AmqpTestOpener = @fieldParentPtr("opener", o);
+        const filter = try position.toFilterExpression(allocator);
+        defer allocator.free(filter);
+
+        const index = self.opens;
+        if (index < self.filter_bufs.len) {
+            const len = @min(filter.len, self.filter_bufs[index].len);
+            @memcpy(self.filter_bufs[index][0..len], filter[0..len]);
+            self.filter_lens[index] = len;
+        }
+
+        const client = try allocator.create(PartitionClient);
+        errdefer allocator.destroy(client);
+        try client.open(allocator, self.session, .{
+            .source_address = source,
+            .instance_id = instance_id,
+            .deadline_ms = 10_000,
+            .filter_expression = filter,
+        }, options);
+        self.opens += 1;
+        return client;
+    }
+
+    fn close(o: *PartitionOpener, client: *PartitionClient) anyerror!void {
+        const self: *AmqpTestOpener = @fieldParentPtr("opener", o);
+        try client.close(10_000);
+        client.allocator.destroy(client);
+        self.closes += 1;
+    }
+
+    fn filterAt(self: *const AmqpTestOpener, index: usize) []const u8 {
+        return self.filter_bufs[index][0..self.filter_lens[index]];
+    }
+};
+
+fn scriptProcessorAttach(peer: amqp.test_peer.Peer, handle: u32) !void {
+    try peer.push(0, .{ .attach = .{
+        .name = AmqpTestOpener.link_name,
+        .handle = handle,
+        .role = .sender,
+        .initial_delivery_count = 0,
+    } });
+}
+
+fn pushProcessorEvent(
+    allocator: Allocator,
+    peer: amqp.test_peer.Peer,
+    handle: u32,
+    id: u32,
+    sequence_number: i64,
+    body: []const u8,
+) !void {
+    var annotations = [_]amqp.MapEntry{
+        .{
+            .key = .{ .symbol = event_data.sequence_number_annotation },
+            .value = .{ .long = sequence_number },
+        },
+        .{
+            .key = .{ .symbol = event_data.offset_annotation },
+            .value = .{ .string = "100" },
+        },
+    };
+    const bodies = [_][]const u8{body};
+    const payload = try amqp.encodeMessageAlloc(allocator, .{
+        .message_annotations = &annotations,
+        .body = .{ .data = &bodies },
+    });
+    defer allocator.free(payload);
+
+    const tag = std.mem.asBytes(&id);
+    try peer.pushTransfer(0, .{
+        .handle = handle,
+        .delivery_id = id,
+        .delivery_tag = tag,
+        .message_format = 0,
+        .settled = false,
+        .more = false,
+    }, payload);
+}
 
 const test_details = OwnershipDetails{
     .fully_qualified_namespace = "ns.servicebus.windows.net",
@@ -552,15 +748,27 @@ test "a reader that lost ownership is closed rather than reused" {
 
     try processor.runOnce();
 
-    // The link is gone, so the reader must be too. Go drops the client and
-    // lets the next cycle decide; because the store still says the partition
-    // is ours, that means a fresh reader rather than the dead one.
+    // The link is gone, so the reader must be too. The store has not observed
+    // the new owner yet, so reopening now would steal the partition straight
+    // back; ownership loss remains nonretryable until a cycle sees it held by
+    // somebody else.
     try testing.expectEqual(@as(usize, 1), opener.closed);
-    try testing.expectEqual(@as(usize, 2), opener.opened.items.len);
-    try testing.expectEqual(@as(usize, 1), processor.ownedPartitions().len);
+    try testing.expectEqual(@as(usize, 1), opener.opened.items.len);
+    try testing.expectEqual(@as(usize, 0), processor.ownedPartitions().len);
+    try testing.expect(processor.nextPartitionClient() == null);
+    try testing.expect(processor.suppressed.contains("0"));
 
-    const second = processor.nextPartitionClient().?;
-    try testing.expect(!second.ownership_lost);
+    const stolen = [_]checkpoint_types.PartitionOwnership{.{
+        .fully_qualified_namespace = test_details.fully_qualified_namespace,
+        .event_hub_name = test_details.event_hub_name,
+        .consumer_group = test_details.consumer_group,
+        .partition_id = "0",
+        .owner_id = "processor-b",
+    }};
+    const taken = try store.store.claimOwnership(allocator, &stolen);
+    checkpoint_types.freeOwnerships(allocator, taken);
+    try processor.runOnce();
+    try testing.expect(!processor.suppressed.contains("0"));
 }
 
 test "a partition claimed by another processor is released" {
@@ -638,11 +846,151 @@ test "an ambiguous partition close retains ownership for retry" {
     try testing.expectError(error.Timeout, processor.runOnce());
     try testing.expectEqual(@as(usize, 1), processor.ownedPartitions().len);
     try testing.expect(processor.clients.get("0").? == retained);
-    try testing.expect(!retained.closed);
+    try testing.expect(!retained.link_closed);
 
     try processor.runOnce();
     try testing.expectEqual(@as(usize, 0), processor.ownedPartitions().len);
     try testing.expectEqual(@as(usize, 1), opener.closed);
+}
+
+test "Processor.close retains timed out readers for retry" {
+    const allocator = testing.allocator;
+    var clock = ManualClock{};
+    var store = InMemoryCheckpointStore{ .allocator = allocator, .clock = &clock.clock };
+    defer store.deinit();
+    var opener = FakeOpener{ .allocator = allocator, .partitions = &.{"0"} };
+    defer opener.deinit();
+
+    var random = std.Random.DefaultPrng.init(29);
+    var processor = Processor.init(
+        allocator,
+        &store.store,
+        &opener.opener,
+        test_details,
+        .{ .load_balancing_strategy = .greedy },
+        &clock.clock,
+        random.random(),
+    );
+    defer processor.deinit();
+
+    try processor.runOnce();
+    const retained = processor.clients.get("0").?;
+
+    opener.close_failures_remaining = 1;
+    try testing.expectError(error.Timeout, processor.close());
+    try testing.expectEqual(@as(usize, 1), processor.ownedPartitions().len);
+    try testing.expect(processor.clients.get("0").? == retained);
+    try testing.expect(!retained.link_closed);
+
+    try processor.close();
+    try processor.close();
+    try testing.expectEqual(@as(usize, 0), processor.ownedPartitions().len);
+    try testing.expectEqual(@as(usize, 1), opener.closed);
+}
+
+test "terminal allocation failure is reopened and replayed next cycle" {
+    const allocator = testing.allocator;
+    var mem = amqp.MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var amqp_clock = amqp.connection_driver.ManualClock{};
+    var conn = try amqp.connection_driver.Driver.init(
+        allocator,
+        mem.transport(),
+        amqp_clock.clock(),
+        amqp.test_peer.driver_options,
+    );
+    defer conn.deinit();
+
+    const peer = amqp.test_peer.Peer{ .allocator = allocator, .mem = &mem };
+    try amqp.test_peer.scriptHandshake(peer, 512);
+    try scriptProcessorAttach(peer, 0);
+    try pushProcessorEvent(allocator, peer, 0, 0, 1, "first attempt");
+    try peer.push(0, .{ .detach = .{ .handle = 0, .closed = true } });
+    try scriptProcessorAttach(peer, 1);
+    try pushProcessorEvent(allocator, peer, 1, 1, 1, "replayed");
+    try peer.push(0, .{ .detach = .{ .handle = 1, .closed = true } });
+
+    var fixture = try amqp.test_peer.Fixture.init(allocator, &mem, &amqp_clock, &conn);
+    defer fixture.deinit();
+    var opener = AmqpTestOpener{ .session = &fixture.session };
+
+    var clock = ManualClock{};
+    var store = InMemoryCheckpointStore{ .allocator = allocator, .clock = &clock.clock };
+    defer store.deinit();
+    var random = std.Random.DefaultPrng.init(31);
+    var processor = Processor.init(
+        allocator,
+        &store.store,
+        &opener.opener,
+        test_details,
+        .{ .load_balancing_strategy = .greedy },
+        &clock.clock,
+        random.random(),
+    );
+    defer processor.deinit();
+
+    try processor.runOnce();
+    const first = processor.nextPartitionClient().?;
+    var failing = std.testing.FailingAllocator.init(allocator, .{ .fail_index = 0 });
+    first.client.allocator = failing.allocator();
+    try testing.expectError(error.OutOfMemory, first.receiveEvents(allocator, 1));
+    try testing.expect(first.recoverable_failure);
+    try testing.expect(!first.ownership_lost);
+
+    try processor.runOnce();
+    try testing.expectEqual(@as(usize, 2), opener.opens);
+    try testing.expectEqual(@as(usize, 1), opener.closes);
+    try testing.expectEqualStrings(opener.filterAt(0), opener.filterAt(1));
+
+    const replacement = processor.nextPartitionClient().?;
+    const replayed = try replacement.receiveEvents(allocator, 1);
+    defer event_data.freeReceivedEvents(allocator, replayed);
+    try testing.expectEqual(@as(usize, 1), replayed.len);
+    try testing.expectEqual(@as(i64, 1), replayed[0].sequence_number);
+    try testing.expectEqualStrings("replayed", replayed[0].body());
+
+    try processor.close();
+}
+
+test "Processor.deinit after session termination never reads freed receivers" {
+    const allocator = testing.allocator;
+    var mem = amqp.MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var amqp_clock = amqp.connection_driver.ManualClock{};
+    var conn = try amqp.connection_driver.Driver.init(
+        allocator,
+        mem.transport(),
+        amqp_clock.clock(),
+        amqp.test_peer.driver_options,
+    );
+    defer conn.deinit();
+
+    const peer = amqp.test_peer.Peer{ .allocator = allocator, .mem = &mem };
+    try amqp.test_peer.scriptHandshake(peer, 512);
+    try scriptProcessorAttach(peer, 0);
+
+    var fixture = try amqp.test_peer.Fixture.init(allocator, &mem, &amqp_clock, &conn);
+    var opener = AmqpTestOpener{ .session = &fixture.session };
+    var clock = ManualClock{};
+    var store = InMemoryCheckpointStore{ .allocator = allocator, .clock = &clock.clock };
+    defer store.deinit();
+    var random = std.Random.DefaultPrng.init(37);
+    var processor = Processor.init(
+        allocator,
+        &store.store,
+        &opener.opener,
+        test_details,
+        .{ .load_balancing_strategy = .greedy },
+        &clock.clock,
+        random.random(),
+    );
+
+    try processor.runOnce();
+    try testing.expectEqual(@as(usize, 1), fixture.session.receivers.items.len);
+
+    fixture.deinit();
+    processor.deinit();
+    try testing.expect(processor.deinitialized);
 }
 
 test "a rejected offset reopens at earliest, inclusive" {
@@ -753,6 +1101,7 @@ test "shutdown relinquishes every partition it held" {
     );
     try processor.runOnce();
     try testing.expectEqual(@as(usize, 2), processor.ownedPartitions().len);
+    try processor.close();
     processor.deinit();
 
     try testing.expectEqual(@as(usize, 2), opener.closed);
