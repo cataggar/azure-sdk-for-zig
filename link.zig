@@ -70,6 +70,33 @@ pub const Rejection = struct {
 
 // ─────────────────────── Session ───────────────────────
 
+/// Structured remote diagnostics retained when a link-open attempt fails.
+///
+/// A value returned by `Session.takeFailedLinkOpen` belongs to the caller and
+/// remains valid until `deinit` is called. Diagnostics are service agnostic;
+/// callers interpret the peer-defined condition and info fields.
+pub const FailedLinkOpen = struct {
+    allocator: Allocator,
+    remote_error: connection.RemoteError,
+
+    pub fn condition(self: FailedLinkOpen) []const u8 {
+        return self.remote_error.condition;
+    }
+
+    pub fn description(self: FailedLinkOpen) ?[]const u8 {
+        return self.remote_error.description;
+    }
+
+    pub fn info(self: FailedLinkOpen) ?perf.Fields {
+        return self.remote_error.info;
+    }
+
+    pub fn deinit(self: *FailedLinkOpen) void {
+        self.remote_error.deinit(self.allocator);
+        self.* = undefined;
+    }
+};
+
 pub const SessionOptions = struct {
     /// Window sizes. Rust opens sessions with very large windows so the
     /// service is never the one throttling.
@@ -122,6 +149,7 @@ pub const Session = struct {
     senders: std.ArrayList(*Sender) = .empty,
     receivers: std.ArrayList(*Receiver) = .empty,
     incoming_deliveries: std.AutoHashMapUnmanaged(u32, *Receiver) = .empty,
+    failed_link_open: ?FailedLinkOpen = null,
 
     /// Begin a session on `channel`.
     pub fn begin(
@@ -166,7 +194,44 @@ pub const Session = struct {
         self.senders.deinit(self.allocator);
         self.receivers.deinit(self.allocator);
         self.incoming_deliveries.deinit(self.allocator);
+        self.clearFailedLinkOpen();
         self.* = undefined;
+    }
+
+    /// Borrow diagnostics from the most recent failed sender or receiver open.
+    ///
+    /// The returned pointer remains valid until the next link-open attempt,
+    /// `takeFailedLinkOpen`, or session deinitialization. Session operations
+    /// are caller serialized.
+    pub fn failedLinkOpen(self: *const Session) ?*const FailedLinkOpen {
+        return if (self.failed_link_open) |*diagnostic| diagnostic else null;
+    }
+
+    /// Transfer ownership of the most recent failed-link-open diagnostics.
+    ///
+    /// The caller must invoke `FailedLinkOpen.deinit` on the returned value.
+    pub fn takeFailedLinkOpen(self: *Session) ?FailedLinkOpen {
+        const diagnostic = self.failed_link_open;
+        self.failed_link_open = null;
+        return diagnostic;
+    }
+
+    fn clearFailedLinkOpen(self: *Session) void {
+        if (self.failed_link_open) |*diagnostic| diagnostic.deinit();
+        self.failed_link_open = null;
+    }
+
+    fn preserveFailedLinkOpen(
+        self: *Session,
+        remote_error: *?connection.RemoteError,
+    ) void {
+        const owned = remote_error.* orelse return;
+        self.clearFailedLinkOpen();
+        remote_error.* = null;
+        self.failed_link_open = .{
+            .allocator = self.allocator,
+            .remote_error = owned,
+        };
     }
 
     /// End the session on the wire.
@@ -1438,6 +1503,8 @@ pub fn openSender(
     options: SenderOptions,
     deadline_ms: i64,
 ) LinkError!*Sender {
+    session.clearFailedLinkOpen();
+
     for (session.senders.items) |sender| {
         if (std.mem.eql(u8, sender.name, options.name)) return error.LinkNameInUse;
     }
@@ -1466,6 +1533,7 @@ pub fn openSender(
 
     try session.senders.append(session.allocator, sender);
     errdefer _ = session.senders.pop();
+    errdefer session.preserveFailedLinkOpen(&sender.detach_error);
 
     try session.driver.sendPerformative(.amqp, session.channel, .{ .attach = .{
         .name = name,
@@ -1485,9 +1553,13 @@ pub fn openSender(
     }
 
     while (!sender.attached) {
-        if (sender.detach_error != null) return error.LinkDetached;
+        if (sender.detach_error != null) {
+            session.preserveFailedLinkOpen(&sender.detach_error);
+            return error.LinkDetached;
+        }
         _ = try session.pump(deadline_ms);
     }
+    session.clearFailedLinkOpen();
     return sender;
 }
 
@@ -2711,6 +2783,8 @@ pub fn openReceiver(
     options: ReceiverOptions,
     deadline_ms: i64,
 ) LinkError!*Receiver {
+    session.clearFailedLinkOpen();
+
     for (session.receivers.items) |receiver| {
         if (std.mem.eql(u8, receiver.name, options.name)) return error.LinkNameInUse;
     }
@@ -2743,6 +2817,7 @@ pub fn openReceiver(
 
     try session.receivers.append(session.allocator, receiver);
     errdefer _ = session.receivers.pop();
+    errdefer session.preserveFailedLinkOpen(&receiver.detach_error);
 
     try session.driver.sendPerformative(.amqp, session.channel, .{ .attach = .{
         .name = name,
@@ -2765,11 +2840,15 @@ pub fn openReceiver(
     }
 
     while (!receiver.attached) {
-        if (receiver.detach_error != null) return error.LinkDetached;
+        if (receiver.detach_error != null) {
+            session.preserveFailedLinkOpen(&receiver.detach_error);
+            return error.LinkDetached;
+        }
         _ = try session.pump(deadline_ms);
     }
 
     if (options.prefetch > 0) try receiver.issueCredit(options.prefetch);
+    session.clearFailedLinkOpen();
     return receiver;
 }
 
@@ -2783,6 +2862,146 @@ const Peer = harness.Peer;
 const EmittedFrames = harness.EmittedFrames;
 const test_options = harness.driver_options;
 const Fixture = harness.Fixture;
+
+fn testSession(allocator: Allocator) Session {
+    return .{
+        .allocator = allocator,
+        .driver = undefined,
+        .channel = 0,
+        .remote_channel = 0,
+        .incoming_window = 0,
+        .outgoing_window = 0,
+    };
+}
+
+fn failedLinkOpenUnderAllocator(allocator: Allocator) !void {
+    var session = testSession(allocator);
+    defer session.deinit();
+
+    const sender_info = [_]uamqp.MapEntry{.{
+        .key = .{ .symbol = "link-name" },
+        .value = .{ .string = "sender-a" },
+    }};
+    var sender = Sender{
+        .allocator = allocator,
+        .session = &session,
+        .name = "sender-a",
+        .handle = 0,
+    };
+    sender.detach_error = try connection.RemoteError.dupe(allocator, .{
+        .condition = "amqp:unauthorized-access",
+        .description = "sender rejected",
+        .info = &sender_info,
+    });
+    session.preserveFailedLinkOpen(&sender.detach_error);
+    try testing.expect(sender.detach_error == null);
+    // The open path also has an errdefer safety net; its second move is a
+    // no-op rather than clearing the diagnostic already retained above.
+    session.preserveFailedLinkOpen(&sender.detach_error);
+
+    const sender_diagnostic = session.failedLinkOpen().?;
+    try testing.expectEqualStrings("amqp:unauthorized-access", sender_diagnostic.condition());
+    try testing.expectEqualStrings("sender rejected", sender_diagnostic.description().?);
+    try testing.expectEqualStrings(
+        "sender-a",
+        sender_diagnostic.info().?[0].value.string,
+    );
+
+    const receiver_info = [_]uamqp.MapEntry{.{
+        .key = .{ .symbol = "link-name" },
+        .value = .{ .string = "receiver-b" },
+    }};
+    // A new open attempt clears the previous failure before doing anything
+    // that can allocate, so an OOM below cannot expose sender-a as its result.
+    session.clearFailedLinkOpen();
+    var receiver = Receiver{
+        .allocator = allocator,
+        .session = &session,
+        .name = "receiver-b",
+        .handle = 1,
+    };
+    receiver.detach_error = try connection.RemoteError.dupe(allocator, .{
+        .condition = "amqp:not-found",
+        .description = "receiver rejected",
+        .info = &receiver_info,
+    });
+    session.preserveFailedLinkOpen(&receiver.detach_error);
+    try testing.expect(receiver.detach_error == null);
+
+    const receiver_diagnostic = session.failedLinkOpen().?;
+    try testing.expectEqualStrings("amqp:not-found", receiver_diagnostic.condition());
+    try testing.expectEqualStrings("receiver rejected", receiver_diagnostic.description().?);
+    try testing.expectEqualStrings(
+        "receiver-b",
+        receiver_diagnostic.info().?[0].value.string,
+    );
+
+    var taken = session.takeFailedLinkOpen().?;
+    defer taken.deinit();
+    try testing.expect(session.failedLinkOpen() == null);
+    try testing.expectEqualStrings("amqp:not-found", taken.condition());
+
+    session.clearFailedLinkOpen();
+    try testing.expect(session.failedLinkOpen() == null);
+}
+
+test "failed sender and receiver opens preserve owned remote diagnostics" {
+    try failedLinkOpenUnderAllocator(testing.allocator);
+}
+
+test "failed link open diagnostics survive every allocation failure" {
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        failedLinkOpenUnderAllocator,
+        .{},
+    );
+}
+
+test "starting or completing a link open clears stale diagnostics" {
+    var session = testSession(testing.allocator);
+    defer session.deinit();
+
+    var remote: ?connection.RemoteError = try connection.RemoteError.dupe(
+        testing.allocator,
+        .{ .condition = "amqp:link:stolen" },
+    );
+    session.preserveFailedLinkOpen(&remote);
+    try testing.expect(session.failedLinkOpen() != null);
+
+    try testing.expectError(error.InvalidReceiverOptions, openReceiver(&session, .{
+        .name = "receiver",
+        .source_address = "source",
+        .max_unsettled_deliveries = 0,
+    }, 10_000));
+    try testing.expect(session.failedLinkOpen() == null);
+    session.clearFailedLinkOpen();
+    try testing.expect(session.failedLinkOpen() == null);
+}
+
+test "link open allocation failure cannot expose stale diagnostics" {
+    // RemoteError with only a condition performs two backing allocations.
+    // Fail the first allocation in the following receiver-open attempt.
+    var failing = testing.FailingAllocator.init(testing.allocator, .{
+        .fail_index = 2,
+    });
+    const allocator = failing.allocator();
+    var session = testSession(allocator);
+    defer session.deinit();
+
+    var remote: ?connection.RemoteError = try connection.RemoteError.dupe(
+        allocator,
+        .{ .condition = "amqp:old-error" },
+    );
+    session.preserveFailedLinkOpen(&remote);
+    try testing.expect(session.failedLinkOpen() != null);
+
+    try testing.expectError(error.OutOfMemory, openReceiver(&session, .{
+        .name = "receiver",
+        .source_address = "source",
+    }, 10_000));
+    try testing.expect(session.failedLinkOpen() == null);
+}
+
 const scriptHandshake = harness.scriptHandshake;
 
 fn expectReceiverAccounting(receiver: *const Receiver) !void {
@@ -2865,6 +3084,40 @@ test "a sender attaches and reports the peer's max-message-size" {
         connection.georeplication_capability,
         a.desired_capabilities.?[0],
     );
+}
+
+test "a successful link open leaves no prior failed-open diagnostics" {
+    const allocator = testing.allocator;
+    var mem = MemoryTransport.init(allocator);
+    defer mem.deinit();
+    var clock: connection.ManualClock = .{};
+    const peer = Peer{ .allocator = allocator, .mem = &mem };
+
+    try scriptHandshake(peer, 65536);
+    try peer.push(0, .{ .attach = .{
+        .name = "producer",
+        .handle = 0,
+        .role = .receiver,
+        .initial_delivery_count = 0,
+    } });
+
+    var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
+    defer driver.deinit();
+    var fixture = try Fixture.init(allocator, &mem, &clock, &driver);
+    defer fixture.deinit();
+
+    var remote: ?connection.RemoteError = try connection.RemoteError.dupe(
+        allocator,
+        .{ .condition = "amqp:link:stolen" },
+    );
+    fixture.session.preserveFailedLinkOpen(&remote);
+    try testing.expect(fixture.session.failedLinkOpen() != null);
+
+    _ = try openSender(&fixture.session, .{
+        .name = "producer",
+        .target_address = "eh",
+    }, 10_000);
+    try testing.expect(fixture.session.failedLinkOpen() == null);
 }
 
 test "a message past max-frame-size is split and reassembles to the original" {

@@ -176,24 +176,98 @@ pub fn buildProperties(allocator: Allocator, info: ClientInfo) Allocator.Error![
 
 /// An error condition reported by the peer, owned by the driver.
 pub const RemoteError = struct {
+    arena: ?*std.heap.ArenaAllocator = null,
     condition: []const u8,
     description: ?[]const u8,
+    info: ?[]MapEntry = null,
 
     /// Copy an inbound error so it outlives the frame it arrived in.
     pub fn dupe(allocator: Allocator, err: perf.AmqpError) Allocator.Error!RemoteError {
-        const condition = try allocator.dupe(u8, err.condition);
-        errdefer allocator.free(condition);
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena);
+        arena.* = .init(allocator);
+        errdefer arena.deinit();
+
+        const owned = arena.allocator();
+        const condition = try owned.dupe(u8, err.condition);
+        const description = if (err.description) |d| try owned.dupe(u8, d) else null;
+        const info = if (err.info) |entries| blk: {
+            const cloned = try owned.alloc(MapEntry, entries.len);
+            for (entries, cloned) |entry, *copy| {
+                copy.* = .{
+                    .key = try entry.key.clone(owned),
+                    .value = try entry.value.clone(owned),
+                };
+            }
+            break :blk cloned;
+        } else null;
+
         return .{
+            .arena = arena,
             .condition = condition,
-            .description = if (err.description) |d| try allocator.dupe(u8, d) else null,
+            .description = description,
+            .info = info,
         };
     }
 
     pub fn deinit(self: RemoteError, allocator: Allocator) void {
+        if (self.arena) |arena| {
+            arena.deinit();
+            allocator.destroy(arena);
+            return;
+        }
         allocator.free(self.condition);
-        if (self.description) |d| allocator.free(d);
+        if (self.description) |description| allocator.free(description);
+        if (self.info) |entries| {
+            for (entries) |*entry| {
+                entry.key.deinit(allocator);
+                entry.value.deinit(allocator);
+            }
+            allocator.free(entries);
+        }
     }
 };
+
+fn remoteErrorUnderAllocator(allocator: Allocator) !void {
+    var condition = [_]u8{ 't', 'e', 's', 't', ':', 'e', 'r', 'r', 'o', 'r' };
+    var description = [_]u8{ 'd', 'e', 't', 'a', 'i', 'l' };
+    var info_key = [_]u8{ 'n', 'a', 'm', 'e' };
+    var info_value = [_]u8{ 'v', 'a', 'l', 'u', 'e' };
+    const info = [_]MapEntry{.{
+        .key = .{ .symbol = &info_key },
+        .value = .{ .string = &info_value },
+    }};
+
+    const remote = try RemoteError.dupe(allocator, .{
+        .condition = &condition,
+        .description = &description,
+        .info = &info,
+    });
+    defer remote.deinit(allocator);
+
+    @memset(&condition, 'x');
+    @memset(&description, 'x');
+    @memset(&info_key, 'x');
+    @memset(&info_value, 'x');
+
+    try std.testing.expectEqualStrings("test:error", remote.condition);
+    try std.testing.expectEqualStrings("detail", remote.description.?);
+    try std.testing.expectEqual(@as(usize, 1), remote.info.?.len);
+    try std.testing.expectEqualStrings("name", remote.info.?[0].key.symbol);
+    try std.testing.expectEqualStrings("value", remote.info.?[0].value.string);
+}
+
+test "remote error owns condition description and info" {
+    try remoteErrorUnderAllocator(std.testing.allocator);
+}
+
+test "remote error cloning survives every allocation failure" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        remoteErrorUnderAllocator,
+        .{},
+    );
+}
 
 /// A frame handed back by `receiveFrame`. The body is owned by the driver and
 /// stays valid until the next receive.

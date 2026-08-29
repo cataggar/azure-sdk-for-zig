@@ -45,6 +45,7 @@ pub const georeplication_capability = connection_driver.georeplication_capabilit
 // Sessions and links.
 pub const Session = link.Session;
 pub const SessionOptions = link.SessionOptions;
+pub const FailedLinkOpen = link.FailedLinkOpen;
 pub const Sender = link.Sender;
 pub const SenderOptions = link.SenderOptions;
 pub const SendOptions = link.SendOptions;
