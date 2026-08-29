@@ -451,12 +451,24 @@ const PlaybackOperation = struct {
 /// The inner descriptor is copied by value. Its context, this recording
 /// transport, and the recording allocator must outlive every open operation.
 /// A configured body-policy context is also borrowed and must outlive calls to
-/// `toJson`. `deinit` does not deinitialize either borrowed context.
+/// `toJson`. Redirect/retry chains remain tentative until their final buffered
+/// response is accepted or final streaming operation finishes; restart,
+/// failure, abort, or cancellation discards the entire tentative chain.
+/// `deinit` does not deinitialize either borrowed context.
 pub const RecordingTransport = struct {
     inner: core.http.HttpTransport,
     exchanges: std.ArrayList(OwnedExchange) = .empty,
+    staged_exchanges: std.ArrayList(OwnedExchange) = .empty,
+    staged_origin: ?*const core.http.Request = null,
+    staged_state: ?StagedRecordingState = null,
+    staged_expected_url: ?[]u8 = null,
     allocator: std.mem.Allocator,
     options: RecordingOptions,
+
+    const StagedRecordingState = enum {
+        redirect_pending,
+        retryable_final,
+    };
 
     const vtable: core.http.HttpTransport.VTable = .{
         .send = &sendImpl,
@@ -490,12 +502,115 @@ pub const RecordingTransport = struct {
         for (self.exchanges.items) |*exchange| {
             exchange.deinit(self.allocator);
         }
+        for (self.staged_exchanges.items) |*exchange| {
+            exchange.deinit(self.allocator);
+        }
+        if (self.staged_expected_url) |url| self.allocator.free(url);
         self.exchanges.deinit(self.allocator);
+        self.staged_exchanges.deinit(self.allocator);
         self.* = undefined;
     }
 
-    pub fn getExchanges(self: *const RecordingTransport) []const OwnedExchange {
+    pub fn getExchanges(self: *RecordingTransport) []const OwnedExchange {
+        self.finalizeStagedForRead();
         return self.exchanges.items;
+    }
+
+    fn reserveStagedSlot(self: *RecordingTransport) !void {
+        try self.staged_exchanges.ensureUnusedCapacity(self.allocator, 1);
+        try self.exchanges.ensureUnusedCapacity(
+            self.allocator,
+            self.staged_exchanges.items.len + 1,
+        );
+    }
+
+    fn stageExchangeAssumeCapacity(
+        self: *RecordingTransport,
+        exchange: OwnedExchange,
+        origin: *const core.http.Request,
+    ) void {
+        if (self.staged_exchanges.items.len == 0)
+            self.staged_origin = origin;
+        self.staged_exchanges.appendAssumeCapacity(exchange);
+    }
+
+    fn stageExchange(
+        self: *RecordingTransport,
+        exchange: OwnedExchange,
+        origin: *const core.http.Request,
+    ) !void {
+        try self.reserveStagedSlot();
+        self.stageExchangeAssumeCapacity(exchange, origin);
+    }
+
+    fn commitStaged(self: *RecordingTransport) void {
+        for (self.staged_exchanges.items) |exchange| {
+            self.exchanges.appendAssumeCapacity(exchange);
+        }
+        self.staged_exchanges.clearRetainingCapacity();
+        self.staged_origin = null;
+        self.staged_state = null;
+        if (self.staged_expected_url) |url| self.allocator.free(url);
+        self.staged_expected_url = null;
+    }
+
+    fn discardStaged(self: *RecordingTransport) void {
+        for (self.staged_exchanges.items) |*exchange| {
+            exchange.deinit(self.allocator);
+        }
+        self.staged_exchanges.clearRetainingCapacity();
+        self.staged_origin = null;
+        self.staged_state = null;
+        if (self.staged_expected_url) |url| self.allocator.free(url);
+        self.staged_expected_url = null;
+    }
+
+    fn prepareRawCall(
+        self: *RecordingTransport,
+        request: *const core.http.Request,
+    ) void {
+        const state = self.staged_state orelse return;
+        if (request == self.staged_origin) {
+            self.discardStaged();
+            return;
+        }
+        if (state == .retryable_final) {
+            const origin = self.staged_exchanges.items[0];
+            const same_body =
+                (origin.request_body == null) == (request.body == null) and
+                (origin.request_body == null or std.mem.eql(
+                    u8,
+                    origin.request_body.?,
+                    request.body.?,
+                ));
+            if (origin.request_method == request.method and
+                std.mem.eql(u8, origin.request_url, request.url) and
+                same_body)
+            {
+                self.discardStaged();
+            } else {
+                self.commitStaged();
+            }
+            return;
+        }
+        const expected = self.staged_expected_url orelse {
+            self.discardStaged();
+            return;
+        };
+        if (!std.mem.eql(u8, request.url, expected)) {
+            self.discardStaged();
+            return;
+        }
+        self.allocator.free(expected);
+        self.staged_expected_url = null;
+    }
+
+    fn finalizeStagedForRead(self: *RecordingTransport) void {
+        const state = self.staged_state orelse return;
+        if (state == .retryable_final)
+            self.commitStaged()
+        else
+            self.discardStaged();
     }
 
     /// Serialize version 2 recordings with lossless base64 bodies while
@@ -512,7 +627,7 @@ pub const RecordingTransport = struct {
     /// and unapproved opaque encodings cause an explicit error; neither is
     /// silently emitted under a false sanitization guarantee.
     pub fn toJson(
-        self: *const RecordingTransport,
+        self: *RecordingTransport,
         allocator: std.mem.Allocator,
     ) ![]u8 {
         var output: std.Io.Writer.Allocating = .init(allocator);
@@ -526,10 +641,11 @@ pub const RecordingTransport = struct {
     }
 
     fn writeJson(
-        self: *const RecordingTransport,
+        self: *RecordingTransport,
         writer: *std.Io.Writer,
         allocator: std.mem.Allocator,
     ) !void {
+        self.finalizeStagedForRead();
         try writer.print(
             "{{\"version\":{d},\"exchanges\":[",
             .{recording_format_version},
@@ -584,17 +700,47 @@ pub const RecordingTransport = struct {
         request: *core.http.Request,
     ) !core.http.Response {
         const self: *RecordingTransport = @ptrCast(@alignCast(context));
-        var response = try self.inner.vtable.send(self.inner.context, request);
+        self.prepareRawCall(request);
+        var response = self.inner.vtable.send(
+            self.inner.context,
+            request,
+        ) catch |err| {
+            self.discardStaged();
+            return err;
+        };
         errdefer response.deinit();
-        var exchange = try ownedExchangeFromResponse(
+        var exchange = ownedExchangeFromResponse(
             self.allocator,
             request,
             request.body,
             &response,
             response.body,
-        );
-        errdefer exchange.deinit(self.allocator);
-        try self.exchanges.append(self.allocator, exchange);
+        ) catch |err| {
+            self.discardStaged();
+            return err;
+        };
+        self.stageExchange(exchange, request) catch |err| {
+            exchange.deinit(self.allocator);
+            self.discardStaged();
+            return err;
+        };
+        if (responseRecordsRedirect(request, response)) {
+            self.staged_expected_url = resolveRecordingRedirectAlloc(
+                self.allocator,
+                request.url,
+                response.getHeader("Location").?,
+            ) catch |err| {
+                self.discardStaged();
+                return err;
+            };
+            self.staged_state = .redirect_pending;
+        } else if (request.retryable and
+            isRetryableRecordingStatus(response.status_code))
+        {
+            self.staged_state = .retryable_final;
+        } else {
+            self.commitStaged();
+        }
         return response;
     }
 
@@ -604,6 +750,8 @@ pub const RecordingTransport = struct {
         options: core.http.OpenOptions,
     ) !*core.http.HttpOperation {
         const self: *RecordingTransport = @ptrCast(@alignCast(context));
+        self.prepareRawCall(request);
+        errdefer self.discardStaged();
         if (options.body != null and request.body != null)
             return error.MultipleRequestBodies;
         try checkCancelled(options.cancellation);
@@ -660,6 +808,7 @@ pub const RecordingTransport = struct {
             inner_operation,
             pending,
             recordsRedirect(request, options, inner_operation),
+            request,
         );
     }
 };
@@ -750,8 +899,10 @@ const RecordingOperation = struct {
     allocator: std.mem.Allocator,
     owner: *RecordingTransport,
     inner: *core.http.HttpOperation,
+    request_identity: *const core.http.Request,
     pending: ?PendingRequest,
     redirect_exchange: ?OwnedExchange,
+    redirect_target: ?[]u8,
     response_reader: CapturingReader,
 
     fn create(
@@ -759,6 +910,7 @@ const RecordingOperation = struct {
         inner: *core.http.HttpOperation,
         pending_value: PendingRequest,
         record_redirect: bool,
+        request_identity: *const core.http.Request,
     ) !*core.http.HttpOperation {
         const self = try owner.allocator.create(RecordingOperation);
         errdefer owner.allocator.destroy(self);
@@ -770,14 +922,21 @@ const RecordingOperation = struct {
             deinitHeaderPairs(owner.allocator, headers);
         var redirect_body: ?[]u8 = null;
         errdefer if (redirect_body) |body| owner.allocator.free(body);
+        var redirect_target: ?[]u8 = null;
+        errdefer if (redirect_target) |url| owner.allocator.free(url);
         if (record_redirect) {
-            try owner.exchanges.ensureUnusedCapacity(owner.allocator, 1);
+            try owner.reserveStagedSlot();
             redirect_headers = try cloneResponseHeaders(
                 owner.allocator,
                 &inner.headers,
                 &inner.response_headers,
             );
             redirect_body = try owner.allocator.dupe(u8, "");
+            redirect_target = try resolveRecordingRedirectAlloc(
+                owner.allocator,
+                pending_value.url,
+                inner.getHeader("Location").?,
+            );
         }
 
         self.* = .{
@@ -785,6 +944,7 @@ const RecordingOperation = struct {
             .allocator = owner.allocator,
             .owner = owner,
             .inner = inner,
+            .request_identity = request_identity,
             .pending = if (record_redirect) null else pending_value,
             .redirect_exchange = if (record_redirect) .{
                 .request_method = pending_value.method,
@@ -795,6 +955,7 @@ const RecordingOperation = struct {
                 .response_body = redirect_body.?,
                 .response_headers = redirect_headers.?,
             } else null,
+            .redirect_target = redirect_target,
             .response_reader = undefined,
         };
         self.response_reader.init(owner.allocator, inner_reader, inner);
@@ -847,10 +1008,15 @@ const RecordingOperation = struct {
             .response_body = body,
             .response_headers = response_headers,
         };
-        self.owner.exchanges.append(self.allocator, exchange) catch |err| {
+        self.owner.stageExchange(
+            exchange,
+            self.request_identity,
+        ) catch |err| {
             exchange.deinit(self.allocator);
+            self.owner.discardStaged();
             return err;
         };
+        self.owner.commitStaged();
     }
 
     fn abortImpl(operation: *core.http.HttpOperation) void {
@@ -858,8 +1024,16 @@ const RecordingOperation = struct {
             @alignCast(@fieldParentPtr("operation", operation));
         self.inner.abort();
         if (self.redirect_exchange) |exchange| {
-            self.owner.exchanges.appendAssumeCapacity(exchange);
+            self.owner.stageExchangeAssumeCapacity(
+                exchange,
+                self.request_identity,
+            );
+            self.owner.staged_expected_url = self.redirect_target;
+            self.redirect_target = null;
+            self.owner.staged_state = .redirect_pending;
             self.redirect_exchange = null;
+        } else {
+            self.owner.discardStaged();
         }
     }
 
@@ -867,6 +1041,7 @@ const RecordingOperation = struct {
         const self: *RecordingOperation =
             @alignCast(@fieldParentPtr("operation", operation));
         self.inner.cancel();
+        self.owner.discardStaged();
     }
 
     fn bodyErrorImpl(operation: *const core.http.HttpOperation) ?anyerror {
@@ -884,6 +1059,7 @@ const RecordingOperation = struct {
         if (self.redirect_exchange) |*exchange| {
             exchange.deinit(self.allocator);
         }
+        if (self.redirect_target) |url| self.allocator.free(url);
         self.response_reader.deinit();
         deinitResponseStorage(
             self.allocator,
@@ -925,6 +1101,37 @@ fn responseRecordsRedirect(
         301, 302, 303, 307, 308 => true,
         else => false,
     };
+}
+
+fn isRetryableRecordingStatus(status: u16) bool {
+    return status == 408 or status == 429 or status == 500 or
+        status == 502 or status == 503 or status == 504;
+}
+
+fn resolveRecordingRedirectAlloc(
+    allocator: std.mem.Allocator,
+    base_url: []const u8,
+    location: []const u8,
+) ![]u8 {
+    var resolved = core.url.resolveUrl(
+        allocator,
+        base_url,
+        location,
+    ) catch |err| switch (err) {
+        error.WriteFailed => return error.OutOfMemory,
+        else => return err,
+    };
+    errdefer allocator.free(resolved);
+    if (std.mem.indexOfScalar(u8, resolved, '#')) |fragment_start| {
+        const without_fragment = try allocator.dupe(
+            u8,
+            resolved[0..fragment_start],
+        );
+        allocator.free(resolved);
+        resolved = without_fragment;
+    }
+    try core.url.validateHttpsUrl(resolved, &.{});
+    return resolved;
 }
 
 const CapturingReader = struct {
@@ -1850,7 +2057,11 @@ fn ensureBodySafe(
         };
         defer parsed.deinit();
         if (try jsonContainsSensitiveField(allocator, parsed.value) or
-            jsonContainsExchangeSensitiveSchema(parsed.value, context))
+            try jsonContainsExchangeSensitiveSchema(
+                allocator,
+                parsed.value,
+                context,
+            ))
         {
             return error.SensitiveBodyRequiresSanitization;
         }
@@ -1861,7 +2072,7 @@ fn ensureBodySafe(
     if (xml and
         (containsSensitiveXml(bytes) or
             containsSensitiveAssignment(bytes) or
-            (isStorageUserDelegationKeyExchange(context) and
+            (try isStorageUserDelegationKeyExchange(allocator, context) and
                 containsIgnoreCase(bytes, "<UserDelegationKey") and
                 containsIgnoreCase(bytes, "<Value"))))
     {
@@ -2199,18 +2410,19 @@ fn looksLikeXml(body: []const u8) bool {
 }
 
 fn jsonContainsExchangeSensitiveSchema(
+    allocator: std.mem.Allocator,
     value: std.json.Value,
     context: BodySafetyContext,
-) bool {
+) !bool {
     const target = parseUrlTarget(context.url) orelse return false;
     if (isKeyVaultHost(target.host)) {
-        if ((pathHasResource(target.path, "secrets") or
-            pathHasResource(target.path, "certificates")) and
+        if ((try pathHasResource(allocator, target.path, "secrets") or
+            try pathHasResource(allocator, target.path, "certificates")) and
             jsonRootHasField(value, "value"))
         {
             return true;
         }
-        if (pathHasResource(target.path, "keys") and
+        if (try pathHasResource(allocator, target.path, "keys") and
             (jsonRootHasField(value, "value") or
                 jsonContainsJwkPrivateField(value)))
         {
@@ -2223,16 +2435,20 @@ fn jsonContainsExchangeSensitiveSchema(
         return true;
     }
     if (isAzureManagementHost(target.host) and
-        isAzureKeyManagementPath(target.path) and
+        try isAzureKeyManagementPath(allocator, target.path) and
         (jsonRootHasField(value, "key1") or
             jsonRootHasField(value, "key2")))
     {
         return true;
     }
     if (isAzureManagementHost(target.host) and
-        pathHasResource(target.path, "Microsoft.DocumentDB") and
-        (pathHasResource(target.path, "listKeys") or
-            pathHasResource(target.path, "listReadOnlyKeys")) and
+        try pathHasResource(allocator, target.path, "Microsoft.DocumentDB") and
+        (try pathHasResource(allocator, target.path, "listKeys") or
+            try pathHasResource(
+                allocator,
+                target.path,
+                "listReadOnlyKeys",
+            )) and
         (jsonContainsField(value, "primarymasterkey") or
             jsonContainsField(value, "secondarymasterkey") or
             jsonContainsField(value, "primaryreadonlymasterkey") or
@@ -2241,23 +2457,27 @@ fn jsonContainsExchangeSensitiveSchema(
         return true;
     }
     if (isAzureManagementHost(target.host) and
-        pathHasResource(target.path, "Microsoft.ContainerRegistry") and
-        pathHasResource(target.path, "listCredentials") and
+        try pathHasResource(
+            allocator,
+            target.path,
+            "Microsoft.ContainerRegistry",
+        ) and
+        try pathHasResource(allocator, target.path, "listCredentials") and
         jsonContainsField(value, "passwords"))
     {
         return true;
     }
     if (isAzureManagementHost(target.host) and
-        pathHasResource(target.path, "Microsoft.Batch") and
-        pathHasResource(target.path, "listKeys") and
+        try pathHasResource(allocator, target.path, "Microsoft.Batch") and
+        try pathHasResource(allocator, target.path, "listKeys") and
         (jsonRootHasField(value, "primary") or
             jsonRootHasField(value, "secondary")))
     {
         return true;
     }
     if (isAzureManagementHost(target.host) and
-        pathHasResource(target.path, "Microsoft.Search") and
-        pathHasResource(target.path, "listQueryKeys") and
+        try pathHasResource(allocator, target.path, "Microsoft.Search") and
+        try pathHasResource(allocator, target.path, "listQueryKeys") and
         jsonContainsField(value, "key"))
     {
         return true;
@@ -2386,7 +2606,8 @@ fn isKeyVaultHost(host: []const u8) bool {
         hostMatches(host, "vaultcore.azure.net") or
         hostMatches(host, "managedhsm.azure.net") or
         hostMatches(host, "managedhsm.azure.cn") or
-        hostMatches(host, "managedhsm.usgovcloudapi.net");
+        hostMatches(host, "managedhsm.usgovcloudapi.net") or
+        hostMatches(host, "managedhsm.microsoftazure.de");
 }
 
 fn isKustoHost(host: []const u8) bool {
@@ -2411,7 +2632,10 @@ fn isStorageBlobHost(host: []const u8) bool {
         hostMatches(host, "blob.core.cloudapi.de");
 }
 
-fn isStorageUserDelegationKeyExchange(context: BodySafetyContext) bool {
+fn isStorageUserDelegationKeyExchange(
+    allocator: std.mem.Allocator,
+    context: BodySafetyContext,
+) !bool {
     if (context.direction != .response) return false;
     const target = parseUrlTarget(context.url) orelse return false;
     if (!isStorageBlobHost(target.host)) return false;
@@ -2430,8 +2654,20 @@ fn isStorageUserDelegationKeyExchange(context: BodySafetyContext) bool {
     );
     while (fields.next()) |field| {
         const equals = std.mem.indexOfScalar(u8, field, '=') orelse continue;
-        if (std.ascii.eqlIgnoreCase(field[0..equals], "comp") and
-            std.ascii.eqlIgnoreCase(field[equals + 1 ..], "userdelegationkey"))
+        const name = try canonicalUrlComponentAlloc(
+            allocator,
+            field[0..equals],
+            true,
+        );
+        defer allocator.free(name);
+        const value = try canonicalUrlComponentAlloc(
+            allocator,
+            field[equals + 1 ..],
+            true,
+        );
+        defer allocator.free(value);
+        if (std.ascii.eqlIgnoreCase(name, "comp") and
+            std.ascii.eqlIgnoreCase(value, "userdelegationkey"))
         {
             return true;
         }
@@ -2439,21 +2675,37 @@ fn isStorageUserDelegationKeyExchange(context: BodySafetyContext) bool {
     return false;
 }
 
-fn isAzureKeyManagementPath(path: []const u8) bool {
+fn isAzureKeyManagementPath(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+) !bool {
     const recognized_provider =
-        pathHasResource(path, "Microsoft.EventGrid") or
-        pathHasResource(path, "Microsoft.CognitiveServices");
+        try pathHasResource(allocator, path, "Microsoft.EventGrid") or
+        try pathHasResource(allocator, path, "Microsoft.CognitiveServices");
     const recognized_action =
-        pathHasResource(path, "listKeys") or
-        pathHasResource(path, "regenerateKey") or
-        pathHasResource(path, "regenerateKeys");
+        try pathHasResource(allocator, path, "listKeys") or
+        try pathHasResource(allocator, path, "regenerateKey") or
+        try pathHasResource(allocator, path, "regenerateKeys");
     return recognized_provider and recognized_action;
 }
 
-fn pathHasResource(path: []const u8, resource: []const u8) bool {
+fn pathHasResource(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    resource: []const u8,
+) !bool {
     var segments = std.mem.splitScalar(u8, path, '/');
-    while (segments.next()) |segment| {
-        if (std.ascii.eqlIgnoreCase(segment, resource)) return true;
+    while (segments.next()) |encoded_segment| {
+        const segment = try canonicalUrlComponentAlloc(
+            allocator,
+            encoded_segment,
+            false,
+        );
+        defer allocator.free(segment);
+        var decoded_segments = std.mem.splitScalar(u8, segment, '/');
+        while (decoded_segments.next()) |decoded| {
+            if (std.ascii.eqlIgnoreCase(decoded, resource)) return true;
+        }
     }
     return false;
 }
@@ -2975,6 +3227,43 @@ const max_url_decode_depth = 3;
 const max_nested_url_depth = 4;
 const max_sanitized_url_length = 256 * 1024;
 
+fn canonicalUrlComponentAlloc(
+    allocator: std.mem.Allocator,
+    encoded: []const u8,
+    plus_as_space: bool,
+) ![]u8 {
+    if (encoded.len > max_sanitized_url_length)
+        return error.SensitiveBodyRequiresSanitization;
+    var current: ?[]u8 = try allocator.dupe(u8, encoded);
+    errdefer if (current) |bytes| allocator.free(bytes);
+    var decode_count: usize = 0;
+    while (decode_count < max_url_decode_depth) : (decode_count += 1) {
+        const decoded = percentDecodeAlloc(
+            allocator,
+            current.?,
+            plus_as_space and decode_count == 0,
+        ) catch |err| switch (err) {
+            error.SensitiveUrlRequiresSanitization => return error.SensitiveBodyRequiresSanitization,
+            else => return err,
+        };
+        const changed = !std.mem.eql(u8, current.?, decoded);
+        allocator.free(current.?);
+        current = decoded;
+        if (std.mem.indexOfAny(u8, decoded, "\x00\r\n") != null)
+            return error.SensitiveBodyRequiresSanitization;
+        if (!changed) {
+            const result = current.?;
+            current = null;
+            return result;
+        }
+    }
+    if (containsPercentEscape(current.?))
+        return error.SensitiveBodyRequiresSanitization;
+    const result = current.?;
+    current = null;
+    return result;
+}
+
 fn sanitizeUrlAllocDepth(
     allocator: std.mem.Allocator,
     url: []const u8,
@@ -2992,6 +3281,7 @@ fn sanitizeUrlAllocDepth(
     const reference_end = fragment orelse url.len;
     const question = std.mem.indexOfScalar(u8, url[0..reference_end], '?');
     var path_start: usize = 0;
+    var authority_range: ?struct { start: usize, end: usize } = null;
     const scheme_end_value = schemeEndAtReferenceStart(url, reference_end);
     if (scheme_end_value) |scheme_end| {
         const scheme = url[0..scheme_end];
@@ -3003,28 +3293,42 @@ fn sanitizeUrlAllocDepth(
         if (!std.mem.startsWith(u8, url[scheme_end + 1 ..], "//"))
             return error.SensitiveUrlRequiresSanitization;
         const authority_start = scheme_end + 3;
-        const slash = std.mem.indexOfScalarPos(
+        const authority_end = std.mem.indexOfAnyPos(
             u8,
             url,
             authority_start,
-            '/',
-        );
-        const authority_end = if (slash) |index|
-            @min(index, reference_end)
-        else
-            reference_end;
-        const authority = url[authority_start..authority_end];
+            "/?#",
+        ) orelse url.len;
+        authority_range = .{ .start = authority_start, .end = authority_end };
+        path_start = authority_end;
+    } else if (std.mem.startsWith(u8, url, "//")) {
+        const authority_start = 2;
+        const authority_end = std.mem.indexOfAnyPos(
+            u8,
+            url,
+            authority_start,
+            "/?#",
+        ) orelse url.len;
+        authority_range = .{ .start = authority_start, .end = authority_end };
+        path_start = authority_end;
+    }
+    if (authority_range) |range| {
+        if (range.end < range.start or range.end > reference_end)
+            return error.SensitiveUrlRequiresSanitization;
+        const authority = url[range.start..range.end];
         if (authority.len == 0 or
-            std.mem.indexOfScalar(u8, authority, '@') != null)
+            try encodedAuthorityIsSensitive(
+                allocator,
+                authority,
+            ))
         {
             return error.SensitiveUrlRequiresSanitization;
         }
-        path_start = authority_end;
-    } else if (std.mem.startsWith(u8, url, "//")) {
-        return error.SensitiveUrlRequiresSanitization;
     }
 
     const query_start = question orelse reference_end;
+    if (path_start > query_start)
+        return error.SensitiveUrlRequiresSanitization;
     if (try encodedComponentIsSensitive(
         allocator,
         url[path_start..query_start],
@@ -3095,6 +3399,29 @@ fn sanitizeUrlAllocDepth(
         try output.writer.writeAll(url[fragment_start..]);
     }
     return output.toOwnedSlice();
+}
+
+fn encodedAuthorityIsSensitive(
+    allocator: std.mem.Allocator,
+    encoded: []const u8,
+) !bool {
+    if (encoded.len > max_sanitized_url_length) return true;
+    var current = try allocator.dupe(u8, encoded);
+    defer allocator.free(current);
+    var decode_count: usize = 0;
+    while (decode_count < max_url_decode_depth) : (decode_count += 1) {
+        const decoded = try percentDecodeAlloc(allocator, current, false);
+        const changed = !std.mem.eql(u8, current, decoded);
+        allocator.free(current);
+        current = decoded;
+        if (std.mem.indexOfAny(u8, current, "@\x00\r\n") != null or
+            try containsSensitiveScalar(allocator, current))
+        {
+            return true;
+        }
+        if (!changed) return false;
+    }
+    return containsPercentEscape(current);
 }
 
 fn encodedQueryNameIsSensitive(
@@ -3423,7 +3750,7 @@ fn preserveRequestDate(
 }
 
 fn expectRejectedSerializationExcludes(
-    recorder: *const RecordingTransport,
+    recorder: *RecordingTransport,
     expected_error: anyerror,
     secrets: []const []const u8,
 ) !void {
@@ -4107,6 +4434,38 @@ test "recording forwards abort and cancel without recording partial responses" {
     try std.testing.expectEqual(@as(usize, 2), mock.stream_deinit_count);
 }
 
+test "recording cancellation discards every tentative redirect exchange" {
+    var sequence = core.http.SequenceMockTransport.init(
+        std.testing.allocator,
+        &.{
+            .{
+                .status = 302,
+                .body = "",
+                .headers = &.{.{ .name = "Location", .value = "/final" }},
+            },
+            .{ .status = 200, .body = "body" },
+        },
+    );
+    var recorder = RecordingTransport.init(
+        std.testing.allocator,
+        sequence.asTransport(),
+    );
+    defer recorder.deinit();
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://example.test/start",
+    );
+    defer request.deinit();
+    var operation = try recorder.asTransport().open(&request, .{});
+    operation.cancel();
+    operation.deinit();
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        recorder.getExchanges().len,
+    );
+}
+
 test "recording and playback preserve streaming redirect sequences" {
     var sequence = core.http.SequenceMockTransport.init(
         std.testing.allocator,
@@ -4164,6 +4523,286 @@ test "recording and playback preserve streaming redirect sequences" {
     try std.testing.expectEqualStrings("done", body);
     try replay.finish();
     replay.deinit();
+}
+
+test "recording stages buffered redirect and retry chains atomically" {
+    var sequence = core.http.SequenceMockTransport.init(
+        std.testing.allocator,
+        &.{
+            .{
+                .status = 302,
+                .body = "",
+                .headers = &.{.{ .name = "Location", .value = "/final" }},
+            },
+            .{ .status = 503, .body = "retry" },
+            .{
+                .status = 302,
+                .body = "",
+                .headers = &.{.{ .name = "Location", .value = "/final" }},
+            },
+            .{ .status = 200, .body = "done" },
+        },
+    );
+    var recorder = RecordingTransport.init(
+        std.testing.allocator,
+        sequence.asTransport(),
+    );
+    defer recorder.deinit();
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    var retry = core.http.RetryPolicy.init();
+    retry.initial_delay_ms = 0;
+    retry.max_delay_ms = 0;
+    var policies = [_]*core.http.HttpPolicy{retry.asPolicy()};
+    var pipeline = core.http.HttpPipeline.init(
+        initHttpRuntime(recorder.asTransport(), crypto.asProvider()),
+        &policies,
+    );
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://example.test/start",
+    );
+    defer request.deinit();
+    var response = try pipeline.send(&request);
+    defer response.deinit();
+    try std.testing.expectEqual(@as(u16, 200), response.status_code);
+    try std.testing.expectEqualStrings("done", response.body);
+
+    const exchanges = recorder.getExchanges();
+    try std.testing.expectEqual(@as(usize, 2), exchanges.len);
+    try std.testing.expectEqual(@as(u16, 302), exchanges[0].response_status);
+    try std.testing.expectEqualStrings(
+        "https://example.test/start",
+        exchanges[0].request_url,
+    );
+    try std.testing.expectEqual(@as(u16, 200), exchanges[1].response_status);
+    try std.testing.expectEqualStrings(
+        "https://example.test/final",
+        exchanges[1].request_url,
+    );
+
+    var recordings: [2]RecordedExchange = undefined;
+    for (exchanges, &recordings) |exchange, *recording| {
+        recording.* = .{
+            .request_method = exchange.request_method,
+            .request_url = exchange.request_url,
+            .request_headers = exchange.request_headers,
+            .request_body = exchange.request_body,
+            .response_status = exchange.response_status,
+            .response_body = exchange.response_body,
+            .response_headers = exchange.response_headers,
+        };
+    }
+    var playback = PlaybackTransport.init(
+        std.testing.allocator,
+        &recordings,
+    );
+    var replayed = try playback.asTransport().send(&request);
+    defer replayed.deinit();
+    try std.testing.expectEqual(@as(u16, 200), replayed.status_code);
+    try std.testing.expectEqualStrings("done", replayed.body);
+    try std.testing.expectEqual(@as(usize, 2), playback.index);
+}
+
+test "recording stages streaming redirect and retry chains atomically" {
+    var sequence = core.http.SequenceMockTransport.init(
+        std.testing.allocator,
+        &.{
+            .{
+                .status = 302,
+                .body = "",
+                .headers = &.{.{ .name = "Location", .value = "/final" }},
+            },
+            .{ .status = 503, .body = "retry" },
+            .{
+                .status = 302,
+                .body = "",
+                .headers = &.{.{ .name = "Location", .value = "/final" }},
+            },
+            .{ .status = 200, .body = "done" },
+        },
+    );
+    var recorder = RecordingTransport.init(
+        std.testing.allocator,
+        sequence.asTransport(),
+    );
+    defer recorder.deinit();
+    var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+    var retry = core.http.RetryPolicy.init();
+    retry.initial_delay_ms = 0;
+    retry.max_delay_ms = 0;
+    var policies = [_]*core.http.HttpPolicy{retry.asPolicy()};
+    var pipeline = core.http.HttpPipeline.init(
+        initHttpRuntime(recorder.asTransport(), crypto.asProvider()),
+        &policies,
+    );
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://example.test/start",
+    );
+    defer request.deinit();
+    var operation = try pipeline.open(&request, .{});
+    const body = try (try operation.reader()).allocRemaining(
+        std.testing.allocator,
+        .unlimited,
+    );
+    defer std.testing.allocator.free(body);
+    try std.testing.expectEqualStrings("done", body);
+    try operation.finish();
+    operation.deinit();
+
+    const exchanges = recorder.getExchanges();
+    try std.testing.expectEqual(@as(usize, 2), exchanges.len);
+    try std.testing.expectEqual(@as(u16, 302), exchanges[0].response_status);
+    try std.testing.expectEqual(@as(u16, 200), exchanges[1].response_status);
+    var recordings: [2]RecordedExchange = undefined;
+    for (exchanges, &recordings) |exchange, *recording| {
+        recording.* = .{
+            .request_method = exchange.request_method,
+            .request_url = exchange.request_url,
+            .request_headers = exchange.request_headers,
+            .request_body = exchange.request_body,
+            .response_status = exchange.response_status,
+            .response_body = exchange.response_body,
+            .response_headers = exchange.response_headers,
+        };
+    }
+    var playback = PlaybackTransport.init(
+        std.testing.allocator,
+        &recordings,
+    );
+    var replayed = try playback.asTransport().open(&request, .{});
+    const replayed_body = try (try replayed.reader()).allocRemaining(
+        std.testing.allocator,
+        .unlimited,
+    );
+    defer std.testing.allocator.free(replayed_body);
+    try std.testing.expectEqualStrings("done", replayed_body);
+    try replayed.finish();
+    replayed.deinit();
+    try std.testing.expectEqual(@as(usize, 2), playback.index);
+}
+
+test "recording redirect allocation failure discards the tentative chain" {
+    var sequence = core.http.SequenceMockTransport.init(
+        std.testing.allocator,
+        &.{
+            .{
+                .status = 302,
+                .body = "",
+                .headers = &.{.{ .name = "Location", .value = "/final" }},
+            },
+            .{
+                .status = 302,
+                .body = "",
+                .headers = &.{.{ .name = "Location", .value = "/final" }},
+            },
+            .{ .status = 200, .body = "done" },
+        },
+    );
+    var recorder = RecordingTransport.init(
+        std.testing.allocator,
+        sequence.asTransport(),
+    );
+    defer recorder.deinit();
+    var failing = std.testing.FailingAllocator.init(
+        std.testing.allocator,
+        .{ .fail_index = 0 },
+    );
+    var request = core.http.Request.init(
+        failing.allocator(),
+        .GET,
+        "https://example.test/start",
+    );
+    defer request.deinit();
+    const transport = recorder.asTransport();
+    const first = transport.send(&request);
+    if (first) |response_value| {
+        var unexpected = response_value;
+        unexpected.deinit();
+        return error.TestExpectedError;
+    } else |err| {
+        try std.testing.expect(
+            err == error.OutOfMemory or err == error.WriteFailed,
+        );
+    }
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        recorder.getExchanges().len,
+    );
+
+    failing.fail_index = std.math.maxInt(usize);
+    var response = try transport.send(&request);
+    defer response.deinit();
+    try std.testing.expectEqualStrings("done", response.body);
+    const exchanges = recorder.getExchanges();
+    try std.testing.expectEqual(@as(usize, 2), exchanges.len);
+    try std.testing.expectEqual(@as(u16, 302), exchanges[0].response_status);
+    try std.testing.expectEqual(@as(u16, 200), exchanges[1].response_status);
+}
+
+test "recording streaming redirect OOM abort stays tentative" {
+    var sequence = core.http.SequenceMockTransport.init(
+        std.testing.allocator,
+        &.{
+            .{
+                .status = 302,
+                .body = "",
+                .headers = &.{.{ .name = "Location", .value = "/final" }},
+            },
+            .{
+                .status = 302,
+                .body = "",
+                .headers = &.{.{ .name = "Location", .value = "/final" }},
+            },
+            .{ .status = 200, .body = "done" },
+        },
+    );
+    var recorder = RecordingTransport.init(
+        std.testing.allocator,
+        sequence.asTransport(),
+    );
+    defer recorder.deinit();
+    var failing = std.testing.FailingAllocator.init(
+        std.testing.allocator,
+        .{ .fail_index = 0 },
+    );
+    var request = core.http.Request.init(
+        failing.allocator(),
+        .GET,
+        "https://example.test/start",
+    );
+    defer request.deinit();
+    const transport = recorder.asTransport();
+    const first = transport.open(&request, .{});
+    if (first) |unexpected| {
+        unexpected.deinit();
+        return error.TestExpectedError;
+    } else |err| {
+        try std.testing.expect(
+            err == error.OutOfMemory or err == error.WriteFailed,
+        );
+    }
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        recorder.getExchanges().len,
+    );
+
+    failing.fail_index = std.math.maxInt(usize);
+    var operation = try transport.open(&request, .{});
+    const body = try (try operation.reader()).allocRemaining(
+        std.testing.allocator,
+        .unlimited,
+    );
+    defer std.testing.allocator.free(body);
+    try std.testing.expectEqualStrings("done", body);
+    try operation.finish();
+    operation.deinit();
+    const exchanges = recorder.getExchanges();
+    try std.testing.expectEqual(@as(usize, 2), exchanges.len);
+    try std.testing.expectEqual(@as(u16, 302), exchanges[0].response_status);
+    try std.testing.expectEqual(@as(u16, 200), exchanges[1].response_status);
 }
 
 test "recording JSON redacts headers and URL query credentials" {
@@ -4877,6 +5516,97 @@ test "URL sanitization recursively decodes nested URI credentials" {
     }
 }
 
+test "pathless absolute and network-path URLs sanitize without range failures" {
+    var mock = core.http.MockTransport.init(
+        std.testing.allocator,
+        302,
+        "",
+    );
+    defer mock.deinit();
+    mock.response_headers_list = &.{
+        .{
+            .name = "Location",
+            .value = "https://next.example?sig=location-secret&mode=one",
+        },
+        .{
+            .name = "Operation-Location",
+            .value = "//next.example/final?sig=network-secret#section",
+        },
+        .{
+            .name = "Content-Location",
+            .value = "//user:password@next.example/final",
+        },
+        .{
+            .name = "Azure-AsyncOperation",
+            .value = "//user%40next.example/final",
+        },
+    };
+    var recorder = RecordingTransport.init(
+        std.testing.allocator,
+        mock.asTransport(),
+    );
+    defer recorder.deinit();
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://example.test?sig=request-secret&return=" ++
+            "https%3A%2F%2Fnested.example%3Fsig%3Dnested-secret&mode=one",
+    );
+    request.redirect_policy = .not_allowed;
+    defer request.deinit();
+    var response = try recorder.asTransport().send(&request);
+    response.deinit();
+    const json = try recorder.toJson(std.testing.allocator);
+    defer std.testing.allocator.free(json);
+    for ([_][]const u8{
+        "request-secret",
+        "nested-secret",
+        "location-secret",
+        "network-secret",
+        "password",
+        "user%40",
+    }) |secret| {
+        try std.testing.expect(std.mem.indexOf(u8, json, secret) == null);
+    }
+    var parsed = try parseJson(std.testing.allocator, json);
+    defer parsed.deinit();
+    const exchange = parsed.asSlice()[0];
+    try std.testing.expectEqualStrings(
+        "https://example.test?sig=REDACTED&return=REDACTED&mode=one",
+        exchange.request_url,
+    );
+    try std.testing.expectEqualStrings(
+        "https://next.example?sig=REDACTED&mode=one",
+        getHeaderPair(exchange.response_headers, "Location").?,
+    );
+    try std.testing.expectEqualStrings(
+        "//next.example/final?sig=REDACTED#section",
+        getHeaderPair(exchange.response_headers, "Operation-Location").?,
+    );
+    for (exchange.response_headers) |header| {
+        if (std.ascii.eqlIgnoreCase(header.name, "Content-Location") or
+            std.ascii.eqlIgnoreCase(header.name, "Azure-AsyncOperation"))
+        {
+            try std.testing.expect(header.redacted);
+        }
+    }
+
+    var playback = PlaybackTransport.init(
+        std.testing.allocator,
+        parsed.asSlice(),
+    );
+    var live = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://example.test?sig=rotated-request&return=" ++
+            "https%3A%2F%2Fnested.example%3Fsig%3Drotated-nested&mode=one",
+    );
+    live.redirect_policy = .not_allowed;
+    defer live.deinit();
+    var replayed = try playback.asTransport().send(&live);
+    replayed.deinit();
+}
+
 test "authenticated recording JSON roundtrips with structured redactions" {
     var mock = core.http.MockTransport.init(
         std.testing.allocator,
@@ -5197,7 +5927,10 @@ test "safe Location fragments remain replayable through Core redirects" {
                 .status = 302,
                 .body = "",
                 .headers = &.{
-                    .{ .name = "Location", .value = "/final#section" },
+                    .{
+                        .name = "Location",
+                        .value = "//example.test/final#section",
+                    },
                 },
             },
             .{ .status = 200, .body = "" },
@@ -5223,7 +5956,7 @@ test "safe Location fragments remain replayable through Core redirects" {
     var parsed = try parseJson(std.testing.allocator, json);
     defer parsed.deinit();
     try std.testing.expectEqualStrings(
-        "/final#section",
+        "//example.test/final#section",
         getHeaderPair(
             parsed.asSlice()[0].response_headers,
             "Location",
@@ -5694,6 +6427,85 @@ test "Key Vault key operation root values are rejected" {
     );
 }
 
+test "encoded Managed HSM key paths are rejected on every sovereign host" {
+    const hosts = [_][]const u8{
+        "example.managedhsm.azure.net",
+        "example.managedhsm.usgovcloudapi.net",
+        "example.managedhsm.azure.cn",
+        "example.managedhsm.microsoftazure.de",
+    };
+    for (hosts) |host| {
+        const url = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "https://{s}/key%73/name/backup?api-version=7.6",
+            .{host},
+        );
+        defer std.testing.allocator.free(url);
+        var mock = core.http.MockTransport.init(
+            std.testing.allocator,
+            200,
+            "{\"value\":\"managed-hsm-backup-secret\"}",
+        );
+        defer mock.deinit();
+        mock.response_headers_list = &.{
+            .{ .name = "Content-Type", .value = "application/json" },
+        };
+        var recorder = RecordingTransport.init(
+            std.testing.allocator,
+            mock.asTransport(),
+        );
+        defer recorder.deinit();
+        var request = core.http.Request.init(
+            std.testing.allocator,
+            .POST,
+            url,
+        );
+        defer request.deinit();
+        var response = try recorder.asTransport().send(&request);
+        response.deinit();
+        try expectRejectedSerializationExcludes(
+            &recorder,
+            error.SensitiveBodyRequiresSanitization,
+            &.{"managed-hsm-backup-secret"},
+        );
+    }
+}
+
+test "malformed or over-depth credential endpoint encodings fail closed" {
+    for ([_][]const u8{
+        "https://example.vault.azure.net/key%ZZ/name/backup",
+        "https://example.vault.azure.net/key%25252573/name/backup",
+    }) |url| {
+        var mock = core.http.MockTransport.init(
+            std.testing.allocator,
+            200,
+            "{\"ordinary\":\"safe\"}",
+        );
+        defer mock.deinit();
+        mock.response_headers_list = &.{
+            .{ .name = "Content-Type", .value = "application/json" },
+        };
+        var recorder = RecordingTransport.initWithOptions(
+            std.testing.allocator,
+            mock.asTransport(),
+            .{ .bodyPolicyFn = &inspectKnownSafeBody },
+        );
+        defer recorder.deinit();
+        var request = core.http.Request.init(
+            std.testing.allocator,
+            .POST,
+            url,
+        );
+        defer request.deinit();
+        var response = try recorder.asTransport().send(&request);
+        response.deinit();
+        try std.testing.expectError(
+            error.SensitiveBodyRequiresSanitization,
+            recorder.toJson(std.testing.allocator),
+        );
+    }
+}
+
 test "Azure key management key1 and key2 responses are rejected" {
     for ([_][]const u8{
         "https://management.azure.com/subscriptions/s/resourceGroups/r/providers/Microsoft.EventGrid/topics/t/listKeys?api-version=2025-02-15",
@@ -5789,27 +6601,27 @@ test "ARM credential schemas cover every trusted sovereign management host" {
         secrets: []const []const u8,
     }{
         .{
-            .path = "/subscriptions/s/resourceGroups/r/providers/Microsoft.Batch/batchAccounts/a/listKeys?api-version=2024-07-01",
+            .path = "/subscriptions/s/resourceGroups/r/providers/Microsoft.Batch/batchAccounts/a/list%4Beys?api-version=2024-07-01",
             .body = "{\"primary\":\"batch-primary\",\"secondary\":\"batch-secondary\"}",
             .secrets = &.{ "batch-primary", "batch-secondary" },
         },
         .{
-            .path = "/subscriptions/s/resourceGroups/r/providers/Microsoft.Search/searchServices/a/listQueryKeys?api-version=2024-03-01-preview",
+            .path = "/subscriptions/s/resourceGroups/r/providers/Microsoft.Search/searchServices/a/listQuery%4Beys?api-version=2024-03-01-preview",
             .body = "{\"value\":[{\"name\":\"query-key\",\"key\":\"search-query-secret\"}]}",
             .secrets = &.{"search-query-secret"},
         },
         .{
-            .path = "/subscriptions/s/resourceGroups/r/providers/Microsoft.EventGrid/topics/t/listKeys?api-version=2025-02-15",
+            .path = "/subscriptions/s/resourceGroups/r/providers/Microsoft.EventGrid/topics/t/list%4Beys?api-version=2025-02-15",
             .body = "{\"key1\":\"event-grid-one\",\"key2\":\"event-grid-two\"}",
             .secrets = &.{ "event-grid-one", "event-grid-two" },
         },
         .{
-            .path = "/subscriptions/s/resourceGroups/r/providers/Microsoft.DocumentDB/databaseAccounts/a/listKeys?api-version=2025-04-15",
+            .path = "/subscriptions/s/resourceGroups/r/providers/Microsoft.DocumentDB/databaseAccounts/a/list%4Beys?api-version=2025-04-15",
             .body = "{\"primaryMasterKey\":\"cosmos-one\",\"secondaryMasterKey\":\"cosmos-two\"}",
             .secrets = &.{ "cosmos-one", "cosmos-two" },
         },
         .{
-            .path = "/subscriptions/s/resourceGroups/r/providers/Microsoft.ContainerRegistry/registries/a/listCredentials?api-version=2025-04-01",
+            .path = "/subscriptions/s/resourceGroups/r/providers/Microsoft.ContainerRegistry/registries/a/list%43redentials?api-version=2025-04-01",
             .body = "{\"passwords\":[{\"name\":\"password\",\"value\":\"acr-secret\"}]}",
             .secrets = &.{"acr-secret"},
         },
@@ -5941,7 +6753,7 @@ test "Storage user delegation key XML is rejected on trusted blob hosts" {
     for (hosts) |host| {
         const url = try std.fmt.allocPrint(
             std.testing.allocator,
-            "https://{s}/?restype=service&comp=userdelegationkey",
+            "https://{s}/?restype=service&co%6dp=user%64elegationkey",
             .{host},
         );
         defer std.testing.allocator.free(url);
@@ -6011,6 +6823,37 @@ test "Storage delegation XML schema ignores untrusted hosts" {
         u8,
         body,
         parsed.asSlice()[0].response_body,
+    );
+}
+
+test "malformed Storage delegation action encoding fails closed" {
+    var mock = core.http.MockTransport.init(
+        std.testing.allocator,
+        200,
+        "<Document><Value>ordinary</Value></Document>",
+    );
+    defer mock.deinit();
+    mock.response_headers_list = &.{
+        .{ .name = "Content-Type", .value = "application/xml" },
+    };
+    var recorder = RecordingTransport.initWithOptions(
+        std.testing.allocator,
+        mock.asTransport(),
+        .{ .bodyPolicyFn = &inspectKnownSafeBody },
+    );
+    defer recorder.deinit();
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .POST,
+        "https://account.blob.core.windows.net/" ++
+            "?restype=service&comp=user%25252564elegationkey",
+    );
+    defer request.deinit();
+    var response = try recorder.asTransport().send(&request);
+    response.deinit();
+    try std.testing.expectError(
+        error.SensitiveBodyRequiresSanitization,
+        recorder.toJson(std.testing.allocator),
     );
 }
 
@@ -6945,6 +7788,35 @@ fn jwtHeaderAllocationFixture(allocator: std.mem.Allocator) !void {
     allocator.free(json);
 }
 
+fn endpointSchemaAllocationFixture(allocator: std.mem.Allocator) !void {
+    var mock = core.http.MockTransport.init(
+        std.testing.allocator,
+        200,
+        "{\"ordinary\":\"safe\"}",
+    );
+    defer mock.deinit();
+    mock.response_headers_list = &.{
+        .{ .name = "Content-Type", .value = "application/json" },
+    };
+    var recorder = RecordingTransport.initWithOptions(
+        std.testing.allocator,
+        mock.asTransport(),
+        .{ .bodyPolicyFn = &inspectKnownSafeBody },
+    );
+    defer recorder.deinit();
+    var request = core.http.Request.init(
+        std.testing.allocator,
+        .GET,
+        "https://management.azure.com/subscriptions/s/" ++
+            "providers/Microsoft.Batch/resources/ordinary",
+    );
+    defer request.deinit();
+    var response = try recorder.asTransport().send(&request);
+    response.deinit();
+    const json = try recorder.toJson(allocator);
+    allocator.free(json);
+}
+
 const allocation_fixture_json =
     \\{"version":2,"exchanges":[{"request_method":"POST","request_url":"https://example.com","request_headers":[],"request_body":{"encoding":"base64","data":"cmVxdWVzdA=="},"response_status":200,"response_headers":[],"response_body":{"encoding":"base64","data":"cmVzcG9uc2U="}}]}
 ;
@@ -6988,6 +7860,11 @@ test "transport allocation failures clean up" {
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
         jwtHeaderAllocationFixture,
+        .{},
+    );
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        endpointSchemaAllocationFixture,
         .{},
     );
     try std.testing.checkAllAllocationFailures(

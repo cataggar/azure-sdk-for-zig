@@ -41,6 +41,14 @@ defer parsed.deinit();
 var playback = testing.PlaybackTransport.init(allocator, parsed.asSlice());
 ```
 
+Recording stages a complete redirect/retry chain before publishing any of its
+exchanges. Buffered chains commit only when their final nonretry response is
+returned; a retryable final response remains tentative until it is accepted or
+the original request restarts. Streaming chains commit only after the final
+operation finishes. Intermediate redirect aborts remain tentative, while
+redirect allocation failure, retry restart from the original request,
+operation failure, abort, or cancellation discards the whole tentative chain.
+
 Recording JSON replaces recognized authorization, token, secret, key, cookie,
 and SAS-bearing header values with `REDACTED`. Credential URL headers such as
 `x-ms-copy-source`, `x-ms-rename-source`, and
@@ -66,8 +74,10 @@ Safe fragments are preserved in recorded URL headers; Core strips them when
 constructing the redirected HTTP request. Unsafe or malformed location
 fragments cause full header redaction. Relative redirects such as
 `/callback?return=https://...` remain replayable when their decoded values are
-safe. Decode depth and size are bounded, and malformed or over-depth encodings
-fail closed.
+safe. Safe network-path references such as `//example.test/final` and pathless
+absolute references such as `https://example.test?mode=one` are preserved;
+userinfo and credential-bearing authorities are rejected. Decode depth and
+size are bounded, and malformed or over-depth encodings fail closed.
 
 Header names are checked case-insensitively. The default preserves only a
 known-safe standard/Azure header allowlist, after inspecting every value for
@@ -112,9 +122,13 @@ list/regenerate credential schemas—including Batch, AI Search, Event Grid,
 Cognitive Services, Cosmos DB, and Container Registry—apply only to the
 explicit public, US Government, China, and German management hosts. Storage
 User Delegation Key XML is recognized only on trusted sovereign Blob service
-hosts and the matching action. Arbitrary URL text cannot activate these schema
-rules, so App Configuration key/value documents and paths containing words
-such as `vault/secrets` remain recordable and exact.
+hosts and the matching action. Managed HSM host rules include every supported
+sovereign suffix, including `managedhsm.microsoftazure.de`. Endpoint path
+segments and query names/values are canonicalized with the same bounded
+recursive decoder before schema classification; malformed or over-depth
+endpoint encodings fail closed. Arbitrary URL text cannot activate these
+schema rules, so App Configuration key/value documents and paths containing
+words such as `vault/secrets` remain recordable and exact.
 
 The default body contract is deny-by-default: every non-empty body is rejected
 with `BodyPolicyRequired` unless `bodyPolicyFn` classifies that exact exchange.
@@ -176,3 +190,6 @@ Run its independent tests from this directory:
 ```bash
 zig build test --summary all
 ```
+
+The test target runs both Core raw-transport and pipeline conformance contracts,
+plus Core allocation-failure fixtures.
