@@ -3056,21 +3056,16 @@ fn sanitizeUrlAllocDepth(
         if (!first) try output.writer.writeByte('&');
         first = false;
         const equals = std.mem.indexOfScalar(u8, parameter, '=') orelse {
-            const decoded = try percentDecodeAlloc(
+            if (try encodedQueryNameIsSensitive(
+                allocator,
+                parameter,
+            ) or try encodedComponentIsSensitive(
                 allocator,
                 parameter,
                 true,
-            );
-            defer allocator.free(decoded);
-            if (isSensitiveQueryField(decoded) or
-                try encodedComponentIsSensitive(
-                    allocator,
-                    parameter,
-                    true,
-                    true,
-                    nesting,
-                ))
-            {
+                true,
+                nesting,
+            )) {
                 try output.writer.writeAll(parameter);
                 try output.writer.writeAll("=");
                 try output.writer.writeAll(redacted_value);
@@ -3081,13 +3076,10 @@ fn sanitizeUrlAllocDepth(
         };
         const encoded_name = parameter[0..equals];
         const encoded_value = parameter[equals + 1 ..];
-        const decoded_name = try percentDecodeAlloc(
+        const redact = try encodedQueryNameIsSensitive(
             allocator,
             encoded_name,
-            true,
-        );
-        defer allocator.free(decoded_name);
-        const redact = isSensitiveQueryField(decoded_name) or
+        ) or
             try encodedComponentIsSensitive(
                 allocator,
                 encoded_value,
@@ -3103,6 +3095,29 @@ fn sanitizeUrlAllocDepth(
         try output.writer.writeAll(url[fragment_start..]);
     }
     return output.toOwnedSlice();
+}
+
+fn encodedQueryNameIsSensitive(
+    allocator: std.mem.Allocator,
+    encoded: []const u8,
+) !bool {
+    if (encoded.len > max_sanitized_url_length) return true;
+    var current = try allocator.dupe(u8, encoded);
+    defer allocator.free(current);
+    var decode_count: usize = 0;
+    while (decode_count < max_url_decode_depth) : (decode_count += 1) {
+        const decoded = try percentDecodeAlloc(
+            allocator,
+            current,
+            decode_count == 0,
+        );
+        const changed = !std.mem.eql(u8, current, decoded);
+        allocator.free(current);
+        current = decoded;
+        if (isSensitiveQueryField(current)) return true;
+        if (!changed) return false;
+    }
+    return containsPercentEscape(current);
 }
 
 fn encodedComponentIsSensitive(
@@ -4767,7 +4782,8 @@ test "URL sanitization recursively decodes nested URI credentials" {
     const recorded_url =
         "https://example.test/callback?return=" ++
         "https%253A%252F%252Fstorage.example%252Fblob%253F" ++
-        "%252573%252569%252567%253Dnested-sas-secret&stable=one";
+        "%252573%252569%252567%253Dnested-sas-secret&" ++
+        "%252573%252569%252567=top-level-sas-secret&stable=one";
     var mock = core.http.MockTransport.init(
         std.testing.allocator,
         200,
@@ -4793,6 +4809,9 @@ test "URL sanitization recursively decodes nested URI credentials" {
         std.mem.indexOf(u8, json, "nested-sas-secret") == null,
     );
     try std.testing.expect(
+        std.mem.indexOf(u8, json, "top-level-sas-secret") == null,
+    );
+    try std.testing.expect(
         std.mem.indexOf(u8, json, "return=REDACTED") != null,
     );
 
@@ -4807,7 +4826,8 @@ test "URL sanitization recursively decodes nested URI credentials" {
         .GET,
         "https://example.test/callback?return=" ++
             "https%253A%252F%252Fstorage.example%252Fblob%253F" ++
-            "%252573%252569%252567%253Drotated-sas-secret&stable=one",
+            "%252573%252569%252567%253Drotated-sas-secret&" ++
+            "%252573%252569%252567=rotated-top-level-sas&stable=one",
     );
     defer live.deinit();
     var replayed = try playback.asTransport().send(&live);
