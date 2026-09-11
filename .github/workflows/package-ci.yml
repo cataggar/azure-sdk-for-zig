@@ -107,6 +107,7 @@ jobs:
           fixture="$GITHUB_WORKSPACE/.symcrypt-ci/${{ matrix.arch }}"
           include="$GITHUB_WORKSPACE/.zig-symcrypt-ci/vendor/symcrypt/include"
           common=(
+            "-Denable_httpx_tls=true"
             "-Dtarget=${{ matrix.target }}"
             "-Dlinkage=dynamic"
             "-Dsymcrypt_include_dir=$include"
@@ -114,15 +115,15 @@ jobs:
             "-Dsymcrypt_libraries=$fixture/lib/libsymcrypt_plus.a"
             "-Dsymcrypt_libraries=$fixture/module/generic/libsymcrypt.so"
           )
-          zig build headers-check -Dheaders_only=true \
+          zig build headers-check -Dheaders_only=true -Denable_httpx_tls=true \
             "-Dtarget=${{ matrix.target }}" "-Dsymcrypt_include_dir=$include" \
             --summary all
-          zig build headers-check -Dheaders_only=true -Dsymcrypt_checked=true \
+          zig build headers-check -Dheaders_only=true -Dsymcrypt_checked=true -Denable_httpx_tls=true \
             "-Dtarget=${{ matrix.target }}" "-Dsymcrypt_include_dir=$include" \
             --summary all
           zig build provenance-check "${common[@]}" --summary all
           for optimize in Debug ReleaseSafe; do
-            zig build test "-Doptimize=$optimize" "${common[@]}" --summary all
+            zig build test tls-test "-Doptimize=$optimize" "${common[@]}" --summary all
           done
           zig build example-run -Doptimize=ReleaseSafe "${common[@]}" --summary all
           zig build package-consumer-check -Doptimize=ReleaseSafe \
@@ -135,6 +136,7 @@ jobs:
           fixture="$GITHUB_WORKSPACE/.symcrypt-ci/${{ matrix.arch }}"
           include="$GITHUB_WORKSPACE/.zig-symcrypt-ci/vendor/symcrypt/include"
           common=(
+            "-Denable_httpx_tls=true"
             "-Dtarget=${{ matrix.target }}"
             "-Dlinkage=static"
             "-Dsymcrypt_include_dir=$include"
@@ -146,7 +148,7 @@ jobs:
           )
           zig build provenance-check "${common[@]}" --summary all
           for optimize in Debug ReleaseSafe; do
-            zig build test "-Doptimize=$optimize" "${common[@]}" --summary all
+            zig build test tls-test "-Doptimize=$optimize" "${common[@]}" --summary all
           done
           zig build example-run -Doptimize=ReleaseSafe "${common[@]}" --summary all
           zig build package-consumer-check -Doptimize=ReleaseSafe \
@@ -166,6 +168,7 @@ jobs:
           $fixture = "$env:GITHUB_WORKSPACE/.symcrypt-ci/${{ matrix.arch }}"
           $include = "$env:GITHUB_WORKSPACE/.zig-symcrypt-ci/vendor/symcrypt/include"
           $common = @(
+            "-Denable_httpx_tls=true",
             "-Dtarget=${{ matrix.target }}",
             "-Dlinkage=dynamic",
             "-Dsymcrypt_include_dir=$include",
@@ -173,18 +176,18 @@ jobs:
             "-Dsymcrypt_libraries=$fixture/lib/symcrypt_plus_NoCIL.lib",
             "-Dsymcrypt_libraries=$fixture/dll/symcrypt_zig_103_13.lib"
           )
-          zig build headers-check -Dheaders_only=true `
+          zig build headers-check -Dheaders_only=true -Denable_httpx_tls=true `
             "-Dtarget=${{ matrix.target }}" "-Dsymcrypt_include_dir=$include" `
             --summary all
           if ($LASTEXITCODE -ne 0) { throw "FRE header check failed" }
-          zig build headers-check -Dheaders_only=true -Dsymcrypt_checked=true `
+          zig build headers-check -Dheaders_only=true -Dsymcrypt_checked=true -Denable_httpx_tls=true `
             "-Dtarget=${{ matrix.target }}" "-Dsymcrypt_include_dir=$include" `
             --summary all
           if ($LASTEXITCODE -ne 0) { throw "checked header check failed" }
           zig build provenance-check @common --summary all
           if ($LASTEXITCODE -ne 0) { throw "dynamic provenance failed" }
           foreach ($optimize in @("Debug", "ReleaseSafe")) {
-            zig build test "-Doptimize=$optimize" @common --summary all
+            zig build test tls-test "-Doptimize=$optimize" @common --summary all
             if ($LASTEXITCODE -ne 0) { throw "dynamic $optimize tests failed" }
           }
           zig build example-run -Doptimize=ReleaseSafe @common --summary all
@@ -198,6 +201,7 @@ jobs:
           $fixture = "$env:GITHUB_WORKSPACE/.symcrypt-ci/${{ matrix.arch }}"
           $include = "$env:GITHUB_WORKSPACE/.zig-symcrypt-ci/vendor/symcrypt/include"
           $common = @(
+            "-Denable_httpx_tls=true",
             "-Dtarget=${{ matrix.target }}",
             "-Dlinkage=static",
             "-Dsymcrypt_include_dir=$include",
@@ -208,7 +212,7 @@ jobs:
           zig build provenance-check @common --summary all
           if ($LASTEXITCODE -ne 0) { throw "static provenance failed" }
           foreach ($optimize in @("Debug", "ReleaseSafe")) {
-            zig build test "-Doptimize=$optimize" @common --summary all
+            zig build test tls-test "-Doptimize=$optimize" @common --summary all
             if ($LASTEXITCODE -ne 0) { throw "static $optimize tests failed" }
           }
           zig build example-run -Doptimize=ReleaseSafe @common --summary all
@@ -292,6 +296,7 @@ jobs:
           fixture="$GITHUB_WORKSPACE/.symcrypt-ci/${{ matrix.arch }}"
           include="$GITHUB_WORKSPACE/.zig-symcrypt-ci/vendor/symcrypt/include"
           dynamic=(
+            "-Denable_httpx_tls=true"
             "-Dtarget=${{ matrix.target }}"
             "-Dtarget_can_run=true"
             "-Dlinkage=dynamic"
@@ -301,6 +306,7 @@ jobs:
             "-Dsymcrypt_libraries=$fixture/module/generic/libsymcrypt.so"
           )
           static=(
+            "-Denable_httpx_tls=true"
             "-Dtarget=${{ matrix.target }}"
             "-Dtarget_can_run=true"
             "-Dlinkage=static"
@@ -312,8 +318,8 @@ jobs:
             "-Dsymcrypt_libraries=$fixture/lib/libsymcrypt_mlkem.a"
           )
           for optimize in Debug ReleaseSafe; do
-            zig build test "-Doptimize=$optimize" "${dynamic[@]}" --summary all
-            zig build test "-Doptimize=$optimize" "${static[@]}" --summary all
+            zig build test tls-test "-Doptimize=$optimize" "${dynamic[@]}" --summary all
+            zig build test tls-test "-Doptimize=$optimize" "${static[@]}" --summary all
           done
           zig build example-run -Doptimize=ReleaseSafe "${dynamic[@]}" --summary all
           zig build example-run -Doptimize=ReleaseSafe "${static[@]}" --summary all
@@ -336,6 +342,7 @@ jobs:
           $fixture = "$env:GITHUB_WORKSPACE/.symcrypt-ci/${{ matrix.arch }}"
           $include = "$env:GITHUB_WORKSPACE/.zig-symcrypt-ci/vendor/symcrypt/include"
           $dynamic = @(
+            "-Denable_httpx_tls=true",
             "-Dtarget=${{ matrix.target }}",
             "-Dtarget_can_run=true",
             "-Dlinkage=dynamic",
@@ -345,6 +352,7 @@ jobs:
             "-Dsymcrypt_libraries=$fixture/dll/symcrypt_zig_103_13.lib"
           )
           $static = @(
+            "-Denable_httpx_tls=true",
             "-Dtarget=${{ matrix.target }}",
             "-Dtarget_can_run=true",
             "-Dlinkage=static",
@@ -354,9 +362,9 @@ jobs:
             "-Dsymcrypt_libraries=$fixture/lib/symcrypt_static_NoCIL.lib"
           )
           foreach ($optimize in @("Debug", "ReleaseSafe")) {
-            zig build test "-Doptimize=$optimize" @dynamic --summary all
+            zig build test tls-test "-Doptimize=$optimize" @dynamic --summary all
             if ($LASTEXITCODE -ne 0) { throw "dynamic Arm64 $optimize tests failed" }
-            zig build test "-Doptimize=$optimize" @static --summary all
+            zig build test tls-test "-Doptimize=$optimize" @static --summary all
             if ($LASTEXITCODE -ne 0) { throw "static Arm64 $optimize tests failed" }
           }
           zig build example-run -Doptimize=ReleaseSafe @dynamic --summary all

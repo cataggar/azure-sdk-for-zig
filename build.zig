@@ -83,6 +83,8 @@ pub fn build(b: *std.Build) void {
         "headers_only",
         "Compile adapter/header ABI only without native libraries",
     ) orelse false;
+    const enable_httpx_tls = b.option(bool, "enable_httpx_tls", "Expose the optional HTTPX TLS primitive provider") orelse false;
+    const httpx_source = b.option(std.Build.LazyPath, "httpx_source", "Development-only HTTPX source root; never a release dependency pin");
 
     if (!headers_only and libraries.len == 0) {
         std.log.err(
@@ -142,6 +144,55 @@ pub fn build(b: *std.Build) void {
     );
     headers_step.dependOn(&header_object.step);
     b.getInstallStep().dependOn(&header_object.step);
+
+    if (enable_httpx_tls) {
+        const httpx_dep = b.lazyDependency("httpx", .{ .target = target, .optimize = optimize }) orelse return;
+        const httpx_mod = httpx_dep.module("httpx");
+        if (httpx_source) |path| httpx_mod.root_source_file = path.path(b, "src/httpx.zig");
+        const tls_mod = b.addModule("azure_sdk_core_symcrypt_tls", .{
+            .root_source_file = b.path("tls/root.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "httpx", .module = httpx_mod },
+                .{ .name = "symcrypt", .module = symcrypt_dep.module("symcrypt") },
+            },
+        });
+        tls_mod.addIncludePath(include_dir orelse symcrypt_dep.path("vendor/symcrypt/include"));
+        for (system_include_dirs) |path| tls_mod.addSystemIncludePath(path);
+        if (checked) tls_mod.addCMacro("DBG", "1");
+        if (!headers_only) addLinuxDynamicRPath(tls_mod, target, linkage, libraries);
+        const tls_headers = b.addObject(.{
+            .name = "symcrypt-tls-headers",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("tls/header_check.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{.{ .name = "binding", .module = tls_mod }},
+            }),
+        });
+        headers_step.dependOn(&tls_headers.step);
+        b.getInstallStep().dependOn(&tls_headers.step);
+        const tls_tests = b.addTest(.{ .root_module = tls_mod });
+        const tls_compile_step = b.step("tls-test-compile", "Compile optional TLS provider tests without execution");
+        const tls_test_step = b.step("tls-test", "Run optional HTTPX TLS provider tests");
+        if (headers_only) {
+            tls_compile_step.dependOn(&b.addFail("tls-test-compile requires native libraries; use headers-check for ABI-only compilation").step);
+            tls_test_step.dependOn(&b.addFail("tls-test requires native SymCrypt libraries and provenance").step);
+        } else {
+            tls_compile_step.dependOn(&tls_tests.step);
+            if (target_can_run) {
+                const run = runArtifactStep(b, symcrypt_dep, tls_tests, target, linkage, provenance, libraries);
+                run.dependOn(addProvenanceVerification(b, symcrypt_dep, target, linkage, provenance, libraries));
+                tls_test_step.dependOn(run);
+            } else {
+                tls_test_step.dependOn(&b.addFail("the selected target is build-only; use tls-test-compile").step);
+            }
+        }
+    } else if (httpx_source != null) {
+        std.log.err("httpx_source requires enable_httpx_tls=true", .{});
+        b.invalid_user_input = true;
+    }
 
     if (headers_only) return;
 
@@ -259,6 +310,7 @@ pub fn build(b: *std.Build) void {
         system_include_dirs,
         checked,
         provenance,
+        enable_httpx_tls,
     );
     const package_consumer_step = b.step(
         "package-consumer-check",
@@ -276,6 +328,7 @@ fn addSourceCheck(b: *std.Build) *std.Build.Step {
         "build.zig",
         "build.zig.zon",
         "root.zig",
+        "tls",
         "examples",
         "conformance",
     });
@@ -350,6 +403,7 @@ fn addPackageConsumerBuild(
     system_include_dirs: []const std.Build.LazyPath,
     checked: bool,
     provenance: ?std.Build.LazyPath,
+    enable_httpx_tls: bool,
 ) *std.Build.Step.Run {
     const command = b.addSystemCommand(&.{
         b.graph.zig_exe,
@@ -361,6 +415,7 @@ fn addPackageConsumerBuild(
         b.fmt("-Doptimize={s}", .{@tagName(optimize)}),
         b.fmt("-Dlinkage={s}", .{@tagName(linkage)}),
         b.fmt("-Dsymcrypt_checked={s}", .{if (checked) "true" else "false"}),
+        b.fmt("-Denable_httpx_tls={s}", .{if (enable_httpx_tls) "true" else "false"}),
     });
     command.setCwd(package.consumer_dir);
     command.step.dependOn(&package.fetch.step);

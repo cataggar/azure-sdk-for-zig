@@ -1,7 +1,8 @@
 # azure_sdk_core_symcrypt
 
 Optional Microsoft SymCrypt 103.13.0 provider for
-`azure_sdk_core.crypto.CryptoProvider`.
+`azure_sdk_core.crypto.CryptoProvider`, with a separately enabled HTTPX TLS
+primitive binding.
 
 - Package version: `0.2.0`
 - Release branch: `sdk/core_symcrypt`
@@ -24,7 +25,7 @@ beneath `std.http.Client`. Selecting this package therefore does not make
 `std.http.Client` TLS use SymCrypt.
 
 MD5 is enabled in `zig_symcrypt` only because Azure Storage compatibility and
-integrity paths require it. The adapter does not expose SHA-1 or legacy RSA.
+integrity paths require it. The SDK provider exposes neither SHA-1 nor RSA.
 MD5 must not be used as a security primitive.
 
 ## Provider API
@@ -108,6 +109,114 @@ The adapter always forwards `legacy=true`,
 `enable_legacy_rsa_pkcs1_encryption=false`, `enable_mlkem=false`, and
 `enable_tls_x25519_mlkem768=false`. Consumers cannot broaden this adapter's
 legacy surface.
+
+## Optional HTTPX TLS binding
+
+`enable_httpx_tls=true` additionally exports the
+`azure_sdk_core_symcrypt_tls` build module. It adds only the pure-Zig HTTPX
+dependency; the existing `zig_symcrypt` 0.1.0 pin, SymCrypt 103.13.0 inputs,
+and native library order above are unchanged. It does not add a native
+dependency to Core or HTTPX itself. The module is absent by default.
+
+```zig
+// Add .enable_httpx_tls = true to the package dependency options above.
+root_module.addImport(
+    "azure_sdk_core_symcrypt_tls",
+    adapter.module("azure_sdk_core_symcrypt_tls"),
+);
+```
+
+```zig
+const symcrypt_tls = @import("azure_sdk_core_symcrypt_tls");
+var tls_crypto = try symcrypt_tls.Provider.init(allocator, .{});
+const tls_primitives = tls_crypto.provider();
+_ = tls_primitives;
+```
+
+This descriptor implements HTTPX CryptoProvider ABI v1. Selecting SDK
+`Provider.asProvider()` and selecting TLS `Provider.provider()` are independent
+decisions. Neither operation changes `std.http.Client` TLS. The TLS binding
+does not implement a TrustProvider, load roots, validate hostnames or validity,
+or change certificate policy. Trust must be supplied independently by the
+qualified HTTPX runtime.
+
+### Primitive capabilities and ownership
+
+| Operation | Enabled |
+| --- | --- |
+| Transcript hashes, clone/snapshot | SHA-256, SHA-384, SHA-512 |
+| HMAC, HKDF extract/expand, TLS 1.2 PRF | SHA-256, SHA-384, SHA-512 |
+| AEAD, detached 16-byte tags and 12-byte nonces | AES-128-GCM, AES-256-GCM, ChaCha20-Poly1305 |
+| Ephemeral agreement | X25519, P-256, P-384 |
+| ECDSA sign/verify | P-256/SHA-256, P-384/SHA-384; DER signatures |
+| RSA sign/verify | RSAe PKCS#1 v1.5 and PSS with SHA-256/384/512; PSS salt is exactly the digest length |
+
+SHA-1, Ed25519, AEGIS, ML-KEM, hybrid groups, and restricted RSASSA-PSS keys
+are not advertised. Unsupported provider operations return
+`UnsupportedAlgorithm`/`UnsupportedOperation`; there is no `std.crypto`
+primitive fallback. Legacy MD5 remains confined to the existing SDK provider,
+not the TLS provider.
+
+EC private imports accept canonical raw scalars, SEC1, and unencrypted PKCS#8
+with matching curve identifiers. Included EC public points must match the
+imported scalar. RSA imports accept unencrypted two-prime PKCS#1/PKCS#8;
+SymCrypt reconstructs and validates private keys from `(n,e,d)` instead of
+trusting encoded CRT values. RSA public keys use PKCS#1 DER. Native RSA limits
+are 2048–16384 bits. Encrypted keys and additional PKCS#8 attributes are not
+accepted.
+
+The descriptor borrows its nonmoving owner. Keep that owner and its
+thread-safe scratch allocator alive until configurations, sessions, and every
+owning handle have been released. Do not mutate the owner while borrowed.
+There is no owner resource to deinitialize
+and no process-global SymCrypt shutdown. Each mutable hash/private-key handle
+is single-owner, single-threaded, and allocated with the supplied handle
+allocator. Imports copy secrets into native-owned storage; native destructors
+and adapter cleanup wipe secret state. Separate handles and stateless calls
+may run concurrently against one borrowed provider.
+
+`Options.max_scratch_bytes` defaults to 64 KiB and bounds concatenated AEAD
+AAD, HKDF info, PRF seed, and key encodings; this is not a total native-memory
+quota. Hash/HMAC parts stream without
+concatenating the transcript. Native library limits and HTTPX ABI preflight
+checks also apply. Allocation failures return `OutOfMemory`; native failures
+are explicitly mapped into HTTPX's finite provider error categories. Version,
+initialization, FIPS, hardware, and unknown failures never select another
+provider. Initialization still exposes the original `symcrypt.InitError`.
+
+HTTPX's facade wipes callback outputs on operational failure. In particular,
+tag failure returns `AuthenticationFailed` and wipes the entire plaintext
+destination, including exact in-place ciphertext. Rejected preflight input
+does not invoke a primitive; partial overlaps are not supported.
+
+### Qualification boundary
+
+The immutable HTTPX dependency currently records the published ABI foundation
+`2257fcdd28fb0e1bbd7da33350846d522d29d034`, not a qualified end-to-end
+SymCrypt TLS runtime. `httpx_source` is an explicit local development override
+for the HTTPX source root, valid only with `enable_httpx_tls=true`; it is not a
+replacement release pin.
+
+Primitive vectors, independent AEAD/key/signature checks, and fault-injection
+tests do **not** establish TLS interoperability. Before claiming HTTPX/SymCrypt
+TLS support or closing the integration gate, qualify and pin the completed
+HTTPX provider-injection runtime, then run independent-server TLS 1.2 and
+TLS 1.3 handshakes/records for every advertised suite and group. Repeat trusted,
+untrusted, expired, and hostname-mismatch outcomes with unchanged TrustProvider
+policy, and inject provider failures into real handshakes and records to prove
+there is no fallback. Repeat dynamic/static Linux/Windows and Arm64 execution;
+header-only compilation is not native matrix evidence.
+
+This binding and its algorithm list make no FIPS-validation claim. In
+particular, availability of ChaCha20-Poly1305 or a successful native integrity
+check does not establish approved-mode operation.
+
+```bash
+zig build tls-test -Denable_httpx_tls=true [linkage and fixture options] --summary all
+zig build tls-test-compile -Denable_httpx_tls=true [linkage and fixture options]
+zig build headers-check -Denable_httpx_tls=true -Dheaders_only=true [header options]
+zig build package-consumer-check -Denable_httpx_tls=true [linkage and fixture options]
+```
 
 ### Exact library order
 

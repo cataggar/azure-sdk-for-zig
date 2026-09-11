@@ -12,12 +12,18 @@
             .url = "git+https://github.com/cataggar/zig-symcrypt.git#9b3c94a2a4e0d98e055f0d908e11e1d7031b9a4b",
             .hash = "zig_symcrypt-0.1.0-QIw66SjCEAAi9B86kkwa2aD-unj5hbQsGhuhTZdL4XFf",
         },
+        .httpx = .{
+            .url = "git+https://github.com/cataggar/httpx.zig.git#2257fcdd28fb0e1bbd7da33350846d522d29d034",
+            .hash = "httpx-0.1.9-8qj2ep9LIgDK5Y7K1rYbcpYQ9CGGdw8Uaq8hSWrRR-oA",
+            .lazy = true,
+        },
     },
     .paths = .{
         ".gitignore",
         "build.zig",
         "build.zig.zon",
         "root.zig",
+        "tls",
         "conformance",
         "examples",
         "README.md",
