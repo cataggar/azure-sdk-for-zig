@@ -46,7 +46,7 @@ fn testingRuntime() core.http.HttpRuntime {
 }
 
 /// Version reported to the service in the `open` properties.
-pub const sdk_version = "0.2.0";
+pub const sdk_version = "0.3.0";
 
 /// The product half of the user agent, matching the other SDKs' shape.
 pub const user_agent_product = "azsdk-zig-servicebus";
@@ -2158,11 +2158,11 @@ test "the user agent leads with the application id when there is one" {
 
     const plain = try (ConnectionOptions{}).userAgent(allocator);
     defer allocator.free(plain);
-    try testing.expect(std.mem.startsWith(u8, plain, "azsdk-zig-servicebus/"));
+    try testing.expect(std.mem.startsWith(u8, plain, "azsdk-zig-servicebus/0.3.0"));
 
     const tagged = try (ConnectionOptions{ .application_id = "contoso-app" }).userAgent(allocator);
     defer allocator.free(tagged);
-    try testing.expect(std.mem.startsWith(u8, tagged, "contoso-app azsdk-zig-servicebus/"));
+    try testing.expect(std.mem.startsWith(u8, tagged, "contoso-app azsdk-zig-servicebus/0.3.0"));
 }
 
 test "a connection string is parsed once and yields its entity path" {
