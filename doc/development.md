@@ -10,6 +10,7 @@ Use Zig 0.16.0 or later.
 zig build
 zig build test --summary all
 zig build current-runtime-consumer-test --summary all
+zig build otlp-collector-fixture-test --summary all
 zig build package-check --summary all
 zig build package-history-check --summary all
 zig fmt --check codegen/ eng/ build.zig
@@ -24,6 +25,14 @@ export and W3C propagation, and the published HTTP and SDK crypto conformance
 modules. Its standard HTTP and allocation-failure contracts use local fixtures,
 not Azure credentials. The catalog and history checks still cover all registered
 package identities.
+
+The [App Configuration OTLP fixture](../eng/fixtures/otlp_collector_interop/README.md)
+uses the immutable released service client and Core mock transport. Its default
+tests and runnable JSON generator are offline. A separate, explicitly invoked
+Linux script can verify that unmodified reference JSON against a pinned official
+local OpenTelemetry Collector; ordinary builds/tests never start that process
+or require the optional Collector executable. See the fixture README for setup,
+loopback-only safety controls, verification and deferred production-export scope.
 
 ## Branch-owned package work
 

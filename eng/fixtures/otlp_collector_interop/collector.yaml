@@ -1,0 +1,21 @@
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: "127.0.0.1:0"
+        max_request_body_size: 65536
+exporters:
+  file:
+    path: accepted.jsonl
+    format: json
+    flush_interval: 100ms
+service:
+  telemetry:
+    metrics:
+      level: none
+      address: ""
+      readers: []
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [file]
