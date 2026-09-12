@@ -82,7 +82,10 @@ Areas do not share a host. `git` lives on `dev.azure.com`, `graph` on
 `vssps.dev.azure.com`, package feeds on `pkgs.dev.azure.com`, and so on —
 14 hosts in total. Every generated area client carries its own default
 endpoint, so an accessor only overrides the endpoint when you supplied
-one. Set `endpoint` for Azure DevOps Server, which serves every area from
+one. Notification's generated service-prefix endpoint has no default; its SDK
+accessor supplies `https://dev.azure.com`, matching the
+[documented service-root example](https://learn.microsoft.com/en-us/rest/api/azure/devops/notification/subscriptions/list?view=azure-devops-rest-7.1#examples).
+An explicit endpoint still wins. Set `endpoint` for Azure DevOps Server, which serves every area from
 a single collection URL:
 
 ```zig
@@ -93,6 +96,46 @@ var client = try devops.DevOpsClient.init(allocator, .{
     .runtime = runtime,
 });
 ```
+
+## Optional automatic tracing
+
+Version **0.2.0** pins published Core **0.4.0** and REST DevOps **0.2.0**.
+Tracing is off unless `ClientOptions.instrumentation` is supplied:
+
+```zig
+var client = try devops.DevOpsClient.init(allocator, .{
+    .organization = "contoso",
+    .credential = .fromPat(pat),
+    .runtime = runtime,
+    .instrumentation = .{
+        .provider = provider.asProvider(),
+        .scope_name = "azure_sdk_devops",
+        .scope_version = "0.2.0",
+        .namespace = "Azure.DevOps",
+    },
+});
+defer client.deinit();
+```
+
+`provider` is caller-owned, for example a `core.tracing.ExportingTracerProvider`.
+The complete options value, including custom scope/version/namespace and optional
+`parent_context`, is copied unchanged into the canonical pipeline before any of
+the 44 areas or 371 subgroups receive it. The Entra ID `scope` option remains
+separate and unchanged. No tracing state is added to `HttpRuntime`; the SDK's
+actual user agent is `azsdk-zig-devops/0.2.0`.
+
+Provider/exporter, borrowed scope strings and parent tracestate must outlive
+every client copy and operation. Derived clients and pager fetchers also borrow
+the SDK client's policies: finish their use before `client.deinit()`. Client and
+pager teardown never exports, flushes, or shuts down a shared provider. The
+caller explicitly flushes/shuts it down after operations finish. Passing `null`
+leaves tracing disabled; changing an options value does not reconfigure clients
+already constructed from it.
+
+Core records one logical HTTP span, ending at buffered completion or streaming
+response headers, not at streaming body completion. It does not automatically
+contact a collector. Per-call context APIs remain deferred to **#465**; this
+adoption does not implement **#456–#458**.
 
 ## Authentication
 

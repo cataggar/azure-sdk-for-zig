@@ -1,16 +1,16 @@
 .{
     .name = .azure_sdk_devops,
-    .version = "0.1.0",
+    .version = "0.2.0",
     .fingerprint = 0x98a482389b7590ba,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .azure_sdk_core = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#bc77bcacbb64af935ca53d60bf8a351c9592bc41",
-            .hash = "azure_sdk_core-0.3.0-eFY0Ev0-CACjsFaYPL6jS7CpeVNvsqYqTrXRfgQKiRFV",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#be32073994f37422f2f6b5e9255d208b1284de85",
+            .hash = "azure_sdk_core-0.4.0-eFY0EufqCgD3plkaubfUTeY5Jvr__1k0noWHdQjBVAdX",
         },
         .azure_rest_devops = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#d2aff59967ad422b0f29c65622019925ce5aa87d",
-            .hash = "azure_rest_devops-0.1.0-anpXMvM1QgAVQ0IBR1LtJlzrJapFjyEIhE9lAIELuaBK",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#33aac3bbc4b400f4961df66835d5465cc1a266cd",
+            .hash = "azure_rest_devops-0.2.0-anpXMrpaQgBX9ejhSP-bEQ9NSPsguKHsx0FCCLAwmumA",
         },
     },
     .paths = .{

@@ -50,6 +50,8 @@ pub fn Page(comptime T: type) type {
 /// the operation's fixed parameters. The pager borrows that fetcher. When the
 /// fetcher contains a generated client, its copied pipeline still borrows the
 /// original runtime's transport and crypto contexts, which must outlive paging.
+/// The originating SDK client's policies and optional tracing provider/config
+/// must also outlive paging; the pager does not manage their lifetimes.
 pub fn ContinuationPager(comptime T: type, comptime Fetcher: type) type {
     return struct {
         fetcher: *Fetcher,
