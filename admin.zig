@@ -43,6 +43,10 @@ pub const SubscriptionProperties = struct {
 
 pub const AdministrationClientOptions = struct {
     api_version: []const u8 = "2021-05",
+    /// Administration HTTP only; disabled by default. Provider/configuration
+    /// strings and default parent tracestate are borrowed for the client and
+    /// all calls. The caller owns provider flush/shutdown.
+    instrumentation: ?core.tracing.InstrumentationOptions = null,
 };
 
 const token_scope = "https://servicebus.azure.net/.default";
@@ -177,12 +181,14 @@ const PipelineState = struct {
         allocator: std.mem.Allocator,
         credential: *core.credentials.TokenCredential,
         runtime: core.http.HttpRuntime,
+        instrumentation: ?core.tracing.InstrumentationOptions,
     ) !*PipelineState {
         const state = try allocator.create(PipelineState);
         state.allocator = allocator;
         state.auth_policy = SynchronizedBearerAuthPolicy.init(allocator, credential);
         state.policies[0] = state.auth_policy.asPolicy();
         state.pipeline = core.http.HttpPipeline.init(runtime, &state.policies);
+        state.pipeline.setInstrumentation(instrumentation);
         return state;
     }
 
@@ -221,6 +227,7 @@ pub const ServiceBusAdministrationClient = struct {
                 allocator,
                 credential,
                 runtime,
+                options.instrumentation,
             ),
         };
     }
@@ -558,6 +565,7 @@ const StubCredential = struct {
     credential: core.credentials.TokenCredential = .{ .getTokenFn = getToken },
     calls: usize = 0,
     use_runtime_crypto: bool = false,
+    fail: bool = false,
 
     fn asCredential(self: *StubCredential) *core.credentials.TokenCredential {
         return &self.credential;
@@ -573,6 +581,7 @@ const StubCredential = struct {
             @fieldParentPtr("credential", credential),
         );
         self.calls += 1;
+        if (self.fail) return error.SelectedCredentialFailure;
         if (self.use_runtime_crypto) {
             var byte: [1]u8 = undefined;
             try runtime.crypto.randomBytes(&byte);
@@ -846,6 +855,133 @@ test "AdministrationClient preserves runtime and provider failures are atomic" {
     try std.testing.expectEqual(@as(usize, 1), crypto.random_calls);
     try std.testing.expectEqual(@as(usize, 0), mock.call_count);
     try std.testing.expect(mock.last_headers.get("Authorization") == null);
+}
+
+const AdminTracingProbe = struct {
+    exporter: core.tracing.SpanExporter = .{ .exportFn = &exportBatch },
+    wire_ids: [8]?[16]u8 = @splat(null),
+    statuses: [8]core.tracing.SpanStatus = @splat(.unset),
+    expected: usize = 0,
+    exported: usize = 0,
+
+    fn options(provider: *core.tracing.TracerProvider) core.tracing.InstrumentationOptions {
+        var parent = core.tracing.TraceContext.parseTraceparent("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01").?;
+        parent.trace_state = "vendor=value";
+        return .{
+            .provider = provider,
+            .scope_name = "caller.admin",
+            .scope_version = "caller-version",
+            .namespace = "Caller.Admin",
+            .parent_context = parent,
+        };
+    }
+
+    fn capture(self: *AdminTracingProbe, mock: *core.http.MockTransport, enabled: bool, status: core.tracing.SpanStatus) !void {
+        const header = mock.last_headers.get("traceparent");
+        if (!enabled) {
+            try std.testing.expect(header == null);
+            try std.testing.expect(mock.last_headers.get("tracestate") == null);
+            return;
+        }
+        const context = core.tracing.TraceContext.parseTraceparent(header orelse return error.MissingTraceparent) orelse
+            return error.InvalidTraceparent;
+        try std.testing.expectEqualStrings("0af7651916cd43dd8448eb211c80319c", &context.trace_id);
+        try std.testing.expectEqualStrings("vendor=value", mock.last_headers.get("tracestate") orelse "");
+        try std.testing.expect(!std.mem.eql(u8, "b7ad6b7169203331", &context.span_id));
+        self.wire_ids[self.expected] = context.span_id;
+        self.statuses[self.expected] = status;
+        self.expected += 1;
+    }
+
+    fn exportBatch(exporter: *core.tracing.SpanExporter, batch: []const core.tracing.SpanData, _: core.tracing.ExportContext) !void {
+        const self: *AdminTracingProbe = @fieldParentPtr("exporter", exporter);
+        for (batch) |span| {
+            try std.testing.expect(self.exported < self.expected);
+            try std.testing.expectEqualStrings("caller.admin", span.scope_name);
+            try std.testing.expectEqualStrings("caller-version", span.scope_version);
+            try std.testing.expectEqualStrings("0af7651916cd43dd8448eb211c80319c", &span.context.trace_id);
+            try std.testing.expectEqualStrings("b7ad6b7169203331", &span.parent_span_id.?);
+            try std.testing.expectEqualStrings("vendor=value", span.context.trace_state orelse "");
+            try std.testing.expectEqual(core.tracing.SpanKind.client, span.kind);
+            try std.testing.expectEqual(self.statuses[self.exported], span.status);
+            if (self.wire_ids[self.exported]) |id|
+                try std.testing.expectEqualStrings(&id, &span.context.span_id);
+            var namespace_seen = false;
+            for (span.attributes) |attribute| {
+                if (!std.mem.eql(u8, "az.namespace", attribute.key)) continue;
+                try std.testing.expect(attribute.value == .string);
+                try std.testing.expectEqualStrings("Caller.Admin", attribute.value.string);
+                namespace_seen = true;
+            }
+            try std.testing.expect(namespace_seen);
+            self.exported += 1;
+        }
+    }
+};
+
+test "AdministrationClient opt-in HTTP spans preserve caller context and failure results" {
+    for ([_]bool{ true, false }) |enabled| {
+        const allocator = std.testing.allocator;
+        var mock = core.http.MockTransport.init(allocator, 201, "<entry/>");
+        defer mock.deinit();
+        var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+        const runtime = testRuntime(mock.asTransport(), crypto.asProvider());
+        var probe = AdminTracingProbe{};
+        var provider = try core.tracing.ExportingTracerProvider.init(allocator, std.testing.io, runtime.crypto, &probe.exporter, .{});
+        defer provider.deinit() catch unreachable;
+        const options: AdministrationClientOptions = .{
+            .instrumentation = if (enabled) AdminTracingProbe.options(provider.asProvider()) else null,
+        };
+        {
+            var credential = StubCredential{};
+            var admin = try ServiceBusAdministrationClient.init(allocator, "ns.servicebus.windows.net", credential.asCredential(), runtime, options);
+            defer admin.deinit();
+            try admin.createQueue(allocator, "queue");
+            try probe.capture(&mock, enabled, .unset);
+            try admin.createTopic(allocator, "topic");
+            try probe.capture(&mock, enabled, .unset);
+            try admin.createSubscription(allocator, "topic", "subscription");
+            try probe.capture(&mock, enabled, .unset);
+            mock.response_status = 200;
+            mock.response_body = "<feed xmlns=\"http://www.w3.org/2005/Atom\"></feed>";
+            const subscriptions = try admin.listSubscriptions(allocator, "topic");
+            defer allocator.free(subscriptions);
+            try std.testing.expectEqual(@as(usize, 0), subscriptions.len);
+            try probe.capture(&mock, enabled, .unset);
+            try std.testing.expectEqual(@as(usize, 1), credential.calls);
+
+            mock.response_status = 404;
+            mock.response_body = "{\"error\":{\"code\":\"MessagingEntityNotFound\",\"message\":\"missing\"}}";
+            const result = try admin.deleteSubscriptionResult(allocator, "topic", "subscription");
+            switch (result) {
+                .ok => return error.ExpectedServiceFailure,
+                .err => |value| {
+                    var failure = value;
+                    defer failure.deinit();
+                    try std.testing.expectEqual(@as(u16, 404), failure.status_code);
+                    try std.testing.expectEqualStrings("MessagingEntityNotFound", failure.error_code.?);
+                },
+            }
+            try probe.capture(&mock, enabled, .@"error");
+            var failing_credential = StubCredential{ .fail = true };
+            var failing = try ServiceBusAdministrationClient.init(allocator, "ns.servicebus.windows.net", failing_credential.asCredential(), runtime, options);
+            defer failing.deinit();
+            try std.testing.expectError(error.SelectedCredentialFailure, failing.createQueue(allocator, "queue"));
+            try std.testing.expectEqual(@as(usize, 1), failing_credential.calls);
+            try std.testing.expectEqual(@as(usize, 5), mock.call_count);
+            if (enabled) {
+                probe.statuses[probe.expected] = .@"error";
+                probe.expected += 1;
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 0), probe.exported);
+        try std.testing.expectEqual(probe.expected, provider.stats().queued_spans);
+        try std.testing.expectEqual(@as(usize, 0), provider.stats().active_spans);
+        try std.testing.expect(!provider.closed);
+        try provider.forceFlush(1000);
+        try std.testing.expectEqual(@as(usize, if (enabled) 6 else 0), probe.exported);
+        try provider.shutdown(1000);
+    }
 }
 
 test "AdministrationClient createQueue" {
