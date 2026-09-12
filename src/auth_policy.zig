@@ -1662,18 +1662,32 @@ const RequestAuthorizationState = struct {
 };
 
 fn removeRequestHeader(request: *Request, name: []const u8) void {
-    var owned_name: ?[]const u8 = null;
-    var iterator = request.headers.iterator();
-    while (iterator.next()) |entry| {
-        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) {
-            owned_name = entry.key_ptr.*;
-            break;
-        }
+    _ = request.removeHeader(name);
+}
+
+test "authorization restoration preserves owning headers across allocation failures" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testAuthorizationRestoration, .{});
+}
+
+fn testAuthorizationRestoration(allocator: std.mem.Allocator) !void {
+    var request = Request.init(allocator, .GET, "https://registry.example/v2/");
+    defer request.deinit();
+    try request.setHeader("X-Unrelated", "retained");
+    {
+        var authorization = RequestAuthorizationState.init(&request);
+        defer authorization.restore(&request);
+        try authorization.setBearer(&request, "first");
+        try authorization.setBearer(&request, "replacement");
+        try request.setHeader("aUtHoRiZaTiOn", "Bearer mixed-case");
+        authorization.restore(&request);
+        try std.testing.expect(request.getHeader("Authorization") == null);
+        try std.testing.expectEqualStrings("retained", request.getHeader("X-Unrelated").?);
     }
-    const key = owned_name orelse return;
-    const removed = request.headers.fetchRemove(key).?;
-    request.allocator.free(removed.key);
-    request.allocator.free(removed.value);
+    try request.setHeader("authorization", "Custom caller-owned");
+    var caller = RequestAuthorizationState.init(&request);
+    caller.restore(&request);
+    try std.testing.expectEqualStrings("Custom caller-owned", request.getHeader("Authorization").?);
+    try std.testing.expectEqualStrings("retained", request.getHeader("X-Unrelated").?);
 }
 
 fn appendFormField(

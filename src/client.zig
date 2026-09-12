@@ -39,12 +39,17 @@ pub const ListTagPropertiesOptions = struct {
 
 pub const ContainerRegistryClientOptions = struct {
     runtime: core.http.HttpRuntime,
+    /// Optional automatic tracing, copied unchanged to protocol clients and pagers.
+    /// Provider, scope/namespace strings and parent tracestate must outlive clients/operations.
+    instrumentation: ?core.tracing.InstrumentationOptions = null,
     authentication: auth.Authentication,
     api_version: []const u8 = "2021-07-01",
     authentication_options: auth.Options = .{},
 };
 
 /// Authenticated wrapper over the generated Container Registry protocol client.
+/// Tracing providers are caller-owned; deinit never flushes or shuts them down.
+/// Derived clients and pagers must stop using this client's policies before deinit.
 pub const ContainerRegistryClient = struct {
     allocator: std.mem.Allocator,
     auth_policy: *auth.ChallengeAuthenticationPolicy,
@@ -75,7 +80,8 @@ pub const ContainerRegistryClient = struct {
         errdefer allocator.free(policy_ptrs);
         policy_ptrs[0] = auth_policy.asPolicy();
 
-        const pipeline = core.http.HttpPipeline.init(options.runtime, policy_ptrs);
+        var pipeline = core.http.HttpPipeline.init(options.runtime, policy_ptrs);
+        pipeline.setInstrumentation(options.instrumentation);
         return .{
             .allocator = allocator,
             .auth_policy = auth_policy,

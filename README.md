@@ -6,6 +6,9 @@ errors, exact-byte manifest operations, bounded-memory resumable blob uploads,
 and bounded blob downloads to the generated
 `azure_rest_container_registry` protocol package.
 
+Version **0.3.0** pins published **Core 0.4.0** and
+**REST Container Registry 0.3.0** by full Git commit URL and package hash.
+
 The stable public data-plane version is **2021-07-01**. Both high-level
 clients default to that version; override `api_version` only when intentionally
 using a compatible service contract. `acr.protocol` re-exports
@@ -82,8 +85,9 @@ userinfo, fragments, malformed links, alternate ports, and untrusted hosts
 before the authentication policy can attach credentials.
 
 Use `.authentication = .anonymous` only for intentional anonymous access.
-Anonymous mode never acquires an Azure credential or attaches an
-`Authorization` header. It succeeds only when the target repository permits
+Anonymous mode never acquires an Azure credential. A registry challenge can
+still obtain an anonymous ACR access token and replay with `Authorization`.
+It succeeds only when the target repository permits
 the requested public pull/catalog operation. Authenticated mode uses the
 supplied `TokenCredential`, performs the AAD-to-ACR challenge exchange, and
 caches bounded refresh/access tokens. Authentication, repository visibility,
@@ -231,17 +235,54 @@ Provider and allocation failures propagate directly. The SDK does not silently
 fall back to `std.crypto`, and it does not return partially computed digests or
 successful transfer results after a provider failure.
 
-Local development uses relative package dependencies. The canonical package
-split changes the common dependency to `azure_sdk_core`. Release branches
-replace local paths with immutable Core and
-`azure_rest_container_registry` Git commit/hash pins as described in the
-[package branch model](../../doc/package-branch-model.md).
+## Optional automatic tracing
+
+All three client options accept the complete
+`core.tracing.InstrumentationOptions`; the default is `null` and emits no spans
+or trace headers. Configure the caller-owned provider once per client:
+
+```zig
+var client = try acr.ContainerRegistryClient.init(allocator, registry_endpoint, .{
+    .runtime = runtime,
+    .authentication = .{ .credential = credential },
+    .instrumentation = .{
+        .provider = tracer_provider,
+        .scope_name = "azure_sdk_container_registry",
+        .scope_version = "0.3.0",
+        .namespace = "Microsoft.ContainerRegistry",
+        // .parent_context = default_parent,
+    },
+});
+defer client.deinit();
+```
+
+Here `tracer_provider` is the caller's `*core.tracing.TracerProvider`. The same
+option works with `ContainerRegistryContentClient` and `BlobDownloadClient`.
+The SDK configures the canonical pipeline before copying it to the generated
+protocol client, its operation groups, metadata pagers, and content/transfer
+operations. It preserves the caller's scope, version, namespace, and default
+parent unchanged; tracing is not attached to `HttpRuntime`. This package does
+not synthesize a User-Agent header.
+
+Core emits one logical HTTP span per pipeline call, including challenge replay.
+Individual pages and transfer requests get their own spans. Streaming spans
+end when response headers arrive, not when the response body completes.
+HTTP error statuses remain error spans even where the SDK deliberately maps
+them to an idempotent result (such as a delete returning `404`).
+
+The provider and borrowed scope/version/namespace/tracestate strings must
+outlive clients, derived clients, pagers, and operations. Keep provider/exporter
+objects at stable addresses. Clients never flush or shut down shared providers.
+The caller explicitly configures any exporter and, after operations complete,
+flushes/shuts down its provider and releases it; no collector or background
+export is started by constructing a client. Per-call context APIs remain
+deferred to #465; #456–#458 are not part of this adoption.
 
 ## Ownership and lifetime rules
 
 - Clients own their copied endpoint/repository/auth-policy/runtime descriptor
   state and must be deinitialized before the borrowed transport context,
-  crypto-provider context, and credential.
+  crypto-provider context, credential, and tracing provider/configuration.
 - Pagers borrow the originating client pipeline. Keep the client alive until
   `pager.deinit()`, and deinitialize every page result before requesting or
   discarding more pages.
