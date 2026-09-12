@@ -165,8 +165,13 @@ pub const TableServiceClientInitOptions = struct {
 /// Settings copied or applied by client initialization.
 ///
 /// Policy objects and the transport are borrowed and must outlive the owning
-/// client. All string values and the policy pointer list are copied.
+/// client. Request/default string values and the policy pointer list are
+/// copied; optional instrumentation retains its explicitly borrowed strings.
 pub const TableClientOptions = struct {
+    /// Disabled by default. The provider, scope/version/namespace strings, and
+    /// default parent tracestate must outlive this client, descendants, pagers,
+    /// and their calls. The caller owns provider flush/shutdown.
+    instrumentation: ?core.tracing.InstrumentationOptions = null,
     api_version: []const u8 = latest_api_version,
     retry: RetryOptions = .{},
     telemetry: TelemetryOptions = .{},

@@ -2,8 +2,9 @@
 
 Hand-written, idiomatic Zig conveniences for **Azure Storage Tables**.
 
-Release branch: `sdk/data_tables`. Package version: `0.3.0`.
-Version 0.3.0 introduces the breaking single-initializer API described below.
+Release branch: `sdk/data_tables`. Package version: `0.4.0`.
+Version 0.3.0 introduced the breaking single-initializer API described below;
+0.4.0 preserves that API while adopting Core 0.4.0 and opt-in HTTP tracing.
 The `TableClient`, `TableServiceClient`, and `TableEntity` exports remain while the parity roadmap in
 [tracker #148](https://github.com/cataggar/azure-sdk-for-zig/issues/148) is
 implemented.
@@ -32,10 +33,10 @@ immutable upstream commit every time it is regenerated. A generic Storage
 `x-ms-version` is not a substitute for a Tables contract version.
 
 The SDK pins generated package commit
-`799b35f81a0478045ec8faca7eb0e1b41c5fafe0` and Zig package hash
-`azure_rest_data_tables-0.1.0-CqXnR-ZzAQD4MTM5hBpINSq2sdV70SMD2lKjSN1-9loh`,
-and Core commit `bc77bcacbb64af935ca53d60bf8a351c9592bc41` with hash
-`azure_sdk_core-0.3.0-eFY0Ev0-CACjsFaYPL6jS7CpeVNvsqYqTrXRfgQKiRFV`.
+`2897d67c4f3a01e63fa949d10ff34d4c1d72bd00` and Zig package hash
+`azure_rest_data_tables-0.2.0-CqXnR5udAQALcSzyzaD5fqzY343xoE6i0cUqU5Df6qmo`,
+and Core commit `be32073994f37422f2f6b5e9255d208b1284de85` with hash
+`azure_sdk_core-0.4.0-eFY0EufqCgD3plkaubfUTeY5Jvr__1k0noWHdQjBVAdX`.
 It re-exports the REST package public root as `protocol`. The REST provenance
 records upstream spec commit `0744f52a86919d243ba2225e55bdb9c87bf521a5`,
 generator commit `c83a1cbef5f728d7530fdec4a724cc453233cfa4`, and stable
@@ -71,7 +72,7 @@ version.
 
 Both clients have one constructor, `init(allocator, runtime, init_options)`.
 `TableClient.InitOptions` contains `authentication`, `table_name`, and optional
-`options` (the existing retry, telemetry, request-ID, timeout, and policy settings).
+`options` (retry, telemetry, request-ID, timeout, policy, and instrumentation settings).
 `TableServiceClient.InitOptions` has the same fields except `table_name`.
 The shared `ClientAuthentication` tagged union selects exactly one input:
 
@@ -99,11 +100,48 @@ var table = try tables.TableClient.init(allocator, runtime, .{
 defer table.deinit();
 ```
 
-Input strings are borrowed only for initialization; clients copy their endpoint,
-table name, and applicable option strings. Runtime descriptors are copied while
+Clients copy endpoint, table name, and request/default option strings during
+initialization. Instrumentation strings are explicitly borrowed as described
+below. Runtime descriptors are copied while
 their backend contexts remain borrowed. Explicit credentials and policy objects
 must outlive owning clients and their derived clients. Do not deinitialize or copy
 an owning client twice. Formatting `ClientAuthentication` redacts its contents.
+
+### Opt-in HTTP tracing
+
+Configure the existing constructor's options without changing authentication
+or adding tracing to `HttpRuntime`:
+
+```zig
+var service = try tables.TableServiceClient.init(allocator, runtime, .{
+    .authentication = authentication,
+    .options = .{
+        .instrumentation = .{
+            .provider = tracing_provider, // Caller-owned *core.tracing.TracerProvider.
+            .scope_name = "my.tables.client",
+            .scope_version = "1.0.0",
+            .namespace = "Microsoft.Tables",
+            // .parent_context = default_parent,
+        },
+    },
+});
+defer service.deinit();
+```
+
+The default `.instrumentation = null` is inert. Both `provider` and
+`scope_name` are required when enabled. The complete configuration, including
+an explicit scope/version, namespace, and optional default parent, is preserved
+through direct and derived clients, table/entity pagers, SAS/admin operations,
+and per-call policy pipelines. A caller-configured pipeline supplied to
+`ProtocolClient.init` is likewise preserved.
+
+The provider, instrumentation strings, and parent tracestate are borrowed
+and must outlive the clients, descendants, pagers, and in-flight calls.
+The caller owns exporter/provider lifetime, flush, and shutdown; clients
+never flush or shut down the provider, start exporter workers, or perform
+network exports. SAS URL signing alone does not create an HTTP span.
+Per-call parent options remain deferred to #465. Core streaming spans end at
+response headers; these Tables operations use buffered HTTP.
 
 ## Microsoft Entra authentication
 

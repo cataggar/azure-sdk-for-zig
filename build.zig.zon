@@ -1,20 +1,20 @@
 .{
     .name = .azure_sdk_data_tables,
-    .version = "0.3.0",
+    .version = "0.4.0",
     .fingerprint = 0xc49b80127477f0d5,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .azure_sdk_core = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#bc77bcacbb64af935ca53d60bf8a351c9592bc41",
-            .hash = "azure_sdk_core-0.3.0-eFY0Ev0-CACjsFaYPL6jS7CpeVNvsqYqTrXRfgQKiRFV",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#be32073994f37422f2f6b5e9255d208b1284de85",
+            .hash = "azure_sdk_core-0.4.0-eFY0EufqCgD3plkaubfUTeY5Jvr__1k0noWHdQjBVAdX",
         },
         .serde = .{
             .url = "git+https://github.com/cataggar/serde.zig#7012f58c7ddf490125852e1d22006b552a1693c7",
             .hash = "serde-1.0.1-1DszT-e9DABp6u1PoDvGFzeGaST2hRp2KGtGn_CkIl0J",
         },
         .azure_rest_data_tables = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#799b35f81a0478045ec8faca7eb0e1b41c5fafe0",
-            .hash = "azure_rest_data_tables-0.1.0-CqXnR-ZzAQD4MTM5hBpINSq2sdV70SMD2lKjSN1-9loh",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#2897d67c4f3a01e63fa949d10ff34d4c1d72bd00",
+            .hash = "azure_rest_data_tables-0.2.0-CqXnR5udAQALcSzyzaD5fqzY343xoE6i0cUqU5Df6qmo",
         },
     },
     .paths = .{
@@ -27,6 +27,7 @@
         "client_configuration.zig",
         "connection_string.zig",
         "construction_test.zig",
+        "tracing_test.zig",
         "edm.zig",
         "entity.zig",
         "entity_codec.zig",
