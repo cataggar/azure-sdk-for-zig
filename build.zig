@@ -189,6 +189,38 @@ pub fn build(b: *std.Build) void {
                 tls_test_step.dependOn(&b.addFail("the selected target is build-only; use tls-test-compile").step);
             }
         }
+        const interop_step = b.step("tls-interop-check", "Qualify selected TLS providers against authenticated local OpenSSL servers");
+        if (headers_only or !target_can_run) {
+            interop_step.dependOn(&b.addFail("tls-interop-check requires a runnable target and native libraries").step);
+        } else {
+            const interop_mod = b.createModule(.{
+                .root_source_file = b.path("conformance/tls_interop.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "httpx", .module = httpx_mod },
+                    .{ .name = "azure_sdk_core_symcrypt_tls", .module = tls_mod },
+                },
+            });
+            addLinuxDynamicRPath(interop_mod, target, linkage, libraries);
+            const interop = b.addExecutable(.{ .name = "symcrypt-tls-interop", .root_module = interop_mod });
+            const run = b.addSystemCommand(&.{"python3"});
+            run.addFileArg(b.path("conformance/tls_interop.py"));
+            if (target.result.os.tag == .windows and linkage == .dynamic) {
+                run.addArg("python3");
+                run.addFileArg(symcrypt_dep.path("tools/run_verified.py"));
+                run.addArg("--manifest");
+                if (provenance) |manifest| run.addFileArg(manifest);
+                run.addArgs(&.{ "--target", canonicalTargetTriple(b, target) });
+                for (libraries) |library| {
+                    run.addArg("--library");
+                    run.addFileArg(library);
+                }
+            }
+            run.addArtifactArg(interop);
+            run.step.dependOn(addProvenanceVerification(b, symcrypt_dep, target, linkage, provenance, libraries));
+            interop_step.dependOn(&run.step);
+        }
     } else if (httpx_source != null) {
         std.log.err("httpx_source requires enable_httpx_tls=true", .{});
         b.invalid_user_input = true;

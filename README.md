@@ -197,15 +197,64 @@ SymCrypt TLS runtime. `httpx_source` is an explicit local development override
 for the HTTPX source root, valid only with `enable_httpx_tls=true`; it is not a
 replacement release pin.
 
-Primitive vectors, independent AEAD/key/signature checks, and fault-injection
-tests do **not** establish TLS interoperability. Before claiming HTTPX/SymCrypt
-TLS support or closing the integration gate, qualify and pin the completed
-HTTPX provider-injection runtime, then run independent-server TLS 1.2 and
-TLS 1.3 handshakes/records for every advertised suite and group. Repeat trusted,
-untrusted, expired, and hostname-mismatch outcomes with unchanged TrustProvider
-policy, and inject provider failures into real handshakes and records to prove
-there is no fallback. Repeat dynamic/static Linux/Windows and Arm64 execution;
-header-only compilation is not native matrix evidence.
+Primitive vectors alone do **not** establish TLS interoperability. The opt-in
+`tls-interop-check` target exercises real TLS 1.2/1.3 client handshakes and
+application records against independent OpenSSL servers. It requires a
+provider-routed HTTPX client, Python 3, OpenSSL 3.5, and verified native inputs:
+
+```bash
+zig build tls-interop-check -Denable_httpx_tls=true \
+  -Dhttpx_source=/absolute/path/to/qualified-httpx \
+  [linkage and fixture options] --summary all
+```
+
+The checked-in harness generates short-lived local P-256, P-384, and RSA
+identities plus genuinely expired/not-yet-valid certificates. Servers listen
+only on loopback ephemeral ports. Processes are bounded and terminated, and
+generated private keys/certificates are removed even on failure. Logs remain
+under the ignored `.agent-scratch/tls-interop` directory.
+
+The same explicit leaf-pin/hostname/time TrustProvider is used with the standard
+and SymCrypt primitive providers. This is a **test fixture**, not production
+root loading or certificate path validation; verification is never disabled.
+The observer permits only the selected AEAD/group, checks actual dispatch,
+drains bounded HTTP responses, and injects exact failures into every used
+handshake primitive and application AEAD. It rejects successful fallback or
+retried provider/trust failures. HTTPX currently maps provider
+`AuthenticationFailed` to `TlsBadRecordMac` during handshakes and
+`TlsDecryptError` for application records; primitive errors remain unchanged
+at the provider boundary.
+
+Local HTTPX routing commit `727748d35298c9bd34751c7ca2ad3941cbcded06` has been
+qualified in ReleaseSafe on Linux Arm64 with SymCrypt dynamic/static linkage and OpenSSL
+3.5.5: **42 authenticated SymCrypt combinations**, the same 42 standard-provider
+controls, and 212 combined trust/provider-negative cases per linkage mode.
+All three AEADs and X25519/P-256/P-384 are covered; TLS 1.2 ECDSA combinations
+respect certificate-curve compatibility and matching signature hashes.
+The probe uses a checking allocator and requires clean teardown.
+
+This evidence covers the low-level client session API:
+
+```zig
+var session = httpx.tls.TLSSession.init(.{
+    .allocator = allocator,
+    .crypto_provider = tls_crypto.provider(),
+    .server_authentication = .{ .verify = .{
+        .provider = owned_trust.provider(),
+    } },
+});
+defer session.deinit();
+session.attachSocket(&socket);
+try session.handshake("service.example");
+```
+
+The snippet requires the qualified client runtime, not the ABI-only manifest
+pin. Final reviewed immutable HTTPX/Core pins, production system/custom-root
+path validation, high-level ClientConfig/SDK transport plumbing, server and
+mutual-authentication routing, and native Windows/other architecture
+qualification remain release gates. Independent KeyUpdate, cancellation and
+pooling tests also remain distinct from this basic session matrix. Header-only
+compilation is not native execution evidence.
 
 This binding and its algorithm list make no FIPS-validation claim. In
 particular, availability of ChaCha20-Poly1305 or a successful native integrity
