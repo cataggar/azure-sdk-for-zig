@@ -309,7 +309,7 @@ test "optional tracing survives SDK and area copies without changing auth result
             } else {
                 try repositories.delete(std.testing.allocator, client.organization, "repository", "project");
             }
-            try std.testing.expectEqualStrings("azsdk-zig-devops/0.2.0", transport.last_headers.get("User-Agent").?);
+            try std.testing.expectEqualStrings("azsdk-zig-devops/0.2.1", transport.last_headers.get("User-Agent").?);
             try std.testing.expectStringStartsWith(transport.last_headers.get("Authorization").?, "Basic ");
             try std.testing.expectEqual(traced, transport.last_headers.contains("traceparent"));
             if (traced) try probe.capture(&transport, 0) else try std.testing.expect(!transport.last_headers.contains("tracestate"));
