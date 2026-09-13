@@ -4,7 +4,7 @@ const http_conformance = @import("azure_sdk_core_http_conformance");
 const crypto_conformance = @import("azure_sdk_core_crypto_conformance");
 
 test "current immutable Core composes the canonical runtime and pipeline" {
-    try std.testing.expectEqualStrings("0.4.0", core.version);
+    try std.testing.expectEqualStrings("0.4.1", core.version);
     var transport = core.http.MockTransport.init(std.testing.allocator, 200, "runtime");
     defer transport.deinit();
     var provider = core.crypto.StdCryptoProvider.init(std.testing.io);
