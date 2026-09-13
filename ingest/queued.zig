@@ -121,21 +121,28 @@ pub const QueuedIngestionResult = struct {
 /// client and all calls. ResourceManager may synchronize its own cache, but a
 /// DataManagementCommandExecutor backed by KustoConnection is not concurrent
 /// safe; callers must serialize those uses.
+/// Tracing options are copied by value at construction. Their provider and
+/// metadata remain borrowed, including by any retained status handles.
 pub const QueuedIngestClient = struct {
     manager: ?*resources.ResourceManager = null,
     connection: ?*kusto_common.KustoConnection = null,
     runtime: core.http.HttpRuntime,
+    instrumentation: ?core.tracing.InstrumentationOptions = null,
 
     pub const Options = struct {
         connection: ?*kusto_common.KustoConnection = null,
         resource_manager: ?*resources.ResourceManager = null,
+        /// Storage tracing override. Null snapshots the supplied connection's
+        /// pipeline configuration, or disables tracing without a connection.
+        instrumentation: ?core.tracing.InstrumentationOptions = null,
     };
 
     /// Copies the runtime descriptors and borrows their contexts plus the
     /// optional connection and resource manager. When a connection is
     /// supplied, its runtime is authoritative so Kusto and Storage operations
-    /// use the same provider. All borrowed values must outlive this client and
-    /// every operation.
+    /// use the same backends. All borrowed values must outlive this client and
+    /// every operation. Tracing uses an explicit options override, otherwise a
+    /// snapshot of the connection pipeline; null without a connection is inert.
     pub fn init(
         runtime: core.http.HttpRuntime,
         options: Options,
@@ -147,7 +154,15 @@ pub const QueuedIngestClient = struct {
                 connection.runtime
             else
                 runtime,
+            .instrumentation = options.instrumentation orelse
+                if (options.connection) |connection| connection.pipeline.instrumentation else null,
         };
+    }
+
+    /// Updates only subsequent Storage operations, not connection-backed Kusto
+    /// requests or already-retained handles. All configuration remains borrowed.
+    pub fn setInstrumentation(self: *QueuedIngestClient, options: ?core.tracing.InstrumentationOptions) void {
+        self.instrumentation = options;
     }
 
     /// Submits a shared runtime source to Kusto queued ingestion.
@@ -386,6 +401,7 @@ pub const QueuedIngestClient = struct {
                 return null;
             };
             defer blob_client.deinit();
+            blob_client.setInstrumentation(self.instrumentation);
 
             try checkCancelled(options.cancellation);
             var opened = OpenedSource.init(allocator, source, source_info.upload_size) catch |err| {
@@ -543,6 +559,7 @@ pub const QueuedIngestClient = struct {
             };
             var tracking_owned = true;
             defer if (tracking_owned) tracking.deinit();
+            tracking.setInstrumentation(self.instrumentation);
 
             var timestamp_buffer: [32]u8 = undefined;
             const timestamp = formatRfc3339Millis(
@@ -677,6 +694,7 @@ pub const QueuedIngestClient = struct {
                 return result.*;
             };
             defer queue_client.deinit();
+            queue_client.setInstrumentation(self.instrumentation);
             try checkCancelled(options.cancellation);
             const queue = queue_client.sendMessage(message) catch |err| {
                 if (err == error.OutOfMemory) return err;

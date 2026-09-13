@@ -43,9 +43,12 @@ pub fn build(b: *std.Build) void {
     queues_mod.addImport("azure_sdk_storage_common", storage_common_mod);
     queues_mod.addImport("serde", serde_mod);
 
+    const package_options = b.addOptions();
+    package_options.addOption([]const u8, "version", @import("build.zig.zon").version);
     const common_imports = [_]std.Build.Module.Import{
         .{ .name = "azure_sdk_core", .module = core_mod },
         .{ .name = "serde", .module = serde_mod },
+        .{ .name = "kusto_build_options", .module = package_options.createModule() },
     };
     const common_mod = b.createModule(.{
         .root_source_file = b.path("common/root.zig"),
@@ -84,7 +87,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "kusto_data_internal", .module = data_mod },
         .{ .name = "kusto_ingest_internal", .module = ingest_mod },
     };
-    _ = b.addModule("azure_sdk_kusto", .{
+    const kusto_mod = b.addModule("azure_sdk_kusto", .{
         .root_source_file = b.path("root.zig"),
         .target = target,
         .imports = &facade_imports,
@@ -130,4 +133,20 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(facade_tests).step);
+
+    const tracing_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tracing_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "azure_sdk_core", .module = core_mod },
+                .{ .name = "azure_sdk_kusto", .module = kusto_mod },
+            },
+        }),
+    });
+    const run_tracing_tests = b.addRunArtifact(tracing_tests);
+    test_step.dependOn(&run_tracing_tests.step);
+    const tracing_step = b.step("test-tracing", "Run offline Kusto tracing integration tests");
+    tracing_step.dependOn(&run_tracing_tests.step);
 }

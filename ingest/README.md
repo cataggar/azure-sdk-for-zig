@@ -105,6 +105,14 @@ var submission = try client.ingest(
 defer submission.deinit(allocator);
 ```
 
+Queued clients snapshot the connection pipeline's optional tracing configuration.
+For a standalone runtime/resource manager, supply
+`QueuedIngestClient.Options.instrumentation`; an explicit value also overrides
+the connection snapshot for Storage requests. `setInstrumentation` changes future
+Storage requests only. Blob and Queue SAS setters receive the complete caller
+configuration without Kusto credentials, policies, or Storage scope substitution.
+Managed clients inherit the same snapshot when constructed.
+
 Outcomes distinguish `.queue_accepted`, `.queue_rejected`, `.queue_unknown`,
 and `.pre_queue_failed`. Queue acceptance is submission, not completed
 ingestion. Blob failover requires a replayable source. A received Queue
@@ -135,8 +143,17 @@ if (submission.takeTracking()) |owned| {
 Polling retries idempotent transient/ambiguous GETs within its explicit
 budget. Authentication, permanent HTTP, and malformed-entity failures stop
 polling without becoming ingestion failures. The handle copies its runtime and
-borrows the runtime transport and crypto contexts,
-is single-owner, and is not concurrency-safe.
+tracing options, borrowing the transport/crypto contexts and any configured
+tracing provider and metadata strings. These external borrows must outlive the
+handle; the initiating connection, client, result, and manager need not.
+`StatusTrackingHandle.setInstrumentation` can update or disable future status
+tracing without altering old spans. The handle is single-owner and is not
+concurrency-safe.
+
+Tracing does not change accepted/rejected/unknown outcomes or polling policy.
+SAS spans end at response headers; subsequent body-drain/read errors are outside
+those spans. Clients never export or manage the provider lifecycle. See the
+[package tracing contract](../README.md#optional-tracing) for details.
 
 Use `.failures_and_successes` reporting when terminal success must be observed.
 `.queue_accepted` alone is never terminal success.
