@@ -8,6 +8,9 @@ Azure Service Bus clients:
 
 Release branch: `sdk/servicebus`. The package depends on `azure_sdk_core`,
 `azure_sdk_messaging_common`, `azure_sdk_amqp`, and `serde`.
+Version 0.3.0 adopts published Core 0.4.0
+(`be32073994f37422f2f6b5e9255d208b1284de85`) and Messaging Common 0.4.0
+(`4d305406180f007b80a04040272beb4ca139b970`). The AMQP pin and API are unchanged.
 
 Messaging runs over [`azure_sdk_amqp`](../../tree/sdk/amqp), the same AMQP 1.0
 stack Event Hubs uses, rather than over a second direct-`uamqp` transport. Both
@@ -37,7 +40,15 @@ var admin = try sb.ServiceBusAdministrationClient.init(
     "contoso.servicebus.windows.net",
     credential.asCredential(),
     runtime,
-    .{},
+    .{
+        // Optional: tracing_provider is a caller-owned TracerProvider.
+        .instrumentation = .{
+            .provider = tracing_provider,
+            .scope_name = "azure_sdk_servicebus.admin",
+            .scope_version = "0.3.0",
+            .namespace = "Microsoft.ServiceBus",
+        },
+    },
 );
 defer admin.deinit();
 ```
@@ -49,6 +60,22 @@ for concurrent operations and for any pager or derived client sharing that
 pipeline. Credential and transport callbacks run outside the cache lock, so
 they may re-enter the same client. Call `deinit` only after all such operations
 and callbacks have completed.
+
+Administration HTTP tracing is opt-in through the existing options above.
+The default `.instrumentation = null` is inert. The complete caller-supplied
+scope/version, namespace, and optional default `parent_context` are retained;
+the provider, configuration strings, and parent tracestate must outlive the
+client and all calls. Clients never flush, shut down, start exporter workers,
+or perform network exports. Explicit provider lifecycle management remains
+with the caller, including after administration-client deinitialization.
+Credential-cache synchronization and service/credential failure distinctions
+are unchanged. Current list operations return arrays, not pagers.
+
+This option applies **only to administration HTTP**. Sender/receiver, CBS,
+settlement, and AMQP management operations are not HTTP spans, and tracing is
+not added to `HttpRuntime`. Per-call parent options remain deferred to #465.
+Core streaming spans end at response headers; administration uses buffered
+HTTP operations.
 
 ## Layout
 
