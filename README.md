@@ -129,7 +129,7 @@ Adapters opt in only when their fixture implements the associated contract:
 - **`https_redirects`**, together with `scripted_attempts`: provide distinct,
   trusted **HTTPS** endpoints. This additionally enables successful same-origin
   and cross-origin redirects, credential stripping/preservation, fragment
-  removal, cross-origin Host replacement, 303 body/method rewriting, and
+  removal, Host replacement on every followed redirect, 303 body/method rewriting, and
   rewind-failure cleanup. Core's
   standard fixture is HTTP loopback and does **not** claim this capability.
   Existing fake positive redirect tests remain separate evidence. No test
