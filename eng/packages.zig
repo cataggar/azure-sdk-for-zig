@@ -634,6 +634,7 @@ pub const all = [_]Package{
             "build.zig",
             "build.zig.zon",
             "root.zig",
+            "tracing_test.zig",
             "common",
             "data",
             "ingest",
