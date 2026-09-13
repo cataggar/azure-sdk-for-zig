@@ -21,6 +21,10 @@ const Seal = struct {
 pub fn main(init: std.process.Init) !u8 {
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
+    if (args.len == 2 and std.mem.eql(u8, args[1], "check-git-environment")) {
+        try checkGitEnvironment(init.environ_map);
+        return 0;
+    }
     if (args.len == 3 and std.mem.eql(u8, args[1], "digest-file")) {
         const text = try std.Io.Dir.cwd().readFileAlloc(init.io, args[2], allocator, .limited(256 * 1024 * 1024));
         try print(init.io, "{s}\n", .{digest(text)});
@@ -80,10 +84,70 @@ pub fn main(init: std.process.Init) !u8 {
         "usage: package-bootstrap-tool target PACKAGE SOURCE_PACKAGE TAG COMMIT\n" ++
             "       package-bootstrap-tool seal PACKAGE SOURCE_PACKAGE TAG COMMIT REPOSITORY FETCH_URL PUSH_URL TOOLING_COMMIT METADATA_SHA256 ARCHIVE_SHA256 OUTPUT\n" ++
             "       package-bootstrap-tool verify MANIFEST SHA256 TOOLING_COMMIT METADATA_SHA256 REPOSITORY FETCH_URL PUSH_URL\n" ++
-            "       package-bootstrap-tool digest-file PATH | digest-text TEXT\n",
+            "       package-bootstrap-tool digest-file PATH | digest-text TEXT\n" ++
+            "       package-bootstrap-tool check-git-environment\n",
         .{},
     );
     return 2;
+}
+
+const forbidden_git_environment = [_][]const u8{
+    "GIT_DIR",                          "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",                   "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE",
+    "GIT_CONFIG",                       "GIT_CONFIG_PARAMETERS",
+    "GIT_SHALLOW_FILE",                 "GIT_REPLACE_REF_BASE",
+};
+
+const git_config_records = [_]struct { key: []const u8, value: []const u8 }{
+    .{ .key = "GIT_CONFIG_KEY_0", .value = "GIT_CONFIG_VALUE_0" },
+    .{ .key = "GIT_CONFIG_KEY_1", .value = "GIT_CONFIG_VALUE_1" },
+    .{ .key = "GIT_CONFIG_KEY_2", .value = "GIT_CONFIG_VALUE_2" },
+};
+
+const restrictive_git_settings = [_]struct { key: []const u8, values: []const []const u8 }{
+    .{ .key = "safe.bareRepository", .values = &.{"explicit"} },
+    .{ .key = "credential.interactive", .values = &.{"never"} },
+    .{ .key = "core.fsmonitor", .values = &.{ "", "false" } },
+};
+
+fn checkGitEnvironment(env: *const std.process.Environ.Map) !void {
+    for (forbidden_git_environment) |name| {
+        if (env.get(name) != null) return error.AmbientGitOverride;
+    }
+    const count_text = env.get("GIT_CONFIG_COUNT") orelse "0";
+    if (count_text.len != 1 or count_text[0] < '0' or count_text[0] > '3')
+        return error.InvalidGitConfigCount;
+    const count: usize = count_text[0] - '0';
+
+    // Inspect names separately so absent counts, surplus records, and ignored
+    // index aliases cannot hide overrides. Never normalize or log their bytes.
+    var entries = env.iterator();
+    while (entries.next()) |entry| {
+        const name = entry.key_ptr.*;
+        if (!std.ascii.startsWithIgnoreCase(name, "GIT_CONFIG_COUNT") and
+            !std.ascii.startsWithIgnoreCase(name, "GIT_CONFIG_KEY") and
+            !std.ascii.startsWithIgnoreCase(name, "GIT_CONFIG_VALUE")) continue;
+        if (std.mem.eql(u8, name, "GIT_CONFIG_COUNT")) continue;
+        for (git_config_records[0..count]) |record| {
+            if (std.mem.eql(u8, name, record.key) or std.mem.eql(u8, name, record.value)) break;
+        } else return error.UnexpectedGitConfigRecord;
+    }
+
+    var seen: [restrictive_git_settings.len]bool = @splat(false);
+    for (git_config_records[0..count]) |record| {
+        const key = env.get(record.key) orelse return error.MissingGitConfigRecord;
+        const value = env.get(record.value) orelse return error.MissingGitConfigRecord;
+        for (restrictive_git_settings, 0..) |setting, index| {
+            if (!std.mem.eql(u8, key, setting.key)) continue;
+            if (seen[index]) return error.DuplicateGitConfigKey;
+            seen[index] = true;
+            for (setting.values) |allowed| {
+                if (std.mem.eql(u8, value, allowed)) break;
+            } else return error.UnsafeGitConfigValue;
+            break;
+        } else return error.UnknownGitConfigKey;
+    }
 }
 
 fn target(name: []const u8) ![]const u8 {
@@ -175,6 +239,108 @@ fn print(io: std.Io, comptime fmt: []const u8, args: anytype) !void {
     var writer = file.writer(io, &buffer);
     try writer.interface.print(fmt, args);
     try writer.interface.flush();
+}
+
+test "bootstrap accepts no overrides and every bounded restrictive subset and order unchanged" {
+    var empty = std.process.Environ.Map.init(std.testing.allocator);
+    defer empty.deinit();
+    try checkGitEnvironment(&empty);
+    const orders = [_][3]usize{
+        .{ 0, 1, 2 }, .{ 0, 2, 1 }, .{ 1, 0, 2 },
+        .{ 1, 2, 0 }, .{ 2, 0, 1 }, .{ 2, 1, 0 },
+    };
+    for (orders) |order| {
+        for (0..8) |subset| {
+            for ([_][]const u8{ "", "false" }) |fsmonitor| {
+                var env = std.process.Environ.Map.init(std.testing.allocator);
+                defer env.deinit();
+                var count: usize = 0;
+                for (order) |index| {
+                    if (subset & (@as(usize, 1) << @intCast(index)) == 0) continue;
+                    const setting = restrictive_git_settings[index];
+                    const value = if (index == 2) fsmonitor else setting.values[0];
+                    try env.put(git_config_records[count].key, setting.key);
+                    try env.put(git_config_records[count].value, value);
+                    count += 1;
+                }
+                const count_text = [_]u8{'0' + @as(u8, @intCast(count))};
+                try env.put("GIT_CONFIG_COUNT", &count_text);
+                try checkGitEnvironment(&env);
+                try std.testing.expectEqualStrings(&count_text, env.get("GIT_CONFIG_COUNT").?);
+                for (git_config_records[0..count]) |record| {
+                    if (std.mem.eql(u8, env.get(record.key).?, "core.fsmonitor"))
+                        try std.testing.expectEqualStrings(fsmonitor, env.get(record.value).?);
+                }
+            }
+        }
+    }
+}
+
+test "bootstrap rejects malformed counts and incomplete or surplus indexed records" {
+    var env = std.process.Environ.Map.init(std.testing.allocator);
+    defer env.deinit();
+    for ([_][]const u8{ "", "00", "01", "+1", "-1", "4", "999999999999999999999", " 1", "1 ", "1\n", "1\r", "one" }) |count| {
+        try env.put("GIT_CONFIG_COUNT", count);
+        try std.testing.expectError(error.InvalidGitConfigCount, checkGitEnvironment(&env));
+    }
+    try env.put("GIT_CONFIG_COUNT", "1");
+    try std.testing.expectError(error.MissingGitConfigRecord, checkGitEnvironment(&env));
+    try env.put("GIT_CONFIG_KEY_0", "core.fsmonitor");
+    try std.testing.expectError(error.MissingGitConfigRecord, checkGitEnvironment(&env));
+    _ = env.swapRemove("GIT_CONFIG_KEY_0");
+    try env.put("GIT_CONFIG_VALUE_0", "");
+    try std.testing.expectError(error.MissingGitConfigRecord, checkGitEnvironment(&env));
+    _ = env.swapRemove("GIT_CONFIG_VALUE_0");
+    _ = env.swapRemove("GIT_CONFIG_COUNT");
+    for ([_][]const u8{
+        "GIT_CONFIG_KEY_0",    "GIT_CONFIG_VALUE_0",
+        "GIT_CONFIG_KEY_00",   "GIT_CONFIG_VALUE_01",
+        "GIT_CONFIG_KEY_3",    "GIT_CONFIG_VALUE_3",
+        "GIT_CONFIG_KEY_",     "GIT_CONFIG_VALUE_1_extra",
+        "GIT_CONFIG_KEY_0\n",  "GIT_CONFIG_COUNT_1",
+        "git_config_count",    "git_config_key_0",
+        "git_config_value_0",  "GIT_CONFIG_KEY0",
+        "GIT_CONFIG_VALUE_+0", "GIT_CONFIG_VALUE_-1",
+    }) |name| {
+        try env.put(name, "0");
+        try std.testing.expectError(error.UnexpectedGitConfigRecord, checkGitEnvironment(&env));
+        _ = env.swapRemove(name);
+    }
+    try env.put("GIT_CONFIG_COUNT", "0");
+    try env.put("GIT_CONFIG_KEY_0", "core.fsmonitor");
+    try std.testing.expectError(error.UnexpectedGitConfigRecord, checkGitEnvironment(&env));
+}
+
+test "bootstrap rejects unknown settings, unsafe exact bytes, duplicate keys and repository overrides" {
+    var env = std.process.Environ.Map.init(std.testing.allocator);
+    defer env.deinit();
+    try env.put("GIT_CONFIG_COUNT", "1");
+    try env.put("GIT_CONFIG_VALUE_0", "fixture");
+    for ([_][]const u8{ "", "user.name", "safe.barerepository", "core.fsmonitor\n", "credential.interactive\t" }) |key| {
+        try env.put("GIT_CONFIG_KEY_0", key);
+        try std.testing.expectError(error.UnknownGitConfigKey, checkGitEnvironment(&env));
+    }
+    for (restrictive_git_settings) |setting| {
+        try env.put("GIT_CONFIG_KEY_0", setting.key);
+        for ([_][]const u8{ "true", "all", "auto", "Explicit", "Never", "False", "explicit\n", "never\r", "false\t", " fixture", "fixture ", "\x01", "\x7f" }) |value| {
+            try env.put("GIT_CONFIG_VALUE_0", value);
+            try std.testing.expectError(error.UnsafeGitConfigValue, checkGitEnvironment(&env));
+        }
+    }
+    try env.put("GIT_CONFIG_COUNT", "2");
+    try env.put("GIT_CONFIG_KEY_0", "core.fsmonitor");
+    try env.put("GIT_CONFIG_VALUE_0", "");
+    try env.put("GIT_CONFIG_KEY_1", "core.fsmonitor");
+    try env.put("GIT_CONFIG_VALUE_1", "false");
+    try std.testing.expectError(error.DuplicateGitConfigKey, checkGitEnvironment(&env));
+    _ = env.swapRemove("GIT_CONFIG_KEY_1");
+    _ = env.swapRemove("GIT_CONFIG_VALUE_1");
+    try env.put("GIT_CONFIG_COUNT", "1");
+    for (forbidden_git_environment) |name| {
+        try env.put(name, "");
+        try std.testing.expectError(error.AmbientGitOverride, checkGitEnvironment(&env));
+        _ = env.swapRemove(name);
+    }
 }
 
 test "bootstrap requires canonical explicit branch-native metadata" {

@@ -15,11 +15,12 @@ trap cleanup EXIT
 mkdir "$WORK/home"
 export HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
-unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR
-unset GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE
 export GIT_AUTHOR_NAME='Bootstrap fixture' GIT_AUTHOR_EMAIL='fixture@example.invalid'
 export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME" GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
 export GIT_TERMINAL_PROMPT=0
+# Validate rather than strip inherited overrides before any fixture Git command.
+(cd "$ROOT" && zig run --cache-dir "$ROOT/.zig-cache/release-tool-local" \
+  eng/package_bootstrap_tool.zig -- check-git-environment)
 
 copy_tooling_snapshot() {
   local source="$1" destination="$2" path
@@ -109,6 +110,115 @@ expect_failure() {
 }
 refs() { git --git-dir="$REMOTE" for-each-ref --format='%(objectname) %(refname)' | sort; }
 refs >"$WORK/before"
+for fsmonitor in "" false; do
+  [[ "$(git -C "$TOOLING" -c core.fsmonitor="$fsmonitor" config --type=bool --get core.fsmonitor)" == false ]]
+done
+
+# Rejected environment inputs must fail before Git or artifact creation.
+mkdir "$WORK/no-git-bin"
+cat >"$WORK/no-git-bin/git" <<'EOF'
+#!/usr/bin/env bash
+echo 'FAIL: rejected environment reached Git' >&2
+exit 1
+EOF
+chmod +x "$WORK/no-git-bin/git"
+environment_seal() {
+  env GIT_CONFIG_COUNT=3 \
+    GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=explicit \
+    GIT_CONFIG_KEY_1=credential.interactive GIT_CONFIG_VALUE_1=never \
+    GIT_CONFIG_KEY_2=core.fsmonitor GIT_CONFIG_VALUE_2= \
+    PATH="$WORK/no-git-bin:$PATH" "$@" \
+    bash "$WORK/run.sh" "$TOOLING" "$TRUSTED" seal azure_sdk_core_symcrypt --id rejected-environment \
+    --template-package azure_sdk_testing --template-tag "$TAG" --template-commit "$COMMIT"
+}
+expect_failure "unknown environment config key" UnknownGitConfigKey \
+  environment_seal GIT_CONFIG_KEY_1=user.name
+expect_failure "unsafe bare repository setting" UnsafeGitConfigValue \
+  environment_seal GIT_CONFIG_VALUE_0=all
+expect_failure "interactive credentials are not allowed" UnsafeGitConfigValue \
+  environment_seal GIT_CONFIG_VALUE_1=auto
+expect_failure "enabled fsmonitor is not allowed" UnsafeGitConfigValue \
+  environment_seal GIT_CONFIG_VALUE_2=true
+expect_failure "duplicate environment config key" DuplicateGitConfigKey \
+  environment_seal GIT_CONFIG_KEY_1=safe.bareRepository GIT_CONFIG_VALUE_1=explicit
+expect_failure "malformed environment config count" InvalidGitConfigCount \
+  environment_seal GIT_CONFIG_COUNT=03
+expect_failure "empty environment config count" InvalidGitConfigCount \
+  environment_seal GIT_CONFIG_COUNT=
+expect_failure "surplus environment config records" UnexpectedGitConfigRecord \
+  environment_seal GIT_CONFIG_COUNT=2
+expect_failure "ignored index alias is not allowed" UnexpectedGitConfigRecord \
+  environment_seal GIT_CONFIG_KEY_00=core.fsmonitor
+expect_failure "empty config key is not a partial record" UnknownGitConfigKey \
+  environment_seal GIT_CONFIG_KEY_1=
+expect_failure "newline config value is not normalized" UnsafeGitConfigValue \
+  environment_seal GIT_CONFIG_VALUE_0=$'explicit\n'
+expect_failure "control config value is not normalized" UnsafeGitConfigValue \
+  environment_seal GIT_CONFIG_VALUE_2=$'false\r'
+expect_failure "repository override still forbidden" AmbientGitOverride \
+  environment_seal GIT_DIR=fixture
+expect_failure "alternate config channel still forbidden" AmbientGitOverride \
+  environment_seal GIT_CONFIG_PARAMETERS=fixture
+[[ ! -e "$TOOLING/.release/package-bootstrap/rejected-environment" ]]
+
+# Audit actual Git invocations, not just the parser. No safety setting is removed
+# for the isolated bare source repository, source validation, preview, or push.
+mkdir "$WORK/hardened-bin"
+cat >"$WORK/hardened-bin/git" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${GIT_CONFIG_COUNT:-}" == 3 &&
+  "${GIT_CONFIG_KEY_0:-}" == safe.bareRepository && "${GIT_CONFIG_VALUE_0:-}" == explicit &&
+  "${GIT_CONFIG_KEY_1:-}" == credential.interactive && "${GIT_CONFIG_VALUE_1:-}" == never &&
+  "${GIT_CONFIG_KEY_2:-}" == core.fsmonitor && "${GIT_CONFIG_VALUE_2+x}" == x &&
+  "$GIT_CONFIG_VALUE_2" == "" ]] || {
+  echo 'FAIL: inherited Git safety settings changed' >&2
+  exit 1
+}
+[[ "$("$BOOTSTRAP_TEST_GIT" -C "$BOOTSTRAP_TEST_ROOT" config --get safe.bareRepository)" == explicit &&
+  "$("$BOOTSTRAP_TEST_GIT" -C "$BOOTSTRAP_TEST_ROOT" config --get credential.interactive)" == never ]]
+fsmonitor="$("$BOOTSTRAP_TEST_GIT" -C "$BOOTSTRAP_TEST_ROOT" config --get core.fsmonitor)"
+[[ "$fsmonitor" == "" ]]
+explicit_bare=false
+for arg in "$@"; do
+  case "$arg" in
+    --git-dir=*) explicit_bare=true ;;
+    fetch|archive|push)
+      [[ "$explicit_bare" == true ]] || {
+        echo 'FAIL: bootstrap bare operation must use explicit --git-dir' >&2
+        exit 1
+      }
+      printf '%s\n' "$arg" >>"$BOOTSTRAP_TEST_LOG"
+      ;;
+  esac
+done
+exec "$BOOTSTRAP_TEST_GIT" "$@"
+EOF
+chmod +x "$WORK/hardened-bin/git"
+hardened_run() {
+  env GIT_CONFIG_COUNT=3 \
+    GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=explicit \
+    GIT_CONFIG_KEY_1=credential.interactive GIT_CONFIG_VALUE_1=never \
+    GIT_CONFIG_KEY_2=core.fsmonitor GIT_CONFIG_VALUE_2= \
+    BOOTSTRAP_TEST_GIT="$(command -v git)" BOOTSTRAP_TEST_ROOT="$TOOLING" \
+    BOOTSTRAP_TEST_LOG="$WORK/hardened-git.log" PATH="$WORK/hardened-bin:$PATH" \
+    bash "$WORK/run.sh" "$TOOLING" "$TRUSTED" "$@"
+}
+hardened_run seal azure_sdk_core_symcrypt --id hardened \
+  --template-package azure_sdk_testing --template-tag "$TAG" --template-commit "$COMMIT" >"$WORK/hardened-seal.log"
+HARDENED_DIGEST="$(cat "$TOOLING/.release/package-bootstrap/hardened/sealed.complete")"
+hardened_run preview --id hardened --seal-sha256 "$HARDENED_DIGEST"
+refs >"$WORK/after"
+cmp "$WORK/before" "$WORK/after"
+hardened_run execute --id hardened --seal-sha256 "$HARDENED_DIGEST"
+[[ "$(git --git-dir="$REMOTE" rev-parse "$DESTINATION")" == "$COMMIT" ]]
+refs | grep -v " $DESTINATION$" >"$WORK/after"
+cmp "$WORK/before" "$WORK/after"
+[[ "$(grep -c '^fetch$' "$WORK/hardened-git.log")" == 3 &&
+  "$(grep -c '^archive$' "$WORK/hardened-git.log")" == 3 &&
+  "$(grep -c '^push$' "$WORK/hardened-git.log")" == 1 ]]
+git --git-dir="$REMOTE" update-ref -d "$DESTINATION" "$COMMIT"
+printf 'PASS: exact Git hardening survives seal/preview/expected-absent execution and explicit bare source operations\n'
 
 # Exercise the actual wrappers with different registries and the same global cache.
 CACHE_TOOLING="$WORK/tooling-other"
