@@ -30,17 +30,21 @@ or deinitialize every owned body/header/model value shown by the type.
 
 ## Core 0.4 and optional tracing
 
-Package **0.3.0** adopts the published **Core 0.4.0** release. Configure optional
-instrumentation on the caller's pipeline before constructing a client:
+Package **0.3.1** pins the published **Core 0.4.1** release by commit and hash.
+This patch updates the Core dependency only; public APIs and tracing behavior
+are unchanged.
+
+Configure optional instrumentation on the caller's pipeline before constructing
+a client:
 
 ```zig
-var telemetry = core.http.TelemetryPolicy.init("azsdk-zig-azure_rest_container_registry/0.3.0");
+var telemetry = core.http.TelemetryPolicy.init("azsdk-zig-azure_rest_container_registry/0.3.1");
 var policies = [_]*core.http.HttpPolicy{telemetry.asPolicy()};
 var pipeline = core.http.HttpPipeline.init(runtime, &policies);
 pipeline.setInstrumentation(.{
     .provider = provider.asProvider(),
     .scope_name = "azure_rest_container_registry",
-    .scope_version = "0.3.0",
+    .scope_version = "0.3.1",
     .namespace = "Microsoft.ContainerRegistry",
 });
 var client = ContainerRegistryClient.init(pipeline, .{ .endpoint = endpoint });
