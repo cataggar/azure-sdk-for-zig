@@ -103,7 +103,29 @@ bootstrap. Retrying a completed seal fails because the destination exists.
 Only canonical HTTPS and `git` SSH URLs for the trusted repository are accepted.
 Fetch/push identities must agree, with exactly one URL each. Password-bearing,
 ambiguous, alternate-repository, HTTP, and rewritten URLs are rejected, as are
-ambient Git repository/config overrides. There is no production local-remote,
+ambient Git repository/config overrides, except these exact restrictive indexed
+settings:
+
+| `GIT_CONFIG_KEY_n` | Allowed `GIT_CONFIG_VALUE_n` |
+| --- | --- |
+| `safe.bareRepository` | `explicit` |
+| `credential.interactive` | `never` |
+| `core.fsmonitor` | Empty (present but zero bytes), or `false`; both disable fsmonitor. |
+
+`GIT_CONFIG_COUNT` must be absent with no indexed records, or exactly `0`, `1`,
+`2`, or `3`, with complete contiguous key/value pairs. Any subset/order of the
+three keys is accepted without duplicates. Unknown keys, other spellings or
+values, missing/extra records, index aliases, and whitespace/control characters
+are rejected without logging their values. Settings are validated without
+rewriting or removing them and remain active throughout seal, preview, execute,
+and source verification. Owned bare repositories use explicit `--git-dir`;
+`safe.bareRepository=explicit` is never disabled to permit implicit discovery.
+
+The existing prohibitions on `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`,
+`GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_NAMESPACE`,
+`GIT_CONFIG`, `GIT_CONFIG_PARAMETERS`, `GIT_SHALLOW_FILE`, and
+`GIT_REPLACE_REF_BASE` still apply, as do both URL-rewrite checks.
+There is no production local-remote,
 arbitrary destination, candidate-commit, or protection-bypass option.
 
 All work is local under the fixed `.release/package-bootstrap/` directory.
@@ -125,4 +147,8 @@ isolated local fixture repositories. The production entry point never accepts
 the fixture trust context. Tests cover canonical/native identities, template
 provenance, coherent remotes, annotated/moved tags, tampering, pre-existing and
 concurrently created destinations, and preservation of every unrelated ref and
-tag. No test publishes to GitHub.
+tag. They also cover the exact inherited hardening triplet through sealing,
+read-only preview, source validation, and expected-absent fixture execution,
+alongside malformed/incomplete records and forbidden overrides. The two-root
+shared-cache regression still verifies current-worktree metadata. No test
+publishes to GitHub.

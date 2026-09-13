@@ -168,6 +168,8 @@ bootstrap_main() (
     bootstrap_fail "invalid seal ID"
   [[ "$remote" != -* && "$remote" != *$'\n'* && "$remote" != *$'\r'* ]] ||
     bootstrap_fail "invalid remote"
+  bootstrap_tool check-git-environment ||
+    bootstrap_fail "ambient Git repository/config overrides are not allowed"
   if [[ "$mode" == seal ]]; then
     [[ -n "$source_package" && -n "$tag" && -n "$commit" && -z "$expected_digest" ]] ||
       bootstrap_fail "seal requires only template inputs"
@@ -176,9 +178,6 @@ bootstrap_main() (
     [[ -z "$source_package" && -z "$tag" && -z "$commit" &&
       "$expected_digest" =~ ^[0-9a-f]{64}$ ]] ||
       bootstrap_fail "preview/execute require only an independently reviewed seal digest"
-  fi
-  if env | grep -Eq '^GIT_(DIR|WORK_TREE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|NAMESPACE|CONFIG|CONFIG_PARAMETERS|CONFIG_COUNT|SHALLOW_FILE|REPLACE_REF_BASE)='; then
-    bootstrap_fail "ambient Git repository/config overrides are not allowed"
   fi
   export GIT_NO_REPLACE_OBJECTS=1
   bootstrap_clean
