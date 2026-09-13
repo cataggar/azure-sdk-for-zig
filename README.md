@@ -2,21 +2,28 @@
 
 **Unpublished source preparation, provisional version 0.1.0.** This optional
 package implements Azure Core's HTTP transport interface using HTTPX. It does
-not add HTTPX to Core, register a new package, bootstrap a package branch, or
-complete issue #413. The intended package branch is `sdk/core_httpx`.
+not add HTTPX to Core or complete issue #413. The package branch is
+`sdk/core_httpx`; the coordinator has completed registration and sealed
+bootstrap. The adapter implementation remains draft and unreleased.
 
 ## Development dependencies
 
-The manifest pins immutable commits and their actual Zig package hashes:
+The portable source checkpoint uses these immutable commits and actual Zig
+package hashes:
 
 | Package | Commit | Status |
 | --- | --- | --- |
 | `azure_sdk_core` | `be32073994f37422f2f6b5e9255d208b1284de85` | Published Core 0.4.0 |
 | `httpx` | `ed0e91f7a5d110151d9876bf2e172ead78729475` | Canonical operation API development input; not a qualified final release |
 
-HTTPX comes from **`cataggar/httpx.zig`**. The development manifest contains no
-local dependency paths. Its HTTPX pin must be replaced with the coordinator's
-reviewed, qualified immutable release before publication.
+HTTPX comes from **`cataggar/httpx.zig`**. The portable development manifest has
+no local dependency paths. The isolated qualification worktree additionally
+uses a clearly marked, **unpublishable** local override for exact candidate
+`ff720540b759dbf28c15eea385b2a6598e04f201`. Its computed source hash is
+`httpx-0.1.9-8qj2egVUMQCgd4IR8e6ja3QqjWj_R5IzqG21IB8wNMBS`.
+This candidate is not a released/final HTTPX dependency. Neither its local path
+nor an invented release pin may be published. The coordinator must supply the
+reviewed, qualified immutable release URL and hash. Core 0.4.0 is already final.
 
 ## Integration
 
@@ -163,10 +170,10 @@ is rejected. Unix plus HTTP/2 or TLS is explicitly rejected, never rerouted or
 downgraded. WASI remains on Core's existing host backend; this optional package
 intentionally refuses a WASI build.
 
-Run only offline tests:
+Default validation is entirely offline:
 
 ```sh
-zig fmt --check build.zig build.zig.zon root.zig transport.zig test_backend.zig interruption_fixture.zig tests.zig
+zig fmt --check build.zig build.zig.zon root.zig transport.zig test_backend.zig interruption_fixture.zig tests.zig tls_qualification.zig tls_fixture_data.zig public_https.zig
 zig build test --cache-dir .zig-cache/local --global-cache-dir .zig-cache/global --summary all
 ```
 
@@ -237,7 +244,8 @@ The evidence test prints measured per-pair results. These fixtures establish
 the listed H2/SOCKS5 paths only, not every protocol or platform combination.
 H1 backpressure, direct stalled TCP connect, DNS, arbitrary upload-reader
 preemption, TLS handshakes and the native Windows/macOS interruption matrix
-remain unproved here. Public-CA/trusted-HTTPS qualification remains gated.
+remain unproved here. These interruption observations do not qualify TLS
+handshake interruption or any additional native platform.
 
 This independent conformance checkpoint passed 24/24 tests on aarch64 Linux
 with Zig 0.16.0. Three additional targeted interruption runs each passed 3/3,
@@ -245,19 +253,135 @@ including the negative watchdog case. Across those repeats, token observations
 were 11 ms and conservative deadline observations were 1–2 ms; every pair
 reported one close, zero live operations and zero leased connections.
 Windows GNU x86_64 and macOS aarch64 cross-compilation also passed, without
-running or qualifying their native interruption matrices. Production adapter
-source and immutable dependency pins are unchanged from the earlier checkpoint.
+running or qualifying their native interruption matrices. At that historical
+checkpoint (`b34e8d4c`), production adapter source and dependency pins were
+unchanged from `904f1b65`.
+
+## Paired standard TLS qualification
+
+The isolated `ff720540` candidate supplies the actual high-level
+`tls_crypto_provider`, `tls_certificate_crypto`, `server_authentication`, and
+`tls_trust_limits` fields. The adapter forwards them unchanged. It now rejects
+the explicit dangerous `server_authentication` variant as well as
+`verify_ssl = false`: the new authentication field overrides the legacy flag
+upstream, so checking only that flag would not preserve the adapter's contract.
+The guard also builds with the older development API.
+
+Example for the **paired API**, with application-owned `allocator` and `io`:
+
+```zig
+const httpx = adapter.httpx;
+var standard = httpx.StandardCryptoProvider.init(io, allocator);
+var roots = try httpx.tls.TrustContext.init(allocator, io, .{ .source = .system });
+defer roots.deinit();
+var certificate_crypto = httpx.CryptoCertificateVerifier.init(standard.provider());
+var binding = try roots.bind(&certificate_crypto, .{ .allow_sha1_identifiers = true });
+var transport = try adapter.HttpxTransport.init(allocator, io, .{
+    .client = .{
+        .tls_crypto_provider = standard.provider(),
+        .tls_certificate_crypto = &certificate_crypto,
+        .server_authentication = .{ .verify = .{ .provider = binding.provider() } },
+        .tls_trust_limits = .{},
+    },
+});
+defer transport.deinit();
+```
+
+Configure a pure-Zig resolver before using a hostname with strict DNS.
+Keep **all** owners above stable until the transport and its pooled sessions
+are destroyed. `roots.bind` obtains both signature verification and production
+metadata hashing from the same typed certificate adapter. SHA-1 identifier
+permission is distinct from backend capability and never enables SHA-1
+certificate signatures. A matching erased signature handle alone cannot
+authorize a different selected TLS provider.
+
+With the exact paired dependency selected, run:
+
+```sh
+zig build test -Dpaired-tls=true -j2 --cache-dir .zig-cache/local --global-cache-dir .zig-cache/global --summary all
+zig build test -Dpaired-tls=true -Doptimize=ReleaseSafe -j2 --cache-dir .zig-cache/local --global-cache-dir .zig-cache/global --summary all
+```
+
+Both commands passed **26/26 tests on aarch64 Linux, Zig 0.16.0**: the existing
+24 adapter/shared-Core tests plus two TLS matrix tests containing 60 cases:
+
+* 48 cases: TLS 1.2/1.3 × H1/H2 × 12 provider/trust cases. These exercise
+  buffered send and partial-read/finish reuse, a real three-certificate path,
+  synthetic in-memory identifier policy, selected-provider ABI/context/vtable
+  mismatch, missing provider/typed adapter, a different certificate adapter,
+  independent SHA-1 policy/backend gates, metadata allocation failure,
+  signature failure, and an actual path-depth limit. Concrete upstream errors,
+  `transport_started`, hash-handle destruction, operation count and lease
+  cleanup are asserted. Successful reuse performs two SDK requests with one
+  TLS handshake and one trust-policy call, retaining all borrowed owners.
+* 12 cases: TLS 1.2/1.3 × H1/H2 × explicit abort, explicit cancel, and token
+  cancellation after open. Each returns to zero live operations and pooled
+  connections. These are terminal cleanup checks, **not** additional blocked
+  TLS phase-interruption claims.
+
+The TLS peer observes the actual negotiated TLS version and ALPN. Its accept
+and socket waits are bounded; every path joins it. The existing SOCKS5/H2
+interruption pairs remain unchanged and passed again (11 ms token, 1–2 ms
+deadline; one close and zero live/leased operations for every pair).
+
+`tls_fixture_data.zig` runs the dependency's deterministic certificate
+generator in a separate std-only build executable, emitting public test bytes
+into the local build cache. It neither copies the trust/conformance frameworks
+nor compiles another HTTPX TLS/provider ABI. The test and adapter import the
+same canonical HTTPX module. `zig build -Dpaired-tls=true` also compile-checks
+these optional tests. The three fixed CI contexts are unchanged; paired tests
+require the coordinator's paired dependency selection before CI enables them.
+The paired adapter/tests also cross-compiled for x86_64 Windows GNU. The
+aarch64 macOS check on Linux was **blocked** by missing `Security` and
+`CoreFoundation` frameworks required by the candidate's canonical platform
+trust discovery. No framework stubs, policy changes or alternate validation
+backend were substituted; native macOS verification remains coordinator-owned.
+
+### Explicit public Azure HTTPS probe
+
+This is opt-in, never part of `test` or default CI:
+
+```sh
+zig build qualify-public-https -Dpaired-tls=true -j2 \
+  --cache-dir .zig-cache/local --global-cache-dir .zig-cache/global \
+  --summary all -- "$(awk '/^nameserver / {print $2; exit}' /etc/resolv.conf)"
+```
+
+The sole argument is a configured DNS-server IP for HTTPX's pure-Zig resolver;
+the shell example reads Linux resolver configuration without changing it.
+The endpoint is fixed to unauthenticated `GET https://management.azure.com/`.
+HTTP/1.1 is selected, with no H2 ALPN offer, proxy, cookies, retry or redirect
+following. The standard selected provider and canonical system-root binding
+perform certificate/path/hostname verification. The probe also requires
+exactly one successful canonical verification for `management.azure.com` and
+zero live operations/connections after bounded finish. It never logs bodies,
+credentials or certificate material, installs roots, alters stores, disables
+verification or uses OS chain-validation fallback.
+
+The aarch64 Linux run against `ff720540` received **HTTP 400**, with 114 strict
+system anchors accepted and 7 unsupported anchors skipped. This is a verified
+HTTPS response, not a successful Azure API operation. Limits: 64 KiB response,
+10 s whole operation, 5 s connect/read/write phases, 2 s DNS attempts, 16 peer
+certificates, 256 KiB per certificate, 1 MiB chain, depth 8 and 64 candidate
+attempts. No payload or credentials were logged. Core does not expose the
+negotiated TLS version; this public result does not assert one. This single
+standard-backend endpoint observation is not the native/platform/public-H2
+qualification matrix.
 
 ## Publication gates still open
 
-* Final upstream provider/trust configuration API, immutable qualified release
-  and final package hash.
-* Parent-controlled native selected-provider and public-CA Azure HTTPS matrix
-  with verification enabled. `verify_ssl = false` is rejected here.
+* Coordinator acceptance of the paired upstream API/composition review,
+  qualified HTTPX release, and final immutable dependency URL/hash.
+* Parent-controlled native selected-provider and remaining public-CA Azure
+  HTTPS matrix with verification enabled. The standard Linux observation
+  above does not qualify SymCrypt or another native provider.
 * Native Windows/macOS runtime results; cross-compilation alone is not runtime
-  qualification.
-* Reviewed registry/history/catalog metadata, sealed expected-absent
-  new-package bootstrap, ordinary implementation review and sequential merge,
-  then tags/releases.
+  qualification. No native interruption capability is inferred.
+* A trusted-HTTPS positive redirect factory is still unadvertised in shared
+  conformance; deterministic credential/attempt tests and this TLS matrix are
+  not a replacement for that factory.
+* Review of adapter changes, ordinary implementation merge, then tags/releases.
+  Package registration/history/catalog and sealed bootstrap are already
+  coordinator-completed, not work to repeat here.
 
-No production, TLS-provider, native-crypto or FIPS qualification is claimed.
+No released-production, native-crypto or FIPS qualification is claimed.

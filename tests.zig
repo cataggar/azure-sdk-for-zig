@@ -90,6 +90,11 @@ test "configuration rejects ambient credentials and unauthenticated TLS" {
     try std.testing.expectError(error.TlsVerificationRequired, adapter.HttpxTransport.init(allocator, io, .{
         .operation = .{ .verify_ssl = false },
     }));
+    if (comptime @hasField(httpx.ClientConfig, "server_authentication")) {
+        try std.testing.expectError(error.TlsVerificationRequired, adapter.HttpxTransport.init(allocator, io, .{
+            .client = .{ .server_authentication = .dangerously_insecure_skip_certificate_verification },
+        }));
+    }
     try std.testing.expectError(error.AzureOwnsRequestOptions, adapter.HttpxTransport.init(allocator, io, .{
         .client = .{ .default_headers = &.{.{ "Authorization", "test" }} },
     }));

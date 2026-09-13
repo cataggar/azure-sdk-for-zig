@@ -190,6 +190,11 @@ pub const HttpxTransport = struct {
 fn validateOptions(options: Options) !void {
     const wire = options.operation;
     if (!options.client.verify_ssl or wire.verify_ssl == false) return error.TlsVerificationRequired;
+    if (comptime @hasField(httpx.ClientConfig, "server_authentication")) {
+        if (options.client.server_authentication) |authentication| {
+            if (authentication != .verify) return error.TlsVerificationRequired;
+        }
+    }
     // Ambient request defaults could restore a credential after Core strips it
     // on a redirect, or alter bytes/framing after an Azure signing policy.
     if (options.client.default_headers != null or options.client.base_url != null or
