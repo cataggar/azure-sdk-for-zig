@@ -75,7 +75,7 @@ const Mock = struct {
         const self: *@This() = @ptrCast(@alignCast(context));
         self.calls += 1;
         if (self.expected_trace) |traced| {
-            try std.testing.expectEqualStrings("azsdk-zig-azure_rest_container_registry/0.3.0", request.getHeader("User-Agent").?);
+            try std.testing.expectEqualStrings("azsdk-zig-azure_rest_container_registry/0.3.1", request.getHeader("User-Agent").?);
             try std.testing.expectEqual(traced, request.getHeader("traceparent") != null);
             if (traced) {
                 const parent = core.tracing.TraceContext.parseTraceparent(request.getHeader("traceparent").?).?;
@@ -348,7 +348,7 @@ test "ACR descendants preserve optional caller instrumentation and automatically
             .{},
         );
         defer provider.deinit() catch unreachable;
-        var telemetry = core.http.TelemetryPolicy.init("azsdk-zig-azure_rest_container_registry/0.3.0");
+        var telemetry = core.http.TelemetryPolicy.init("azsdk-zig-azure_rest_container_registry/0.3.1");
         var policies = [_]*core.http.HttpPolicy{telemetry.asPolicy()};
         var pipeline = core.http.HttpPipeline.init(runtime, &policies);
         try std.testing.expect(pipeline.instrumentation == null);
