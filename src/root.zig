@@ -89,4 +89,5 @@ test {
     _ = @import("metadata_test.zig");
     _ = @import("blob_upload_test.zig");
     _ = @import("blob_download_test.zig");
+    _ = @import("tracing_test.zig");
 }
