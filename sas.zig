@@ -199,9 +199,31 @@ pub fn send(
     request: *core.http.Request,
     body: ?core.http.StreamingRequestBody,
 ) !RequestOutcome {
+    return sendWithOptions(runtime, request, body, .{});
+}
+
+/// Tracing-only configuration: no caller HTTP pipeline or policies can enter
+/// the credential-isolated SAS dispatch path.
+pub const SendOptions = struct {
+    /// Forward the service's provider, package scope/version, namespace and
+    /// optional parent unchanged. Borrowed configuration must remain valid
+    /// through the call; Core's concrete provider owns queued data afterward.
+    instrumentation: ?core.tracing.InstrumentationOptions = null,
+};
+
+/// The same credential-free dispatch as send(), with opt-in instrumentation.
+/// The helper neither exports telemetry nor flushes/shuts down the provider.
+/// Streaming spans cover open/response headers, not the subsequent body drain.
+pub fn sendWithOptions(
+    runtime: core.http.HttpRuntime,
+    request: *core.http.Request,
+    body: ?core.http.StreamingRequestBody,
+    options: SendOptions,
+) !RequestOutcome {
     request.retryable = false;
     request.redirect_policy = .not_allowed;
     var pipeline = core.http.HttpPipeline.init(runtime, &.{});
+    pipeline.setInstrumentation(options.instrumentation);
     const operation = pipeline.open(request, .{ .body = body }) catch |err| {
         if (request.transport_started)
             return .{ .unknown = .{ .cause = err } };
@@ -378,4 +400,8 @@ test "complete SAS URI cleans up on every URL allocation failure" {
         uriAllocationTest,
         .{},
     );
+}
+
+test {
+    _ = @import("sas_tracing_test.zig");
 }

@@ -4,6 +4,7 @@ const base64 = core.base64;
 const crypto = core.crypto;
 
 pub const sas = @import("sas.zig");
+pub const version: []const u8 = @import("build.zig.zon").version;
 
 test {
     std.testing.refAllDecls(sas);
@@ -37,16 +38,16 @@ fn decodeAccountKey(allocator: std.mem.Allocator, encoded: []const u8) ![]u8 {
     return decoded;
 }
 
-fn versionAtLeast(version: ?[]const u8, minimum: []const u8) bool {
-    const value = version orelse return true;
+fn versionAtLeast(service_version: ?[]const u8, minimum: []const u8) bool {
+    const value = service_version orelse return true;
     return std.mem.order(u8, value, minimum) != .lt;
 }
 
 fn contentLengthToSign(request: *const core.http.Request) []const u8 {
     const value = request.getHeader("Content-Length") orelse return "";
     if (std.mem.eql(u8, value, "0")) {
-        const version = request.getHeader("x-ms-version") orelse return "";
-        if (std.mem.order(u8, version, "2014-02-14") == .gt) return "";
+        const service_version = request.getHeader("x-ms-version") orelse return "";
+        if (std.mem.order(u8, service_version, "2014-02-14") == .gt) return "";
     }
     return value;
 }
