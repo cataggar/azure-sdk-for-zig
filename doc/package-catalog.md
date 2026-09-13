@@ -32,10 +32,10 @@ its source lives at the root of the named branch.
 | `azure_sdk_kusto` | Branch | — | [`sdk/kusto`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/kusto) | `azure_sdk_core`, `azure_sdk_storage_common`, `azure_sdk_storage_blobs`, `azure_sdk_storage_queues` |
 | `azure_sdk_devops` | Branch | — | [`sdk/devops`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/devops) | `azure_sdk_core`, `azure_rest_devops` |
 
-`azure_sdk_core_httpx` is registered for sealed branch-native bootstrap and is
-not yet released. Registration does not create its branch or ship a transport.
-The implementation and final HTTPX pin remain subject to review, native
-qualification, and the [sealed onboarding workflow](package-bootstrap.md).
+`azure_sdk_core_httpx` has completed the [sealed branch-native
+bootstrap](package-bootstrap.md) and is not yet released. Its implementation and
+final HTTPX pin remain subject to review and native qualification. Registration
+and publication paths alone do not ship a transport.
 
 `azure_rest_devops` is the only REST package generated from
 `microsoft/vsts-rest-api-specs` rather than `Azure/azure-rest-api-specs`;
@@ -44,4 +44,8 @@ DevOps API areas, with a Zig namespace per area.
 
 `azure_sdk_core_httpx` declares the external `httpx` dependency.
 `azure_sdk_core_symcrypt` pins the external `zig_symcrypt` dependency.
+Its forthcoming optional TLS adapter also declares a lazy `httpx` dependency;
+the published 0.2.0 package remains SDK-crypto-only. The registered `tls` and
+HTTPX qualification paths prepare those branch-owned releases without adding
+package source to Main.
 `azure_sdk_kusto` pins the external `serde` dependency.
