@@ -178,6 +178,8 @@ fn print(io: std.Io, comptime fmt: []const u8, args: anytype) !void {
 }
 
 test "bootstrap requires canonical explicit branch-native metadata" {
+    try std.testing.expectEqualStrings("sdk/core_httpx", try target("azure_sdk_core_httpx"));
+    try std.testing.expectError(error.UnknownPackage, target("sdk/core_httpx"));
     try std.testing.expectEqualStrings("sdk/core_symcrypt", try target("azure_sdk_core_symcrypt"));
     try std.testing.expectError(error.UnknownPackage, target("sdk/core_symcrypt"));
     try std.testing.expectError(error.UnknownPackage, target("azure_sdk_not_registered"));

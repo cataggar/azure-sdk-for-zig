@@ -7,8 +7,8 @@ test {
     _ = @import("example_history_map.zig");
 }
 
-test "registry contains a valid twenty-five-package dependency graph" {
-    try std.testing.expectEqual(@as(usize, 25), registry.all.len);
+test "registry contains a valid twenty-six-package dependency graph" {
+    try std.testing.expectEqual(@as(usize, 26), registry.all.len);
     try registry.validate(std.testing.allocator, &registry.all);
     var main_owned: usize = 0;
     var branch_owned: usize = 0;
@@ -19,7 +19,23 @@ test "registry contains a valid twenty-five-package dependency graph" {
         }
     }
     try std.testing.expectEqual(@as(usize, 0), main_owned);
-    try std.testing.expectEqual(@as(usize, 25), branch_owned);
+    try std.testing.expectEqual(@as(usize, 26), branch_owned);
+}
+
+test "HTTPX adapter stays branch-owned and separate from Core dependencies" {
+    const adapter = registry.all[registry.find(&registry.all, "azure_sdk_core_httpx").?];
+    try std.testing.expectEqual(registry.SourceOwnership.branch_owned, adapter.ownership);
+    try std.testing.expect(adapter.workspace_path == null);
+    try std.testing.expectEqualStrings("sdk/core_httpx", adapter.branch);
+    try std.testing.expectEqual(@as(usize, 1), adapter.dependencies.len);
+    try std.testing.expectEqualStrings("azure_sdk_core", adapter.dependencies[0]);
+    try std.testing.expectEqual(@as(usize, 1), adapter.external_dependencies.len);
+    try std.testing.expectEqualStrings("httpx", adapter.external_dependencies[0]);
+
+    const core = registry.all[registry.find(&registry.all, "azure_sdk_core").?];
+    for (core.external_dependencies) |dependency| {
+        try std.testing.expect(!std.mem.eql(u8, "httpx", dependency));
+    }
 }
 
 test "topological order places dependencies before dependents" {
