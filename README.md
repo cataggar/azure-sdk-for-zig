@@ -5,9 +5,9 @@ playback HTTP transports.
 
 - Source: repository root on the `sdk/testing` package branch
 - Release branch: `sdk/testing`
-- Version: `0.3.0`
-- Internal dependency: `azure_sdk_core` 0.4.0 at
-  `be32073994f37422f2f6b5e9255d208b1284de85`
+- Version: `0.3.1`
+- Internal dependency: `azure_sdk_core` 0.4.1 at
+  `2c95f65be96b5ef48a50671de33e9e0926c624cb`
 
 Transport descriptors are copied by value while their contexts are borrowed.
 Keep playback/recording transport values, wrapped transport contexts, crypto
@@ -32,7 +32,7 @@ recorded request header. Additional live request headers are allowed so
 volatile telemetry can be omitted from recordings. Response header order and
 duplicates are preserved.
 
-This compatibility release adopts Core's owned `RequestHeaders`. Request
+This compatibility release retains Core's owned `RequestHeaders`. Request
 snapshots still allocate independent header name/value copies, including
 `traceparent` and `tracestate`, and remain valid after the original request is
 mutated or destroyed. Response and capture-map ownership has not changed.
