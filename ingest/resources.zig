@@ -333,7 +333,7 @@ pub const ResourceCommandExecutor = struct {
 pub const DataManagementCommandExecutor = struct {
     connection: *kusto_common.KustoConnection,
     application_name: []const u8 = "azure-sdk-zig",
-    client_version: []const u8 = "azsdk-zig-kusto/0.2.0",
+    client_version: []const u8 = kusto_common.user_agent_prefix,
 
     pub const supports_concurrent_use = false;
 

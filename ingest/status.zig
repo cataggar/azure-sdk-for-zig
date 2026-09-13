@@ -158,6 +158,7 @@ pub const SasStatusTableClient = struct {
     allocator: std.mem.Allocator,
     uri: sas.CompleteSasUri,
     runtime: core.http.HttpRuntime,
+    instrumentation: ?core.tracing.InstrumentationOptions = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -174,6 +175,11 @@ pub const SasStatusTableClient = struct {
     pub fn deinit(self: *SasStatusTableClient) void {
         self.uri.deinit();
         self.* = undefined;
+    }
+
+    /// Tracing-only borrowed configuration; no credential or caller policies.
+    pub fn setInstrumentation(self: *SasStatusTableClient, options: ?core.tracing.InstrumentationOptions) void {
+        self.instrumentation = options;
     }
 
     pub fn format(self: SasStatusTableClient, writer: anytype) !void {
@@ -211,7 +217,9 @@ pub const SasStatusTableClient = struct {
         try request.setHeader("Prefer", "return-no-content");
         try request.setHeader("x-ms-version", storage_api_version);
         request.body = body;
-        const outcome = try sas.send(self.runtime, &request, null);
+        const outcome = try sas.sendWithOptions(self.runtime, &request, null, .{
+            .instrumentation = self.instrumentation,
+        });
         return switch (outcome) {
             .accepted => |value| if (value.status_code == 204)
                 outcome
@@ -238,6 +246,7 @@ pub const SasStatusTableClient = struct {
         request.redirect_policy = .not_allowed;
 
         var pipeline = core.http.HttpPipeline.init(self.runtime, &.{});
+        pipeline.setInstrumentation(self.instrumentation);
         const operation = pipeline.open(&request, .{}) catch |err| {
             if (request.transport_started) return .{ .unknown = .{ .cause = err } };
             return err;
@@ -284,10 +293,10 @@ pub const StatusTableReadOutcome = union(enum) {
 };
 
 /// An owned, pollable reference to the entity pre-created for an accepted
-/// queued submission. It borrows only `transport`; the manager and any Kusto
-/// connection need not remain alive after submission, but the copied runtime's
-/// borrowed transport and crypto contexts must. It is single-owner and not
-/// safe for concurrent polling.
+/// queued submission. The manager and any Kusto connection need not remain
+/// alive after submission. The copied runtime's transport/crypto contexts and
+/// any configured tracing provider/metadata must outlive the handle. It is
+/// single-owner and not safe for concurrent polling.
 pub const StatusTrackingHandle = struct {
     allocator: std.mem.Allocator,
     table: SasStatusTableClient,
@@ -334,6 +343,12 @@ pub const StatusTrackingHandle = struct {
         self.allocator.free(self.database);
         self.allocator.free(self.target_table);
         self.* = undefined;
+    }
+
+    /// Retains tracing options by value, borrowing provider and metadata.
+    /// Null disables future status tracing without managing the provider.
+    pub fn setInstrumentation(self: *StatusTrackingHandle, options: ?core.tracing.InstrumentationOptions) void {
+        self.table.setInstrumentation(options);
     }
 
     pub fn format(self: StatusTrackingHandle, writer: anytype) !void {

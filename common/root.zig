@@ -308,6 +308,9 @@ pub const KustoCloudInfoCache = struct {
     }
 };
 
+pub const version = @import("kusto_build_options").version;
+pub const user_agent_prefix = "azsdk-zig-kusto/" ++ version;
+
 pub const KustoConnectionOptions = struct {
     /// Empty derives the scope from metadata, or uses the public default when
     /// metadata discovery is disabled.
@@ -319,18 +322,22 @@ pub const KustoConnectionOptions = struct {
     additional_trusted_hosts: []const []const u8 = &.{},
     /// The connection never changes or inspects the credential's authority;
     /// configure any credential authority when constructing that credential.
-    user_agent: []const u8 = "azsdk-zig-kusto/0.2.0",
+    user_agent: []const u8 = user_agent_prefix,
     retry: KustoRetryOptions = .{},
+    /// Applied unchanged to metadata discovery and the authenticated pipeline.
+    /// Provider and metadata are borrowed, including by retained status handles.
+    instrumentation: ?core.tracing.InstrumentationOptions = null,
 };
 
 /// Allocator-owned, stable HTTP connection shared by Kusto service clients.
 ///
 /// The credential is borrowed and must outlive this connection. This
 /// connection must outlive all derived clients and their in-flight requests.
-/// The runtime is copied by value and borrows its transport and
-/// crypto contexts; both contexts, the credential, and any open operations
-/// must outlive this connection. Callers must externally serialize use when
-/// any borrowed backend context is not concurrent-safe.
+/// The runtime is copied by value and borrows its transport and crypto
+/// contexts; both contexts and the credential must outlive this connection.
+/// The connection must outlive its clients and open operations. Configured
+/// tracing providers/metadata are also borrowed and must additionally outlive
+/// retained status handles using them. Callers must externally serialize use.
 pub const KustoConnection = struct {
     allocator: std.mem.Allocator,
     /// Engine endpoint retained under its #46 field name for source compatibility.
@@ -386,7 +393,7 @@ pub const KustoConnection = struct {
                 }
             }
             if (resolved_cloud_info == null) {
-                var fetched = try discoverCloudInfo(allocator, runtime, normalized_engine);
+                var fetched = try discoverCloudInfo(allocator, runtime, normalized_engine, options.instrumentation);
                 errdefer fetched.deinit(allocator);
                 try validateCloudInfo(&fetched);
                 resolved_cloud_info = fetched;
@@ -470,6 +477,7 @@ pub const KustoConnection = struct {
             self.decompression.asPolicy(),
         };
         self.pipeline = core.http.HttpPipeline.init(runtime, &self.policies);
+        self.pipeline.setInstrumentation(options.instrumentation);
         return self;
     }
 
@@ -679,6 +687,7 @@ fn discoverCloudInfo(
     allocator: std.mem.Allocator,
     runtime: core.http.HttpRuntime,
     engine_url: []const u8,
+    instrumentation: ?core.tracing.InstrumentationOptions,
 ) !KustoCloudInfo {
     const metadata_url = try std.fmt.allocPrint(allocator, "{s}/v1/rest/auth/metadata", .{engine_url});
     defer allocator.free(metadata_url);
@@ -689,6 +698,7 @@ fn discoverCloudInfo(
     try request.setHeader("Accept", "application/json");
     try request.setHeader("Accept-Encoding", "gzip, deflate");
     var pipeline = core.http.HttpPipeline.init(runtime, &.{});
+    pipeline.setInstrumentation(instrumentation);
     var response = try pipeline.send(&request);
     defer response.deinit();
 
@@ -1971,7 +1981,7 @@ test "KustoConnection sends authenticated request with default and override scop
     try std.testing.expectEqual(@as(u32, 1), credential.call_count);
     try std.testing.expectEqualStrings("https://kusto.kusto.windows.net/.default", credential.last_scope.?);
     try std.testing.expect(std.mem.endsWith(u8, mock.last_headers.get("Authorization").?, "connection-test-token"));
-    try std.testing.expectEqualStrings("azsdk-zig-kusto/0.2.0", mock.last_headers.get("User-Agent").?);
+    try std.testing.expectEqualStrings(user_agent_prefix, mock.last_headers.get("User-Agent").?);
     try std.testing.expectEqualStrings("gzip, deflate", mock.last_headers.get("Accept-Encoding").?);
     const request_id = mock.last_headers.get("x-ms-client-request-id").?;
     try std.testing.expectEqual(@as(usize, 36), request_id.len);

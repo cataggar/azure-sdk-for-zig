@@ -78,7 +78,7 @@ pub const dynamic = kql.dynamic;
 
 pub const KustoClientOptions = struct {
     application_name: []const u8 = "azure-sdk-zig",
-    client_version: []const u8 = "azsdk-zig-kusto/0.2.0",
+    client_version: []const u8 = kusto_common.user_agent_prefix,
 };
 
 /// Client for executing KQL queries and management commands against a Kusto cluster.

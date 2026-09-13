@@ -86,6 +86,9 @@ pub const ManagedIngestionResult = union(enum) {
 /// connection runtime contexts. They must outlive this client, all copies of
 /// it, and all calls. A shared connection (and a manager backed by one) is not
 /// concurrent-safe; callers must externally serialize use.
+/// Streaming uses the connection pipeline; the queued client snapshots its
+/// tracing options at construction. Configure the connection before deriving
+/// clients. Retained status handles also borrow tracing provider/metadata.
 pub const ManagedIngestClient = struct {
     streaming: streaming.StreamingIngestClient,
     queued: queued.QueuedIngestClient,
