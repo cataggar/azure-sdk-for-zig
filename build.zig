@@ -61,6 +61,25 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const examples_step = b.step("examples", "Compile Storage Blobs examples");
+    const tracing_module = b.createModule(.{
+        .root_source_file = b.path("examples/tracing_mock.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "azure_sdk_core", .module = core_mod },
+            .{ .name = "azure_sdk_storage_blobs", .module = blobs_mod },
+        },
+    });
+    const tracing_mock = b.addExecutable(.{
+        .name = "storage-blob-tracing-mock",
+        .root_module = tracing_module,
+    });
+    examples_step.dependOn(&tracing_mock.step);
+    test_step.dependOn(&tracing_mock.step);
+    const tracing_tests = b.addTest(.{ .root_module = tracing_module });
+    test_step.dependOn(&b.addRunArtifact(tracing_tests).step);
+    const tracing_step = b.step("tracing-mock", "Mock-only Blob client tracing to OTLP JSON; no network or credentials");
+    tracing_step.dependOn(&b.addRunArtifact(tracing_mock).step);
     examples_step.dependOn(&complete_sas_upload.step);
     test_step.dependOn(&complete_sas_upload.step);
     const run_complete_sas_upload = b.addRunArtifact(complete_sas_upload);

@@ -3,8 +3,11 @@
 Azure Blob Storage clients, including `BlobClient`, `BlobContainerClient`, and
 the complete-SAS `SasBlobClient`.
 
-Release branch: `sdk/storage_blobs`. The package depends on
-`azure_sdk_core`, `azure_sdk_storage_common`, and `serde`.
+Version: **0.4.0**. Release branch: `sdk/storage_blobs`. The package pins
+published `azure_sdk_core` **0.4.0** and `azure_sdk_storage_common` **0.4.0**,
+plus `serde`. `blobs.version` and `blobs.user_agent_prefix` follow the manifest.
+The user-agent prefix is available for a caller-owned `TelemetryPolicy`; clients
+do not add a user-agent policy implicitly.
 
 Clients take a caller-built `core.http.HttpPipeline`. The pipeline copies its
 `HttpRuntime` descriptors by value while borrowing the transport, crypto,
@@ -16,9 +19,90 @@ standard crypto fallback.
 Common's credential-isolated SAS sender; it never attaches the caller's
 credential policies.
 
-See the
-[Storage overview](https://github.com/cataggar/azure-sdk-for-zig/blob/main/sdk/storage/README.md)
-for complete-SAS transfer behavior.
+See [`sas.zig`](sas.zig) for complete-SAS transfer sources and outcome semantics.
+
+## Opt-in tracing
+
+Configure the canonical pipeline before constructing generated or handwritten
+clients. The complete configuration is copied into derived clients, pagers,
+convenience status requests, and buffered upload/download helpers:
+
+```zig
+var pipeline = core.http.HttpPipeline.init(runtime, &policies);
+const instrumentation: core.tracing.InstrumentationOptions = .{
+    .provider = provider.asProvider(),
+    .scope_name = "azure_sdk_storage_blobs",
+    .scope_version = blobs.version,
+    .namespace = "Microsoft.Storage",
+    .parent_context = optional_parent,
+};
+pipeline.setInstrumentation(instrumentation);
+var container = blobs.BlobContainerClient.init(pipeline, .{
+    .endpoint = endpoint,
+    .container_name = container_name,
+});
+var blob = container.getBlobClient(blob_name);
+```
+
+For complete-SAS clients, preserve the existing constructor and configure tracing
+only; no credential policy or caller pipeline can enter this path:
+
+```zig
+var sas_client = try blobs.SasBlobClient.init(allocator, complete_sas_url, runtime);
+defer sas_client.deinit();
+sas_client.setInstrumentation(instrumentation);
+// sas_client.setInstrumentation(null) disables subsequent tracing.
+```
+
+`CompleteSasBlobClient` is the same type and supports the same setter. Every
+single upload, staged block, block-list commit, and unknown-length block stream
+uses Storage Common's `sendWithOptions`. Caller scope, version, namespace, and
+default parent are forwarded unchanged, including when the owning service is
+Kusto rather than Blob Storage. SAS dispatch never gains retries, redirects,
+credential policies, or automatic reader rewinds.
+
+Provider/exporter/backend contexts must stay at stable addresses. Instrumentation
+strings and parent tracestate are borrowed and must outlive all clients/pagers
+using them; changing the original pipeline does not reconfigure existing copies.
+Owning SAS clients and pagers must not be shallow-copied and deinitialized twice.
+Core's concrete provider owns completed span data, so clients, request storage,
+and configuration strings can be released before explicit export once their
+operations have ended. Clients never drain, flush, or shut down the provider.
+
+Defaults are inert. Configured instrumentation emits one logical HTTP span per
+request, not one span around a multi-block upload or whole listing. Buffered
+`send` covers the HTTP response; streaming `open` (used by SAS) ends at response
+headers and excludes subsequent body-drain errors. Local validation, result
+parsing, and download-writer failures are outside an already-completed HTTP span.
+SAS accepted/rejected/unknown/incomplete outcomes remain unchanged; telemetry
+allocation failures, bounded-queue drops, and explicit exporter errors do not
+replace service outcomes. Inspect provider counters and handle export management
+errors separately.
+
+Built-in spans omit paths, SAS query/signatures, bodies, authorization, cookies,
+and arbitrary headers. Do not put secrets in explicit scope/namespace/tracestate
+metadata. There is no environment discovery, automatic export, worker, or
+collector connection. HTTP exporters must use suppression or an uninstrumented
+pipeline. Production OTLP transport, per-attempt spans, full streaming lifetimes,
+and per-call service-client parent APIs remain separate follow-ups.
+
+### Runnable mock-first example
+
+```bash
+zig build tracing-mock
+```
+
+[`examples/tracing_mock.zig`](examples/tracing_mock.zig) runs actual
+`BlobContainerClient.create` and derived Blob upload calls through `MockTransport`.
+It writes versioned OTLP JSON to stdout, with W3C wire IDs checked against the
+exported spans by its test. It explicitly configures bounded span storage and
+calls `forceFlush(1000)` / `shutdown(1000)` after the clients leave scope.
+Budgets are cooperative, not promises to interrupt an arbitrary blocking writer.
+No token, network access, Azure account, or collector is needed.
+
+Core 0.4 uses owned `RequestHeaders`; this package uses compatible
+`setHeader`/`getHeader` and read-only iteration. Applications mutating raw request
+maps should follow Core's `http/request_headers.md` migration guide.
 
 ## Blob metadata
 
@@ -70,6 +154,10 @@ const sequence_number = properties.metadata.get("sequencenumber");
 
 ```bash
 zig build test --summary all
+zig build test -Doptimize=ReleaseSafe --summary all
 zig build examples
+zig build tracing-mock
 zig build complete-sas-upload -- <blob-sas-url> <file>
 ```
+
+`test` executes mock tests and compiles examples; it does not run live examples.
