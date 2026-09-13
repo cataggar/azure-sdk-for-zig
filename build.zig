@@ -76,6 +76,7 @@ pub fn build(b: *std.Build) void {
                     .{ .name = "azure_sdk_core_httpx", .module = adapter },
                     .{ .name = "httpx", .module = httpx_module },
                     .{ .name = "tls_fixture_data", .module = fixture_data },
+                    .{ .name = "azure_sdk_core_http_conformance", .module = core.module("azure_sdk_core_http_conformance") },
                 },
             }),
             .filters = if (test_filter) |filter| &.{filter} else &.{},

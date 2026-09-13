@@ -173,7 +173,7 @@ intentionally refuses a WASI build.
 Default validation is entirely offline:
 
 ```sh
-zig fmt --check build.zig build.zig.zon root.zig transport.zig test_backend.zig interruption_fixture.zig tests.zig tls_qualification.zig tls_fixture_data.zig public_https.zig
+zig fmt --check build.zig build.zig.zon root.zig transport.zig test_backend.zig interruption_fixture.zig tests.zig tls_qualification.zig tls_fixture_data.zig https_fixture.zig public_https.zig
 zig build test --cache-dir .zig-cache/local --global-cache-dir .zig-cache/global --summary all
 ```
 
@@ -186,9 +186,10 @@ framing, decompression, explicit limits, deadlines, method mapping, lifetime,
 trailers and H1/H2 loopback reuse/abort.
 
 Synthetic wire mocks exercise credential stripping and attempt counts, **not
-trusted HTTPS**. The shared factory does not claim trusted-HTTPS redirect
-capability. Interruption evidence is separately obtained from real loopback
-connections, not these wire mocks.
+trusted HTTPS**. The default plain-HTTP factory does not claim trusted-HTTPS
+redirect capability. The opt-in trusted factory below serves actual TLS and
+exposes two currently failing shared gates. Interruption evidence is separately
+obtained from real H2/SOCKS5 loopback connections, not these wire mocks.
 
 CI retains the three fixed `package-test (<os>)` contexts. There are no default
 live Azure, credential, public-CA or native-provider checks. Windows currently
@@ -302,8 +303,10 @@ zig build test -Dpaired-tls=true -j2 --cache-dir .zig-cache/local --global-cache
 zig build test -Dpaired-tls=true -Doptimize=ReleaseSafe -j2 --cache-dir .zig-cache/local --global-cache-dir .zig-cache/global --summary all
 ```
 
-Both commands passed **26/26 tests on aarch64 Linux, Zig 0.16.0**: the existing
-24 adapter/shared-Core tests plus two TLS matrix tests containing 60 cases:
+At portable checkpoint `1167939aa`, both commands passed **26/26 tests on
+aarch64 Linux, Zig 0.16.0**: the existing 24 adapter/shared-Core tests plus two
+TLS matrix tests containing 60 cases. The extended trusted-factory gates below
+are additional checks, and currently fail rather than silently skipping:
 
 * 48 cases: TLS 1.2/1.3 × H1/H2 × 12 provider/trust cases. These exercise
   buffered send and partial-read/finish reuse, a real three-certificate path,
@@ -368,6 +371,90 @@ negotiated TLS version; this public result does not assert one. This single
 standard-backend endpoint observation is not the native/platform/public-H2
 qualification matrix.
 
+## Trusted HTTPS shared factory — implemented, shared gates blocked
+
+`https_fixture.Owner.create(allocator, io, options)` creates stable, test-owned
+standard-provider, typed certificate adapter, `roots.bind` binding, private
+test-CA, TLS server and pure-Zig DNS owners. `owner.factory()` is the released
+Core `BackendFactory`, with `https_redirects = true`. Call `owner.deinit()`
+only after every created backend has been deinitialized.
+
+This fixture serves actual `https://api.example.test:<loopback-port>/...`
+requests. Its loopback-only DNS responder resolves the two reserved test names
+without public resolvers or OS DNS workers. Certificate/path/DNS-name
+verification remains enabled, using the existing generated three-certificate
+chain and exactly one custom test trust anchor. The standard provider is
+selected through the same canonical HTTPX module and typed binding as the
+previous TLS matrix. No Core API, HTTPX source, native provider, OS trust store,
+or production adapter code was changed.
+
+The factory uses Core's response-script/captured-request types and invokes the
+published `runPipelineContracts`, `runRawTransportContracts`, and
+`runBackendAllocationFailureContracts` directly. It does not copy the shared
+test framework or fabricate request observations. `std.http.Server` parses
+the decrypted HTTP/1.1 requests; only a bounded body prefix and incremental
+hash are retained. Metadata and responses are observed at real TLS peers.
+HTTP/2 redirect qualification is not claimed by this HTTP/1.1 fixture.
+
+Listeners poll at 20 ms; peer socket I/O is bounded to 2 s. The SDK operation
+budget is 10 s; strict DNS uses the owned resolver with 1 s attempts.
+Cancellation of fixture shutdown only shuts down a mutex-protected live
+socket; its owner thread clears/closes that socket, and every exit joins the
+thread before destroying TLS/provider/trust storage. A separate test verifies
+idle and incomplete-handshake shutdown within 1 s. That is fixture cleanup,
+**not** a new SDK blocked-TLS interruption capability.
+
+### Actual results against frozen HTTPX `95b916c`
+
+With the separate unpublished development selector for
+`95b916c77573e70a63c73218ce5b4b371b3868eb`
+(`httpx-0.1.9-8qj2elNsMQC3gzkMbgAYN5ggmNx2kKuVBHVLjYp50FcT`):
+
+* The unchanged 24 adapter/Core tests and the earlier 60 TLS cases still pass.
+* Independent real-TLS checks pass for TLS 1.2 and 1.3: same-origin credential
+  preservation, cross-origin stripping of Authorization/Cookie/Cookie2/
+  Proxy-Authorization, 303 POST-to-GET/body removal, original-request ownership,
+  ignored ambient Set-Cookie, and exactly one Azure policy call per redirect
+  chain. Each chain performs exactly two verified TLS requests.
+* Both TLS versions stream **33,554,689 bytes in each direction** within the
+  shared **2,097,152-byte adapter allocation budget**, despite a 1 KiB buffered
+  response limit. Existing H2/SOCKS5 interruption capabilities remain unchanged.
+* Core's complete five-scenario backend allocation-failure runner passes over
+  TLS 1.3, retaining OutOfMemory and checking operation/connection cleanup.
+* Wrong hostname, unrelated root and path-depth limits fail with their concrete
+  canonical trust errors. A redirect to an invalid TLS hostname fails before
+  any destination HTTP request is sent, retains `transport_started`, and
+  releases both backends. No certificate-verification bypass is involved.
+
+**Four tests remain failing: two underlying shared gates × TLS 1.2/1.3.**
+They are neither skipped nor converted into expected-success tests:
+
+1. **Released Core 0.4 contradicts its shared same-origin Host assertion.**
+   `http/transport.zig:isRedirectOmittedHeader` (lines 656–658 at released
+   `be320739`) always removes `Host` on redirects. The shared runner at
+   `conformance/http_transport.zig:1206` instead requires the same-origin
+   second request to retain `conformance-origin`. The actual peer correctly
+   observes the regenerated `api.example.test:<port>`. Same-origin credential
+   assertions pass before this contradictory Host assertion fails. Each TLS
+   version reaches 13 authenticated requests/handshakes/verifications and zero
+   live backends. All seven shared native retry cases ran before this failure.
+   Restoring Host in the adapter or altering observations would violate Core
+   ownership and would not be a valid fixture fix.
+2. **HTTPX 95b surfaces TLS close-notify instead of HTTP framing EOF.**
+   A clean TLS close after a body shorter than its Content-Length reaches
+   `ClientOperation.transportRead`/`readHttp1Body` as `TlsCloseNotify`, while
+   Core's shared framing contract requires `HttpContentLengthTruncated`.
+   The operation and connection are cleaned up. Globally relabeling a TLS
+   alert in the SDK would mishandle other framing/close-delimited responses;
+   HTTPX must interpret clean TLS EOF at its HTTP framing boundary.
+
+The complete extended run currently reports **32/36 passing, four failing**.
+These failures are blockers, not a claim of complete shared HTTPS conformance.
+No final release pin is available. Reproduce with the ordinary commands above;
+target only these cases using `-Dtest-filter='trusted HTTPS'`. Source and
+development selector are delivered as separate commits. The only new
+publication path is `https_fixture.zig` (13 total); CI contexts are unchanged.
+
 ## Publication gates still open
 
 * Coordinator acceptance of the paired upstream API/composition review,
@@ -377,9 +464,9 @@ qualification matrix.
   above does not qualify SymCrypt or another native provider.
 * Native Windows/macOS runtime results; cross-compilation alone is not runtime
   qualification. No native interruption capability is inferred.
-* A trusted-HTTPS positive redirect factory is still unadvertised in shared
-  conformance; deterministic credential/attempt tests and this TLS matrix are
-  not a replacement for that factory.
+* Resolution of the released Core same-origin Host assertion conflict and
+  HTTPX clean-TLS-EOF framing behavior above. The new real-HTTPS factory and
+  its deliberately unmodified shared gates do not bypass either blocker.
 * Review of adapter changes, ordinary implementation merge, then tags/releases.
   Package registration/history/catalog and sealed bootstrap are already
   coordinator-completed, not work to repeat here.

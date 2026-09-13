@@ -23,6 +23,7 @@
         "test_backend.zig",
         "interruption_fixture.zig",
         "tls_qualification.zig",
+        "https_fixture.zig",
         "tls_fixture_data.zig",
         "public_https.zig",
         "README.md",

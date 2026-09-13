@@ -11,6 +11,13 @@ pub fn main(init: std.process.Init) !void {
     defer directory.close(init.io);
     var chain = try fixtures.Chain.init(init.gpa, .ecdsa_p256);
     defer chain.deinit();
+    const other_key = try fixtures.Key.init(.ecdsa_p256, 9);
+    var other_options = fixtures.rootOptions();
+    other_options.subject = "Unrelated Fixture Root";
+    other_options.issuer = "Unrelated Fixture Root";
+    const other_root = try fixtures.certificate(init.gpa, other_key, other_key, other_options);
+    defer init.gpa.free(other_root);
+    try directory.writeFile(init.io, .{ .sub_path = "other.der", .data = other_root });
     try directory.writeFile(init.io, .{ .sub_path = "root.der", .data = chain.root });
     try directory.writeFile(init.io, .{ .sub_path = "intermediate.der", .data = chain.intermediate });
     try directory.writeFile(init.io, .{ .sub_path = "leaf.der", .data = chain.leaf });
@@ -23,6 +30,7 @@ pub fn main(init: std.process.Init) !void {
         \\pub const intermediate = @embedFile("intermediate.der");
         \\pub const leaf = @embedFile("leaf.der");
         \\pub const leaf_key = @embedFile("leaf.raw");
+        \\pub const other_root = @embedFile("other.der");
         \\
         ,
     });

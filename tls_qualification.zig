@@ -8,6 +8,7 @@ const fixtures = @import("tls_fixture_data");
 const tls = httpx.tls;
 const crypto = httpx.crypto_provider;
 const Version = std.crypto.tls.ProtocolVersion;
+const https_fixture = @import("https_fixture.zig");
 
 const Case = enum {
     matching,
@@ -425,4 +426,281 @@ test "paired standard TLS drains aborts and cancels Core operations without leak
         }
     }
     std.debug.print("SDK paired TLS: 12 post-open abort/cancel/token cleanup cases; not new blocked-phase interruption evidence\n", .{});
+}
+
+fn sharedHttpsPipeline(version: Version) !void {
+    const owner = try https_fixture.Owner.create(testing.allocator, testing.io, .{ .version = version });
+    defer owner.deinit();
+    errdefer std.debug.print("blocked shared HTTPS pipeline {s}: requests={d}, handshakes={d}, verified={d}, live_backends={d}\n", .{
+        @tagName(version), owner.requests, owner.handshakes, owner.verified.load(.acquire), owner.live_backends,
+    });
+    try https_fixture.conformance.runPipelineContracts(testing.allocator, testing.io, owner.factory());
+    try testing.expectEqual(@as(usize, 0), owner.live_backends);
+    try testing.expectEqual(@as(usize, 22), owner.requests);
+    try testing.expectEqual(owner.requests, owner.handshakes);
+    try testing.expectEqual(owner.requests, owner.verified.load(.acquire));
+    try testing.expectEqual(@as(usize, 0), owner.rejected.load(.acquire));
+    try testing.expectEqual(@as(usize, 1), owner.roots.anchorCount());
+}
+
+test "trusted HTTPS shared pipeline TLS1.2" {
+    try sharedHttpsPipeline(.tls_1_2);
+}
+
+test "trusted HTTPS shared pipeline TLS1.3" {
+    try sharedHttpsPipeline(.tls_1_3);
+}
+
+fn sharedHttpsRaw(version: Version) !void {
+    const owner = try https_fixture.Owner.create(testing.allocator, testing.io, .{ .version = version });
+    defer owner.deinit();
+    errdefer std.debug.print("blocked shared HTTPS raw {s}: live_backends={d}, verified={d}\n", .{
+        @tagName(version), owner.live_backends, owner.verified.load(.acquire),
+    });
+    try https_fixture.conformance.runRawTransportContracts(testing.allocator, testing.io, owner.factory());
+    try testing.expectEqual(@as(usize, 0), owner.live_backends);
+}
+
+test "trusted HTTPS shared raw TLS1.2" {
+    try sharedHttpsRaw(.tls_1_2);
+}
+
+test "trusted HTTPS shared raw TLS1.3" {
+    try sharedHttpsRaw(.tls_1_3);
+}
+
+test "trusted HTTPS shared allocation failure contracts retain concrete errors and cleanup" {
+    const owner = try https_fixture.Owner.create(testing.allocator, testing.io, .{});
+    defer owner.deinit();
+    try https_fixture.conformance.runBackendAllocationFailureContracts(testing.allocator, testing.io, owner.factory());
+    try testing.expectEqual(@as(usize, 0), owner.live_backends);
+}
+
+test "trusted HTTPS factory enforces hostname roots and actual path limits" {
+    const cases = [_]struct { options: https_fixture.Options, expected: anyerror }{
+        .{ .options = .{ .wrong_hostname = true }, .expected = error.TlsHostnameMismatch },
+        .{ .options = .{ .untrusted_root = true }, .expected = error.TlsUnknownCa },
+        .{ .options = .{ .path_depth = 2 }, .expected = error.TlsCertificatePathTooDeep },
+    };
+    for (cases) |case| {
+        const owner = try https_fixture.Owner.create(testing.allocator, testing.io, case.options);
+        defer owner.deinit();
+        var backend = try owner.factory().create(testing.allocator, testing.io, .{ .allow_peer_failure = true });
+        defer backend.deinit();
+        var request = adapter.core.http.Request.init(testing.allocator, .GET, backend.url);
+        defer request.deinit();
+        try testing.expectError(case.expected, backend.transport.send(&request));
+        try backend.finish();
+        try backend.assertQuiescent();
+        try testing.expect(request.transport_started);
+        try testing.expectEqual(@as(usize, 0), backend.observe().request_count);
+        try testing.expectEqual(@as(usize, 0), owner.verified.load(.acquire));
+        try testing.expectEqual(@as(usize, 1), owner.rejected.load(.acquire));
+    }
+}
+
+test "trusted HTTPS redirect rejects an unauthenticated destination without sending its request" {
+    const owner = try https_fixture.Owner.create(testing.allocator, testing.io, .{});
+    defer owner.deinit();
+    const destination_owner = try https_fixture.Owner.create(testing.allocator, testing.io, .{ .wrong_hostname = true });
+    defer destination_owner.deinit();
+    var destination = try destination_owner.factory().create(testing.allocator, testing.io, .{ .allow_peer_failure = true });
+    defer destination.deinit();
+    const headers = [_]https_fixture.conformance.scripted.Header{.{ .name = "Location", .value = destination.url }};
+    var source = try owner.factory().create(testing.allocator, testing.io, .{
+        .response = .{ .status_code = 307, .headers = &headers },
+    });
+    defer source.deinit();
+    var crypto_provider = adapter.core.crypto.StdCryptoProvider.init(testing.io);
+    var pipeline = adapter.core.http.HttpPipeline.init(
+        adapter.core.http.HttpRuntime.init(source.transport, crypto_provider.asProvider()),
+        &.{},
+    );
+    var request = adapter.core.http.Request.init(testing.allocator, .POST, source.url);
+    defer request.deinit();
+    try request.setHeader("Authorization", "fixture-token");
+    var bytes = adapter.core.http.ReplayableBytes.init("fixture-body");
+    try testing.expectError(error.TlsHostnameMismatch, pipeline.open(&request, .{ .body = bytes.body() }));
+    try source.finish();
+    try destination.finish();
+    try source.assertQuiescent();
+    try destination.assertQuiescent();
+    try testing.expect(request.transport_started);
+    try testing.expectEqual(@as(usize, 1), source.observe().request_count);
+    try testing.expectEqual(@as(usize, 0), destination.observe().request_count);
+    try testing.expectEqualStrings("fixture-token", (try source.attempt(0)).authorization.?);
+    try testing.expectEqualStrings("fixture-token", request.getHeader("Authorization").?);
+    try testing.expectEqual(@as(usize, 1), owner.verified.load(.acquire));
+    try testing.expectEqual(@as(usize, 1), owner.rejected.load(.acquire));
+}
+
+const RedirectPolicyProbe = struct {
+    calls: usize = 0,
+    policy: adapter.core.http.HttpPolicy = .{ .processFn = process, .prepareFn = prepare },
+
+    fn prepare(policy: *adapter.core.http.HttpPolicy, _: *adapter.core.http.Request, _: adapter.core.http.HttpRuntime) !void {
+        const self: *@This() = @fieldParentPtr("policy", policy);
+        self.calls += 1;
+    }
+
+    fn process(policy: *adapter.core.http.HttpPolicy, request: *adapter.core.http.Request, next: []*adapter.core.http.HttpPolicy, runtime: adapter.core.http.HttpRuntime) !adapter.core.http.Response {
+        try prepare(policy, request, runtime);
+        return if (next.len == 0) runtime.transport.send(request) else next[0].process(request, next[1..], runtime);
+    }
+};
+
+test "trusted HTTPS independent redirects verify actual credentials without hiding the shared Host blocker" {
+    for ([_]Version{ .tls_1_2, .tls_1_3 }) |version| {
+        for ([_]enum { same_origin, cross_origin, see_other }{ .same_origin, .cross_origin, .see_other }) |case| {
+            const owner = try https_fixture.Owner.create(testing.allocator, testing.io, .{ .version = version });
+            defer owner.deinit();
+            var destination = try owner.factory().create(testing.allocator, testing.io, .{ .response = .{ .body = "destination" } });
+            defer destination.deinit();
+            const same_origin = case == .same_origin;
+            const headers = [_]https_fixture.conformance.scripted.Header{
+                .{ .name = "Location", .value = if (same_origin) "/continued#fragment" else destination.url },
+                .{ .name = "Set-Cookie", .value = "ambient=must-not-be-replayed" },
+            };
+            const responses = [_]https_fixture.conformance.scripted.Response{
+                .{ .status_code = if (case == .see_other) 303 else 307, .headers = &headers },
+                .{ .body = "same-origin" },
+            };
+            var source = try owner.factory().create(testing.allocator, testing.io, .{ .responses = &responses });
+            defer source.deinit();
+            var probe: RedirectPolicyProbe = .{};
+            var policies = [_]*adapter.core.http.HttpPolicy{&probe.policy};
+            var crypto_provider = adapter.core.crypto.StdCryptoProvider.init(testing.io);
+            var pipeline = adapter.core.http.HttpPipeline.init(
+                adapter.core.http.HttpRuntime.init(source.transport, crypto_provider.asProvider()),
+                &policies,
+            );
+            var request = adapter.core.http.Request.init(testing.allocator, .POST, source.url);
+            defer request.deinit();
+            inline for (.{ "Authorization", "Cookie", "Cookie2", "Proxy-Authorization", "Host" }) |name|
+                try request.setHeader(name, "fixture-value");
+            var bytes = adapter.core.http.ReplayableBytes.init("redirect-upload");
+            {
+                const operation = try pipeline.open(&request, .{ .body = bytes.body() });
+                defer operation.deinit();
+                try testing.expectEqual(@as(u16, 200), operation.status_code);
+                try operation.finish();
+            }
+            try source.finish();
+            try destination.finish();
+            try source.assertQuiescent();
+            try destination.assertQuiescent();
+            try testing.expect(request.transport_started);
+            try testing.expectEqual(@as(usize, 1), probe.calls);
+            try testing.expectEqual(@as(usize, if (same_origin) 2 else 1), source.observe().request_count);
+            try testing.expectEqual(@as(usize, if (same_origin) 0 else 1), destination.observe().request_count);
+            const first = try source.attempt(0);
+            try testing.expectEqualStrings("fixture-value", first.authorization.?);
+            try testing.expectEqualStrings("fixture-value", first.cookie.?);
+            try testing.expectEqualStrings("fixture-value", first.proxy_authorization.?);
+            try testing.expectEqualStrings("fixture-value", first.host.?);
+            const last = if (same_origin) try source.attempt(1) else try destination.attempt(0);
+            const captured_backend: *https_fixture.Backend = @ptrCast(@alignCast(if (same_origin) source.context else destination.context));
+            const cookie2 = captured_backend.requests.items[if (same_origin) 1 else 0].headerValue("Cookie2");
+            if (same_origin) {
+                try testing.expectEqualStrings("fixture-value", last.authorization.?);
+                try testing.expectEqualStrings("fixture-value", last.cookie.?);
+                try testing.expectEqualStrings("fixture-value", last.proxy_authorization.?);
+                try testing.expectEqualStrings("fixture-value", cookie2.?);
+            } else {
+                try testing.expect(last.authorization == null and last.cookie == null and last.proxy_authorization == null);
+                try testing.expect(cookie2 == null);
+            }
+            // This matches released Core behavior, not its contradictory shared
+            // assertion. The shared runner above remains an unmodified failing gate.
+            const target = if (same_origin) source.url else destination.url;
+            try testing.expectEqualStrings(std.mem.sliceTo(target["https://".len..], '/'), last.host.?);
+            try testing.expectEqualStrings(if (case == .see_other) "" else "redirect-upload", last.body);
+            try testing.expect(std.mem.startsWith(u8, last.request_line, if (case == .see_other) "GET " else "POST "));
+            if (same_origin) try testing.expectEqualStrings("POST /continued HTTP/1.1", last.request_line);
+            try testing.expectEqualStrings("fixture-value", request.getHeader("Authorization").?);
+            try testing.expectEqual(@as(usize, 2), owner.verified.load(.acquire));
+            try testing.expectEqual(@as(usize, 0), owner.rejected.load(.acquire));
+        }
+    }
+}
+
+test "trusted HTTPS independent logical streaming keeps the shared allocation budget" {
+    const conformance = https_fixture.conformance;
+    for ([_]Version{ .tls_1_2, .tls_1_3 }) |version| {
+        const owner = try https_fixture.Owner.create(testing.allocator, testing.io, .{ .version = version });
+        defer owner.deinit();
+        const storage = try testing.allocator.alloc(u8, conformance.streaming_allocation_budget);
+        defer testing.allocator.free(storage);
+        var budget = std.heap.FixedBufferAllocator.init(storage);
+        var backend = try owner.factory().create(budget.allocator(), testing.io, .{
+            .fixture_allocator = testing.allocator,
+            .max_response_body = 1024,
+            .response = .{
+                .chunked = true,
+                .generated_body = .{ .byte = 'd', .length = conformance.logical_stream_length },
+            },
+        });
+        defer backend.deinit();
+        var request = adapter.core.http.Request.init(budget.allocator(), .POST, backend.url);
+        defer request.deinit();
+        var upload = conformance.fakes.RepeatingReader.init('u', conformance.logical_stream_length);
+        {
+            const operation = try backend.transport.open(&request, .{
+                .body = adapter.core.http.StreamingRequestBody.chunked(&upload.interface),
+            });
+            defer operation.deinit();
+            const reader = try operation.reader();
+            var bytes: [8191]u8 = undefined;
+            var received: usize = 0;
+            while (true) {
+                const count = try reader.readSliceShort(&bytes);
+                if (count == 0) break;
+                try testing.expect(std.mem.allEqual(u8, bytes[0..count], 'd'));
+                received += count;
+            }
+            try testing.expectEqual(conformance.logical_stream_length, received);
+            try operation.finish();
+        }
+        try backend.finish();
+        try backend.assertQuiescent();
+        try testing.expectEqual(@as(usize, 0), upload.remaining);
+        try testing.expectEqual(conformance.logical_stream_length, backend.observe().body_length);
+        std.debug.print("trusted HTTPS {s}: streamed {d} bytes each direction within {d}-byte adapter allocation budget\n", .{
+            @tagName(version), conformance.logical_stream_length, conformance.streaming_allocation_budget,
+        });
+    }
+}
+
+test "trusted HTTPS fixture shutdown joins an idle peer and an incomplete handshake" {
+    const owner = try https_fixture.Owner.create(testing.allocator, testing.io, .{});
+    defer owner.deinit();
+    for ([_]bool{ false, true }) |connect| {
+        var backend = try owner.factory().create(testing.allocator, testing.io, .{
+            .responses = &.{.{}},
+            .expect_request = false,
+        });
+        defer backend.deinit();
+        const state: *https_fixture.Backend = @ptrCast(@alignCast(backend.context));
+        var socket = try httpx.Socket.create();
+        defer socket.close();
+        if (connect) {
+            try socket.connectWithTimeout(try state.listener.getLocalAddress(), 1000);
+            const start = std.Io.Timestamp.now(testing.io, .awake);
+            while (true) {
+                state.mutex.lockUncancelable(testing.io);
+                const active = state.active != null;
+                state.mutex.unlock(testing.io);
+                if (active) break;
+                if (std.Io.Timestamp.now(testing.io, .awake).toNanoseconds() - start.toNanoseconds() > 500 * std.time.ns_per_ms)
+                    return error.FixtureHandshakeNotEntered;
+                try std.Io.sleep(testing.io, .fromMilliseconds(1), .awake);
+            }
+        }
+        const before = std.Io.Timestamp.now(testing.io, .awake);
+        try backend.finish();
+        const elapsed = std.Io.Timestamp.now(testing.io, .awake).toNanoseconds() - before.toNanoseconds();
+        try testing.expect(elapsed <= std.time.ns_per_s);
+        try testing.expect(state.thread == null and state.active == null);
+        try backend.assertQuiescent();
+    }
 }
