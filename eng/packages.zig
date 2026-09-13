@@ -120,6 +120,7 @@ pub const all = [_]Package{
             "interruption_fixture.zig",
             "tls_qualification.zig",
             "tls_fixture_data.zig",
+            "https_fixture.zig",
             "public_https.zig",
             "README.md",
             "LICENSE.txt",
