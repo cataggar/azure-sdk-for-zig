@@ -459,6 +459,7 @@ pub const all = [_]Package{
             "service_client.zig",
             "service_admin_models.zig",
             "service_models.zig",
+            "tracing_test.zig",
             "transaction.zig",
             "examples",
             "integration_tests",
