@@ -1,8 +1,10 @@
-name: Package CI
+name: azure_sdk_core_httpx CI
 
 on:
   pull_request:
+    branches: [sdk/core_httpx]
   push:
+    branches: [sdk/core_httpx]
 
 permissions:
   contents: read
@@ -32,10 +34,4 @@ jobs:
         run: git ls-files -z -- '*.zig' 'build.zig.zon' | xargs -0 zig fmt --check
       - name: Run package tests
         shell: bash
-        run: zig build test --summary all
-      - name: Build examples
-        shell: bash
-        run: echo "No examples configured"
-      - name: Compile live tests
-        shell: bash
-        run: echo "No live tests configured"
+        run: zig build test --cache-dir .zig-cache/local --global-cache-dir .zig-cache/global --summary all
