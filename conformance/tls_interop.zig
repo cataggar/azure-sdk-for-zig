@@ -1,5 +1,5 @@
-//! Independent-server qualification, not production certificate path policy.
-//! The fixture trusts exactly one supplied leaf and checks hostname and time.
+//! Independent-server qualification using the canonical Options-based trust engine.
+//! The local root, intermediate and leaf never modify an operating-system trust store.
 const std = @import("std");
 const httpx = @import("httpx");
 const binding = @import("azure_sdk_core_symcrypt_tls");
@@ -8,13 +8,15 @@ const tls = httpx.tls;
 const Version = std.crypto.tls.ProtocolVersion;
 
 comptime {
-    if (!@hasField(tls.TLSConfig, "crypto_provider"))
-        @compileError("TLS interoperability requires completed HTTPX client routing; use a qualified pin or explicit httpx_source development override");
+    if (!@hasField(tls.TLSConfig, "certificate_crypto") or !@hasDecl(tls.TrustContext, "bind"))
+        @compileError("TLS interoperability requires the paired canonical HTTPX runtime; use a qualified pin or explicit httpx_source development override");
 }
 
 const FixtureTrust = struct {
-    der: []const u8,
     parsed: std.crypto.Certificate.Parsed,
+    roots: *tls.TrustContext,
+    unrelated_roots: *tls.TrustContext,
+    bound: tls.TrustProvider = undefined,
     reject_anchor: bool = false,
     calls: usize = 0,
 
@@ -25,17 +27,7 @@ const FixtureTrust = struct {
     fn verify(context: *anyopaque, request: tls.VerifyPeerRequest) tls.TrustError!void {
         const self: *FixtureTrust = @ptrCast(@alignCast(context));
         self.calls += 1;
-        if (self.reject_anchor or request.role != .server or request.chain_der.len != 1 or
-            !std.mem.eql(u8, self.der, request.chain_der[0])) return error.TlsUnknownCa;
-        const identity = request.expected_identity orelse return error.TlsHostnameMismatch;
-        const host = switch (identity) {
-            .dns_name => |name| name,
-            .ip_address => return error.TlsHostnameMismatch,
-        };
-        self.parsed.verifyHostName(host) catch return error.TlsHostnameMismatch;
-        if (request.now_seconds < 0 or request.now_seconds < self.parsed.validity.not_before)
-            return error.TlsCertificateNotYetValid;
-        if (request.now_seconds > self.parsed.validity.not_after) return error.TlsCertificateExpired;
+        return self.bound.verifyPeer(request);
     }
 };
 
@@ -48,6 +40,7 @@ fn injectedError(operation: p.Operation) p.ProviderError {
 }
 
 fn expectedTlsError(operation: p.Operation, application: bool) anyerror {
+    if (operation == .verify) return error.TlsCertificateSignatureInvalid;
     if (operation == .aead_open)
         return if (application) error.TlsDecryptError else error.TlsBadRecordMac;
     return injectedError(operation);
@@ -239,6 +232,11 @@ fn runCase(comptime Backend: type, backend: Backend, allocator: std.mem.Allocato
     });
     if (scenario == .handshake_failure) observed.failure = scenario.handshake_failure;
     trust.calls = 0;
+    var adapter = tls.CryptoCertificateVerifier.init(observed.provider());
+    var paired = try (if (trust.reject_anchor) trust.unrelated_roots else trust.roots).bind(&adapter, .{
+        .allow_sha1_identifiers = true,
+    });
+    trust.bound = paired.provider();
     var socket = try httpx.Socket.create();
     defer socket.close();
     try socket.connectWithTimeout(.initIp4(.{ 127, 0, 0, 1 }, port), 5000);
@@ -247,6 +245,7 @@ fn runCase(comptime Backend: type, backend: Backend, allocator: std.mem.Allocato
     var session = tls.TLSSession.init(.{
         .allocator = allocator,
         .crypto_provider = observed.provider(),
+        .certificate_crypto = &adapter,
         .server_authentication = .{ .verify = .{ .provider = trust.provider() } },
     });
     defer session.deinit();
@@ -323,10 +322,36 @@ pub fn main(init: std.process.Init) !void {
     const allocator = checking.allocator();
     const args = try init.minimal.args.toSlice(allocator);
     defer allocator.free(args);
-    if (args.len != 5) return error.ExpectedDerTls12PortTls13PortAndValidity;
+    if (args.len != 7) return error.ExpectedLeafPortsValidityAndRootCertificates;
     const der = try std.Io.Dir.cwd().readFileAlloc(init.io, args[1], allocator, .limited(256 * 1024));
     defer allocator.free(der);
-    var trust: FixtureTrust = .{ .der = der, .parsed = try (std.crypto.Certificate{ .buffer = der, .index = 0 }).parse() };
+    const root_der = try std.Io.Dir.cwd().readFileAlloc(init.io, args[5], allocator, .limited(256 * 1024));
+    defer allocator.free(root_der);
+    const unrelated_der = try std.Io.Dir.cwd().readFileAlloc(init.io, args[6], allocator, .limited(256 * 1024));
+    defer allocator.free(unrelated_der);
+    var roots = try tls.TrustContext.init(allocator, init.io, .{
+        .source = .{ .custom_only = .{ .der_certificates = &.{root_der} } },
+    });
+    defer roots.deinit();
+    var unrelated_roots = try tls.TrustContext.init(allocator, init.io, .{
+        .source = .{ .custom_only = .{ .der_certificates = &.{unrelated_der} } },
+    });
+    defer unrelated_roots.deinit();
+    const Snapshot = @typeInfo(@FieldType(tls.TrustContext, "platform_snapshot")).optional.child;
+    roots.platform_snapshot = Snapshot.init(allocator, .{});
+    var identifier: [64]u8 = @splat(0);
+    std.crypto.hash.Sha1.hash(der, identifier[0..20], .{});
+    try roots.platform_snapshot.?.addFingerprintList(.{
+        .algorithm = .sha1,
+        .this_update = 1_700_000_000,
+        .next_update = 2_524_608_000,
+        .entries = &.{.{ .identifier = identifier, .policy = .{} }},
+    });
+    var trust: FixtureTrust = .{
+        .parsed = try (std.crypto.Certificate{ .buffer = der, .index = 0 }).parse(),
+        .roots = &roots,
+        .unrelated_roots = &unrelated_roots,
+    };
     const expected_time: ?tls.TrustError = if (std.mem.eql(u8, args[4], "valid")) null else if (std.mem.eql(u8, args[4], "expired"))
         error.TlsCertificateExpired
     else if (std.mem.eql(u8, args[4], "future"))
@@ -338,7 +363,7 @@ pub fn main(init: std.process.Init) !void {
     var negatives: usize = 0;
     inline for (.{ false, true }) |native| {
         const Backend = if (native) binding.Provider else httpx.StandardCryptoProvider;
-        const backend = if (native) try binding.Provider.init(allocator, .{}) else httpx.StandardCryptoProvider.init(init.io, allocator);
+        const backend = if (native) try binding.Provider.init(allocator, .{ .allow_sha1_identifier_hash = true }) else httpx.StandardCryptoProvider.init(init.io, allocator);
         for ([_]Version{ .tls_1_2, .tls_1_3 }, ports) |version, port| {
             const certificate_group = try compatibleGroup(&trust);
             if (expected_time) |expected| {

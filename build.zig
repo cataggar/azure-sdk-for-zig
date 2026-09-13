@@ -85,6 +85,7 @@ pub fn build(b: *std.Build) void {
     ) orelse false;
     const enable_httpx_tls = b.option(bool, "enable_httpx_tls", "Expose the optional HTTPX TLS primitive provider") orelse false;
     const httpx_source = b.option(std.Build.LazyPath, "httpx_source", "Development-only HTTPX source root; never a release dependency pin");
+    const httpx_adapter_source = b.option(std.Build.LazyPath, "httpx_adapter_source", "Development-only SDK HTTPX transport source for paired conformance");
 
     if (!headers_only and libraries.len == 0) {
         std.log.err(
@@ -221,8 +222,53 @@ pub fn build(b: *std.Build) void {
             run.step.dependOn(addProvenanceVerification(b, symcrypt_dep, target, linkage, provenance, libraries));
             interop_step.dependOn(&run.step);
         }
-    } else if (httpx_source != null) {
-        std.log.err("httpx_source requires enable_httpx_tls=true", .{});
+        const paired_step = b.step("tls-paired-check", "Qualify native crypto through canonical trust, public TLS and HTTP streaming");
+        if (headers_only or !target_can_run) {
+            paired_step.dependOn(&b.addFail("tls-paired-check requires a runnable target and native libraries").step);
+        } else {
+            // Copy the std-only fixture outside HTTPX's module ownership boundary.
+            const fixture_files = b.addWriteFiles();
+            const fixtures = b.createModule(.{
+                .root_source_file = fixture_files.addCopyFile(if (httpx_source) |path|
+                    path.path(b, "src/tls/trust_fixtures.zig")
+                else
+                    httpx_dep.path("src/tls/trust_fixtures.zig"), "trust_fixtures.zig"),
+                .target = target,
+                .optimize = optimize,
+            });
+            const paired_mod = b.createModule(.{
+                .root_source_file = b.path("conformance/tls_pairing.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "httpx", .module = httpx_mod },
+                    .{ .name = "azure_sdk_core_symcrypt_tls", .module = tls_mod },
+                    .{ .name = "httpx_certificate_fixtures", .module = fixtures },
+                },
+            });
+            const paired_options = b.addOptions();
+            paired_options.addOption(bool, "sdk_transport", httpx_adapter_source != null);
+            paired_mod.addOptions("paired_options", paired_options);
+            if (httpx_adapter_source) |path| {
+                const sdk_httpx = b.createModule(.{
+                    .root_source_file = path.path(b, "root.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                    .imports = &.{
+                        .{ .name = "httpx", .module = httpx_mod },
+                        .{ .name = "azure_sdk_core", .module = core_dep.module("azure_sdk_core") },
+                    },
+                });
+                paired_mod.addImport("sdk_httpx", sdk_httpx);
+            }
+            addLinuxDynamicRPath(paired_mod, target, linkage, libraries);
+            const paired = b.addTest(.{ .root_module = paired_mod, .filters = &.{"native paired"} });
+            const run = runArtifactStep(b, symcrypt_dep, paired, target, linkage, provenance, libraries);
+            run.dependOn(addProvenanceVerification(b, symcrypt_dep, target, linkage, provenance, libraries));
+            paired_step.dependOn(run);
+        }
+    } else if (httpx_source != null or httpx_adapter_source != null) {
+        std.log.err("HTTPX development sources require enable_httpx_tls=true", .{});
         b.invalid_user_input = true;
     }
 

@@ -246,39 +246,80 @@ zig build tls-interop-check -Denable_httpx_tls=true \
   [linkage and fixture options] --summary all
 ```
 
-The checked-in harness generates short-lived local P-256, P-384, and RSA
-identities plus genuinely expired/not-yet-valid certificates. Servers listen
+The checked-in harness generates local root/intermediate CAs, short-lived
+P-256/P-384/RSA leaf identities, an unrelated root, and genuinely expired or
+not-yet-valid leaves. Servers listen
 only on loopback ephemeral ports. Processes are bounded and terminated, and
 generated private keys/certificates are removed even on failure. Logs remain
 under the ignored `.agent-scratch/tls-interop` directory.
 
-The same explicit leaf-pin/hostname/time TrustProvider is used with the standard
-and SymCrypt primitive providers. This is a **test fixture**, not production
-root loading or certificate path validation; verification is never disabled.
+Both standard and SymCrypt providers use the actual canonical Options-based
+`TrustContext` and `roots.bind`, a three-certificate path, and a synthetic
+SHA-1 fingerprint restriction. Roots are explicit local test authorities, not
+operating-system or public-CA trust. Verification is never disabled and
+fingerprint membership never grants anchor status.
 The observer permits only the selected AEAD/group, checks actual dispatch,
 drains bounded HTTP responses, and injects exact failures into every used
 handshake primitive and application AEAD. It rejects successful fallback or
 retried provider/trust failures. HTTPX currently maps provider
 `AuthenticationFailed` to `TlsBadRecordMac` during handshakes and
 `TlsDecryptError` for application records; primitive errors remain unchanged
-at the provider boundary.
+at the provider boundary. The canonical trust engine maps an injected
+certificate signature failure to `TlsCertificateSignatureInvalid`.
 
-Local HTTPX routing commit `727748d35298c9bd34751c7ca2ad3941cbcded06` has been
-qualified in ReleaseSafe on Linux Arm64 with SymCrypt dynamic/static linkage and OpenSSL
-3.5.5: **42 authenticated SymCrypt combinations**, the same 42 standard-provider
-controls, and 212 combined trust/provider-negative cases per linkage mode.
+Frozen local HTTPX `ff720540b759dbf28c15eea385b2a6598e04f201` was exercised on
+Linux Arm64 with SymCrypt dynamic/static linkage in Debug and ReleaseSafe,
+using OpenSSL 3.5.5: **42 authenticated SymCrypt combinations**, the same 42
+standard-provider controls, and 212 combined trust/provider-negative cases
+per linkage/optimization combination.
 All three AEADs and X25519/P-256/P-384 are covered; TLS 1.2 ECDSA combinations
 respect certificate-curve compatibility and matching signature hashes.
 The probe uses a checking allocator and requires clean teardown.
 
-This evidence covers the low-level client session API:
+The separate `tls-paired-check` target exercises native **client and server**
+providers through public `connectClient`, current `Client.open` H1/H2, and
+optionally Azure Core's actual HTTPX transport. Each route performs two
+requests on one connection, checks quiescent leases/operations and observes
+native TLS 1.3 KeyUpdate. This canonical matrix uses P-256/AES-128-GCM; the
+independent OpenSSL matrix above covers the wider client suite/group set.
+
+The two paired tests contain 84 connection scenarios without the SDK adapter,
+or 140 with it, plus direct metadata conformance. They check both independent
+SHA-1 gates, all-error output clearing, exact digest lengths, callback and
+allocation failures, hash destruction, canonical path/fingerprint failures,
+current request time, and exact adapter/provider provenance. Different
+contexts of the same backend and identical callback tables at different
+addresses are rejected despite equal capabilities and the correct A binding
+handle. Neither SHA-1 signatures nor MAC/KDF/PRF capabilities are enabled.
+
+```bash
+zig build tls-paired-check tls-interop-check -Denable_httpx_tls=true \
+  -Dhttpx_source=/absolute/path/to/frozen-httpx \
+  -Dhttpx_adapter_source=/absolute/path/to/frozen-sdk-httpx \
+  [linkage and fixture options] --summary all
+```
+
+`httpx_adapter_source` is optional and development-only. The SDK transport
+cases were executed against frozen
+`b34e8d4ca6e5d9005e45be06b82a2720293c5d8f`; the build supplies that source
+with the **same HTTPX and Core module instances**, without a new manifest
+dependency or changing Core's default dependency. The deterministic
+certificate generator is copied by the build from the selected HTTPX
+`src/tls/trust_fixtures.zig`; it imports only `std`, not another HTTPX module.
+
+Example paired session composition:
 
 ```zig
+var certificate_crypto = httpx.CryptoCertificateVerifier.init(tls_crypto.provider());
+var bound = try roots.bind(&certificate_crypto, .{
+    .allow_sha1_identifiers = true,
+});
 var session = httpx.tls.TLSSession.init(.{
     .allocator = allocator,
     .crypto_provider = tls_crypto.provider(),
+    .certificate_crypto = &certificate_crypto,
     .server_authentication = .{ .verify = .{
-        .provider = owned_trust.provider(),
+        .provider = bound.provider(),
     } },
 });
 defer session.deinit();
@@ -286,13 +327,21 @@ session.attachSocket(&socket);
 try session.handshake("service.example");
 ```
 
-The snippet requires the qualified client runtime, not the ABI-only manifest
-pin. Final reviewed immutable HTTPX/Core pins, production system/custom-root
-path validation, high-level ClientConfig/SDK transport plumbing, server and
-mutual-authentication routing, and native Windows/other architecture
-qualification remain release gates. Independent KeyUpdate, cancellation and
-pooling tests also remain distinct from this basic session matrix. Header-only
-compilation is not native execution evidence.
+The native owner must separately enable `allow_sha1_identifier_hash` when this
+metadata policy is needed. The snippet requires the paired runtime, not the
+ABI-only manifest pin. These are local candidate results, not an independently
+approved or published release. Final reviewed immutable HTTPX/SDK-adapter
+pins, versioning, Windows CTL/system-store and other native-target execution,
+public-CA interoperability, mutual authentication and wider server/KeyUpdate
+suite coverage remain separate gates. In particular, Windows empty-AuthRoot
+property 104 handling is not qualified here. Header-only compilation is not
+native execution evidence.
+
+No manifest publication paths are added: existing `conformance` contains the
+new harness. Once final pins are selected, native CI should run
+`tls-paired-check` and `tls-interop-check` alongside existing unit and archive
+consumer checks, with OpenSSL 3.5 available. SDK transport coverage additionally
+needs its reviewed source/package mapped to the same module instances.
 
 This binding and its algorithm list make no FIPS-validation claim. In
 particular, availability of ChaCha20-Poly1305 or a successful native integrity
