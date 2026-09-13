@@ -145,14 +145,15 @@ qualified HTTPX runtime.
 | Operation | Enabled |
 | --- | --- |
 | Transcript hashes, clone/snapshot | SHA-256, SHA-384, SHA-512 |
+| Trust metadata identifier hashes | SHA-1 only with explicit opt-in below; disabled by default |
 | HMAC, HKDF extract/expand, TLS 1.2 PRF | SHA-256, SHA-384, SHA-512 |
 | AEAD, detached 16-byte tags and 12-byte nonces | AES-128-GCM, AES-256-GCM, ChaCha20-Poly1305 |
 | Ephemeral agreement | X25519, P-256, P-384 |
 | ECDSA sign/verify | P-256/SHA-256, P-384/SHA-384; DER signatures |
 | RSA sign/verify | RSAe PKCS#1 v1.5 and PSS with SHA-256/384/512; PSS salt is exactly the digest length |
 
-SHA-1, Ed25519, AEGIS, ML-KEM, hybrid groups, and restricted RSASSA-PSS keys
-are not advertised. Unsupported provider operations return
+SHA-1 signatures, HMAC, HKDF and TLS PRF, Ed25519, AEGIS, ML-KEM, hybrid groups,
+and restricted RSASSA-PSS keys are not advertised. Unsupported provider operations return
 `UnsupportedAlgorithm`/`UnsupportedOperation`; there is no `std.crypto`
 primitive fallback. Legacy MD5 remains confined to the existing SDK provider,
 not the TLS provider.
@@ -188,6 +189,43 @@ HTTPX's facade wipes callback outputs on operational failure. In particular,
 tag failure returns `AuthenticationFailed` and wipes the entire plaintext
 destination, including exact in-place ciphertext. Rejected preflight input
 does not invoke a primitive; partial overlaps are not supported.
+
+### Opt-in SHA-1 trust identifiers
+
+Some Windows trust metadata identifies a certificate with a raw SHA-1 digest.
+Deployments that explicitly permit those identifier forms can enable the
+existing ABI-v1 hash operations without enabling SHA-1 security algorithms:
+
+```zig
+var tls_crypto = try symcrypt_tls.Provider.init(allocator, .{
+    .allow_sha1_identifier_hash = true,
+});
+```
+
+The default is `false`: SHA-1 is not advertised and creation returns
+`UnsupportedAlgorithm` before allocating state. Opt-in enables only raw hash
+create/update/snapshot/clone/destruction through the already-pinned SymCrypt
+primitive. SHA-1 certificate/TLS signatures, HMAC, HKDF and PRF remain
+unsupported, including direct callbacks. Neither the Core SDK hash ABI nor its
+legacy-MD5-only scope changes. MD5 is absent from the HTTPX hash enum and cannot
+be used for trust identifiers.
+
+Raw hashing does not establish trust: a fingerprint match alone never grants
+anchor status. The trust-policy binding must pair identifier hashing and
+signature verification from the **same selected provider**, and independently
+permit the metadata form; missing algorithms or unsupported policy forms must
+fail closed, never select stdlib, Crypt32 or native-chain fallback. Request and
+provider-vtable ABI-v1 layouts remain unchanged.
+
+Keep the borrowed provider, policy binding and roots alive at stable addresses
+through their configurations and pooled TLS sessions. Each digest uses
+independent caller-allocated hash state, with cloned/snapshot state wiped and
+released on all paths; shared provider use requires a concurrent-safe allocator.
+SHA-1 snapshot buffers must be exactly 20 bytes. Operational callback failures
+clear output and return the exact provider error; ABI preflight rejections leave
+output unchanged. A policy-digest helper promising cleared output on every
+failure must also clear its own preflight-error output. Identifier support does
+not replace canonical certificate/key checks or per-request current-time policy.
 
 ### Qualification boundary
 

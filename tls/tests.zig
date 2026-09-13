@@ -14,6 +14,126 @@ test "optional TLS capabilities exclude unimplemented and legacy algorithms" {
     try std.testing.expect(!caps.supportsKem(.ml_kem_768));
 }
 
+test "SHA1 identifier hashing requires opt in without enabling security algorithms" {
+    var disabled = try binding.Provider.init(testing.allocator, .{});
+    var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
+    try testing.expectError(error.UnsupportedAlgorithm, disabled.provider().hashCreate(failing.allocator(), .sha1));
+    var raw: ?*anyopaque = null;
+    const disabled_provider = disabled.provider();
+    try testing.expectError(error.UnsupportedAlgorithm, disabled_provider.vtable.hashCreate(disabled_provider.context, failing.allocator(), .sha1, &raw));
+    try testing.expect(raw == null);
+
+    var enabled = try binding.Provider.init(testing.allocator, .{ .allow_sha1_identifier_hash = true });
+    const provider = enabled.provider();
+    const caps = try provider.capabilities();
+    try testing.expect(caps.supportsHash(.sha1));
+    try testing.expect(!caps.supportsHmac(.sha1));
+    try testing.expect(!caps.supportsHkdf(.sha1));
+    try testing.expect(!caps.supportsTls12Prf(.sha1));
+    try testing.expect(!caps.supportsSign(.rsa_pkcs1_sha1));
+    try testing.expect(!caps.supportsVerify(.rsa_pkcs1_sha1));
+    try testing.expect(!@hasField(p.HashAlgorithm, "md5"));
+    var output = [_]u8{0xaa} ** 20;
+    const prk = [_]u8{1} ** 20;
+    try testing.expectError(error.UnsupportedAlgorithm, provider.hmac(.sha1, "key", &.{"metadata"}, &output));
+    try testing.expectError(error.UnsupportedAlgorithm, provider.hkdfExtract(.sha1, "salt", &.{"metadata"}, &output));
+    try testing.expectError(error.UnsupportedAlgorithm, provider.hkdfExpand(.sha1, &prk, &.{"info"}, &output));
+    try testing.expectError(error.UnsupportedAlgorithm, provider.tls12Prf(.sha1, "secret", "label", &.{"seed"}, &output));
+    try testing.expectError(error.UnsupportedAlgorithm, provider.vtable.hmac(provider.context, .sha1, "key", &.{"metadata"}, &output));
+    try testing.expectError(error.UnsupportedAlgorithm, provider.vtable.hkdfExtract(provider.context, .sha1, "salt", &.{"metadata"}, &output));
+    try testing.expectError(error.UnsupportedAlgorithm, provider.vtable.hkdfExpand(provider.context, .sha1, &prk, &.{"info"}, &output));
+    try testing.expectError(error.UnsupportedAlgorithm, provider.vtable.tls12Prf(provider.context, .sha1, "secret", "label", &.{"seed"}, &output));
+    try testing.expectError(error.UnsupportedAlgorithm, provider.verify(.rsa_pkcs1_sha1, .{
+        .algorithm = .rsa,
+        .encoding = .rsa_pkcs1_der,
+        .bytes = &.{},
+    }, &.{"metadata"}, &.{}));
+    try testing.expectEqualSlices(u8, &([_]u8{0xaa} ** 20), &output);
+}
+
+test "native SHA1 identifiers snapshot clone and require exact digest buffers" {
+    var owner = try binding.Provider.init(testing.allocator, .{ .allow_sha1_identifier_hash = true });
+    var state = try owner.provider().hashCreate(testing.allocator, .sha1);
+    defer state.deinit();
+    var digest: [20]u8 = undefined;
+    try state.snapshot(&digest);
+    try testing.expectEqualSlices(u8, &hex("da39a3ee5e6b4b0d3255bfef95601890afd80709"), &digest);
+    try state.update("a");
+    var clone = try state.clone(testing.allocator);
+    defer clone.deinit();
+    try state.update("bc");
+    try state.snapshot(&digest);
+    try testing.expectEqualSlices(u8, &hex("a9993e364706816aba3e25717850c26c9cd0d89d"), &digest);
+    try clone.update(" different");
+    try clone.snapshot(&digest);
+    var expected: [20]u8 = undefined;
+    std.crypto.hash.Sha1.hash("a different", &expected, .{});
+    try testing.expectEqualSlices(u8, &expected, &digest);
+
+    var short = [_]u8{0xaa} ** 19;
+    var long = [_]u8{0xaa} ** 21;
+    try testing.expectError(error.InvalidDigestLength, state.snapshot(&short));
+    try testing.expectError(error.InvalidDigestLength, state.snapshot(&long));
+    try testing.expectEqualSlices(u8, &([_]u8{0xaa} ** 19), &short);
+    try testing.expectEqualSlices(u8, &([_]u8{0xaa} ** 21), &long);
+    try state.snapshot(&digest);
+    try testing.expectEqualSlices(u8, &hex("a9993e364706816aba3e25717850c26c9cd0d89d"), &digest);
+}
+
+test "SHA1 identifier snapshot failures wipe outputs without fallback" {
+    const Failure = struct {
+        fn snapshot(_: *anyopaque, _: *anyopaque, out: []u8) p.ProviderError!void {
+            @memset(out, 0x55);
+            return error.InternalError;
+        }
+    };
+    var owner = try binding.Provider.init(testing.allocator, .{ .allow_sha1_identifier_hash = true });
+    var provider = owner.provider();
+    var table = provider.vtable.*;
+    table.hashSnapshot = Failure.snapshot;
+    provider.vtable = &table;
+    var state = try provider.hashCreate(testing.allocator, .sha1);
+    defer state.deinit();
+    try state.update("metadata");
+    var digest = [_]u8{0xaa} ** 20;
+    try testing.expectError(error.InternalError, state.snapshot(&digest));
+    try testing.expectEqualSlices(u8, &([_]u8{0} ** 20), &digest);
+}
+
+test "SHA1 identifier hashing streams without further allocation" {
+    var owner = try binding.Provider.init(testing.allocator, .{
+        .allow_sha1_identifier_hash = true,
+        .max_scratch_bytes = 0,
+    });
+    var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 2 });
+    var hash = try owner.provider().hashCreate(failing.allocator(), .sha1);
+    defer hash.deinit();
+    const chunk = [_]u8{'a'} ** 1000;
+    for (0..1000) |_| try hash.update(&chunk);
+    var digest: [20]u8 = undefined;
+    try hash.snapshot(&digest);
+    try testing.expectEqualSlices(u8, &hex("34aa973cd4c4daa4f61eeb2bdbad27316534016f"), &digest);
+}
+
+fn identifierAllocationFixture(allocator: std.mem.Allocator) !void {
+    var owner = try binding.Provider.init(allocator, .{ .allow_sha1_identifier_hash = true });
+    var hash = try owner.provider().hashCreate(allocator, .sha1);
+    defer hash.deinit();
+    try hash.update("metadata identifier");
+    var clone = try hash.clone(allocator);
+    defer clone.deinit();
+    var digest: [20]u8 = undefined;
+    try clone.snapshot(&digest);
+}
+
+test "SHA1 identifier allocation failures and destruction release wiped native state" {
+    try testing.checkAllAllocationFailures(testing.allocator, identifierAllocationFixture, .{});
+    var allocator: symcrypt.asymmetric.testing.WipeAllocator = .{ .backing = testing.allocator };
+    try identifierAllocationFixture(allocator.allocator());
+    try testing.expect(allocator.frees > 0);
+    try testing.expectEqual(@as(usize, 0), allocator.nonzero_frees);
+}
+
 test "SHA2 transcripts clone snapshot and HMAC agree with independent primitives" {
     var owner = try binding.Provider.init(testing.allocator, .{});
     const provider = owner.provider();
@@ -279,13 +399,18 @@ test "RSA private ownership PKCS1 and PKCS8 import PSS and PKCS1 signatures" {
     var encoded: DerBuilder = .{};
     defer p.secureWipeValue(&encoded);
     try encoded.field(0x30, fields.bytes());
-    var owner = try binding.Provider.init(testing.allocator, .{});
+    var owner = try binding.Provider.init(testing.allocator, .{ .allow_sha1_identifier_hash = true });
     var key = try owner.provider().signingKeyImport(testing.allocator, .{
         .algorithm = .rsa,
         .encoding = .rsa_pkcs1_der,
         .bytes = encoded.bytes(),
     });
     defer key.deinit();
+    var rejected_signature = [_]u8{0xaa} ** 256;
+    try testing.expectError(error.UnsupportedAlgorithm, key.sign(.rsa_pkcs1_sha1, &.{"metadata"}, &rejected_signature));
+    const provider = owner.provider();
+    try testing.expectError(error.UnsupportedAlgorithm, provider.vtable.sign(provider.context, key.raw_handle.?, .rsa_pkcs1_sha1, &.{"metadata"}, &rejected_signature));
+    try testing.expectEqualSlices(u8, &([_]u8{0xaa} ** 256), &rejected_signature);
     var pkcs8_fields: DerBuilder = .{};
     defer p.secureWipeValue(&pkcs8_fields);
     try pkcs8_fields.integer(&.{0});
@@ -337,6 +462,11 @@ test "RSA private ownership PKCS1 and PKCS8 import PSS and PKCS1 signatures" {
 test "shared borrowed provider supports concurrent independent operations" {
     const Worker = struct {
         fn operation(provider: p.CryptoProvider) p.ProviderError!void {
+            var identifier = try provider.hashCreate(std.heap.page_allocator, .sha1);
+            defer identifier.deinit();
+            try identifier.update("metadata identifier");
+            var identifier_digest: [20]u8 = undefined;
+            try identifier.snapshot(&identifier_digest);
             var hash = try provider.hashCreate(std.heap.page_allocator, .sha256);
             defer hash.deinit();
             try hash.update("parallel transcript");
@@ -352,7 +482,7 @@ test "shared borrowed provider supports concurrent independent operations" {
             };
         }
     };
-    var owner = try binding.Provider.init(std.heap.page_allocator, .{});
+    var owner = try binding.Provider.init(std.heap.page_allocator, .{ .allow_sha1_identifier_hash = true });
     var results = [_]?p.ProviderError{null} ** 4;
     {
         var threads: [4]std.Thread = undefined;

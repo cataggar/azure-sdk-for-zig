@@ -13,11 +13,15 @@ const mapError = native.mapError;
 pub const Provider = struct {
     scratch_allocator: Allocator,
     max_scratch_bytes: usize,
+    allow_sha1_identifier_hash: bool,
 
     pub const Options = struct {
         /// Bounds concatenated AEAD AAD, HKDF info, PRF seed, and key encodings.
         /// Transcript hashes and HMAC inputs are processed incrementally.
         max_scratch_bytes: usize = 64 * 1024,
+        /// Raw SHA-1 for explicitly permitted trust metadata identifiers only.
+        /// Does not enable SHA-1 signatures, HMAC, HKDF, or TLS PRF.
+        allow_sha1_identifier_hash: bool = false,
     };
 
     /// No native global shutdown is performed. Keep this owner and its
@@ -25,7 +29,11 @@ pub const Provider = struct {
     /// are released. Mutable handles remain single-owner/single-threaded.
     pub fn init(scratch_allocator: Allocator, options: Options) symcrypt.InitError!Provider {
         try symcrypt.ensureInitialized();
-        return .{ .scratch_allocator = scratch_allocator, .max_scratch_bytes = options.max_scratch_bytes };
+        return .{
+            .scratch_allocator = scratch_allocator,
+            .max_scratch_bytes = options.max_scratch_bytes,
+            .allow_sha1_identifier_hash = options.allow_sha1_identifier_hash,
+        };
     }
 
     pub fn provider(self: *Provider) p.CryptoProvider {
@@ -46,8 +54,9 @@ fn destroy(comptime T: type, allocator: Allocator, value: *T) void {
     allocator.destroy(value);
 }
 
-fn capabilities(_: *anyopaque) p.Capabilities {
+fn capabilities(context: *anyopaque) p.Capabilities {
     var result: p.Capabilities = .{ .random = true, .constant_time_equal = true };
+    result.setHash(.sha1, owner(context).allow_sha1_identifier_hash);
     inline for (.{ p.HashAlgorithm.sha256, .sha384, .sha512 }) |a| {
         result.setHash(a, true);
         result.setHmac(a, true);
@@ -80,18 +89,17 @@ fn random(_: *anyopaque, out: []u8) Error!void {
 }
 
 const HashState = union(p.HashAlgorithm) {
-    sha1: void,
+    sha1: *symcrypt.hash.Context(.sha1),
     sha256: *symcrypt.hash.Context(.sha256),
     sha384: *symcrypt.hash.Context(.sha384),
     sha512: *symcrypt.hash.Context(.sha512),
 };
 
-fn hashCreate(_: *anyopaque, allocator: Allocator, algorithm: p.HashAlgorithm, out: *?*anyopaque) Error!void {
-    if (algorithm == .sha1) return error.UnsupportedAlgorithm;
+fn hashCreate(context: *anyopaque, allocator: Allocator, algorithm: p.HashAlgorithm, out: *?*anyopaque) Error!void {
+    if (algorithm == .sha1 and !owner(context).allow_sha1_identifier_hash) return error.UnsupportedAlgorithm;
     const state = try allocator.create(HashState);
     errdefer destroy(HashState, allocator, state);
     state.* = switch (algorithm) {
-        .sha1 => unreachable,
         inline else => |a| @unionInit(HashState, @tagName(a), symcrypt.hash.Context(@field(symcrypt.hash.Algorithm, @tagName(a))).create(allocator) catch |err| return mapError(err)),
     };
     out.* = state;
@@ -99,14 +107,12 @@ fn hashCreate(_: *anyopaque, allocator: Allocator, algorithm: p.HashAlgorithm, o
 
 fn hashUpdate(_: *anyopaque, raw: *anyopaque, data: []const u8) Error!void {
     switch (cast(HashState, raw).*) {
-        .sha1 => return error.UnsupportedAlgorithm,
         inline else => |state| state.update(data) catch |err| return mapError(err),
     }
 }
 
 fn hashSnapshot(_: *anyopaque, raw: *anyopaque, out: []u8) Error!void {
     switch (cast(HashState, raw).*) {
-        .sha1 => return error.UnsupportedAlgorithm,
         inline else => |state| {
             var digest = state.snapshot() catch |err| return mapError(err);
             defer p.secureWipe(&digest);
@@ -119,7 +125,6 @@ fn hashClone(_: *anyopaque, raw: *anyopaque, allocator: Allocator, out: *?*anyop
     const state = try allocator.create(HashState);
     errdefer destroy(HashState, allocator, state);
     state.* = switch (cast(HashState, raw).*) {
-        .sha1 => return error.UnsupportedAlgorithm,
         inline else => |source, a| @unionInit(HashState, @tagName(a), source.clone(allocator) catch |err| return mapError(err)),
     };
     out.* = state;
@@ -128,7 +133,6 @@ fn hashClone(_: *anyopaque, raw: *anyopaque, allocator: Allocator, out: *?*anyop
 fn hashDestroy(_: *anyopaque, allocator: Allocator, raw: *anyopaque) void {
     const state = cast(HashState, raw);
     switch (state.*) {
-        .sha1 => {},
         inline else => |hash| hash.deinit(),
     }
     destroy(HashState, allocator, state);
