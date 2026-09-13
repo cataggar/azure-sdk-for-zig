@@ -1,5 +1,7 @@
 const std = @import("std");
 const core = @import("azure_sdk_core");
+pub const version: []const u8 = @import("build.zig.zon").version;
+pub const user_agent_prefix = "azsdk-zig-storage-queues/" ++ @import("build.zig.zon").version;
 
 const sas = @import("sas.zig");
 
@@ -10,6 +12,7 @@ pub const max_queue_message_bytes = sas.max_queue_message_bytes;
 pub const auth_scopes: []const []const u8 = &.{"https://storage.azure.com/.default"};
 
 test {
+    _ = @import("tracing_test.zig");
     std.testing.refAllDecls(sas);
     std.testing.refAllDecls(QueueClient);
     std.testing.refAllDecls(QueueServiceClient);
@@ -40,6 +43,7 @@ pub const QueueClient = struct {
     ///
     /// The pipeline's policy pointers and runtime backend contexts are
     /// borrowed and must outlive this client and every operation on it.
+    /// Configured tracing providers and metadata are borrowed in the same way.
     pub fn init(
         endpoint: []const u8,
         queue_name: []const u8,
@@ -193,7 +197,8 @@ pub const QueueServiceClient = struct {
     ///
     /// The pipeline's policy pointers and runtime backend contexts are
     /// borrowed and must outlive this client, clients derived from it, and
-    /// every operation on those clients.
+    /// every operation on those clients. Configured tracing providers and
+    /// metadata are borrowed in the same way.
     pub fn init(
         endpoint: []const u8,
         pipeline: core.http.HttpPipeline,

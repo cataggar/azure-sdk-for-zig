@@ -17,6 +17,7 @@ pub const SasQueueClient = struct {
     allocator: std.mem.Allocator,
     uri: sas.CompleteSasUri,
     runtime: core.http.HttpRuntime,
+    instrumentation: ?core.tracing.InstrumentationOptions = null,
 
     /// Copies `runtime` while borrowing its transport and crypto contexts.
     /// Both contexts must outlive this client and every operation on it.
@@ -39,6 +40,13 @@ pub const SasQueueClient = struct {
     pub fn deinit(self: *SasQueueClient) void {
         self.uri.deinit();
         self.* = undefined;
+    }
+
+    /// Configures tracing only, preserving the caller's complete Core options.
+    /// Provider and metadata strings are borrowed and must outlive operations.
+    /// Null disables tracing; this client never manages the provider lifecycle.
+    pub fn setInstrumentation(self: *SasQueueClient, options: ?core.tracing.InstrumentationOptions) void {
+        self.instrumentation = options;
     }
 
     /// Renders a query-redacted SAS URL only.
@@ -69,7 +77,9 @@ pub const SasQueueClient = struct {
         try request.setHeader("Content-Type", "application/xml");
         try request.setHeader("x-ms-version", storage_api_version);
         request.body = body;
-        const outcome = try sas.send(self.runtime, &request, null);
+        const outcome = try sas.sendWithOptions(self.runtime, &request, null, .{
+            .instrumentation = self.instrumentation,
+        });
         return switch (outcome) {
             .accepted => |value| if (value.status_code == 201)
                 outcome
