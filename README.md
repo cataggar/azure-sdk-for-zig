@@ -3,8 +3,8 @@
 Azure Queue Storage clients, including `QueueClient`, `QueueServiceClient`, and
 the complete-SAS `SasQueueClient`.
 
-Version: **0.3.0**. Release branch: `sdk/storage_queues`. The package pins
-published `azure_sdk_core` **0.4.0** and `azure_sdk_storage_common` **0.4.0**,
+Version: **0.3.1**. Release branch: `sdk/storage_queues`. The package pins
+published `azure_sdk_core` **0.4.1** and `azure_sdk_storage_common` **0.4.1**,
 plus `serde`. `queues.version` and `queues.user_agent_prefix` follow the manifest.
 The prefix is available for a caller-owned `TelemetryPolicy`; clients do not
 install a user-agent policy implicitly.
