@@ -26,9 +26,9 @@ in Zig's package cache; after restoration, execution and tests are offline.
 The root `test` step includes only these offline tests, never `interop.sh`.
 The historical Core 0.1.2 consumer remains separate and unchanged.
 
-The manifest pins App Configuration **0.3.0** at
-`18ad4ee42e0a297653a9a672d005337bc0b3f65f` and Core **0.4.0** at
-`be32073994f37422f2f6b5e9255d208b1284de85`, with their released package hashes.
+The manifest pins App Configuration **0.3.1** at
+`7efda6d0d658ab29cad8cd1c811be4608df8ee9a` and Core **0.4.1** at
+`2c95f65be96b5ef48a50671de33e9e0926c624cb`, with their released package hashes.
 The build asserts one canonical Core module identity with the service client.
 No branch source or local dependency override is used.
 
@@ -86,7 +86,8 @@ header and complete expected span semantics. HTTP success alone is insufficient.
 The Collector can omit protobuf-default zero fields when reserializing; the
 verifier compares typed semantics, not JSON property order or byte equality.
 
-A local Linux arm64 validation with the checksum-verified archive returned
+A local Linux arm64 validation of the Core 0.4.1 / App Configuration 0.3.1 pair
+with the checksum-verified archive returned
 HTTP 405 for readiness, HTTP 200 for the unchanged request and
 `{"partialSuccess":{}}`. Its file output contained exactly the child span
 `1112131415161718` in trace `0af7651916cd43dd8448eb211c80319c`, matching the
