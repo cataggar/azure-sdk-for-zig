@@ -9,17 +9,20 @@ overwritten on the next regeneration.
 
 ## Core 0.4 and optional tracing
 
-Package **0.3.0** pins the published **Core 0.4.0** release by commit and hash.
+Package **0.3.1** pins the published **Core 0.4.1** release by commit and hash.
+This patch updates the Core dependency only; public APIs and tracing behavior
+are unchanged.
+
 `KeyVaultClient.init` copies the caller's complete HTTP pipeline:
 
 ```zig
-var telemetry = core.http.TelemetryPolicy.init("azsdk-zig-azure_rest_keyvault_secrets/0.3.0");
+var telemetry = core.http.TelemetryPolicy.init("azsdk-zig-azure_rest_keyvault_secrets/0.3.1");
 var policies = [_]*core.http.HttpPolicy{telemetry.asPolicy()};
 var pipeline = core.http.HttpPipeline.init(runtime, &policies);
 pipeline.setInstrumentation(.{
     .provider = provider.asProvider(),
     .scope_name = "azure_rest_keyvault_secrets",
-    .scope_version = "0.3.0",
+    .scope_version = "0.3.1",
     .namespace = "Microsoft.KeyVault",
 });
 var client = KeyVaultClient.init(pipeline, .{ .endpoint = endpoint });

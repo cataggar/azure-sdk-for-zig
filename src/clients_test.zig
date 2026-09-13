@@ -66,7 +66,7 @@ test "Key Vault preserves optional caller instrumentation and automatically trac
             .{},
         );
         defer provider.deinit() catch unreachable;
-        var telemetry = core.http.TelemetryPolicy.init("azsdk-zig-azure_rest_keyvault_secrets/0.3.0");
+        var telemetry = core.http.TelemetryPolicy.init("azsdk-zig-azure_rest_keyvault_secrets/0.3.1");
         var policies = [_]*core.http.HttpPolicy{telemetry.asPolicy()};
         var pipeline = core.http.HttpPipeline.init(runtime, &policies);
         try std.testing.expect(pipeline.instrumentation == null);
@@ -90,7 +90,7 @@ test "Key Vault preserves optional caller instrumentation and automatically trac
             "https://vault.example/deletedsecrets/sensitive-secret-name?api-version=2026-03-01-preview",
             mock.last_url.?,
         );
-        try std.testing.expectEqualStrings("azsdk-zig-azure_rest_keyvault_secrets/0.3.0", mock.last_headers.get("User-Agent").?);
+        try std.testing.expectEqualStrings("azsdk-zig-azure_rest_keyvault_secrets/0.3.1", mock.last_headers.get("User-Agent").?);
         try std.testing.expectEqual(mode == .enabled, mock.last_headers.contains("traceparent"));
         if (mode == .enabled) {
             try std.testing.expectEqualStrings("vendor=caller", mock.last_headers.get("tracestate").?);
