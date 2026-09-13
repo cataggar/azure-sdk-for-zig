@@ -1194,19 +1194,20 @@ fn runBackendRedirectContracts(allocator: std.mem.Allocator, io: std.Io, factory
             if (case == .same_origin)
                 try std.testing.expectEqualStrings("POST /continued HTTP/1.1", second.request_line);
             try std.testing.expectEqualStrings("1", second.policy_marker orelse "");
+            // Redirect authority is regenerated even when the origin is unchanged.
+            try std.testing.expect(!std.mem.eql(u8, "conformance-origin", second.host orelse ""));
             if (cross_origin) {
                 try std.testing.expectEqual(@as(?[]const u8, null), second.authorization);
                 try std.testing.expectEqual(@as(?[]const u8, null), second.cookie);
                 try std.testing.expectEqual(@as(?[]const u8, null), second.proxy_authorization);
-                try std.testing.expect(!std.mem.eql(u8, "conformance-origin", second.host orelse ""));
             } else {
                 try std.testing.expectEqualStrings("conformance-token", second.authorization orelse "");
                 try std.testing.expectEqualStrings("conformance-cookie", second.cookie orelse "");
                 try std.testing.expectEqualStrings("conformance-proxy", second.proxy_authorization orelse "");
-                try std.testing.expectEqualStrings("conformance-origin", second.host orelse "");
             }
         }
         try std.testing.expectEqualStrings("conformance-token", request.getHeader("Authorization").?);
+        try std.testing.expectEqualStrings("conformance-origin", request.getHeader("Host").?);
         try std.testing.expectEqualStrings(backend.url, request.url);
         if (factory.capabilities.lifecycle_observable) {
             const observation = backend.observe();
