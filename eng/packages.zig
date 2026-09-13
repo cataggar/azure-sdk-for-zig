@@ -117,6 +117,7 @@ pub const all = [_]Package{
             "transport.zig",
             "tests.zig",
             "test_backend.zig",
+            "interruption_fixture.zig",
             "README.md",
             "LICENSE.txt",
         },
