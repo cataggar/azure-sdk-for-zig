@@ -166,7 +166,7 @@ intentionally refuses a WASI build.
 Run only offline tests:
 
 ```sh
-zig fmt --check build.zig build.zig.zon root.zig transport.zig test_backend.zig tests.zig
+zig fmt --check build.zig build.zig.zon root.zig transport.zig test_backend.zig interruption_fixture.zig tests.zig
 zig build test --cache-dir .zig-cache/local --global-cache-dir .zig-cache/global --summary all
 ```
 
@@ -179,19 +179,74 @@ framing, decompression, explicit limits, deadlines, method mapping, lifetime,
 trailers and H1/H2 loopback reuse/abort.
 
 Synthetic wire mocks exercise credential stripping and attempt counts, **not
-trusted HTTPS**. The shared factory deliberately does not claim trusted-HTTPS
-redirect capability or the stronger per-phase interruption evidence matrix.
-Local cancellation/timeout integration tests do not imply cancellation of
-arbitrary upload readers or native DNS workers.
+trusted HTTPS**. The shared factory does not claim trusted-HTTPS redirect
+capability. Interruption evidence is separately obtained from real loopback
+connections, not these wire mocks.
 
 CI retains the three fixed `package-test (<os>)` contexts. There are no default
 live Azure, credential, public-CA or native-provider checks. Windows currently
 uses HTTPX's system Winsock ABI; no C/crypto library dependency is added.
 
-Source-preparation validation with Zig 0.16.0: 21 adapter tests passed on
-aarch64 Linux, including the imported shared contracts. Test executables also
-cross-compiled for x86_64 Windows GNU and aarch64 macOS; they were not run there.
-The WASI build was checked to reject this adapter with host-backend guidance.
+The earlier reviewed source checkpoint had 21 passing tests on aarch64 Linux
+and compile-only checks for x86_64 Windows GNU and aarch64 macOS. The WASI build
+was checked to reject this adapter with host-backend guidance.
+
+### Per-phase interruption evidence
+
+`interruption_fixture.zig` supplies the factory's `interruptionFixtureFn` and
+runs through published Core `runInterruptionContracts`. It advertises these
+token/deadline pairs, orthogonal to the existing cooperative-upload grade:
+
+| Phase | Token | Deadline | Actual blocked path and synchronization |
+| --- | --- | --- | --- |
+| `connect` | Yes | Yes | A loopback SOCKS5 peer receives CONNECT after method negotiation and withholds the success reply. This is native connection-establishment negotiation, not raw TCP SYN or DNS interruption. |
+| `upload_write` | Yes | Yes | H2 upload exhausts flow-control credit. The peer observes a PING ACK processed by the native upload pump, without granting more credit. |
+| `response_headers` | Yes | Yes | After request END_STREAM, the peer observes a PING ACK from native header reception and never supplies a response head. |
+| `response_body` | Yes | Yes | An incomplete H2 body produces one byte of WINDOW_UPDATE credit and a PING ACK during a two-byte read; no END_STREAM is supplied. |
+| `finish_drain` | Yes | Yes | Native finish/drain produces the same credit and PING ACK, without any application body read or peer completion. |
+| `upload_read` | No | No | The borrowed reader API cannot preempt an arbitrary blocking caller callback. No detached worker or synthetic preemption is used. |
+
+The peer's acknowledged protocol traffic proves entry before the token is
+signalled or the whole-operation deadline expires. The H2 checks do not rely on
+an owner-thread “about to read” flag, socket-buffer-size guesses or fixed sleeps.
+Token scenarios disable native deadlines; deadline scenarios use a 500 ms
+whole-operation budget with all independent phase/drain deadlines disabled.
+For deadline latency, the timestamp immediately before Core dispatch plus
+500 ms is an **earlier bound** on native expiry: measured latency therefore
+conservatively overestimates, rather than understates, time since actual expiry.
+The shared runner's 1000 ms acceptance budget is unchanged.
+
+The controller is a scoped watchdog with bounded event waits. Every exit
+shuts down the peer if needed and joins both threads. A watchdog failure is an
+error, never qualifying evidence. The success path never releases the withheld
+bytes: the peer must observe the interrupted client's EOF/reset exactly once.
+Both owner completion and peer closure observation must meet the same 1000 ms
+deadline, and reported latency includes the later of those observations.
+Evidence reports that observed close count, `transport_started`, the concrete
+outcome and live-operation/leased-connection counts collected after owner
+cleanup. A negative watchdog test withholds the phase probe and verifies that
+both threads stop/join without producing any evidence.
+
+Run the evidence cases independently:
+
+```sh
+zig build test -Dtest-filter=interruption -j2 --cache-dir .zig-cache/local --global-cache-dir .zig-cache/global --summary all
+```
+
+The evidence test prints measured per-pair results. These fixtures establish
+the listed H2/SOCKS5 paths only, not every protocol or platform combination.
+H1 backpressure, direct stalled TCP connect, DNS, arbitrary upload-reader
+preemption, TLS handshakes and the native Windows/macOS interruption matrix
+remain unproved here. Public-CA/trusted-HTTPS qualification remains gated.
+
+This independent conformance checkpoint passed 24/24 tests on aarch64 Linux
+with Zig 0.16.0. Three additional targeted interruption runs each passed 3/3,
+including the negative watchdog case. Across those repeats, token observations
+were 11 ms and conservative deadline observations were 1–2 ms; every pair
+reported one close, zero live operations and zero leased connections.
+Windows GNU x86_64 and macOS aarch64 cross-compilation also passed, without
+running or qualifying their native interruption matrices. Production adapter
+source and immutable dependency pins are unchanged from the earlier checkpoint.
 
 ## Publication gates still open
 

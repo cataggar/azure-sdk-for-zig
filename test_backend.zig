@@ -1,5 +1,6 @@
 const std = @import("std");
 const adapter = @import("azure_sdk_core_httpx");
+const interruption = @import("interruption_fixture.zig");
 pub const conformance = @import("azure_sdk_core_http_conformance");
 
 pub fn factory() conformance.BackendFactory {
@@ -15,9 +16,11 @@ pub fn factory() conformance.BackendFactory {
             .bounded_memory_logical_large_download = true,
             .scripted_attempts = true,
             .allocation_failure_cleanup = true,
+            .interruption = .{ .token = interruption.phases, .deadline = interruption.phases },
         },
         .createFn = create,
         .allocationFixtureFn = allocation,
+        .interruptionFixtureFn = interruption.run,
     };
 }
 

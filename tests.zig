@@ -3,6 +3,7 @@ const adapter = @import("azure_sdk_core_httpx");
 const core = adapter.core;
 const httpx = @import("httpx");
 const backend = @import("test_backend.zig");
+const interruption = @import("interruption_fixture.zig");
 const conformance = backend.conformance;
 const allocator = std.testing.allocator;
 const io = std.testing.io;
@@ -37,6 +38,41 @@ test "allocation failure with cancellation bridge releases every resource" {
 
 test "published Core raw transport conformance" {
     try conformance.runRawTransportContracts(allocator, io, backend.factory());
+}
+
+test "published Core per-phase interruption evidence" {
+    var report: interruption.Report = .{};
+    var factory = backend.factory();
+    factory.context = &report;
+    try conformance.runInterruptionContracts(allocator, io, factory);
+    try std.testing.expectEqual(@as(usize, 10), report.count);
+    for (report.samples[0..report.count]) |sample| {
+        const evidence = sample.evidence;
+        std.debug.print("interruption {s}/{s}: {s}, {d}ms, entered={}, started={}, close={d}, live={d}, leased={d}, connect={d}, ping={d}, upload={d}, credit={d}\n", .{
+            @tagName(sample.phase),
+            @tagName(sample.trigger),
+            @errorName(evidence.outcome),
+            evidence.elapsed_ms,
+            evidence.phase_entered,
+            evidence.transport_started,
+            evidence.cleanup_count,
+            evidence.live_operations,
+            evidence.leased_connections,
+            sample.connect_requests,
+            sample.ping_acks,
+            sample.uploaded_bytes,
+            sample.body_credit,
+        });
+    }
+}
+
+test "unproved upload_read interruption remains unadvertised" {
+    const factory = backend.factory();
+    try std.testing.expect(!factory.capabilities.interruption.token.contains(.upload_read));
+    try std.testing.expect(!factory.capabilities.interruption.deadline.contains(.upload_read));
+    for (std.meta.tags(conformance.InterruptionTrigger)) |trigger| {
+        try std.testing.expectError(error.UnsupportedInterruptionPair, interruption.run(null, allocator, io, .upload_read, trigger));
+    }
 }
 
 test "published Core pipeline attempt ownership" {
