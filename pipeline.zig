@@ -36,7 +36,7 @@ fn sleepMs(ms: u64) void {
     threaded.io().sleep(.fromNanoseconds(nanoseconds), .awake) catch {};
 }
 
-pub const user_agent = "azsdk-zig-data-tables/0.4.0";
+pub const user_agent = "azsdk-zig-data-tables/0.4.1";
 
 /// Heap-owned policy storage shared by an owning client and its derived
 /// clients. The credential, runtime backend contexts, and caller policy
