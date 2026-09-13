@@ -22,6 +22,10 @@ pub fn build(b: *std.Build) void {
     );
     runtime_consumer_step.dependOn(&runtime_consumer.step);
 
+    const otlp_fixture = addFixtureTest(b, "eng/fixtures/otlp_collector_interop", null);
+    test_step.dependOn(&otlp_fixture.step);
+    b.step("otlp-collector-fixture-test", "Test service-client OTLP fixture offline").dependOn(&otlp_fixture.step);
+
     addPackageToolSteps(b, test_step);
     addCodegenSteps(b);
     addRepositoryValidationSteps(b);
