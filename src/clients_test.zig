@@ -78,7 +78,7 @@ const TraceProbe = struct {
             "https://devops.example/org/project/_apis/git/repositories/repository?api-version=7.2-preview",
             request.url,
         );
-        try std.testing.expectEqualStrings("azsdk-zig-azure_rest_devops/0.2.0", request.getHeader("User-Agent").?);
+        try std.testing.expectEqualStrings("azsdk-zig-azure_rest_devops/0.2.1", request.getHeader("User-Agent").?);
         try std.testing.expectEqual(self.traced, request.getHeader("traceparent") != null);
         if (self.traced) {
             const parent = core.tracing.TraceContext.parseTraceparent(request.getHeader("traceparent").?).?;
@@ -138,7 +138,7 @@ test "all 44 area roots and 371 descendants retain caller tracing with real Git 
             .{},
         );
         defer provider.deinit() catch unreachable;
-        var telemetry = core.http.TelemetryPolicy.init("azsdk-zig-azure_rest_devops/0.2.0");
+        var telemetry = core.http.TelemetryPolicy.init("azsdk-zig-azure_rest_devops/0.2.1");
         var policies = [_]*core.http.HttpPolicy{telemetry.asPolicy()};
         var pipeline = core.http.HttpPipeline.init(runtime, &policies);
         try std.testing.expect(pipeline.instrumentation == null);

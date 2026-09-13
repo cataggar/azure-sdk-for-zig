@@ -29,18 +29,21 @@ command.
 
 ## Core 0.4 and optional tracing
 
-Package **0.2.0** pins published **Core 0.4.0** by immutable commit and hash.
+Package **0.2.1** pins published **Core 0.4.1** by immutable commit and hash.
+This patch updates the Core dependency only; public APIs and tracing behavior
+are unchanged.
+
 All 44 area roots and their 371 operation groups copy the caller's complete
 pipeline. Configure it once before constructing any area client:
 
 ```zig
-var telemetry = core.http.TelemetryPolicy.init("azsdk-zig-azure_rest_devops/0.2.0");
+var telemetry = core.http.TelemetryPolicy.init("azsdk-zig-azure_rest_devops/0.2.1");
 var policies = [_]*core.http.HttpPolicy{telemetry.asPolicy()};
 var pipeline = core.http.HttpPipeline.init(runtime, &policies);
 pipeline.setInstrumentation(.{
     .provider = provider.asProvider(),
     .scope_name = "azure_rest_devops",
-    .scope_version = "0.2.0",
+    .scope_version = "0.2.1",
     .namespace = "Azure.DevOps",
 });
 var git_client = root.git.GitClient.init(pipeline, .{});
