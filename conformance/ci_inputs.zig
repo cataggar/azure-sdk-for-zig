@@ -1,7 +1,11 @@
 //! Release-input coherence gate; it does not grant review or qualification approval.
 const std = @import("std");
 
-const Dependency = struct { url: []const u8, hash: []const u8 };
+const Dependency = struct {
+    url: []const u8,
+    hash: []const u8,
+    path: ?[]const u8 = null,
+};
 const Manifest = struct {
     dependencies: struct {
         azure_sdk_core: Dependency,
@@ -16,6 +20,7 @@ fn fullCommit(value: []const u8) bool {
 }
 
 fn immutable(dependency: Dependency) bool {
+    if (dependency.path != null) return false;
     if (!std.mem.startsWith(u8, dependency.url, "git+https://github.com/")) return false;
     const marker = std.mem.lastIndexOfScalar(u8, dependency.url, '#') orelse return false;
     return fullCommit(dependency.url[marker + 1 ..]) and dependency.hash.len != 0;
@@ -101,4 +106,20 @@ test "CI reads ZON manifests without accepting path dependencies" {
     try validate(commit, commit, fixture, parsed);
     const local = ".{ .dependencies = .{ .azure_sdk_core = .{ .path = \"../core\" }, .httpx = .{ .path = \"../httpx\" } } }";
     try std.testing.expectError(error.ParseZon, std.zon.parse.fromSliceAlloc(Manifest, allocator, local, null, .{ .ignore_unknown_fields = true }));
+}
+
+test "CI rejects local paths even when immutable pin fields are also present" {
+    const allocator = std.testing.allocator;
+    const text =
+        \\.{
+        \\ .dependencies = .{
+        \\  .azure_sdk_core = .{ .url = "git+https://github.com/example/core#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", .hash = "core-fixture" },
+        \\  .httpx = .{ .url = "git+https://github.com/example/httpx#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", .hash = "httpx-fixture", .path = "../httpx" },
+        \\ },
+        \\}
+    ;
+    const parsed = try std.zon.parse.fromSliceAlloc(Manifest, allocator, text, null, .{ .ignore_unknown_fields = true });
+    defer std.zon.parse.free(allocator, parsed);
+    try std.testing.expectError(error.NonImmutableDependency, validate(commit, commit, fixture, parsed));
+    try std.testing.expectError(error.NonImmutableDependency, validate(commit, commit, parsed, fixture));
 }
