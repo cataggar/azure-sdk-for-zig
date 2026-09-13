@@ -7,7 +7,7 @@ const core = @import("azure_sdk_core");
 const serde = @import("serde");
 
 pub const cosmos_scope = "https://cosmos.azure.com/.default";
-pub const user_agent = "azsdk-zig-data-cosmos/0.3.0";
+pub const user_agent = "azsdk-zig-data-cosmos/0.3.1";
 
 // ─────────────────────── Enums ───────────────────────
 
