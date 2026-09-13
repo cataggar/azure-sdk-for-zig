@@ -24,6 +24,12 @@ pub const offset_key = "offset";
 pub const owner_id_key = "ownerid";
 
 /// Checkpoint store backed by Azure Blob Storage.
+///
+/// Borrows the container and its complete caller-configured pipeline, including
+/// optional tracing. The container, provider/exporter, instrumentation strings,
+/// parent tracestate, policies, credentials, and runtime backend contexts must
+/// remain valid through every store operation. The caller owns synchronization
+/// and provider flush/shutdown; the store has no separate tracing configuration.
 pub const BlobCheckpointStore = struct {
     container_client: *blobs.BlobContainerClient,
     store: eventhubs.CheckpointStore,
@@ -766,6 +772,267 @@ test "claimOwnership relinquishes a partition with an empty owner id" {
 
     try testing.expectEqualStrings("", mock.last_headers.get("x-ms-meta-ownerid").?);
     try testing.expect(claimed[0].isRelinquished());
+}
+
+const CheckpointTracingProbe = struct {
+    const scope_name = "caller.eventhubs.checkpoints";
+    const scope_version = "caller-version";
+    const namespace = "Caller.Checkpoints";
+    const parent_header = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    const trace_state = "checkpoint=opaque,vendor=two";
+
+    exporter: core.tracing.SpanExporter = .{ .exportFn = exportBatch },
+    transport: *ScriptedTransport,
+    statuses: []const core.tracing.SpanStatus,
+    exported: usize = 0,
+
+    fn instrumentation(provider: *core.tracing.ExportingTracerProvider) core.tracing.InstrumentationOptions {
+        return .{
+            .provider = provider.asProvider(),
+            .scope_name = scope_name,
+            .scope_version = scope_version,
+            .namespace = namespace,
+            .parent_context = core.tracing.TraceContext.extract(parent_header, trace_state).?,
+        };
+    }
+
+    fn exportBatch(exporter: *core.tracing.SpanExporter, batch: []const core.tracing.SpanData, _: core.tracing.ExportContext) !void {
+        const self: *CheckpointTracingProbe = @fieldParentPtr("exporter", exporter);
+        for (batch) |span| {
+            try testing.expect(self.exported < self.statuses.len);
+            try testing.expectEqualStrings(scope_name, span.scope_name);
+            try testing.expectEqualStrings(scope_version, span.scope_version);
+            try testing.expectEqualStrings(parent_header[3..35], &span.context.trace_id);
+            try testing.expectEqualStrings(parent_header[36..52], &span.parent_span_id.?);
+            try testing.expectEqualStrings(trace_state, span.context.trace_state.?);
+            try testing.expectEqual(core.tracing.SpanKind.client, span.kind);
+            try testing.expectEqual(self.statuses[self.exported], span.status);
+            if (self.exported < self.transport.requests.items.len) {
+                const wire = core.tracing.TraceContext.parseTraceparent(
+                    self.transport.requests.items[self.exported].headers.get("traceparent").?,
+                ).?;
+                try testing.expectEqualStrings(&wire.trace_id, &span.context.trace_id);
+                try testing.expectEqualStrings(&wire.span_id, &span.context.span_id);
+            }
+            var found_namespace = false;
+            for (span.attributes) |attribute| {
+                try testing.expect(!std.mem.eql(u8, "url.full", attribute.key));
+                if (attribute.value == .string) {
+                    try testing.expect(std.mem.indexOf(u8, attribute.value.string, "private-") == null);
+                }
+                if (std.mem.eql(u8, "az.namespace", attribute.key)) {
+                    try testing.expectEqualStrings(namespace, attribute.value.string);
+                    found_namespace = true;
+                }
+            }
+            try testing.expect(found_namespace);
+            self.exported += 1;
+        }
+    }
+
+    fn checkAndFlush(self: *CheckpointTracingProbe, provider: *core.tracing.ExportingTracerProvider, enabled: bool) !void {
+        for (self.transport.requests.items, 0..) |captured, index| {
+            const header = captured.headers.get("traceparent");
+            try testing.expectEqual(enabled, header != null);
+            if (!enabled) {
+                try testing.expect(captured.headers.get("tracestate") == null);
+                continue;
+            }
+            const context = core.tracing.TraceContext.parseTraceparent(header.?).?;
+            try testing.expectEqualStrings(trace_state, captured.headers.get("tracestate").?);
+            try testing.expect(!std.mem.eql(u8, &context.span_id, parent_header[36..52]));
+            for (self.transport.requests.items[0..index]) |previous| {
+                const previous_context = core.tracing.TraceContext.parseTraceparent(previous.headers.get("traceparent").?).?;
+                try testing.expect(!std.mem.eql(u8, &previous_context.span_id, &context.span_id));
+            }
+        }
+        try testing.expectEqual(@as(usize, 0), self.exported);
+        try testing.expectEqual(@as(usize, 0), provider.stats().active_spans);
+        try testing.expectEqual(self.statuses.len, provider.stats().queued_spans);
+        try testing.expect(!provider.closed);
+        try provider.forceFlush(1000);
+        try testing.expectEqual(self.statuses.len, self.exported);
+        try provider.shutdown(1000);
+    }
+};
+
+test "checkpoint HTTP tracing preserves borrowed configuration across writes and paged reads" {
+    const allocator = testing.allocator;
+    for ([_]bool{ false, true }) |enabled| {
+        var scripted = ScriptedTransport.init(allocator, &.{
+            .{ .status = 201, .body = "", .etag = "\"created\"" },
+            .{ .status = 200, .body = "", .etag = "\"renewed\"" },
+            .{ .status = 412, .body = "" },
+            .{ .status = 200, .body = "" },
+            .{ .status = 404, .body = "" },
+            .{ .status = 201, .body = "" },
+            .{ .status = 200, .body = "<EnumerationResults><Blobs><Blob><Name>ns/hub/cg/ownership/0</Name><Metadata><ownerid>private-owner</ownerid></Metadata></Blob></Blobs><NextMarker>owner cursor/?</NextMarker></EnumerationResults>" },
+            .{ .status = 200, .body = "<EnumerationResults><Blobs><Blob><Name>ns/hub/cg/ownership/1</Name><Metadata/></Blob></Blobs></EnumerationResults>" },
+            .{ .status = 200, .body = "<EnumerationResults><Blobs><Blob><Name>ns/hub/cg/checkpoint/0</Name><Metadata><sequencenumber>42</sequencenumber><offset>private-offset:2:9</offset></Metadata></Blob></Blobs><NextMarker>checkpoint cursor/?</NextMarker></EnumerationResults>" },
+            .{ .status = 200, .body = "<EnumerationResults><Blobs><Blob><Name>ns/hub/cg/checkpoint/1</Name><Metadata><sequencenumber>43</sequencenumber></Metadata></Blob></Blobs></EnumerationResults>" },
+        });
+        defer scripted.deinit();
+        var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+        const runtime = core.http.HttpRuntime.init(scripted.asTransport(), crypto.asProvider());
+        var probe: CheckpointTracingProbe = .{
+            .transport = &scripted,
+            .statuses = if (enabled) &.{ .unset, .unset, .@"error", .unset, .@"error", .unset, .unset, .unset, .unset, .unset } else &.{},
+        };
+        var provider = try core.tracing.ExportingTracerProvider.init(allocator, std.testing.io, runtime.crypto, &probe.exporter, .{});
+        defer provider.deinit() catch unreachable;
+        {
+            const scope = try allocator.dupe(u8, CheckpointTracingProbe.scope_name);
+            defer allocator.free(scope);
+            const scope_version = try allocator.dupe(u8, CheckpointTracingProbe.scope_version);
+            defer allocator.free(scope_version);
+            const namespace = try allocator.dupe(u8, CheckpointTracingProbe.namespace);
+            defer allocator.free(namespace);
+            const trace_state = try allocator.dupe(u8, CheckpointTracingProbe.trace_state);
+            defer allocator.free(trace_state);
+            {
+                var pipeline = core.http.HttpPipeline.init(runtime, &.{});
+                if (enabled) pipeline.setInstrumentation(.{
+                    .provider = provider.asProvider(),
+                    .scope_name = scope,
+                    .scope_version = scope_version,
+                    .namespace = namespace,
+                    .parent_context = core.tracing.TraceContext.extract(CheckpointTracingProbe.parent_header, trace_state).?,
+                });
+                var container = blobs.BlobContainerClient.init(pipeline, .{
+                    .endpoint = "https://account.blob.core.windows.net",
+                    .container_name = "private-checkpoints",
+                });
+                pipeline.setInstrumentation(null);
+                var implementation = BlobCheckpointStore.init(&container);
+                const store = implementation.asCheckpointStore();
+                var ownership: eventhubs.PartitionOwnership = .{
+                    .fully_qualified_namespace = "ns",
+                    .event_hub_name = "hub",
+                    .consumer_group = "cg",
+                    .partition_id = "0",
+                    .owner_id = "private-owner",
+                };
+                const created = try store.claimOwnership(allocator, &.{ownership});
+                defer eventhubs.freeOwnerships(allocator, created);
+                try testing.expectEqual(@as(usize, 1), created.len);
+                try testing.expectEqualStrings("\"created\"", created[0].etag.?);
+                ownership.etag = created[0].etag;
+                const renewed = try store.claimOwnership(allocator, &.{ownership});
+                defer eventhubs.freeOwnerships(allocator, renewed);
+                try testing.expectEqualStrings("\"renewed\"", renewed[0].etag.?);
+                const lost = try store.claimOwnership(allocator, &.{ownership});
+                defer eventhubs.freeOwnerships(allocator, lost);
+                try testing.expectEqual(@as(usize, 0), lost.len);
+                try testing.expectEqualStrings("*", scripted.requests.items[0].headers.get("If-None-Match").?);
+                try testing.expectEqualStrings("\"created\"", scripted.requests.items[1].headers.get("If-Match").?);
+
+                const checkpoint: eventhubs.Checkpoint = .{
+                    .fully_qualified_namespace = "ns",
+                    .event_hub_name = "hub",
+                    .consumer_group = "cg",
+                    .partition_id = "0",
+                    .offset = "private-offset:2:9",
+                    .sequence_number = 42,
+                };
+                try store.updateCheckpoint(allocator, checkpoint);
+                try store.updateCheckpoint(allocator, checkpoint);
+                for (scripted.requests.items[3..6]) |captured| {
+                    try testing.expectEqualStrings("42", captured.headers.get("x-ms-meta-sequencenumber").?);
+                    try testing.expectEqualStrings("private-offset:2:9", captured.headers.get("x-ms-meta-offset").?);
+                }
+                try testing.expect(std.mem.endsWith(u8, scripted.requests.items[4].url, "?comp=metadata"));
+                try testing.expect(!std.mem.endsWith(u8, scripted.requests.items[5].url, "?comp=metadata"));
+                try testing.expectEqualStrings("BlockBlob", scripted.requests.items[5].headers.get("x-ms-blob-type").?);
+
+                const owners = try store.listOwnership(allocator, "ns", "hub", "cg");
+                defer eventhubs.freeOwnerships(allocator, owners);
+                try testing.expectEqual(@as(usize, 2), owners.len);
+                try testing.expectEqualStrings("private-owner", owners[0].owner_id);
+                try testing.expect(owners[1].isRelinquished());
+                const checkpoints = try store.listCheckpoints(allocator, "ns", "hub", "cg");
+                defer eventhubs.freeCheckpoints(allocator, checkpoints);
+                try testing.expectEqual(@as(usize, 2), checkpoints.len);
+                try testing.expectEqualStrings("private-offset:2:9", checkpoints[0].offset.?);
+                try testing.expectEqual(@as(i64, 43), checkpoints[1].sequence_number.?);
+                for (scripted.requests.items[6..10]) |captured|
+                    try testing.expect(std.mem.indexOf(u8, captured.url, "include=metadata") != null);
+                try testing.expect(std.mem.indexOf(u8, scripted.requests.items[7].url, "marker=owner%20cursor%2F%3F") != null);
+                try testing.expect(std.mem.indexOf(u8, scripted.requests.items[9].url, "marker=checkpoint%20cursor%2F%3F") != null);
+                try testing.expectEqual(@as(usize, 10), scripted.requests.items.len);
+            }
+            // End the borrowers' lifetime before invalidating their configuration.
+            for ([_][]u8{ scope, scope_version, namespace, trace_state }) |bytes| @memset(bytes, 'x');
+        }
+        try probe.checkAndFlush(&provider, enabled);
+    }
+}
+
+const CheckpointFailurePolicy = struct {
+    policy: core.http.HttpPolicy = .{ .processFn = process },
+    fail: bool = false,
+
+    fn process(policy: *core.http.HttpPolicy, request: *core.http.Request, next: []*core.http.HttpPolicy, runtime: core.http.HttpRuntime) !core.http.Response {
+        const self: *CheckpointFailurePolicy = @fieldParentPtr("policy", policy);
+        if (self.fail) return error.CheckpointPolicyFailure;
+        if (next.len == 0) return runtime.transport.send(request);
+        return next[0].process(request, next[1..], runtime);
+    }
+};
+
+test "checkpoint HTTP tracing preserves service failures paging cleanup and pre-dispatch errors" {
+    const allocator = testing.allocator;
+    for ([_]bool{ false, true }) |enabled| {
+        var scripted = ScriptedTransport.init(allocator, &.{
+            .{ .status = 403, .body = "" },
+            .{ .status = 403, .body = "" },
+            .{ .status = 403, .body = "" },
+            .{ .status = 200, .body = "<EnumerationResults><Blobs><Blob><Name>ns/hub/cg/checkpoint/0</Name><Metadata><offset>private-offset</offset></Metadata></Blob></Blobs><NextMarker>next</NextMarker></EnumerationResults>" },
+            .{ .status = 403, .body = "" },
+        });
+        defer scripted.deinit();
+        var crypto = core.crypto.StdCryptoProvider.init(std.testing.io);
+        const runtime = core.http.HttpRuntime.init(scripted.asTransport(), crypto.asProvider());
+        var probe: CheckpointTracingProbe = .{
+            .transport = &scripted,
+            .statuses = if (enabled) &.{ .@"error", .@"error", .@"error", .unset, .@"error", .@"error" } else &.{},
+        };
+        var provider = try core.tracing.ExportingTracerProvider.init(allocator, std.testing.io, runtime.crypto, &probe.exporter, .{});
+        defer provider.deinit() catch unreachable;
+        {
+            var policy = CheckpointFailurePolicy{};
+            var policies = [_]*core.http.HttpPolicy{&policy.policy};
+            var pipeline = core.http.HttpPipeline.init(runtime, &policies);
+            if (enabled) pipeline.setInstrumentation(CheckpointTracingProbe.instrumentation(&provider));
+            var container = blobs.BlobContainerClient.init(pipeline, .{
+                .endpoint = "https://account.blob.core.windows.net",
+                .container_name = "private-checkpoints",
+            });
+            var implementation = BlobCheckpointStore.init(&container);
+            const store = implementation.asCheckpointStore();
+            try testing.expectError(error.ClaimOwnershipFailed, store.claimOwnership(allocator, &.{.{
+                .fully_qualified_namespace = "ns",
+                .event_hub_name = "hub",
+                .consumer_group = "cg",
+                .partition_id = "0",
+                .owner_id = "private-owner",
+            }}));
+            const checkpoint: eventhubs.Checkpoint = .{
+                .fully_qualified_namespace = "ns",
+                .event_hub_name = "hub",
+                .consumer_group = "cg",
+                .partition_id = "0",
+                .sequence_number = 42,
+            };
+            try testing.expectError(error.UpdateCheckpointFailed, store.updateCheckpoint(allocator, checkpoint));
+            try testing.expectError(error.ListBlobsFailed, store.listOwnership(allocator, "ns", "hub", "cg"));
+            try testing.expectError(error.ListBlobsFailed, store.listCheckpoints(allocator, "ns", "hub", "cg"));
+            try testing.expectEqual(@as(usize, 5), scripted.requests.items.len);
+            policy.fail = true;
+            try testing.expectError(error.CheckpointPolicyFailure, store.updateCheckpoint(allocator, checkpoint));
+            try testing.expectEqual(@as(usize, 5), scripted.requests.items.len);
+        }
+        try probe.checkAndFlush(&provider, enabled);
+    }
 }
 
 /// Transport that replays a scripted sequence of responses and records each

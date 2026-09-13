@@ -345,19 +345,19 @@ test "the emulator is reached over plaintext on the AMQP port" {
 
 test "the application id leads the user agent" {
     const allocator = testing.allocator;
-    try testing.expectEqualStrings("0.6.0", sdk_version);
+    try testing.expectEqualStrings("0.7.0", sdk_version);
 
     const with_id = try (ConnectionOptions{ .application_id = "my-app/2.1" }).userAgent(allocator);
     defer allocator.free(with_id);
     try testing.expectEqualStrings(
-        "my-app/2.1 azsdk-zig-eventhubs/0.6.0 (" ++ @tagName(builtin.os.tag) ++ ")",
+        "my-app/2.1 azsdk-zig-eventhubs/0.7.0 (" ++ @tagName(builtin.os.tag) ++ ")",
         with_id,
     );
 
     const without = try (ConnectionOptions{}).userAgent(allocator);
     defer allocator.free(without);
     try testing.expectEqualStrings(
-        "azsdk-zig-eventhubs/0.6.0 (" ++ @tagName(builtin.os.tag) ++ ")",
+        "azsdk-zig-eventhubs/0.7.0 (" ++ @tagName(builtin.os.tag) ++ ")",
         without,
     );
 }
@@ -464,11 +464,11 @@ test "a WebSocket hook is given the namespace URL and its stream opens the conne
 
     const user_agent = propertyValue(open.properties.?, "user-agent").?;
     try testing.expectEqualStrings(
-        "my-app azsdk-zig-eventhubs/0.6.0 (" ++ @tagName(builtin.os.tag) ++ ")",
+        "my-app azsdk-zig-eventhubs/0.7.0 (" ++ @tagName(builtin.os.tag) ++ ")",
         user_agent,
     );
     try testing.expectEqualStrings("azure-sdk-for-zig", propertyValue(open.properties.?, "product").?);
-    try testing.expectEqualStrings("0.6.0", propertyValue(open.properties.?, "version").?);
+    try testing.expectEqualStrings("0.7.0", propertyValue(open.properties.?, "version").?);
 
     // Geo-replication is only reported to a connection that asked for it.
     const capabilities = open.desired_capabilities.?;

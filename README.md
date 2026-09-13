@@ -7,6 +7,34 @@ Azure Event Hubs clients:
 - `Processor`
 - [`checkpoint_store_blob`](checkpoint_store_blob/README.md)
 
+Package version **0.7.0**, release branch `sdk/eventhubs`. This release adopts
+published Core 0.4.0 (`be32073994f37422f2f6b5e9255d208b1284de85`),
+Messaging Common 0.4.0 (`4d305406180f007b80a04040272beb4ca139b970`), and
+Blobs 0.4.0 (`c1b5e19ee4ba6e6dec4e868e6cf5909fac58396d`) with one canonical
+Core identity. The AMQP 0.5.2 pin and protocol APIs are unchanged. The manifest
+remains the source of the package version, user agent, and AMQP open-property
+version.
+
+## Optional checkpoint HTTP tracing
+
+`BlobCheckpointStore` borrows an already configured `BlobContainerClient`.
+Configure optional Core instrumentation on the caller-owned Blob pipeline;
+its explicit scope/version, namespace, and default parent survive checkpoint
+writes, ownership claims, derived blob clients, and all list continuation
+requests. Defaults remain inert, and existing constructors do not change.
+See the [configuration and lifetime example](checkpoint_store_blob/README.md#optional-http-tracing).
+
+This is **Blob checkpoint HTTP tracing**, not AMQP tracing. Event send/receive,
+CBS, and `$management` operations remain AMQP operations without invented HTTP
+spans. Token credentials receive the existing `HttpRuntime` and own any HTTP
+they perform; caller-supplied WebSocket hooks own their handshakes. No tracing
+configuration is added to `HttpRuntime`, and no client starts exporter workers
+or flushes/shuts down a provider.
+
+Production exporters (#456), attempt spans (#457), streaming-lifetime changes
+(#458), and per-call service parent contexts (#465) remain deferred. Checkpoint
+operations use buffered HTTP; Core streaming spans currently end at headers.
+
 ## Connecting
 
 `HubConnection` is the whole transport stack in one value: the dialler, the
