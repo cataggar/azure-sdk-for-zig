@@ -41,7 +41,7 @@ const Credential = auth.Credential;
 const CredentialPolicy = auth.CredentialPolicy;
 const HttpPolicy = core.http.HttpPolicy;
 
-pub const user_agent = "azsdk-zig-devops/" ++ "0.2.0";
+pub const user_agent = "azsdk-zig-devops/" ++ "0.2.1";
 
 pub const ClientOptions = struct {
     /// Azure DevOps organization name, e.g. `contoso` for
