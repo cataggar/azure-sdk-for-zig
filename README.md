@@ -3,8 +3,8 @@
 Azure Blob Storage clients, including `BlobClient`, `BlobContainerClient`, and
 the complete-SAS `SasBlobClient`.
 
-Version: **0.4.0**. Release branch: `sdk/storage_blobs`. The package pins
-published `azure_sdk_core` **0.4.0** and `azure_sdk_storage_common` **0.4.0**,
+Version: **0.4.1**. Release branch: `sdk/storage_blobs`. The package pins
+published `azure_sdk_core` **0.4.1** and `azure_sdk_storage_common` **0.4.1**,
 plus `serde`. `blobs.version` and `blobs.user_agent_prefix` follow the manifest.
 The user-agent prefix is available for a caller-owned `TelemetryPolicy`; clients
 do not add a user-agent policy implicitly.
