@@ -41,7 +41,7 @@ const Credential = auth.Credential;
 const CredentialPolicy = auth.CredentialPolicy;
 const HttpPolicy = core.http.HttpPolicy;
 
-pub const user_agent = "azsdk-zig-devops/" ++ "0.1.0";
+pub const user_agent = "azsdk-zig-devops/" ++ "0.2.0";
 
 pub const ClientOptions = struct {
     /// Azure DevOps organization name, e.g. `contoso` for
@@ -53,6 +53,9 @@ pub const ClientOptions = struct {
     /// HTTP and SDK crypto dependencies. The descriptor is copied by value
     /// while its transport and crypto contexts remain borrowed.
     runtime: core.http.HttpRuntime,
+    /// Optional automatic tracing, copied unchanged to every area and subgroup.
+    /// Provider, scope strings and parent tracestate must outlive all client copies.
+    instrumentation: ?core.tracing.InstrumentationOptions = null,
     /// Borrowed override for every area's own default host. Azure DevOps Server
     /// serves all areas from one collection URL, e.g.
     /// `https://tfs.contoso.com/tfs/DefaultCollection`; Azure DevOps
@@ -67,6 +70,8 @@ pub const ClientOptions = struct {
 /// Runtime and provider descriptors are copied by value. The transport and
 /// crypto backend contexts, credential, organization, endpoint, and scope are
 /// borrowed and must outlive this client and every derived area or operation.
+/// Instrumentation and its provider are borrowed; deinit never flushes or shuts
+/// down the provider. Derived clients must stop using this client's policies first.
 pub const DevOpsClient = struct {
     allocator: std.mem.Allocator,
     organization: []const u8,
@@ -101,6 +106,8 @@ pub const DevOpsClient = struct {
         policy_ptrs[1] = retry_policy.asPolicy();
         policy_ptrs[2] = credential_policy.asPolicy();
 
+        var pipeline = core.http.HttpPipeline.init(options.runtime, policy_ptrs);
+        pipeline.setInstrumentation(options.instrumentation);
         return .{
             .allocator = allocator,
             .organization = options.organization,
@@ -109,7 +116,7 @@ pub const DevOpsClient = struct {
             .telemetry_policy = telemetry_policy,
             .retry_policy = retry_policy,
             .policy_ptrs = policy_ptrs,
-            .pipeline = core.http.HttpPipeline.init(options.runtime, policy_ptrs),
+            .pipeline = pipeline,
         };
     }
 
@@ -128,12 +135,19 @@ pub const DevOpsClient = struct {
     /// directly to reach an area generically, e.g. in a helper that is
     /// itself generic over the area.
     pub fn areaClient(self: *DevOpsClient, comptime Client: type) Client {
-        if (self.endpoint) |endpoint| {
+        if (comptime Client == protocol.notification.NotificationClient) {
+            // Notification's service-prefix endpoint has no generated default.
             return Client.init(self.pipeline, .{
-                .endpoint = endpoint,
+                .endpoint = self.endpoint orelse "https://dev.azure.com",
             });
+        } else {
+            if (self.endpoint) |endpoint| {
+                return Client.init(self.pipeline, .{
+                    .endpoint = endpoint,
+                });
+            }
+            return Client.init(self.pipeline, .{});
         }
-        return Client.init(self.pipeline, .{});
     }
 
     pub fn account(self: *DevOpsClient) protocol.account.AccountClient {
