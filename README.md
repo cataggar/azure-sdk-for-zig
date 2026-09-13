@@ -3,8 +3,8 @@
 Azure App Configuration client exposing `ConfigurationClient`.
 
 Release branch: `sdk/data_appconfiguration`. The package depends on
-`azure_sdk_core` and `serde`. Version 0.3.0 adopts Core 0.4.0 at
-`be32073994f37422f2f6b5e9255d208b1284de85`.
+`azure_sdk_core` and `serde`. Version 0.3.1 pins Core 0.4.1 at
+`2c95f65be96b5ef48a50671de33e9e0926c624cb` without API changes.
 
 `ConfigurationClient` copies a caller-built `core.http.HttpPipeline`. The
 endpoint and API version, the pipeline policy pointers, and the runtime
@@ -32,7 +32,7 @@ var pipeline = core.http.HttpPipeline.init(runtime, &policies);
 pipeline.setInstrumentation(.{
     .provider = tracing_provider,
     .scope_name = "azure_sdk_data_appconfiguration",
-    .scope_version = "0.3.0",
+    .scope_version = "0.3.1",
     .namespace = "Microsoft.AppConfiguration",
 });
 var client = app_configuration.ConfigurationClient.init(endpoint, pipeline, .{});
