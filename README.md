@@ -6,9 +6,9 @@ Shared Azure Storage authentication and SAS primitives:
 - `SasBuilder`
 - complete service-issued SAS helpers
 
-Version: `0.4.0` (`storage_common.version`, derived from the package manifest).
+Version: `0.4.1` (`storage_common.version`, derived from the package manifest).
 Release branch: `sdk/storage_common`. The package pins the published pure-Zig
-`azure_sdk_core` 0.4.0 release.
+`azure_sdk_core` 0.4.1 release.
 
 Cryptographic operations require an explicit `core.crypto.CryptoProvider`.
 Pipeline integrations should pass `runtime.crypto`; there is no implicit
