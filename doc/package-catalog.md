@@ -6,6 +6,7 @@ its source lives at the root of the named branch.
 | Package | Ownership | Main path | Package branch | Internal dependencies |
 | --- | --- | --- | --- | --- |
 | `azure_sdk_core` | Branch | — | [`sdk/core`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/core) | — |
+| `azure_sdk_core_httpx` | Branch | — | [`sdk/core_httpx`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/core_httpx) | `azure_sdk_core` |
 | `azure_sdk_core_symcrypt` | Branch | — | [`sdk/core_symcrypt`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/core_symcrypt) | `azure_sdk_core` |
 | `azure_sdk_amqp` | Branch | — | [`sdk/amqp`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/amqp) | — |
 | `azure_sdk_testing` | Branch | — | [`sdk/testing`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/testing) | `azure_sdk_core` |
@@ -31,10 +32,16 @@ its source lives at the root of the named branch.
 | `azure_sdk_kusto` | Branch | — | [`sdk/kusto`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/kusto) | `azure_sdk_core`, `azure_sdk_storage_common`, `azure_sdk_storage_blobs`, `azure_sdk_storage_queues` |
 | `azure_sdk_devops` | Branch | — | [`sdk/devops`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/devops) | `azure_sdk_core`, `azure_rest_devops` |
 
+`azure_sdk_core_httpx` is registered for sealed branch-native bootstrap and is
+not yet released. Registration does not create its branch or ship a transport.
+The implementation and final HTTPX pin remain subject to review, native
+qualification, and the [sealed onboarding workflow](package-bootstrap.md).
+
 `azure_rest_devops` is the only REST package generated from
 `microsoft/vsts-rest-api-specs` rather than `Azure/azure-rest-api-specs`;
 see `codegen/devops/README.md`. It is one package covering all 44 Azure
 DevOps API areas, with a Zig namespace per area.
 
+`azure_sdk_core_httpx` declares the external `httpx` dependency.
 `azure_sdk_core_symcrypt` pins the external `zig_symcrypt` dependency.
 `azure_sdk_kusto` pins the external `serde` dependency.

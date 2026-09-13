@@ -36,6 +36,11 @@ pub const all = [_]PackageHistory{
         .mappings = current_only.mappings("sdk/core"),
     },
     .{
+        .package = "azure_sdk_core_httpx",
+        .branch = "sdk/core_httpx",
+        .origin = .branch_native,
+    },
+    .{
         .package = "azure_sdk_core_symcrypt",
         .branch = "sdk/core_symcrypt",
         .origin = .branch_native,
@@ -296,10 +301,13 @@ fn validatePath(path: []const u8, allow_empty: bool) !void {
 
 test "history map covers every branch-owned package" {
     try validate(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 25), all.len);
+    try std.testing.expectEqual(@as(usize, 26), all.len);
     try std.testing.expectEqual(@as(usize, 5), rejected_paths.len);
     try std.testing.expect(find("azure_sdk_storage_blobs") != null);
     try std.testing.expect(find("azure_sdk_core") != null);
+    const core_httpx = find("azure_sdk_core_httpx").?;
+    try std.testing.expectEqual(Origin.branch_native, core_httpx.origin);
+    try std.testing.expectEqual(@as(usize, 0), core_httpx.mappings.len);
     const core_symcrypt = find("azure_sdk_core_symcrypt").?;
     try std.testing.expectEqual(Origin.branch_native, core_symcrypt.origin);
     try std.testing.expectEqual(@as(usize, 0), core_symcrypt.mappings.len);
