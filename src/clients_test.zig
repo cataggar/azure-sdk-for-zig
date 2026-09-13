@@ -33,7 +33,7 @@ fn expectPublicMethods(comptime Client: type, comptime methods: []const []const 
     }
 }
 
-const tracing_user_agent = "azsdk-zig-azure_rest_data_tables/0.2.0";
+const tracing_user_agent = "azsdk-zig-azure_rest_data_tables/0.2.1";
 const tracing_parent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
 
 const TraceProbe = struct {
