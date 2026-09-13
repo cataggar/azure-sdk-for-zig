@@ -8,8 +8,8 @@ Azure Files clients:
 - `ShareFileClient`
 
 Release branch: `sdk/storage_files_shares`. The package depends on
-`azure_sdk_core` 0.4.0 at `be32073994f37422f2f6b5e9255d208b1284de85`.
-Version 0.3.0 adopts that Core source/type boundary.
+`azure_sdk_core` 0.4.1 at `2c95f65be96b5ef48a50671de33e9e0926c624cb`.
+Version 0.3.1 updates that Core pin without API changes.
 
 Construct a Core `HttpRuntime` with independently selected HTTP transport and
 crypto providers, place it in an `HttpPipeline`, and pass that pipeline to a
@@ -28,7 +28,7 @@ var pipeline = core.http.HttpPipeline.init(runtime, &.{});
 pipeline.setInstrumentation(.{
     .provider = tracing_provider,
     .scope_name = "azure_sdk_storage_files_shares",
-    .scope_version = "0.3.0",
+    .scope_version = "0.3.1",
     .namespace = "Microsoft.Storage",
 });
 
