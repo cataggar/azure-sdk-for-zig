@@ -162,13 +162,9 @@ pub fn download(
 /// Downloads the blob and writes its bytes to `writer`, returning the number
 /// of bytes written.
 ///
-/// NOTE: this currently buffers the full response body in memory before
-/// writing it out, because the core HTTP transport buffers response bodies
-/// (`transport.Response.body` is a `[]const u8`) and does not yet expose a
-/// streaming reader. The signature is intentionally stable: once core gains a
-/// streaming response API, this can stream to `writer` without changing its
-/// public shape (see the note in `src/clients.zig` about adopting the core
-/// streaming response API).
+/// This helper currently uses buffered `HttpPipeline.send`, even though Core
+/// also exposes a streaming API. The HTTP span ends before writing the buffered
+/// bytes to `writer`; a later writer failure is not part of that completed span.
 pub fn downloadInto(
     blob: *Blob,
     alloc: std.mem.Allocator,

@@ -1,4 +1,6 @@
 const std = @import("std");
+pub const version: []const u8 = @import("build.zig.zon").version;
+pub const user_agent_prefix = "azsdk-zig-storage-blobs/" ++ @import("build.zig.zon").version;
 
 const sas = @import("sas.zig");
 
@@ -74,6 +76,7 @@ pub const SetMetadataResult = container_client.SetMetadataResult;
 pub const DownloadBlobResult = container_client.DownloadBlobResult;
 
 test {
+    _ = @import("tracing_test.zig");
     std.testing.refAllDecls(sas);
     _ = @import("convenience.zig");
     _ = @import("container_client.zig");

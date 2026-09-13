@@ -32,7 +32,8 @@ pub const BlobClient = struct {
 
     /// The pipeline and its runtime descriptors are copied by value. Their
     /// borrowed transport, crypto, policy, and credential contexts must
-    /// outlive this client and every client derived from it.
+    /// outlive this client and every client derived from it. Configured tracing
+    /// providers and metadata are borrowed in the same way, including by pagers.
     pub fn init(
         pipeline: core.http.HttpPipeline,
         options: InitOptions,

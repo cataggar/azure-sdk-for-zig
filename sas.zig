@@ -117,6 +117,7 @@ pub const SasBlobClient = struct {
     allocator: std.mem.Allocator,
     uri: sas.CompleteSasUri,
     runtime: core.http.HttpRuntime,
+    instrumentation: ?core.tracing.InstrumentationOptions = null,
 
     /// The runtime descriptors are copied by value and borrow their backend
     /// contexts. Those contexts must outlive this client and every upload.
@@ -139,6 +140,13 @@ pub const SasBlobClient = struct {
     pub fn deinit(self: *SasBlobClient) void {
         self.uri.deinit();
         self.* = undefined;
+    }
+
+    /// Configures tracing only, preserving the caller's complete Core options.
+    /// Provider and metadata strings are borrowed and must outlive operations.
+    /// Null disables tracing; this client never manages the provider lifecycle.
+    pub fn setInstrumentation(self: *SasBlobClient, options: ?core.tracing.InstrumentationOptions) void {
+        self.instrumentation = options;
     }
 
     /// Renders a query-redacted SAS URL only.
@@ -201,7 +209,7 @@ pub const SasBlobClient = struct {
                     .content_length = block_length,
                 },
             };
-            const outcome = sas.send(self.runtime, &request, streaming_body) catch |err|
+            const outcome = self.sendRequest(&request, streaming_body) catch |err|
                 return localFailureAfterBlocks(err, .put_block, block_index);
             switch (outcome) {
                 .accepted => {},
@@ -231,7 +239,7 @@ pub const SasBlobClient = struct {
         request.setHeader("x-ms-blob-content-type", options.content_type) catch |err|
             return localFailureAfterBlocks(err, .put_block_list, block_index);
         request.body = commit_body;
-        const outcome = sas.send(self.runtime, &request, null) catch |err|
+        const outcome = self.sendRequest(&request, null) catch |err|
             return localFailureAfterBlocks(err, .put_block_list, block_index);
         return mapOutcome(outcome, .put_block_list);
     }
@@ -327,7 +335,7 @@ pub const SasBlobClient = struct {
                 request.setHeader("x-ms-version", storage_api_version) catch |err|
                     return localFailureAfterBlocks(err, .put_block, staged_blocks);
                 request.body = block[0..used];
-                break :blk sas.send(self.runtime, &request, null) catch |err|
+                break :blk self.sendRequest(&request, null) catch |err|
                     return localFailureAfterBlocks(err, .put_block, staged_blocks);
             };
             switch (outcome) {
@@ -359,7 +367,7 @@ pub const SasBlobClient = struct {
         request.setHeader("x-ms-blob-content-type", options.content_type) catch |err|
             return localFailureAfterBlocks(err, .put_block_list, staged_blocks);
         request.body = commit.items;
-        const outcome = sas.send(self.runtime, &request, null) catch |err|
+        const outcome = self.sendRequest(&request, null) catch |err|
             return localFailureAfterBlocks(err, .put_block_list, staged_blocks);
         return mapOutcome(outcome, .put_block_list);
     }
@@ -376,8 +384,7 @@ pub const SasBlobClient = struct {
         try request.setHeader("x-ms-blob-type", "BlockBlob");
         try request.setHeader("x-ms-version", storage_api_version);
         return mapOutcome(
-            try sas.send(
-                self.runtime,
+            try self.sendRequest(
                 &request,
                 .{ .reader = reader, .content_length = size },
             ),
@@ -396,7 +403,17 @@ pub const SasBlobClient = struct {
         try request.setHeader("x-ms-blob-type", "BlockBlob");
         try request.setHeader("x-ms-version", storage_api_version);
         request.body = bytes;
-        return mapOutcome(try sas.send(self.runtime, &request, null), .put_blob);
+        return mapOutcome(try self.sendRequest(&request, null), .put_blob);
+    }
+
+    fn sendRequest(
+        self: *SasBlobClient,
+        request: *core.http.Request,
+        body: ?core.http.StreamingRequestBody,
+    ) !sas.RequestOutcome {
+        return sas.sendWithOptions(self.runtime, request, body, .{
+            .instrumentation = self.instrumentation,
+        });
     }
 };
 
