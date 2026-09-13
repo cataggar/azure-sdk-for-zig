@@ -36,7 +36,7 @@ fn sleepMs(ms: u64) void {
     threaded.io().sleep(.fromNanoseconds(nanoseconds), .awake) catch {};
 }
 
-pub const user_agent = "azsdk-zig-data-tables/0.3.0";
+pub const user_agent = "azsdk-zig-data-tables/0.4.0";
 
 /// Heap-owned policy storage shared by an owning client and its derived
 /// clients. The credential, runtime backend contexts, and caller policy
@@ -167,6 +167,7 @@ pub const PipelineState = struct {
         policy_ptrs[3] = state.authentication.asPolicy();
         @memcpy(policy_ptrs[4..], init_options.policies);
         state.pipeline = .init(runtime, policy_ptrs);
+        state.pipeline.setInstrumentation(init_options.instrumentation);
         return state;
     }
 
@@ -478,13 +479,15 @@ pub const CallContext = struct {
         const custom_start = base_start + base.policies.len;
         @memcpy(policies[custom_start .. custom_start + custom_policies.len], custom_policies);
         policies[policies.len - 1] = sas.asPolicy();
+        var call_pipeline = base;
+        call_pipeline.policies = policies;
         return .{
             .allocator = allocator,
             .config_policy = config,
             .capture_policy = capture,
             .sas_policy = sas,
             .policy_ptrs = policies,
-            .pipeline = .init(base.runtime, policies),
+            .pipeline = call_pipeline,
         };
     }
 
@@ -1025,6 +1028,22 @@ test "stable policy order authenticates every retry and runs caller policies" {
     try std.testing.expectEqual(@as(usize, 1), mock.call_count);
 }
 
+fn expectCredentialFreeTracing(recording_tracer: *core.tracing.RecordingTracer) !void {
+    const span = recording_tracer.last_span.?;
+    try std.testing.expect(span.attributes.get("url.full") == null);
+    try std.testing.expectEqualStrings(
+        "account.table.core.windows.net",
+        span.attributes.get("server.address").?,
+    );
+    var attributes = span.attributes.iterator();
+    while (attributes.next()) |attribute| {
+        for ([_][]const u8{ "sig=", "SECRET", "SharedKeyLite", "account-key", "YWNjb3VudC1rZXk=" }) |secret| {
+            try std.testing.expect(std.mem.indexOf(u8, attribute.key_ptr.*, secret) == null);
+            try std.testing.expect(std.mem.indexOf(u8, attribute.value_ptr.*, secret) == null);
+        }
+    }
+}
+
 test "core logging and tracing never observe SAS while retries send exact opaque bytes" {
     const allocator = std.testing.allocator;
     var transport = core.http.SequenceMockTransport.init(allocator, &.{
@@ -1068,10 +1087,7 @@ test "core logging and tracing never observe SAS while retries send exact opaque
     try std.testing.expectEqualStrings(exact_sas_url, transport.capturedUrl(1));
     try std.testing.expectEqualStrings(clean_url, request.url);
     try std.testing.expectEqual(core.http.RedirectPolicy.follow, request.redirect_policy);
-    const observed_url = recording_tracer.last_span.?.attributes.get("url.full").?;
-    try std.testing.expectEqualStrings(clean_url, observed_url);
-    try std.testing.expect(std.mem.indexOf(u8, observed_url, "sig=") == null);
-    try std.testing.expect(std.mem.indexOf(u8, observed_url, "SECRET") == null);
+    try expectCredentialFreeTracing(&recording_tracer);
 }
 
 test "SAS transport errors restore the credential-free URL and redirect policy" {
@@ -1117,9 +1133,7 @@ test "SAS transport errors restore the credential-free URL and redirect policy" 
     try std.testing.expect(transport.saw_redirects_disabled);
     try std.testing.expectEqualStrings(clean_url, request.url);
     try std.testing.expectEqual(core.http.RedirectPolicy.follow, request.redirect_policy);
-    const observed_url = recording_tracer.last_span.?.attributes.get("url.full").?;
-    try std.testing.expectEqualStrings(clean_url, observed_url);
-    try std.testing.expect(std.mem.indexOf(u8, observed_url, "SECRET") == null);
+    try expectCredentialFreeTracing(&recording_tracer);
 }
 
 test "SAS URL allocation errors leave the request untouched" {
@@ -1182,10 +1196,7 @@ test "Shared Key core observability records no credential material in URLs" {
     defer response.deinit();
 
     try std.testing.expect(transport.last_headers.get("Authorization") != null);
-    const observed_url = recording_tracer.last_span.?.attributes.get("url.full").?;
-    try std.testing.expectEqualStrings(clean_url, observed_url);
-    try std.testing.expect(std.mem.indexOf(u8, observed_url, "SharedKeyLite") == null);
-    try std.testing.expect(std.mem.indexOf(u8, observed_url, "account-key") == null);
+    try expectCredentialFreeTracing(&recording_tracer);
 }
 
 test "Shared Key policy retains an owned API version across caller mutation and policy moves" {

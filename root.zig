@@ -112,6 +112,7 @@ pub const unwrapCreateEntity = responses.unwrapCreateEntity;
 
 test {
     _ = @import("construction_test.zig");
+    _ = @import("tracing_test.zig");
     _ = auth;
     _ = client;
     _ = connection_string;
