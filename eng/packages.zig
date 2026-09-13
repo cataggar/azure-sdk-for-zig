@@ -355,6 +355,7 @@ pub const all = [_]Package{
             "build.zig.zon",
             "root.zig",
             "sas.zig",
+            "tracing_test.zig",
             "examples",
             "README.md",
             "LICENSE.txt",
