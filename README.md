@@ -19,20 +19,23 @@ behavior. The selected TypeSpec has no `$batch` operation.
 
 ## Core 0.4 and optional tracing
 
-Package **0.2.0** pins the published **Core 0.4.0** release by commit and hash.
+Package **0.2.1** pins the published **Core 0.4.1** release by commit and hash.
+This patch updates the Core dependency only; public APIs and tracing behavior
+are unchanged.
+
 Constructors copy the caller's complete `core.http.HttpPipeline`, including
 optional instrumentation, into both `table()` and `service()` clients. No
 provider option is added to generated constructors and tracing remains off by
 default. Configure the caller's pipeline before constructing clients:
 
 ```zig
-var telemetry = core.http.TelemetryPolicy.init("azsdk-zig-azure_rest_data_tables/0.2.0");
+var telemetry = core.http.TelemetryPolicy.init("azsdk-zig-azure_rest_data_tables/0.2.1");
 var policies = [_]*core.http.HttpPolicy{telemetry.asPolicy()};
 var pipeline = core.http.HttpPipeline.init(runtime, &policies);
 pipeline.setInstrumentation(.{
     .provider = provider.asProvider(),
     .scope_name = "azure_rest_data_tables",
-    .scope_version = "0.2.0",
+    .scope_version = "0.2.1",
     .namespace = "Microsoft.Storage",
 });
 var client = TablesClient.init(pipeline, .{ .endpoint = endpoint });
