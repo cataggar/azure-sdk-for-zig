@@ -3,7 +3,7 @@
 Azure Attestation client exposing `AttestationClient`.
 
 Release branch: `sdk/attestation`. The package depends on
-`azure_sdk_core` and `serde`. Version `0.3.0` adds opt-in tracing with Core `0.4.0`.
+`azure_sdk_core` and `serde`. Version `0.3.1` pins Core `0.4.1` without API changes.
 
 Construct clients with Core's canonical HTTP runtime:
 
@@ -32,8 +32,8 @@ provider failures propagate without falling back to `std.crypto` or sending a
 request.
 
 Core is pinned to commit
-`be32073994f37422f2f6b5e9255d208b1284de85` with package hash
-`azure_sdk_core-0.4.0-eFY0EufqCgD3plkaubfUTeY5Jvr__1k0noWHdQjBVAdX`.
+`2c95f65be96b5ef48a50671de33e9e0926c624cb` with package hash
+`azure_sdk_core-0.4.1-eFY0EpbrCgAKh2uJJ-DguKP7zx8Ywuf1UdP7HkJ_9CmI`.
 
 ## Opt-in tracing
 
@@ -49,7 +49,7 @@ var client = try attestation.AttestationClient.init(
         .instrumentation = .{
             .provider = provider.asProvider(),
             .scope_name = "azure_sdk_attestation",
-            .scope_version = "0.3.0",
+            .scope_version = "0.3.1",
             .namespace = "Microsoft.Attestation",
             .parent_context = parent, // Optional core.tracing.TraceContext.
         },
@@ -68,7 +68,7 @@ addresses, with their resources alive, until all clients and operations finish.
 Nonstatic scope/version/namespace strings and parent tracestate are borrowed
 for that lifetime too. Clients never drain, flush, shut down or deinitialize
 providers. The application explicitly calls Core
-[`ExportingTracerProvider`](https://github.com/cataggar/azure-sdk-for-zig/blob/azure_sdk_core/v0.4.0/tracing/README.md)
+[`ExportingTracerProvider`](https://github.com/cataggar/azure-sdk-for-zig/blob/azure_sdk_core/v0.4.1/tracing/README.md)
 `drain(timeout_ms)`, `forceFlush(timeout_ms)` and `shutdown(timeout_ms)` as
 appropriate; there is no hidden worker or network exporter. Core streaming
 spans end at response headers, not after body consumption; SDK result parsing
