@@ -44,7 +44,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run offline adapter and published Core transport conformance");
     test_step.dependOn(&b.addRunArtifact(tests).step);
 
-    if (b.option(bool, "paired-tls", "Enable qualification requiring the canonical paired TLS API") orelse false) {
+    if (b.option(bool, "paired-tls", "Require the paired API and run standard TLS plus trusted HTTPS contracts") orelse false) {
         const certificates = b.createModule(.{
             .root_source_file = httpx.path("src/tls/trust_fixtures.zig"),
             .target = b.graph.host,
@@ -82,9 +82,10 @@ pub fn build(b: *std.Build) void {
             .filters = if (test_filter) |filter| &.{filter} else &.{},
         });
         b.default_step.dependOn(&paired_tests.step);
-        test_step.dependOn(&b.addRunArtifact(paired_tests).step);
-        const paired_step = b.step("paired-tls-test", "Run hermetic standard-provider TLS qualification through the SDK");
-        paired_step.dependOn(&b.addRunArtifact(paired_tests).step);
+        const run_paired = b.addRunArtifact(paired_tests);
+        test_step.dependOn(&run_paired.step);
+        const paired_step = b.step("paired-tls-test", "Run standard-provider TLS and trusted HTTPS Core conformance");
+        paired_step.dependOn(&run_paired.step);
         const probe = b.addExecutable(.{
             .name = "azure-httpx-public-https",
             .root_module = b.createModule(.{

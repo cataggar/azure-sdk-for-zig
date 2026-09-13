@@ -191,9 +191,26 @@ redirect capability. The opt-in trusted factory below serves actual TLS and
 exposes two currently failing shared gates. Interruption evidence is separately
 obtained from real H2/SOCKS5 loopback connections, not these wire mocks.
 
-CI retains the three fixed `package-test (<os>)` contexts. There are no default
-live Azure, credential, public-CA or native-provider checks. Windows currently
-uses HTTPX's system Winsock ABI; no C/crypto library dependency is added.
+CI retains the three fixed `package-test (<os>)` contexts. Every context
+explicitly runs `zig build test -Dpaired-tls=true` in Debug and ReleaseSafe,
+including the shared/plain-HTTP suite, the 60-case standard TLS matrix, and the
+new trusted-HTTPS contracts. There is no legacy-only fallback or success
+override. The current `ed0` portable development pin does not support this mode:
+the coordinator must install the qualified paired release pin before CI
+acceptance/publication. The existing shared-gate blockers below remain real
+failures until resolved.
+
+The workflow executes both optimization modes even if the first fails, then
+returns a failing status if either failed. Local validation executed the exact
+workflow shell block with transient immutable `95b916c` input: both modes ran
+all 36 tests, with the same four documented failures and final exit status 1.
+The untouched `ed0` pin instead failed paired-mode setup because its canonical
+test certificate module is absent; it did not silently pass the 24-test suite.
+The portable CI change restores that original manifest and changes no pins.
+
+The public Azure probe remains a separate manual build step. CI adds no live
+Azure, credential, public-CA or native-provider checks. Windows currently uses
+HTTPX's system Winsock ABI; no C/crypto library dependency is added.
 
 The earlier reviewed source checkpoint had 21 passing tests on aarch64 Linux
 and compile-only checks for x86_64 Windows GNU and aarch64 macOS. The WASI build
@@ -332,8 +349,9 @@ generator in a separate std-only build executable, emitting public test bytes
 into the local build cache. It neither copies the trust/conformance frameworks
 nor compiles another HTTPX TLS/provider ABI. The test and adapter import the
 same canonical HTTPX module. `zig build -Dpaired-tls=true` also compile-checks
-these optional tests. The three fixed CI contexts are unchanged; paired tests
-require the coordinator's paired dependency selection before CI enables them.
+these optional tests. The three fixed CI context names are unchanged; their
+commands now require paired tests explicitly, and therefore require the
+coordinator's qualified paired dependency selection to pass.
 The paired adapter/tests also cross-compiled for x86_64 Windows GNU. The
 aarch64 macOS check on Linux was **blocked** by missing `Security` and
 `CoreFoundation` frameworks required by the candidate's canonical platform

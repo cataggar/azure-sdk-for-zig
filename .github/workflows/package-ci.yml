@@ -32,6 +32,13 @@ jobs:
       - name: Check formatting
         shell: bash
         run: git ls-files -z -- '*.zig' 'build.zig.zon' | xargs -0 zig fmt --check
-      - name: Run package tests
+      # Requires the qualified paired HTTPX release pin. Never fall back to the
+      # legacy-only suite; the public Azure HTTPS probe remains manual.
+      - name: Run shared, paired standard TLS and trusted HTTPS tests
         shell: bash
-        run: zig build test --cache-dir .zig-cache/local --global-cache-dir .zig-cache/global --summary all
+        run: |
+          status=0
+          for mode in Debug ReleaseSafe; do
+            zig build test -Dpaired-tls=true -Doptimize="$mode" -j2 --cache-dir .zig-cache/local --global-cache-dir .zig-cache/global --summary all || status=1
+          done
+          exit "$status"
