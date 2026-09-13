@@ -338,10 +338,65 @@ property 104 handling is not qualified here. Header-only compilation is not
 native execution evidence.
 
 No manifest publication paths are added: existing `conformance` contains the
-new harness. Once final pins are selected, native CI should run
-`tls-paired-check` and `tls-interop-check` alongside existing unit and archive
-consumer checks, with OpenSSL 3.5 available. SDK transport coverage additionally
-needs its reviewed source/package mapped to the same module instances.
+harness and its release-input checker. `.github/scripts` contains checkout-only
+CI tooling, not an SDK runtime dependency.
+
+### Native CI release gates
+
+`package-ci.yml` preserves the three fixed `package-test` contexts and the two
+Arm64 architecture jobs. Once release inputs are supplied, its required matrix is:
+
+| Target | Runner | Required execution |
+| --- | --- | --- |
+| `x86_64-linux-gnu` | `ubuntu-24.04` | Dynamic/static, Debug/ReleaseSafe |
+| `aarch64-linux-gnu` | `ubuntu-24.04-arm` | Dynamic/static, Debug/ReleaseSafe |
+| `x86_64-windows-msvc` | `windows-2025` | Dynamic/static, Debug/ReleaseSafe |
+| `aarch64-windows-msvc` | `windows-11-vs2026-arm` | Dynamic/static, Debug/ReleaseSafe |
+| macOS | `macos-latest` | Source/package checks and explicit unsupported-native diagnostic only |
+
+Every native combination runs `test tls-test tls-paired-check tls-interop-check`.
+SDK transport coverage is mandatory in CI through `httpx_adapter_source`, using
+the exact same Core and HTTPX module instances. Existing provenance, header,
+verified Windows DLL staging, example execution and archive-consumer compilation
+remain in place. Consumer compilation is not consumer execution. No native
+target is silently downgraded to build-only or omitted when prerequisites fail;
+Windows Arm64's existing Zig-host emulation does not change the native test target.
+
+`SDK_HTTPX_CONFORMANCE_REF` is deliberately empty until a reviewed SDK-adapter
+release exists. Native jobs **fail**, rather than report a skipped conformance
+success, until it is replaced with the full immutable commit. CI checks the
+exact clean checkout, a lightweight `azure_sdk_core_httpx/v*` release tag, and
+identical immutable Core/HTTPX URLs and hashes in both manifests. This source
+checkout introduces no runtime package cycle. The parent release change must
+also select the final qualified HTTPX release shared with the SDK adapter;
+draft HTTPX `95b916c` and local SDK candidate `1167939` are not final release
+inputs. Dependency coherence alone does not approve a release or qualify
+Windows trust metadata.
+
+Native jobs build the independent **CLI test reference** from
+[OpenSSL 3.5.5's official archive](https://github.com/openssl/openssl/releases/download/openssl-3.5.5/openssl-3.5.5.tar.gz),
+requiring SHA-256
+`b28c91532a8b65a1f983b4c28b7488174e4a01008e29ce8e69bd789f28bc2a89`.
+The helper requires Python 3.12+, a complete Perl distribution with its standard
+modules, and Make/a C compiler on Linux or the matching native MSVC/nmake
+environment on Windows. Missing tools, download/hash/version failures, or
+non-runnable targets fail the job. It uses `no-shared no-tests no-asm no-module`,
+checks executable/library version, and writes and logs source/configuration/
+executable-digest provenance in `.openssl-reference/provenance.json`.
+The generated minimal `OPENSSL_CONF` applies only to the disposable test peer.
+OpenSSL is neither linked into the SDK nor a fallback provider or a FIPS
+qualification claim.
+
+Local CI-helper validation built that exact CLI on Linux Arm64 and ran both
+conformance targets with dynamic SymCrypt in Debug against frozen HTTPX
+`95b916c77573e70a63c73218ce5b4b371b3868eb` and SDK adapter
+`1167939aa087b5a02df1ec30967e5f1b6d33f992`: 140 paired connection scenarios,
+42 native plus 42 standard authenticated OpenSSL sessions, and 212 negatives.
+The three input-guard tests and source/package checks also passed; the actual
+candidate manifests correctly fail the unresolved HTTPX-identity gate.
+This CI-helper run does not replace the earlier four-way native results or
+claim Linux x64/Windows reference-build or native execution. Those remote
+matrix runs and final reviewed release pins remain publication gates.
 
 This binding and its algorithm list make no FIPS-validation claim. In
 particular, availability of ChaCha20-Poly1305 or a successful native integrity

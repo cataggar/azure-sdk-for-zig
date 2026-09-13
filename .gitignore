@@ -7,3 +7,5 @@ zig-pkg/
 .symcrypt-ci-source/
 .zig-symcrypt-ci/
 .zig-verified-runs/
+.openssl-reference/
+.sdk-httpx-conformance/
