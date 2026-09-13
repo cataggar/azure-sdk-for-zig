@@ -44,8 +44,9 @@ DevOps API areas, with a Zig namespace per area.
 
 `azure_sdk_core_httpx` declares the external `httpx` dependency.
 `azure_sdk_core_symcrypt` pins the external `zig_symcrypt` dependency.
-Its forthcoming optional TLS adapter also declares a lazy `httpx` dependency;
-the published 0.2.0 package remains SDK-crypto-only. The registered `tls` and
-HTTPX qualification paths prepare those branch-owned releases without adding
-package source to Main.
+Its forthcoming optional TLS adapter will add a lazy `httpx` dependency and a
+`tls` publication path when the reviewed package branch advances. Until then,
+the registry must match the published SDK-crypto-only 0.2.0 package so existing
+release verification continues to work. The HTTPX qualification paths prepare
+the unreleased transport package without adding package source to Main.
 `azure_sdk_kusto` pins the external `serde` dependency.
