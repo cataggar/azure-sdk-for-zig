@@ -15,7 +15,7 @@ const parent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
 const trace_state = "vendor=fixture";
 const service_name = "zig-appconfiguration-collector-fixture";
 const scope_name = "azure_sdk_data_appconfiguration";
-const scope_version = "0.3.0";
+const scope_version = "0.3.1";
 const namespace = "Microsoft.AppConfiguration";
 const endpoint = "https://appconfig.fixture.invalid:8443";
 const start_time = "1700000000000000000";
@@ -51,7 +51,7 @@ fn deterministicRandom(_: *anyopaque, bytes: []u8) !void {
 }
 
 pub fn capture(allocator: std.mem.Allocator, io: std.Io) !Capture {
-    try strings("0.4.0", core.version);
+    try strings("0.4.1", core.version);
     var result: Capture = .{};
     var transport = core.http.MockTransport.init(allocator, 200,
         \\{"key":"fixture-private-key","value":"mock-value-not-telemetry","label":"fixture-private-label"}

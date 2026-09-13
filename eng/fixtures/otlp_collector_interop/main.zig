@@ -31,7 +31,7 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print(
             "Collector accepted 1 matching client span; rejected spans: 0\n" ++
                 "traceparent: {s}\n" ++
-                "Verified resource, scope 0.3.0, parent, tracestate, flags, timestamps, GET/200 and safe HTTP attributes.\n",
+                "Verified resource, scope 0.3.1, parent, tracestate, flags, timestamps, GET/200 and safe HTTP attributes.\n",
             .{contents[1]},
         );
         return;
