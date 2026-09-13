@@ -11,8 +11,8 @@ One independently versioned Key Vault package with four namespaces:
 
 - Source: `sdk/keyvault`
 - Release branch: `sdk/keyvault`
-- Current version: `0.3.0`
-- Dependencies: `azure_sdk_core` `0.4.0` and `serde`
+- Current version: `0.3.1`
+- Dependencies: `azure_sdk_core` `0.4.1` and `serde`
 
 All clients require an explicit `core.http.HttpRuntime`, so applications select
 the HTTP transport and SDK crypto provider independently:
@@ -67,7 +67,7 @@ var client = try keyvault.secrets.SecretClient.init(
     .{ .instrumentation = .{
         .provider = provider.asProvider(),
         .scope_name = "azure_sdk_keyvault",
-        .scope_version = "0.3.0",
+        .scope_version = "0.3.1",
         .namespace = "Microsoft.KeyVault",
         .parent_context = parent, // Optional core.tracing.TraceContext.
     } },
@@ -90,7 +90,7 @@ and default-parent tracestate alive until every client, borrowed descendant,
 pager and operation has finished. Deinitialize derived clients/pagers before
 their owning client. Clients never drain, flush, shut down or deinitialize
 providers. For Core's
-[`ExportingTracerProvider`](https://github.com/cataggar/azure-sdk-for-zig/blob/azure_sdk_core/v0.4.0/tracing/README.md),
+[`ExportingTracerProvider`](https://github.com/cataggar/azure-sdk-for-zig/blob/azure_sdk_core/v0.4.1/tracing/README.md),
 the application explicitly calls bounded `drain(timeout_ms)`,
 `forceFlush(timeout_ms)` and `shutdown(timeout_ms)` as appropriate; there is no
 hidden worker or network exporter. Core streaming spans end at response headers,
