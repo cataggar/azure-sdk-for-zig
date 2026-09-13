@@ -328,6 +328,8 @@ pub const all = [_]Package{
             "sas.zig",
             "convenience.zig",
             "container_client.zig",
+            "tracing_test.zig",
+            "testdata",
             "src",
             "examples",
             "README.md",
