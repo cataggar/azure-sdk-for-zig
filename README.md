@@ -17,13 +17,16 @@ package hashes:
 | `httpx` | `ed0e91f7a5d110151d9876bf2e172ead78729475` | Canonical operation API development input; not a qualified final release |
 
 HTTPX comes from **`cataggar/httpx.zig`**. The portable development manifest has
-no local dependency paths. The isolated qualification worktree additionally
-uses a clearly marked, **unpublishable** local override for exact candidate
+no local dependency paths. Earlier isolated qualification used a clearly
+marked, **unpublishable** local override for exact candidate
 `ff720540b759dbf28c15eea385b2a6598e04f201`. Its computed source hash is
 `httpx-0.1.9-8qj2egVUMQCgd4IR8e6ja3QqjWj_R5IzqG21IB8wNMBS`.
 This candidate is not a released/final HTTPX dependency. Neither its local path
 nor an invented release pin may be published. The coordinator must supply the
 reviewed, qualified immutable release URL and hash. Core 0.4.0 is already final.
+The combined corrected-input qualification below uses normal immutable URLs
+and independently verified hashes in a separate development-selector commit;
+it does not change this portable manifest or approve final publication pins.
 
 ## Integration
 
@@ -188,8 +191,9 @@ trailers and H1/H2 loopback reuse/abort.
 Synthetic wire mocks exercise credential stripping and attempt counts, **not
 trusted HTTPS**. The default plain-HTTP factory does not claim trusted-HTTPS
 redirect capability. The opt-in trusted factory below serves actual TLS and
-exposes two currently failing shared gates. Interruption evidence is separately
-obtained from real H2/SOCKS5 loopback connections, not these wire mocks.
+passes both formerly blocked shared gates with the exact corrected inputs
+documented below. Interruption evidence is separately obtained from real
+H2/SOCKS5 loopback connections, not these wire mocks.
 
 CI retains the three fixed `package-test (<os>)` contexts. Every context
 explicitly runs `zig build test -Dpaired-tls=true` in Debug and ReleaseSafe,
@@ -198,7 +202,7 @@ new trusted-HTTPS contracts. There is no legacy-only fallback or success
 override. The current `ed0` portable development pin does not support this mode:
 the coordinator must install the qualified paired release pin before CI
 acceptance/publication. The existing shared-gate blockers below remain real
-failures until resolved.
+failures on the historical inputs, not on the corrected-input qualification.
 
 The workflow executes both optimization modes even if the first fails, then
 returns a failing status if either failed. Local validation executed the exact
@@ -316,14 +320,14 @@ authorize a different selected TLS provider.
 With the exact paired dependency selected, run:
 
 ```sh
-zig build test -Dpaired-tls=true -j2 --cache-dir .zig-cache/local --global-cache-dir .zig-cache/global --summary all
+zig build test -Dpaired-tls=true -Doptimize=Debug -j2 --cache-dir .zig-cache/local --global-cache-dir .zig-cache/global --summary all
 zig build test -Dpaired-tls=true -Doptimize=ReleaseSafe -j2 --cache-dir .zig-cache/local --global-cache-dir .zig-cache/global --summary all
 ```
 
 At portable checkpoint `1167939aa`, both commands passed **26/26 tests on
 aarch64 Linux, Zig 0.16.0**: the existing 24 adapter/shared-Core tests plus two
 TLS matrix tests containing 60 cases. The extended trusted-factory gates below
-are additional checks, and currently fail rather than silently skipping:
+are additional checks; the original matrix consists of:
 
 * 48 cases: TLS 1.2/1.3 × H1/H2 × 12 provider/trust cases. These exercise
   buffered send and partial-read/finish reuse, a real three-certificate path,
@@ -389,7 +393,7 @@ negotiated TLS version; this public result does not assert one. This single
 standard-backend endpoint observation is not the native/platform/public-H2
 qualification matrix.
 
-## Trusted HTTPS shared factory — implemented, shared gates blocked
+## Trusted HTTPS shared factory — corrected-input qualification
 
 `https_fixture.Owner.create(allocator, io, options)` creates stable, test-owned
 standard-provider, typed certificate adapter, `roots.bind` binding, private
@@ -422,7 +426,47 @@ thread before destroying TLS/provider/trust storage. A separate test verifies
 idle and incomplete-handshake shutdown within 1 s. That is fixture cleanup,
 **not** a new SDK blocked-TLS interruption capability.
 
-### Actual results against frozen HTTPX `95b916c`
+### Combined corrected-input results
+
+Unchanged reviewed portable source
+`b24e2270ec0d2d1d0b796356b1c68481d10676db` was qualified in a new isolated
+worktree with selector-only commit
+`55d933f3ab707b13b6f74a0c831c35cf4aa45620`. Both dependencies resolved normally
+from their full immutable URLs; no local package paths or duplicate modules
+were used:
+
+| Input | Immutable URL | Independently verified Zig hash |
+| --- | --- | --- |
+| Core 0.4.1 merged input | `git+https://github.com/cataggar/azure-sdk-for-zig.git#2c95f65be96b5ef48a50671de33e9e0926c624cb` | `azure_sdk_core-0.4.1-eFY0EpbrCgAKh2uJJ-DguKP7zx8Ywuf1UdP7HkJ_9CmI` |
+| HTTPX development input | `git+https://github.com/cataggar/httpx.zig#80e2cbb6976d65a0349976ab82301b1eb9c27b51` | `httpx-0.1.9-8qj2evcNMgBRYXXcklYYayJOyJmP51lzXn0xylUhlicH` |
+
+The full paired commands above each passed **36/36 tests, 8/8 build steps,
+exit status 0** on aarch64 Linux with Zig 0.16.0, in **Debug and ReleaseSafe**.
+Each mode ran once, without retries or filters. Formatting also passed.
+No adapter, fixture, build, workflow or shared-conformance source was changed.
+
+Both complete shared pipeline and raw-transport suites now pass for TLS 1.2
+and TLS 1.3; no further failure appeared after the earlier Host/EOF assertions.
+Each pipeline suite asserts 22 actual requests, TLS handshakes and canonical
+verifications, zero rejected verifications/live backends, and one custom
+anchor. Core still regenerates Host on every followed redirect while retaining
+the original caller request; same-origin credential preservation, cross-origin
+stripping and Azure-owned retry/redirect counts remain covered.
+
+The original 60 provider/trust/cleanup cases, all five backend allocation
+scenarios, and both 33,554,689-byte upload/download checks within the
+2,097,152-byte adapter budget also pass. The existing ten SOCKS5/H2 interruption
+pairs remain Linux-scoped: token latency 11 ms, deadline latency 1–2 ms,
+`transport_started = true`, one observed close and zero live/leased operations.
+No new blocked-TLS or native-platform interruption claim follows.
+
+These are development qualification inputs, not final publication pins.
+Core's 0.4.1 tag was pending coordinator-controlled exact-tip CI at this run;
+HTTPX remained a draft, unreleased candidate with native-policy gates pending.
+No live Azure probe, Windows/macOS runtime check, native-provider qualification
+or OS trust-store mutation was performed for this combined run.
+
+### Historical results against Core `be320739` and HTTPX `95b916c`
 
 With the separate unpublished development selector for
 `95b916c77573e70a63c73218ce5b4b371b3868eb`
@@ -444,8 +488,9 @@ With the separate unpublished development selector for
   any destination HTTP request is sent, retains `transport_started`, and
   releases both backends. No certificate-verification bypass is involved.
 
-**Four tests remain failing: two underlying shared gates × TLS 1.2/1.3.**
-They are neither skipped nor converted into expected-success tests:
+**This historical pair failed four tests: two underlying shared gates ×
+TLS 1.2/1.3.** These failures were retained, not skipped or converted into
+expected-success tests:
 
 1. **Released Core 0.4 contradicts its shared same-origin Host assertion.**
    `http/transport.zig:isRedirectOmittedHeader` (lines 656–658 at released
@@ -466,26 +511,29 @@ They are neither skipped nor converted into expected-success tests:
    alert in the SDK would mishandle other framing/close-delimited responses;
    HTTPX must interpret clean TLS EOF at its HTTP framing boundary.
 
-The complete extended run currently reports **32/36 passing, four failing**.
-These failures are blockers, not a claim of complete shared HTTPS conformance.
-No final release pin is available. Reproduce with the ordinary commands above;
-target only these cases using `-Dtest-filter='trusted HTTPS'`. Source and
-development selector are delivered as separate commits. The only new
-publication path is `https_fixture.zig` (13 total); CI contexts are unchanged.
+The historical extended run reported **32/36 passing, four failing**.
+Core's corrected shared Host assertion and HTTPX's authenticated clean-close
+HTTP framing fix clear those failures together in the exact-input run above;
+no SDK error relabeling or production Host policy change was needed.
+No final release pin is approved here. Reproduce either input pair with the
+ordinary commands above; target only the trusted cases using
+`-Dtest-filter='trusted HTTPS'`. Portable source/documentation and development
+selectors remain separate commits. The fixture added only `https_fixture.zig`
+to publication paths (13 total); this documentation correction adds none.
 
 ## Publication gates still open
 
-* Coordinator acceptance of the paired upstream API/composition review,
-  qualified HTTPX release, and final immutable dependency URL/hash.
+* Coordinator release approval for corrected Core and HTTPX inputs, including
+  the qualified HTTPX release and final immutable dependency URLs/hashes.
 * Parent-controlled native selected-provider and remaining public-CA Azure
   HTTPS matrix with verification enabled. The standard Linux observation
   above does not qualify SymCrypt or another native provider.
 * Native Windows/macOS runtime results; cross-compilation alone is not runtime
   qualification. No native interruption capability is inferred.
-* Resolution of the released Core same-origin Host assertion conflict and
-  HTTPX clean-TLS-EOF framing behavior above. The new real-HTTPS factory and
-  its deliberately unmodified shared gates do not bypass either blocker.
-* Review of adapter changes, ordinary implementation merge, then tags/releases.
+* Installation of those coherent pins and successful execution of all three
+  fixed package CI contexts, including the mandatory paired/trusted suites.
+  The portable `ed0` selector still cannot satisfy those suites.
+* Coordinator acceptance, ordinary implementation merge, then tags/releases.
   Package registration/history/catalog and sealed bootstrap are already
   coordinator-completed, not work to repeat here.
 
