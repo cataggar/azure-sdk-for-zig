@@ -8,13 +8,13 @@ bootstrap. The adapter implementation remains draft and unreleased.
 
 ## Development dependencies
 
-The portable source checkpoint uses these immutable commits and actual Zig
+The combined source checkpoint uses these immutable commits and actual Zig
 package hashes:
 
 | Package | Commit | Status |
 | --- | --- | --- |
-| `azure_sdk_core` | `be32073994f37422f2f6b5e9255d208b1284de85` | Published Core 0.4.0 |
-| `httpx` | `ed0e91f7a5d110151d9876bf2e172ead78729475` | Canonical operation API development input; not a qualified final release |
+| `azure_sdk_core` | `2c95f65be96b5ef48a50671de33e9e0926c624cb` | Published Core 0.4.1 |
+| `httpx` | `80e2cbb6976d65a0349976ab82301b1eb9c27b51` | Paired development input qualified below; not a final release |
 
 HTTPX comes from **`cataggar/httpx.zig`**. The portable development manifest has
 no local dependency paths. Earlier isolated qualification used a clearly
@@ -23,10 +23,11 @@ marked, **unpublishable** local override for exact candidate
 `httpx-0.1.9-8qj2egVUMQCgd4IR8e6ja3QqjWj_R5IzqG21IB8wNMBS`.
 This candidate is not a released/final HTTPX dependency. Neither its local path
 nor an invented release pin may be published. The coordinator must supply the
-reviewed, qualified immutable release URL and hash. Core 0.4.0 is already final.
+reviewed, qualified immutable release URL and hash. Core 0.4.1 is released.
 The combined corrected-input qualification below uses normal immutable URLs
-and independently verified hashes in a separate development-selector commit;
-it does not change this portable manifest or approve final publication pins.
+and independently verified hashes in a separate development-selector commit.
+This checkpoint selects the same pair for the required three-platform CI;
+the HTTPX pin remains a development input, not an approved publication pin.
 
 ## Integration
 
@@ -199,9 +200,10 @@ CI retains the three fixed `package-test (<os>)` contexts. Every context
 explicitly runs `zig build test -Dpaired-tls=true` in Debug and ReleaseSafe,
 including the shared/plain-HTTP suite, the 60-case standard TLS matrix, and the
 new trusted-HTTPS contracts. There is no legacy-only fallback or success
-override. The current `ed0` portable development pin does not support this mode:
-the coordinator must install the qualified paired release pin before CI
-acceptance/publication. The existing shared-gate blockers below remain real
+override. The current `80e2` development pin supports this mode, but all three
+contexts must pass on this combined source before platform acceptance. A
+qualified HTTPX release pin is still required before publication. The shared
+gate blockers below remain real
 failures on the historical inputs, not on the corrected-input qualification.
 
 The workflow executes both optimization modes even if the first fails, then
@@ -460,9 +462,8 @@ pairs remain Linux-scoped: token latency 11 ms, deadline latency 1–2 ms,
 `transport_started = true`, one observed close and zero live/leased operations.
 No new blocked-TLS or native-platform interruption claim follows.
 
-These are development qualification inputs, not final publication pins.
-Core's 0.4.1 tag was pending coordinator-controlled exact-tip CI at this run;
-HTTPX remained a draft, unreleased candidate with native-policy gates pending.
+Core 0.4.1 is now released. HTTPX remains a draft, unreleased development
+candidate with native-policy gates pending, not a final publication pin.
 No live Azure probe, Windows/macOS runtime check, native-provider qualification
 or OS trust-store mutation was performed for this combined run.
 
@@ -523,8 +524,8 @@ to publication paths (13 total); this documentation correction adds none.
 
 ## Publication gates still open
 
-* Coordinator release approval for corrected Core and HTTPX inputs, including
-  the qualified HTTPX release and final immutable dependency URLs/hashes.
+* Coordinator approval of a qualified HTTPX release and its final immutable
+  URL/hash, paired with the already released Core 0.4.1 input.
 * Parent-controlled native selected-provider and remaining public-CA Azure
   HTTPS matrix with verification enabled. The standard Linux observation
   above does not qualify SymCrypt or another native provider.
@@ -532,7 +533,7 @@ to publication paths (13 total); this documentation correction adds none.
   qualification. No native interruption capability is inferred.
 * Installation of those coherent pins and successful execution of all three
   fixed package CI contexts, including the mandatory paired/trusted suites.
-  The portable `ed0` selector still cannot satisfy those suites.
+  Passing with the current `80e2` development input does not make it a release.
 * Coordinator acceptance, ordinary implementation merge, then tags/releases.
   Package registration/history/catalog and sealed bootstrap are already
   coordinator-completed, not work to repeat here.
