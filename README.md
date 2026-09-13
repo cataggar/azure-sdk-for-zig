@@ -8,9 +8,9 @@ Azure Service Bus clients:
 
 Release branch: `sdk/servicebus`. The package depends on `azure_sdk_core`,
 `azure_sdk_messaging_common`, `azure_sdk_amqp`, and `serde`.
-Version 0.3.0 adopts published Core 0.4.0
-(`be32073994f37422f2f6b5e9255d208b1284de85`) and Messaging Common 0.4.0
-(`4d305406180f007b80a04040272beb4ca139b970`). The AMQP pin and API are unchanged.
+Version 0.3.1 pins published Core 0.4.1
+(`2c95f65be96b5ef48a50671de33e9e0926c624cb`) and Messaging Common 0.4.1
+(`2abee8f00c54e11877034783997434da6c90208a`). The AMQP pin and API are unchanged.
 
 Messaging runs over [`azure_sdk_amqp`](../../tree/sdk/amqp), the same AMQP 1.0
 stack Event Hubs uses, rather than over a second direct-`uamqp` transport. Both
@@ -45,7 +45,7 @@ var admin = try sb.ServiceBusAdministrationClient.init(
         .instrumentation = .{
             .provider = tracing_provider,
             .scope_name = "azure_sdk_servicebus.admin",
-            .scope_version = "0.3.0",
+            .scope_version = "0.3.1",
             .namespace = "Microsoft.ServiceBus",
         },
     },
