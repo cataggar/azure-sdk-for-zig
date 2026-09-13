@@ -7,7 +7,7 @@ Azure Cosmos DB clients:
 - `ContainerClient`
 
 Release branch: `sdk/data_cosmos`. The package depends on
-`azure_sdk_core` and `serde`. Version `0.3.0` uses Core `0.4.0` and its
+`azure_sdk_core` and `serde`. Version `0.3.1` uses Core `0.4.1` and its
 canonical `HttpRuntime`.
 
 Construct `CosmosClient` with an allocator, borrowed token credential, and
@@ -29,7 +29,7 @@ var client = try cosmos.CosmosClient.init(
     .{ .instrumentation = .{
         .provider = provider.asProvider(),
         .scope_name = "azure_sdk_data_cosmos",
-        .scope_version = "0.3.0",
+        .scope_version = "0.3.1",
         .namespace = "Microsoft.DocumentDB",
         .parent_context = parent, // Optional core.tracing.TraceContext.
     } },
@@ -49,7 +49,7 @@ stable and their backing resources alive until every client, descendant and
 operation has finished. Nonstatic scope/version/namespace strings and parent
 tracestate are also borrowed for that lifetime. Clients never drain, flush,
 shut down or deinitialize the provider. For Core's
-[`ExportingTracerProvider`](https://github.com/cataggar/azure-sdk-for-zig/blob/azure_sdk_core/v0.4.0/tracing/README.md),
+[`ExportingTracerProvider`](https://github.com/cataggar/azure-sdk-for-zig/blob/azure_sdk_core/v0.4.1/tracing/README.md),
 the application explicitly calls bounded `drain(timeout_ms)`,
 `forceFlush(timeout_ms)` and `shutdown(timeout_ms)` as appropriate. There is no
 hidden export worker or network exporter. Core streaming spans end at response
