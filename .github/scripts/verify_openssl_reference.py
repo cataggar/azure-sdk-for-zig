@@ -97,7 +97,10 @@ def main():
     executable = directory / "openssl-3.5.5/apps" / ("openssl.exe" if system == "win32" else "openssl")
     require(image_machine(executable, system == "win32") == machine, "CLI is not the actual native target")
     selected = shutil.which("openssl")
-    require(selected is not None and os.path.samefile(selected, executable), "PATH does not select the built CLI")
+    require(
+        selected is not None and os.path.samefile(selected, executable),
+        f"PATH does not select the built CLI: selected={selected!r}, expected={str(executable)!r}",
+    )
     require(pathlib.Path(os.environ["OPENSSL_CONF"]).resolve() == directory / "openssl.cnf", "wrong reference configuration")
     provenance = json.loads((directory / "provenance.json").read_text(encoding="utf-8"))
     require(provenance["target"] == args.target, "provenance target differs")

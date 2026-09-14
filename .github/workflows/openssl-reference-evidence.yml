@@ -71,8 +71,20 @@ jobs:
           ./.github/scripts/prepare_openssl_windows.ps1 -Architecture "${{ matrix.arch }}"
           if ($LASTEXITCODE -ne 0) { throw "OpenSSL reference helper failed" }
       - name: Record actual native CLI evidence, not SDK qualification
+        if: matrix.platform == 'linux'
         shell: bash
         run: |
           set -euo pipefail
           python3 .github/scripts/verify_openssl_reference.py \
             --target "${{ matrix.target }}" --after-build
+      - name: Record Git Bash command selection on Windows
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: |
+          python3 -c 'import shutil; print("Git Bash OpenSSL selection:", repr(shutil.which("openssl")), flush=True)'
+      - name: Record actual native Windows CLI evidence, not SDK qualification
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          python3 .github/scripts/verify_openssl_reference.py --target "${{ matrix.target }}" --after-build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
