@@ -320,8 +320,9 @@ pub fn main(init: std.process.Init) !void {
     var checking: std.heap.DebugAllocator(.{}) = .init;
     defer std.debug.assert(checking.deinit() == .ok);
     const allocator = checking.allocator();
-    const args = try init.minimal.args.toSlice(allocator);
-    defer allocator.free(args);
+    var args_arena = std.heap.ArenaAllocator.init(allocator);
+    defer args_arena.deinit();
+    const args = try init.minimal.args.toSlice(args_arena.allocator());
     if (args.len != 7) return error.ExpectedLeafPortsValidityAndRootCertificates;
     const der = try std.Io.Dir.cwd().readFileAlloc(init.io, args[1], allocator, .limited(256 * 1024));
     defer allocator.free(der);

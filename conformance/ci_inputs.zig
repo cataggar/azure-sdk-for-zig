@@ -52,8 +52,9 @@ fn load(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !Manifest {
 
 pub fn main(init: std.process.Init) !void {
     const allocator = std.heap.page_allocator;
-    const args = try init.minimal.args.toSlice(allocator);
-    defer allocator.free(args);
+    var args_arena = std.heap.ArenaAllocator.init(allocator);
+    defer args_arena.deinit();
+    const args = try init.minimal.args.toSlice(args_arena.allocator());
     if (args.len != 5) return error.ExpectedProviderManifestAdapterManifestExpectedCommitActualCommit;
     const provider = try load(allocator, init.io, args[1]);
     defer std.zon.parse.free(allocator, provider);
