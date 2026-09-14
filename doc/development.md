@@ -19,7 +19,7 @@ zig fmt --check codegen/ eng/ build.zig
 `main` owns no package source, so root tests run workspace tooling and fixture
 consumers that pin `azure_sdk_core` by immutable commit and hash. The original
 `direct_package_consumer` retains Core 0.1.2 compatibility coverage.
-`current_runtime_consumer` pins Core 0.4.0 and separately exercises canonical
+`current_runtime_consumer` pins Core 0.4.1 and separately exercises canonical
 runtime and pipeline construction, owned request headers, explicit OTLP JSON
 export and W3C propagation, and the published HTTP and SDK crypto conformance
 modules. Its standard HTTP and allocation-failure contracts use local fixtures,
