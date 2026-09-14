@@ -1,8 +1,6 @@
 # Azure Core HTTPX transport for Zig
 
-**Status: 0.1.0 source candidate, not an SDK release. HTTPX v0.2.0 tag
-publication is pending.** Final package CI and release approval are required
-before publication.
+**Version: 0.1.0.** Uses released Azure Core 0.4.1 and HTTPX 0.2.0.
 
 `azure_sdk_core_httpx` implements Azure Core's buffered and streaming HTTP
 transport contracts using HTTPX. It is optional: Core does not depend on HTTPX,
@@ -11,14 +9,14 @@ and WASI applications keep Core's host backend. Requires Zig 0.16.0.
 ## Dependencies
 
 The manifest uses normal immutable commit URLs and actual Zig package hashes,
-without local paths. Core 0.4.1 is released. HTTPX comes only from
-`cataggar/httpx.zig`; its merged commit has the same complete source tree and
-package hash as the qualified input.
+without local paths. Core 0.4.1 and HTTPX 0.2.0 are released. HTTPX comes only
+from `cataggar/httpx.zig`; its release commit has the same complete source tree
+and package hash as the qualified input.
 
 | Package | Immutable URL | Zig package hash |
 | --- | --- | --- |
 | Core 0.4.1 | `git+https://github.com/cataggar/azure-sdk-for-zig.git#2c95f65be96b5ef48a50671de33e9e0926c624cb` | `azure_sdk_core-0.4.1-eFY0EpbrCgAKh2uJJ-DguKP7zx8Ywuf1UdP7HkJ_9CmI` |
-| HTTPX 0.2.0 source | `git+https://github.com/cataggar/httpx.zig#2d418ce2ebbd8cbb0d930e80feeac0e45560f0c9` | `httpx-0.2.0-8qj2eonLMwDuDDJxDVzoax9VY68Lb0YjT_AtwZBAbqwV` |
+| HTTPX 0.2.0 | `git+https://github.com/cataggar/httpx.zig#2d418ce2ebbd8cbb0d930e80feeac0e45560f0c9` | `httpx-0.2.0-8qj2eonLMwDuDDJxDVzoax9VY68Lb0YjT_AtwZBAbqwV` |
 
 ## Integration
 
@@ -27,7 +25,9 @@ The package also exports `dependency.module("httpx")` and
 `dependency.module("azure_sdk_core")`, the same module objects used internally.
 Optional TLS providers must use that canonical HTTPX module or `adapter.httpx`
 types, never a second HTTPX compilation or copied provider/trust ABI.
-This package adds no C or native-crypto library dependency, including SymCrypt.
+This package adds no C source or third-party native-crypto dependency, including
+SymCrypt. HTTPX uses operating-system libraries for Windows/macOS trust-store
+discovery; certificate cryptography still uses the selected provider.
 
 | Public API | Contract |
 | --- | --- |
@@ -242,8 +242,8 @@ second HTTPX ABI.
 passed **38/38 tests in each mode** in all three fixed contexts:
 `package-test (ubuntu-latest)`, `package-test (windows-latest)` and
 `package-test (macos-latest)`. That run executed accepted SDK source
-`cbda8daa26d928b96990fb3c0d84b078d654e2a9` with the source-identical HTTPX input;
-the current merged-commit selector still requires final candidate CI.
+`cbda8daa26d928b96990fb3c0d84b078d654e2a9` with the same HTTPX source tree and
+package hash as the released dependency selected here.
 
 Coverage includes the 24 adapter/shared-Core tests and 14 paired tests:
 48 TLS 1.2/1.3 x H1/H2 provider/trust cases plus 12 terminal abort/cancel/token
