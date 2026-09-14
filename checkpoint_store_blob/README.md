@@ -45,8 +45,8 @@ all of its operations.
 
 ## Optional HTTP tracing
 
-Event Hubs 0.7.0 borrows the complete Blobs 0.4.0 pipeline, including optional
-Core 0.4.0 instrumentation. There is no separate checkpoint-store tracing
+Event Hubs 0.7.1 borrows the complete Blobs 0.4.1 pipeline, including optional
+Core 0.4.1 instrumentation. There is no separate checkpoint-store tracing
 constructor or configuration:
 
 ```zig

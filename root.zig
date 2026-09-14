@@ -1510,7 +1510,7 @@ pub const HubConnection = struct {
 // ─────────────────────── Tests ───────────────────────
 
 test "package version comes from the manifest" {
-    try std.testing.expectEqualStrings("0.7.0", version);
+    try std.testing.expectEqualStrings("0.7.1", version);
 }
 
 // Zig only analyses a file it is told to. Re-exporting a type is not
