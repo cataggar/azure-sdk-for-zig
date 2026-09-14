@@ -27,8 +27,7 @@ const Verification = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
-    const args = try init.minimal.args.toSlice(init.gpa);
-    defer init.gpa.free(args);
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len != 2) return error.ExpectedConfiguredDnsServerIp;
     _ = try httpx.Address.parseIp(args[1], 53);
     std.debug.print("endpoint={s} method=GET http=HTTP/1.1-only provider=HTTPX.StandardCryptoProvider trust=canonical-system verification=required response_limit={d} request_ms=10000\n", .{

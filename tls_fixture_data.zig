@@ -4,8 +4,7 @@ const std = @import("std");
 const fixtures = @import("httpx_test_certificates");
 
 pub fn main(init: std.process.Init) !void {
-    const args = try init.minimal.args.toSlice(init.gpa);
-    defer init.gpa.free(args);
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len != 2) return error.ExpectedFixtureOutputDirectory;
     var directory = try std.Io.Dir.cwd().createDirPathOpen(init.io, args[1], .{});
     defer directory.close(init.io);
