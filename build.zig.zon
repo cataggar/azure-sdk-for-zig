@@ -8,9 +8,9 @@
             .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#2c95f65be96b5ef48a50671de33e9e0926c624cb",
             .hash = "azure_sdk_core-0.4.1-eFY0EpbrCgAKh2uJJ-DguKP7zx8Ywuf1UdP7HkJ_9CmI",
         },
-        // Unpublished development input, not the final qualified release.
+        // Merged 0.2.0 source; upstream tag publication is still pending.
         .httpx = .{
-            .url = "git+https://github.com/cataggar/httpx.zig#b2c6814c2a8a2b6b861314b259434a43b1f08f16",
+            .url = "git+https://github.com/cataggar/httpx.zig#2d418ce2ebbd8cbb0d930e80feeac0e45560f0c9",
             .hash = "httpx-0.2.0-8qj2eonLMwDuDDJxDVzoax9VY68Lb0YjT_AtwZBAbqwV",
         },
     },
