@@ -270,13 +270,21 @@ fn exercise(version: Version, h2: bool, case: Case, action: Action) !void {
     const Snapshot = @typeInfo(@TypeOf(roots.platform_snapshot)).optional.child;
     roots.platform_snapshot = Snapshot.init(testing.allocator, .{});
     var identifier: [64]u8 = @splat(0);
-    std.crypto.hash.Sha1.hash(chain.leaf, identifier[0..20], .{});
+    std.crypto.hash.Sha1.hash(chain.leaf, identifier[0..std.crypto.hash.Sha1.digest_length], .{});
     try roots.platform_snapshot.?.addFingerprintList(.{
+        .kind = .constraints,
+        .identity = .certificate_der,
         .algorithm = .sha1,
         .this_update = 1_700_000_000,
         .next_update = 2_524_608_000,
-        .entries = &.{.{ .identifier = identifier, .policy = .{ .roles = 3 } }},
+        .entries = &.{.{
+            .identifier = identifier,
+            .identifier_length = std.crypto.hash.Sha1.digest_length,
+            .policy = .{ .roles = 3 },
+        }},
     });
+    try testing.expectEqual(@as(usize, 0), roots.platform_snapshot.?.entries.items.len);
+    try testing.expectEqual(@as(usize, 1), roots.anchorCount());
     var observed: Observed = .{
         .standard = .init(testing.io, testing.allocator),
         .version = version,

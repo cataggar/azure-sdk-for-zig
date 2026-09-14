@@ -362,6 +362,18 @@ are additional checks; the original matrix consists of:
   connections. These are terminal cleanup checks, **not** additional blocked
   TLS phase-interruption claims.
 
+The synthetic matrix list is explicitly `.constraints` / `.certificate_der`:
+SHA-1 covers the entire leaf certificate DER, with a 20-byte identifier and the
+original role policy. HTTPX `b2c6814` requires each staged entry's explicit
+identifier length; the earlier literal omitted it and failed before TLS.
+This remains restriction-only metadata, not AuthRoot membership or the Windows
+Disallowed P15/P25 identity family. Staging adds no platform certificate entries
+or trust anchors; the custom root remains the sole anchor. Both independent
+SHA-1 permission gates and all 60 matrix cases remain unchanged, without MD5.
+With unchanged composed `b2c6814` / Core 0.4.1 inputs, the adapted matrix passed
+2/2 tests (60 cases) and the full suite passed 38/38 in both Debug and ReleaseSafe
+on aarch64 Linux, Zig 0.16.0. This is not native Windows qualification.
+
 The TLS peer observes the actual negotiated TLS version and ALPN. Its accept
 and socket waits are bounded; every path joins it. The existing SOCKS5/H2
 interruption pairs remain unchanged and passed again (11 ms token, 1–2 ms
