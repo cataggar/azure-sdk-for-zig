@@ -14,9 +14,8 @@ concurrency:
 env:
   SYMCRYPT_COMMIT: 286762b7730e2b780678f5ab11fef2b1bad639e0
   ZIG_SYMCRYPT_COMMIT: 9b3c94a2a4e0d98e055f0d908e11e1d7031b9a4b
-  # RELEASE GATE: parent replaces this with the reviewed, released adapter tip.
-  # Neither local 1167939 nor draft HTTPX 95b916c is a final release input.
-  SDK_HTTPX_CONFORMANCE_REF: ""
+  # Reviewed lightweight azure_sdk_core_httpx/v0.1.0 release tip.
+  SDK_HTTPX_CONFORMANCE_REF: "21b2bd41afa768fc2895041d8176fe06de9ccde6"
 
 jobs:
   package-test:

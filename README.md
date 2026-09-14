@@ -11,13 +11,14 @@ primitive binding.
 - Supported targets: `x86_64-linux-gnu`, `aarch64-linux-gnu`,
   `x86_64-windows-msvc`, and `aarch64-windows-msvc`
 
-This package is optional. Applications that use only `azure_sdk_core` do not
-compile or link any C or SymCrypt symbols.
+This package is optional. Core-only applications do not acquire a SymCrypt or
+other third-party native crypto dependency. Platform features can still link
+operating-system libraries; this is not a blanket no-C-symbol guarantee.
 
-This source prepares the next native package release. HTTPX 0.2.0 source has
-merged, but its release tag is still pending; the standard SDK HTTPX adapter
-0.1.0 is also not yet released. Neither a version field nor merged source
-satisfies the remaining release-input and full native SDK matrix gates.
+This source prepares the next native package release using actually released
+HTTPX 0.2.0, Core 0.4.1 and standard SDK HTTPX adapter 0.1.0 conformance inputs.
+Those prerequisite releases do not by themselves qualify or release this
+native 0.3.0 candidate.
 
 ## Scope
 
@@ -276,11 +277,11 @@ canonical policy. Those platform/composition gates remain separately owned.
 
 ### Qualification boundary
 
-The immutable HTTPX dependency records reviewed, merged 0.2.0 source
+The immutable HTTPX dependency records the released lightweight `v0.2.0` tip
 `2d418ce2ebbd8cbb0d930e80feeac0e45560f0c9`, paired with released Core 0.4.1
 `2c95f65be96b5ef48a50671de33e9e0926c624cb`. Its full URLs/hashes are in the
-manifest. The HTTPX release tag is **still pending**: this source pin is not
-evidence of a published release or complete native SDK qualification.
+manifest. Both dependencies are released; complete native SDK qualification
+still requires the native matrix below.
 `httpx_source` is an explicit local development
 override for the HTTPX source root, valid only with `enable_httpx_tls=true`; it is not a
 replacement release pin.
@@ -412,17 +413,18 @@ remain in place. Consumer compilation is not consumer execution. No native
 target is silently downgraded to build-only or omitted when prerequisites fail;
 Windows Arm64's existing Zig-host emulation does not change the native test target.
 
-`SDK_HTTPX_CONFORMANCE_REF` is deliberately empty until a reviewed SDK-adapter
-release exists. Native jobs **fail**, rather than report a skipped conformance
-success, until it is replaced with the full immutable commit. CI checks the
+`SDK_HTTPX_CONFORMANCE_REF` pins the actual reviewed standard SDK 0.1.0 release
+`21b2bd41afa768fc2895041d8176fe06de9ccde6`, tagged with lightweight
+`azure_sdk_core_httpx/v0.1.0`. Its package hash is
+`azure_sdk_core_httpx-0.1.0-NXwWetyMAgCa5-LeLhuKTpXZVUewQK-j3j9_vj375My4`.
+CI checks the
 exact clean checkout, a lightweight `azure_sdk_core_httpx/v*` release tag, and
 identical immutable Core/HTTPX URLs and hashes in both manifests. This source
-checkout introduces no runtime package cycle. The parent must complete the
-HTTPX tag gate and supply the actual released standard SDK adapter tip with
-the same Core/HTTPX URL/hash pair. Standard SDK 0.1.0 candidate `cbda` is not a
-release input; neither it nor earlier draft/local candidates can replace the
-empty ref. Dependency coherence alone does not approve a release or qualify
-Windows trust metadata.
+checkout introduces no runtime package cycle. The native and standard adapters
+use identical released Core/HTTPX URL/hash pairs. A missing, draft, untagged,
+dirty or incoherent input still fails the existing strict guards rather than
+skipping conformance. Dependency coherence alone does not approve a native
+release or qualify Windows trust metadata.
 
 Native jobs build the independent **CLI test reference** from
 [OpenSSL 3.5.5's official archive](https://github.com/openssl/openssl/releases/download/openssl-3.5.5/openssl-3.5.5.tar.gz),
@@ -472,10 +474,11 @@ family, certificate-DER domain, permissions and assertions are unchanged.
 No SDK adapter source substitution or full SDK/OpenSSL interoperability matrix
 was used for these results.
 
-The full four-target dynamic/static Debug/ReleaseSafe SDK transport matrix
-remains blocked until the actual released SDK adapter ref and final coherent
-HTTPX release are supplied. `SDK_HTTPX_CONFORMANCE_REF` stays empty; neither its
-released-source/hash-coherence guard nor mixed `.path` rejection is relaxed.
+The released prerequisites now permit the full four-target dynamic/static
+Debug/ReleaseSafe SDK transport and independent OpenSSL matrix to run. The
+earlier native-only results above do not satisfy that gate. The released-source/
+hash-coherence guard, mixed `.path` rejection and all mandatory native commands
+remain enforced.
 The 0.3.0 candidate version is not release approval. Main publication metadata
 remains unchanged until the parent advances the official package branch and
 performs the reviewed release sequence.
