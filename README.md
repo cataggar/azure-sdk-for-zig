@@ -4,7 +4,7 @@ Optional Microsoft SymCrypt 103.13.0 provider for
 `azure_sdk_core.crypto.CryptoProvider`, with a separately enabled HTTPX TLS
 primitive binding.
 
-- Package version: `0.2.0`
+- Package version: `0.3.0` candidate (not released)
 - Release branch: `sdk/core_symcrypt`
 - Core dependency: `azure_sdk_core` `0.4.1`
 - Native wrapper dependency: `zig_symcrypt` `0.1.0`
@@ -13,6 +13,11 @@ primitive binding.
 
 This package is optional. Applications that use only `azure_sdk_core` do not
 compile or link any C or SymCrypt symbols.
+
+This source prepares the next native package release. HTTPX 0.2.0 source has
+merged, but its release tag is still pending; the standard SDK HTTPX adapter
+0.1.0 is also not yet released. Neither a version field nor merged source
+satisfies the remaining release-input and full native SDK matrix gates.
 
 ## Scope
 
@@ -271,11 +276,12 @@ canonical policy. Those platform/composition gates remain separately owned.
 
 ### Qualification boundary
 
-The immutable HTTPX dependency currently records reviewed development foundation
-`cf9655baac9062f2bc799e25bd123de3c536594b`, paired with released Core 0.4.1
+The immutable HTTPX dependency records reviewed, merged 0.2.0 source
+`2d418ce2ebbd8cbb0d930e80feeac0e45560f0c9`, paired with released Core 0.4.1
 `2c95f65be96b5ef48a50671de33e9e0926c624cb`. Its full URLs/hashes are in the
-manifest. The HTTPX source is reachable but **not the final HTTPX release** or
-complete native SDK qualification. `httpx_source` is an explicit local development
+manifest. The HTTPX release tag is **still pending**: this source pin is not
+evidence of a published release or complete native SDK qualification.
+`httpx_source` is an explicit local development
 override for the HTTPX source root, valid only with `enable_httpx_tls=true`; it is not a
 replacement release pin.
 
@@ -411,10 +417,11 @@ release exists. Native jobs **fail**, rather than report a skipped conformance
 success, until it is replaced with the full immutable commit. CI checks the
 exact clean checkout, a lightweight `azure_sdk_core_httpx/v*` release tag, and
 identical immutable Core/HTTPX URLs and hashes in both manifests. This source
-checkout introduces no runtime package cycle. The parent release change must
-also select the final qualified HTTPX release shared with the SDK adapter;
-draft HTTPX `95b916c` and local SDK candidate `1167939` are not final release
-inputs. Dependency coherence alone does not approve a release or qualify
+checkout introduces no runtime package cycle. The parent must complete the
+HTTPX tag gate and supply the actual released standard SDK adapter tip with
+the same Core/HTTPX URL/hash pair. Standard SDK 0.1.0 candidate `cbda` is not a
+release input; neither it nor earlier draft/local candidates can replace the
+empty ref. Dependency coherence alone does not approve a release or qualify
 Windows trust metadata.
 
 Native jobs build the independent **CLI test reference** from
@@ -448,17 +455,30 @@ Production Windows already uses PowerShell and needs no evidence-shell fix.
 The ABI 2 port uses targeted Core/provider/TLS native tests, including independent
 backend/policy flags, captured ceilings, direct keyed-operation rejection,
 allocation/partial-failure wiping, cloning, concurrency and exact provenance.
-Linux Arm64 dynamic/static × Debug/ReleaseSafe each passed 42 tests (10 Core,
+The reviewed ABI 2 foundation port passed Linux Arm64 dynamic/static
+× Debug/ReleaseSafe with 42 tests each (10 Core,
 32 TLS). Both ReleaseSafe archive consumers compiled; Linux x64 headers also
 compiled without execution. A Windows x64 header-only attempt was blocked by
 missing local MSVC/Windows SDK headers; neither Windows architecture is
 qualified by these local runs.
+
+The 0.3.0 candidate repeats all four Linux Arm64 unit configurations against
+merged HTTPX `2d418ce`: 42 tests passed in each. Native-only pairing additionally
+passed 84 cases in dynamic Debug and ReleaseSafe; both ReleaseSafe archive
+consumers compiled. The two synthetic SHA-1 fixtures now explicitly record
+their 20-byte identifier length, correcting an observed
+`TlsTrustStoreLoadFailed` under the merged contract. Their generic/constraints
+family, certificate-DER domain, permissions and assertions are unchanged.
+No SDK adapter source substitution or full SDK/OpenSSL interoperability matrix
+was used for these results.
+
 The full four-target dynamic/static Debug/ReleaseSafe SDK transport matrix
 remains blocked until the actual released SDK adapter ref and final coherent
 HTTPX release are supplied. `SDK_HTTPX_CONFORMANCE_REF` stays empty; neither its
 released-source/hash-coherence guard nor mixed `.path` rejection is relaxed.
-Current package version and Main publication metadata are not release approvals
-or changed by this port.
+The 0.3.0 candidate version is not release approval. Main publication metadata
+remains unchanged until the parent advances the official package branch and
+performs the reviewed release sequence.
 
 This binding and its algorithm list make no FIPS-validation claim. In
 particular, availability of ChaCha20-Poly1305 or a successful native integrity

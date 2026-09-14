@@ -1,6 +1,6 @@
 .{
     .name = .azure_sdk_core_symcrypt,
-    .version = "0.2.0",
+    .version = "0.3.0",
     .fingerprint = 0x3475427fd5847371,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
@@ -13,9 +13,9 @@
             .hash = "zig_symcrypt-0.1.0-QIw66SjCEAAi9B86kkwa2aD-unj5hbQsGhuhTZdL4XFf",
         },
         .httpx = .{
-            // Reviewed ABI 2 development foundation, pending the final HTTPX release.
-            .url = "git+https://github.com/cataggar/httpx.zig#cf9655baac9062f2bc799e25bd123de3c536594b",
-            .hash = "httpx-0.1.9-8qj2enSTMgAnUCmuz0zXLDF8vMH6jKpgNbqhMdNExLHq",
+            // Reviewed merged HTTPX 0.2.0 source; release tag is still pending.
+            .url = "git+https://github.com/cataggar/httpx.zig#2d418ce2ebbd8cbb0d930e80feeac0e45560f0c9",
+            .hash = "httpx-0.2.0-8qj2eonLMwDuDDJxDVzoax9VY68Lb0YjT_AtwZBAbqwV",
             .lazy = true,
         },
     },

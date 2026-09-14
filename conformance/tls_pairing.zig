@@ -435,7 +435,7 @@ fn exercise(api: Api, version: Version, case: Case) !void {
         .algorithm = .sha1,
         .this_update = 1_700_000_000,
         .next_update = 2_524_608_000,
-        .entries = &.{.{ .identifier = identifier, .policy = .{
+        .entries = &.{.{ .identifier = identifier, .identifier_length = std.crypto.hash.Sha1.digest_length, .policy = .{
             .roles = if (case == .fingerprint_denied) 0 else 3,
         } }},
     });

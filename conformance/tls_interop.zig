@@ -345,7 +345,7 @@ pub fn main(init: std.process.Init) !void {
         .algorithm = .sha1,
         .this_update = 1_700_000_000,
         .next_update = 2_524_608_000,
-        .entries = &.{.{ .identifier = identifier, .policy = .{} }},
+        .entries = &.{.{ .identifier = identifier, .identifier_length = std.crypto.hash.Sha1.digest_length, .policy = .{} }},
     });
     var trust: FixtureTrust = .{
         .parsed = try (std.crypto.Certificate{ .buffer = der, .index = 0 }).parse(),
