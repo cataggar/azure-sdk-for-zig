@@ -4,7 +4,7 @@ Optional Microsoft SymCrypt 103.13.0 provider for
 `azure_sdk_core.crypto.CryptoProvider`, with a separately enabled HTTPX TLS
 primitive binding.
 
-- Package version: `0.3.0` candidate (not released)
+- Package version: `0.3.0`
 - Release branch: `sdk/core_symcrypt`
 - Core dependency: `azure_sdk_core` `0.4.1`
 - Native wrapper dependency: `zig_symcrypt` `0.1.0`
@@ -15,10 +15,10 @@ This package is optional. Core-only applications do not acquire a SymCrypt or
 other third-party native crypto dependency. Platform features can still link
 operating-system libraries; this is not a blanket no-C-symbol guarantee.
 
-This source prepares the next native package release using actually released
-HTTPX 0.2.0, Core 0.4.1 and standard SDK HTTPX adapter 0.1.0 conformance inputs.
-Those prerequisite releases do not by themselves qualify or release this
-native 0.3.0 candidate.
+The TLS binding pins released HTTPX 0.2.0 and Core 0.4.1. Native conformance
+additionally uses the released standard SDK HTTPX adapter 0.1.0. Package
+publication requires the reviewed branch tip and the native CI gates below;
+a version field or prerequisite release alone does not establish qualification.
 
 ## Scope
 
@@ -280,8 +280,7 @@ canonical policy. Those platform/composition gates remain separately owned.
 The immutable HTTPX dependency records the released lightweight `v0.2.0` tip
 `2d418ce2ebbd8cbb0d930e80feeac0e45560f0c9`, paired with released Core 0.4.1
 `2c95f65be96b5ef48a50671de33e9e0926c624cb`. Its full URLs/hashes are in the
-manifest. Both dependencies are released; complete native SDK qualification
-still requires the native matrix below.
+manifest. Complete native SDK qualification requires the native matrix below.
 `httpx_source` is an explicit local development
 override for the HTTPX source root, valid only with `enable_httpx_tls=true`; it is not a
 replacement release pin.
@@ -293,7 +292,6 @@ provider-routed HTTPX client, Python 3, OpenSSL 3.5, and verified native inputs:
 
 ```bash
 zig build tls-interop-check -Denable_httpx_tls=true \
-  -Dhttpx_source=/absolute/path/to/qualified-httpx \
   [linkage and fixture options] --summary all
 ```
 
@@ -318,11 +316,9 @@ retried provider/trust failures. HTTPX currently maps provider
 at the provider boundary. The canonical trust engine maps an injected
 certificate signature failure to `TlsCertificateSignatureInvalid`.
 
-Historical ABI 1 HTTPX `ff720540b759dbf28c15eea385b2a6598e04f201` was exercised on
-Linux Arm64 with SymCrypt dynamic/static linkage in Debug and ReleaseSafe,
-using OpenSSL 3.5.5: **42 authenticated SymCrypt combinations**, the same 42
-standard-provider controls, and 212 combined trust/provider-negative cases
-per linkage/optimization combination.
+The independent matrix covers **42 authenticated SymCrypt combinations**, the
+same 42 standard-provider controls, and 212 combined trust/provider-negative
+cases per linkage/optimization combination.
 All three AEADs and X25519/P-256/P-384 are covered; TLS 1.2 ECDSA combinations
 respect certificate-curve compatibility and matching signature hashes.
 The probe uses a checking allocator and requires clean teardown.
@@ -345,16 +341,15 @@ handle. Neither SHA-1 signatures nor MAC/KDF/PRF capabilities are enabled.
 
 ```bash
 zig build tls-paired-check tls-interop-check -Denable_httpx_tls=true \
-  -Dhttpx_source=/absolute/path/to/frozen-httpx \
-  -Dhttpx_adapter_source=/absolute/path/to/frozen-sdk-httpx \
+  -Dhttpx_adapter_source=/absolute/path/to/released-sdk-httpx \
   [linkage and fixture options] --summary all
 ```
 
-`httpx_adapter_source` is optional and development-only. The SDK transport
-cases were executed against frozen
-`b34e8d4ca6e5d9005e45be06b82a2720293c5d8f`; the build supplies that source
-with the **same HTTPX and Core module instances**, without a new manifest
-dependency or changing Core's default dependency. The deterministic
+`httpx_adapter_source` is an optional source integration for conformance, not
+a runtime manifest dependency. CI requires the released SDK checkout described
+below and supplies it with the **same HTTPX and Core module instances**,
+without changing Core's default dependency. Omitting it runs only the 84-case
+native pairing, not the full 140-case SDK matrix. The deterministic
 certificate generator is copied by the build from the selected HTTPX
 `src/tls/trust_fixtures.zig`; it imports only `std`, not another HTTPX module.
 
@@ -379,23 +374,20 @@ try session.handshake("service.example");
 ```
 
 The native owner must separately enable `allow_sha1_identifier_hash` when this
-metadata policy is needed. These historical candidate results are not a new
-ABI 2 full-matrix run or an independently
-approved or published release. Final reviewed immutable HTTPX/SDK-adapter
-pins, versioning, Windows CTL/system-store and other native-target execution,
-public-CA interoperability, mutual authentication and wider server/KeyUpdate
-suite coverage remain separate gates. In particular, Windows empty-AuthRoot
-property 104 handling is not qualified here. Header-only compilation is not
-native execution evidence.
+metadata policy is needed. These explicit-authority cases do not establish
+Windows CTL/system-store behavior, public-CA interoperability, mutual
+authentication or wider server/KeyUpdate suite coverage. Platform trust remains
+HTTPX policy, not a native-provider or operating-system chain-verifier fallback.
+Header-only compilation is not native execution evidence.
 
-No manifest publication paths are added: existing `conformance` contains the
-harness and its release-input checker. `.github/scripts` contains checkout-only
-CI tooling, not an SDK runtime dependency.
+The existing `conformance` publication path contains the harness and its
+release-input checker; the optional binding is published under `tls`.
+`.github/scripts` contains checkout-only CI tooling, not an SDK runtime dependency.
 
 ### Native CI release gates
 
 `package-ci.yml` preserves the three fixed `package-test` contexts and the two
-Arm64 architecture jobs. Once release inputs are supplied, its required matrix is:
+Arm64 architecture jobs. Its required matrix is:
 
 | Target | Runner | Required execution |
 | --- | --- | --- |
@@ -411,14 +403,16 @@ the exact same Core and HTTPX module instances. Existing provenance, header,
 verified Windows DLL staging, example execution and archive-consumer compilation
 remain in place. Consumer compilation is not consumer execution. No native
 target is silently downgraded to build-only or omitted when prerequisites fail;
-Windows Arm64's existing Zig-host emulation does not change the native test target.
+Windows Arm64 uses checksum-verified x86-64 Zig under emulation on the native
+Arm64 runner. That does not change the native test target or qualify the native
+Arm64 Zig 0.16.0 compiler, whose observed crashes remain a separate limitation.
 
 `SDK_HTTPX_CONFORMANCE_REF` pins the actual reviewed standard SDK 0.1.0 release
 `21b2bd41afa768fc2895041d8176fe06de9ccde6`, tagged with lightweight
 `azure_sdk_core_httpx/v0.1.0`. Its package hash is
 `azure_sdk_core_httpx-0.1.0-NXwWetyMAgCa5-LeLhuKTpXZVUewQK-j3j9_vj375My4`.
-CI checks the
-exact clean checkout, a lightweight `azure_sdk_core_httpx/v*` release tag, and
+CI checks the exact clean checkout, a lightweight `azure_sdk_core_httpx/v*`
+release tag, and
 identical immutable Core/HTTPX URLs and hashes in both manifests. This source
 checkout introduces no runtime package cycle. The native and standard adapters
 use identical released Core/HTTPX URL/hash pairs. A missing, draft, untagged,
@@ -440,48 +434,26 @@ The generated minimal `OPENSSL_CONF` applies only to the disposable test peer.
 OpenSSL is neither linked into the SDK nor a fallback provider or a FIPS
 qualification claim.
 
-Local CI-helper validation built that exact CLI on Linux Arm64 and ran both
-conformance targets with dynamic SymCrypt in Debug against frozen HTTPX
-`95b916c77573e70a63c73218ce5b4b371b3868eb` and SDK adapter
-`1167939aa087b5a02df1ec30967e5f1b6d33f992`: 140 paired connection scenarios,
-42 native plus 42 standard authenticated OpenSSL sessions, and 212 negatives.
-The three input-guard tests and source/package checks also passed; the actual
-candidate manifests correctly fail the unresolved HTTPX-identity gate.
-This historical CI-helper run does not replace the earlier four-way native
-results or qualify the new ABI 2 candidate. Subsequent evidence-only
-[run 34793232241](https://github.com/cataggar/azure-sdk-for-zig/actions/runs/34793232241)
-at `fa2d00b766b3df14fef057a74aef5ae277f9293c` qualified the unchanged CLI builder
-on all four native targets; this is not SDK/TLS/provider qualification.
-Production Windows already uses PowerShell and needs no evidence-shell fix.
+The released-input source at `64c2ea2be944caf0bc2e2eccd41272a5f7179fe3`
+completed the full local Linux Arm64 matrix with the released SDK checkout and
+the actual built OpenSSL 3.5.5 reference. Every dynamic/static and
+Debug/ReleaseSafe combination ran all four mandatory targets: 21 build steps,
+44 tests, 140 SDK-enabled paired connections, 84 authenticated OpenSSL sessions
+and 212 trust/provider negatives passed per configuration. Both ReleaseSafe
+archive consumers compiled. These local results do not stand in for Linux x64,
+Windows x64 or Windows Arm64 execution.
 
-The ABI 2 port uses targeted Core/provider/TLS native tests, including independent
-backend/policy flags, captured ceilings, direct keyed-operation rejection,
-allocation/partial-failure wiping, cloning, concurrency and exact provenance.
-The reviewed ABI 2 foundation port passed Linux Arm64 dynamic/static
-× Debug/ReleaseSafe with 42 tests each (10 Core,
-32 TLS). Both ReleaseSafe archive consumers compiled; Linux x64 headers also
-compiled without execution. A Windows x64 header-only attempt was blocked by
-missing local MSVC/Windows SDK headers; neither Windows architecture is
-qualified by these local runs.
+The ABI 2 tests retain independent backend/policy flags, captured ceilings,
+direct keyed-operation rejection, allocation/partial-failure wiping, cloning,
+concurrency and exact provenance. Synthetic SHA-1 restrictions use the generic
+constraints family, certificate-DER domain and explicit 20-byte identifier
+length; they neither grant trust nor relax permissions.
 
-The 0.3.0 candidate repeats all four Linux Arm64 unit configurations against
-merged HTTPX `2d418ce`: 42 tests passed in each. Native-only pairing additionally
-passed 84 cases in dynamic Debug and ReleaseSafe; both ReleaseSafe archive
-consumers compiled. The two synthetic SHA-1 fixtures now explicitly record
-their 20-byte identifier length, correcting an observed
-`TlsTrustStoreLoadFailed` under the merged contract. Their generic/constraints
-family, certificate-DER domain, permissions and assertions are unchanged.
-No SDK adapter source substitution or full SDK/OpenSSL interoperability matrix
-was used for these results.
-
-The released prerequisites now permit the full four-target dynamic/static
-Debug/ReleaseSafe SDK transport and independent OpenSSL matrix to run. The
-earlier native-only results above do not satisfy that gate. The released-source/
-hash-coherence guard, mixed `.path` rejection and all mandatory native commands
-remain enforced.
-The 0.3.0 candidate version is not release approval. Main publication metadata
-remains unchanged until the parent advances the official package branch and
-performs the reviewed release sequence.
+The released-source/hash-coherence guard, mixed `.path` rejection and all
+mandatory native commands remain enforced. Main publication metadata must
+match the reviewed package branch before a new lightweight release tag is
+created. Neither a successful CLI-builder run nor native-only pairing replaces
+the full SDK/OpenSSL matrix.
 
 This binding and its algorithm list make no FIPS-validation claim. In
 particular, availability of ChaCha20-Poly1305 or a successful native integrity
