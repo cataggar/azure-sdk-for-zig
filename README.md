@@ -14,7 +14,7 @@ package hashes:
 | Package | Commit | Status |
 | --- | --- | --- |
 | `azure_sdk_core` | `2c95f65be96b5ef48a50671de33e9e0926c624cb` | Published Core 0.4.1 |
-| `httpx` | `9c487bfc060c14df3d337d614ff4772eee45c0cd` | Reviewed ABI 2/server-I/O development input; not a final release |
+| `httpx` | `b2c6814c2a8a2b6b861314b259434a43b1f08f16` | Composed ABI 2, Windows policy and server-I/O development input; not a release |
 
 HTTPX comes from **`cataggar/httpx.zig`**. The portable development manifest has
 no local dependency paths. Earlier isolated qualification used a clearly
@@ -26,11 +26,12 @@ nor an invented release pin may be published. The coordinator must supply the
 reviewed, qualified immutable release URL and hash. Core 0.4.1 is released.
 The combined corrected-input qualification below uses normal immutable URLs
 and independently verified hashes in a separate development-selector commit.
-This checkpoint selects the reviewed context-aware server-I/O input with hash
-`httpx-0.1.9-8qj2euMfMwA79n2ul9N40WXlWpX7Fxo-bvJ2jw082GnZ`, independently
-confirmed by normal immutable URL resolution. It does not contain the final
-combined Windows profile. Public-probe/system-trust example changes remain
-gated on that coherent input; no interim MD5 identifier permissions are added.
+This checkpoint selects the composed ABI 2, Windows profile and context-aware
+server-I/O input with hash
+`httpx-0.2.0-8qj2eonLMwDuDDJxDVzoax9VY68Lb0YjT_AtwZBAbqwV`, independently
+confirmed by normal immutable URL resolution. The public probe and system-trust
+example explicitly enable Windows-only identifier permissions as documented
+below; library defaults remain unchanged.
 The HTTPX pin remains a development input, not an approved publication pin.
 
 ## Integration
@@ -204,7 +205,7 @@ CI retains the three fixed `package-test (<os>)` contexts. Every context
 explicitly runs `zig build test -Dpaired-tls=true` in Debug and ReleaseSafe,
 including the shared/plain-HTTP suite, the 60-case standard TLS matrix, and the
 new trusted-HTTPS contracts. There is no legacy-only fallback or success
-override. The current `9c487` development pin supports this mode, but all three
+override. The current composed development pin supports this mode, but all three
 contexts must pass on this combined source before platform acceptance. A
 qualified HTTPX release pin is still required before publication. The shared
 gate blockers below remain real
@@ -299,11 +300,17 @@ Example for the **paired API**, with application-owned `allocator` and `io`:
 
 ```zig
 const httpx = adapter.httpx;
-var standard = httpx.StandardCryptoProvider.init(io, allocator);
+const allow_windows_md5_identifiers = @import("builtin").os.tag == .windows;
+var standard = httpx.StandardCryptoProvider.initWithOptions(io, allocator, .{
+    .allow_md5_identifier_hash = allow_windows_md5_identifiers,
+});
 var roots = try httpx.tls.TrustContext.init(allocator, io, .{ .source = .system });
 defer roots.deinit();
 var certificate_crypto = httpx.CryptoCertificateVerifier.init(standard.provider());
-var binding = try roots.bind(&certificate_crypto, .{ .allow_sha1_identifiers = true });
+var binding = try roots.bind(&certificate_crypto, .{
+    .allow_sha1_identifiers = true,
+    .allow_md5_identifiers = allow_windows_md5_identifiers,
+});
 var transport = try adapter.HttpxTransport.init(allocator, io, .{
     .client = .{
         .tls_crypto_provider = standard.provider(),
@@ -322,6 +329,12 @@ metadata hashing from the same typed certificate adapter. SHA-1 identifier
 permission is distinct from backend capability and never enables SHA-1
 certificate signatures. A matching erased signature handle alone cannot
 authorize a different selected TLS provider.
+
+On Windows, this system-trust example explicitly enables the independent
+backend and metadata MD5 permissions required by the documented P15/P25 deny
+profile. Both remain off on other platforms and in library defaults. These
+identifier permissions never enable MD5 certificate signatures, HMAC, HKDF
+or TLS PRF, and do not change the separate SHA-1 identifier permission.
 
 With the exact paired dependency selected, run:
 
@@ -399,6 +412,13 @@ negotiated TLS version; this public result does not assert one. This single
 standard-backend endpoint observation is not the native/platform/public-H2
 qualification matrix.
 
+With the composed `b2c6814` HTTPX development input and released Core 0.4.1,
+the current probe also received a verified HTTP 400 on aarch64 Linux in both
+Debug and ReleaseSafe. Each invocation required exactly one successful
+canonical handshake and finished with zero live operations/connections.
+The Windows-only MD5 identifier opt-ins stayed off on Linux. This does not
+claim a native Windows public-endpoint result or a completed adapter release.
+
 ## Trusted HTTPS shared factory — corrected-input qualification
 
 `https_fixture.Owner.create(allocator, io, options)` creates stable, test-owned
@@ -460,7 +480,7 @@ clamping a partial record's 2 s read budget. These are fixture cleanup checks,
 
 ### Context-aware fixture integration results
 
-With exact `9c487bfc060c14df3d337d614ff4772eee45c0cd` and unchanged released
+Before composition, with exact `9c487bfc060c14df3d337d614ff4772eee45c0cd` and unchanged released
 Core 0.4.1, the targeted fixture selector passed **3/3** in Debug and ReleaseSafe.
 After the request-completion corrections, the full paired commands passed
 **38/38** in both modes on aarch64 Linux, Zig 0.16.0: the original 36 tests plus
@@ -588,7 +608,7 @@ to publication paths (13 total); this documentation correction adds none.
   qualification. No native interruption capability is inferred.
 * Installation of those coherent pins and successful execution of all three
   fixed package CI contexts, including the mandatory paired/trusted suites.
-  Passing with the current `9c487` development input does not make it a release.
+  Passing with the current composed development input does not make it a release.
 * Coordinator acceptance, ordinary implementation merge, then tags/releases.
   Package registration/history/catalog and sealed bootstrap are already
   coordinator-completed, not work to repeat here.

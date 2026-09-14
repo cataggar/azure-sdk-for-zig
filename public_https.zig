@@ -5,6 +5,7 @@ const adapter = @import("azure_sdk_core_httpx");
 const httpx = adapter.httpx;
 const endpoint = "https://management.azure.com/";
 const response_limit = 64 * 1024;
+const allow_windows_md5_identifiers = @import("builtin").os.tag == .windows;
 
 const Verification = struct {
     bound: httpx.TrustProvider,
@@ -30,8 +31,8 @@ pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len != 2) return error.ExpectedConfiguredDnsServerIp;
     _ = try httpx.Address.parseIp(args[1], 53);
-    std.debug.print("endpoint={s} method=GET http=HTTP/1.1-only provider=HTTPX.StandardCryptoProvider trust=canonical-system verification=required response_limit={d} request_ms=10000\n", .{
-        endpoint, response_limit,
+    std.debug.print("endpoint={s} method=GET http=HTTP/1.1-only provider=HTTPX.StandardCryptoProvider trust=canonical-system verification=required response_limit={d} request_ms=10000 windows_md5_identifiers={}\n", .{
+        endpoint, response_limit, allow_windows_md5_identifiers,
     });
     qualify(init, args[1]) catch |err| {
         std.debug.print("public_https_result=blocked error={s}\n", .{@errorName(err)});
@@ -42,7 +43,9 @@ pub fn main(init: std.process.Init) !void {
 fn qualify(init: std.process.Init, dns_server: []const u8) !void {
     const allocator = init.gpa;
     const io = init.io;
-    var standard = httpx.StandardCryptoProvider.init(io, allocator);
+    var standard = httpx.StandardCryptoProvider.initWithOptions(io, allocator, .{
+        .allow_md5_identifier_hash = allow_windows_md5_identifiers,
+    });
     var roots = httpx.tls.TrustContext.init(allocator, io, .{ .source = .system }) catch |err| {
         std.debug.print("blocked_phase=system_root_discovery\n", .{});
         return err;
@@ -52,7 +55,10 @@ fn qualify(init: std.process.Init, dns_server: []const u8) !void {
         roots.anchorCount(), roots.skipped_system_anchors,
     });
     var certificate_crypto = httpx.CryptoCertificateVerifier.init(standard.provider());
-    var binding = try roots.bind(&certificate_crypto, .{ .allow_sha1_identifiers = true });
+    var binding = try roots.bind(&certificate_crypto, .{
+        .allow_sha1_identifiers = true,
+        .allow_md5_identifiers = allow_windows_md5_identifiers,
+    });
     var verification: Verification = .{ .bound = binding.provider() };
     var resolver = httpx.DNSResolver.init(allocator, .{
         .dns_servers = &.{.{ .ip = dns_server }},
