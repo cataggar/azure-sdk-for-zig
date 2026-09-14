@@ -1,6 +1,7 @@
 //! Adapter-local TLS peer for the published Core factory contract. HTTP parsing
 //! uses std.http.Server; response scripts and captured-request types are Core's.
 const std = @import("std");
+const builtin = @import("builtin");
 const adapter = @import("azure_sdk_core_httpx");
 const httpx = adapter.httpx;
 const data = @import("tls_fixture_data");
@@ -255,6 +256,7 @@ pub const Backend = struct {
     stopping: std.atomic.Value(bool) = .init(false),
     mutex: std.Io.Mutex = .init,
     active: ?*httpx.Socket = null,
+    stop_cancel_status: ?std.os.windows.NTSTATUS = null,
     failure: ?anyerror = null,
     handshakes: usize = 0,
     requests: std.ArrayList(conformance.scripted.CapturedRequest) = .empty,
@@ -311,7 +313,19 @@ pub const Backend = struct {
     fn stop(self: *Backend) void {
         self.stopping.store(true, .release);
         self.mutex.lockUncancelable(self.owner.io);
-        if (self.active) |socket| socket.shutdownBoth() catch {};
+        if (self.active) |socket| {
+            socket.shutdownBoth() catch {};
+            if (builtin.os.tag == .windows) {
+                // Shutdown disallows subsequent receives; also cancel an already
+                // pending synchronous receive on this fixture-owned worker.
+                var status_block: std.os.windows.IO_STATUS_BLOCK = undefined;
+                self.stop_cancel_status = std.os.windows.ntdll.NtCancelSynchronousIoFile(
+                    self.thread.?.getHandle(),
+                    null,
+                    &status_block,
+                );
+            }
+        }
         self.mutex.unlock(self.owner.io);
         if (self.thread) |thread| {
             thread.join();
@@ -322,6 +336,10 @@ pub const Backend = struct {
     fn finish(context: *anyopaque) !void {
         const self: *Backend = @ptrCast(@alignCast(context));
         self.stop();
+        if (self.stop_cancel_status) |status| switch (status) {
+            .SUCCESS, .NOT_FOUND => {},
+            else => return error.FixtureIoCancellationFailed,
+        };
         const dns_error = self.owner.dns.failure_code.load(.acquire);
         if (dns_error != 0) return @errorFromInt(dns_error);
         if (self.failure) |err| {

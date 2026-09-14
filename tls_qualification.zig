@@ -674,7 +674,8 @@ test "trusted HTTPS independent logical streaming keeps the shared allocation bu
 test "trusted HTTPS fixture shutdown joins an idle peer and an incomplete handshake" {
     const owner = try https_fixture.Owner.create(testing.allocator, testing.io, .{});
     defer owner.deinit();
-    for ([_]bool{ false, true }) |connect| {
+    const Phase = enum { idle, incomplete_handshake, partial_record };
+    for ([_]Phase{ .idle, .incomplete_handshake, .partial_record }) |phase| {
         var backend = try owner.factory().create(testing.allocator, testing.io, .{
             .responses = &.{.{}},
             .expect_request = false,
@@ -683,8 +684,9 @@ test "trusted HTTPS fixture shutdown joins an idle peer and an incomplete handsh
         const state: *https_fixture.Backend = @ptrCast(@alignCast(backend.context));
         var socket = try httpx.Socket.create();
         defer socket.close();
-        if (connect) {
+        if (phase != .idle) {
             try socket.connectWithTimeout(try state.listener.getLocalAddress(), 1000);
+            if (phase == .partial_record) try socket.sendAll("\x16\x03\x03");
             const start = std.Io.Timestamp.now(testing.io, .awake);
             while (true) {
                 state.mutex.lockUncancelable(testing.io);
@@ -697,8 +699,16 @@ test "trusted HTTPS fixture shutdown joins an idle peer and an incomplete handsh
             }
         }
         const before = std.Io.Timestamp.now(testing.io, .awake);
-        try backend.finish();
+        const finished = backend.finish();
         const elapsed = std.Io.Timestamp.now(testing.io, .awake).toNanoseconds() - before.toNanoseconds();
+        std.debug.print("trusted HTTPS fixture shutdown {s}: elapsed_us={d}, joined={}, active={}, cancel_status={s}\n", .{
+            @tagName(phase),
+            @divTrunc(elapsed, std.time.ns_per_us),
+            state.thread == null,
+            state.active != null,
+            if (state.stop_cancel_status) |status| @tagName(status) else "not_requested",
+        });
+        try finished;
         try testing.expect(elapsed <= std.time.ns_per_s);
         try testing.expect(state.thread == null and state.active == null);
         try backend.assertQuiescent();

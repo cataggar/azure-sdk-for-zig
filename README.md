@@ -422,11 +422,16 @@ HTTP/2 redirect qualification is not claimed by this HTTP/1.1 fixture.
 
 Listeners poll at 20 ms; peer socket I/O is bounded to 2 s. The SDK operation
 budget is 10 s; strict DNS uses the owned resolver with 1 s attempts.
-Cancellation of fixture shutdown only shuts down a mutex-protected live
-socket; its owner thread clears/closes that socket, and every exit joins the
-thread before destroying TLS/provider/trust storage. A separate test verifies
-idle and incomplete-handshake shutdown within 1 s. That is fixture cleanup,
-**not** a new SDK blocked-TLS interruption capability.
+Fixture shutdown shuts down a mutex-protected live socket. On Windows it also
+requests cancellation of pending synchronous I/O on the dedicated fixture
+thread, rather than relying on socket shutdown to interrupt an issued receive.
+That worker alone clears/closes the socket; every exit joins it before
+destroying TLS/provider/trust storage. The shutdown test retains its 1 s bound
+and joined/quiescent assertions, adds an incomplete TLS record, and reports
+each phase's actual elapsed time and native cancellation status. Native
+Windows execution of this correction is still required; cross-compilation is
+not timing evidence. This is fixture cleanup, **not** a new SDK blocked-TLS
+interruption capability or a change to runtime cancellation policy.
 
 ### Combined corrected-input results
 
