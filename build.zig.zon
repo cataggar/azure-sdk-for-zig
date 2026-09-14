@@ -1,24 +1,24 @@
 .{
     .name = .azure_sdk_kusto,
-    .version = "0.3.0",
+    .version = "0.3.1",
     .fingerprint = 0x897430dd7c19e528,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .azure_sdk_core = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#be32073994f37422f2f6b5e9255d208b1284de85",
-            .hash = "azure_sdk_core-0.4.0-eFY0EufqCgD3plkaubfUTeY5Jvr__1k0noWHdQjBVAdX",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#2c95f65be96b5ef48a50671de33e9e0926c624cb",
+            .hash = "azure_sdk_core-0.4.1-eFY0EpbrCgAKh2uJJ-DguKP7zx8Ywuf1UdP7HkJ_9CmI",
         },
         .azure_sdk_storage_common = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#1b910b67d31048d05367d88824e7cd39add3dcf6",
-            .hash = "azure_sdk_storage_common-0.4.0-JzoreFOJAQAlKJgK5LTMCNTMGKloJ8RSkuA3PFrEEYrI",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#c422891793d33b8078f032167fe8fd42ecf05bcc",
+            .hash = "azure_sdk_storage_common-0.4.1-JzoreFOJAQCzO8pA3xms3n0gCloSYeSj52Vh490MaXle",
         },
         .azure_sdk_storage_blobs = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#c1b5e19ee4ba6e6dec4e868e6cf5909fac58396d",
-            .hash = "azure_sdk_storage_blobs-0.4.0-I5lGdnAmCwDJyv68eIYyu8WX28TpYU-IWCCo_FhgRO2d",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#fb8f312f4d4672174a6cafafc3c0b82a1838a4a0",
+            .hash = "azure_sdk_storage_blobs-0.4.1-I5lGdnAmCwDY9NXYtzIgxOY3jTJGIG9Y5sgR18-b_Vuj",
         },
         .azure_sdk_storage_queues = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#21ce3d36bd884272ccfb52435a010c8061643d82",
-            .hash = "azure_sdk_storage_queues-0.3.0-LKTiC6TiAADfCmjYrGVV-58ihFL2G9hKbL8-a0eglFX9",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#c74f826e923171081ff0fa340156f42078c735c2",
+            .hash = "azure_sdk_storage_queues-0.3.1-LKTiC6TiAAAABBFRQ8h1umiZqlufeF2_q9T1XBLYCbsM",
         },
         .serde = .{
             .url = "git+https://github.com/cataggar/serde.zig#7012f58c7ddf490125852e1d22006b552a1693c7",

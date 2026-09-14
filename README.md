@@ -9,11 +9,11 @@ independently versioned package:
 | [`data`](data/README.md) | Query, management, progressive results, KQL, and typed rows |
 | [`ingest`](ingest/README.md) | Streaming, managed, and queued ingestion |
 
-The current package version is `0.3.0`. All namespaces release together.
+The current package version is `0.3.1`. All namespaces release together.
 `kusto.version` and `kusto.user_agent_prefix` derive from the package manifest;
 the default `User-Agent` and `x-ms-client-version` values use that prefix.
-Dependencies pin published Core **0.4.0**, Storage Common **0.4.0**, Blobs
-**0.4.0**, and Queues **0.3.0** for complete-SAS queued ingestion.
+Dependencies pin published Core **0.4.1**, Storage Common **0.4.1**, Blobs
+**0.4.1**, and Queues **0.3.1** for complete-SAS queued ingestion.
 
 ## Feature matrix
 
