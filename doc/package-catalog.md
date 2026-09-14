@@ -32,10 +32,13 @@ its source lives at the root of the named branch.
 | `azure_sdk_kusto` | Branch | — | [`sdk/kusto`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/kusto) | `azure_sdk_core`, `azure_sdk_storage_common`, `azure_sdk_storage_blobs`, `azure_sdk_storage_queues` |
 | `azure_sdk_devops` | Branch | — | [`sdk/devops`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/devops) | `azure_sdk_core`, `azure_rest_devops` |
 
-`azure_sdk_core_httpx` has completed the [sealed branch-native
-bootstrap](package-bootstrap.md) and is not yet released. Its implementation and
-final HTTPX pin remain subject to review and native qualification. Registration
-and publication paths alone do not ship a transport.
+`azure_sdk_core_httpx`
+[0.1.0](https://github.com/cataggar/azure-sdk-for-zig/tree/azure_sdk_core_httpx/v0.1.0)
+is released following the completed [sealed branch-native
+bootstrap](package-bootstrap.md). This optional HTTPX transport pins released
+Core 0.4.1 and HTTPX 0.2.0. See the
+[released package README](https://github.com/cataggar/azure-sdk-for-zig/blob/21b2bd41afa768fc2895041d8176fe06de9ccde6/README.md)
+for configuration, ownership, DNS and trust-policy requirements.
 
 `azure_rest_devops` is the only REST package generated from
 `microsoft/vsts-rest-api-specs` rather than `Azure/azure-rest-api-specs`;
@@ -47,6 +50,6 @@ DevOps API areas, with a Zig namespace per area.
 Its forthcoming optional TLS adapter will add a lazy `httpx` dependency and a
 `tls` publication path when the reviewed package branch advances. Until then,
 the registry must match the published SDK-crypto-only 0.2.0 package so existing
-release verification continues to work. The HTTPX qualification paths prepare
-the unreleased transport package without adding package source to Main.
+release verification continues to work. The HTTPX transport and its qualification
+fixtures remain branch-owned; no package source is kept on Main.
 `azure_sdk_kusto` pins the external `serde` dependency.
