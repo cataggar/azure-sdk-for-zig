@@ -14,7 +14,7 @@ package hashes:
 | Package | Commit | Status |
 | --- | --- | --- |
 | `azure_sdk_core` | `2c95f65be96b5ef48a50671de33e9e0926c624cb` | Published Core 0.4.1 |
-| `httpx` | `80e2cbb6976d65a0349976ab82301b1eb9c27b51` | Paired development input qualified below; not a final release |
+| `httpx` | `9c487bfc060c14df3d337d614ff4772eee45c0cd` | Reviewed ABI 2/server-I/O development input; not a final release |
 
 HTTPX comes from **`cataggar/httpx.zig`**. The portable development manifest has
 no local dependency paths. Earlier isolated qualification used a clearly
@@ -26,8 +26,12 @@ nor an invented release pin may be published. The coordinator must supply the
 reviewed, qualified immutable release URL and hash. Core 0.4.1 is released.
 The combined corrected-input qualification below uses normal immutable URLs
 and independently verified hashes in a separate development-selector commit.
-This checkpoint selects the same pair for the required three-platform CI;
-the HTTPX pin remains a development input, not an approved publication pin.
+This checkpoint selects the reviewed context-aware server-I/O input with hash
+`httpx-0.1.9-8qj2euMfMwA79n2ul9N40WXlWpX7Fxo-bvJ2jw082GnZ`, independently
+confirmed by normal immutable URL resolution. It does not contain the final
+combined Windows profile. Public-probe/system-trust example changes remain
+gated on that coherent input; no interim MD5 identifier permissions are added.
+The HTTPX pin remains a development input, not an approved publication pin.
 
 ## Integration
 
@@ -200,7 +204,7 @@ CI retains the three fixed `package-test (<os>)` contexts. Every context
 explicitly runs `zig build test -Dpaired-tls=true` in Debug and ReleaseSafe,
 including the shared/plain-HTTP suite, the 60-case standard TLS matrix, and the
 new trusted-HTTPS contracts. There is no legacy-only fallback or success
-override. The current `80e2` development pin supports this mode, but all three
+override. The current `9c487` development pin supports this mode, but all three
 contexts must pass on this combined source before platform acceptance. A
 qualified HTTPX release pin is still required before publication. The shared
 gate blockers below remain real
@@ -420,20 +424,66 @@ the decrypted HTTP/1.1 requests; only a bounded body prefix and incremental
 hash are retained. Metadata and responses are observed at real TLS peers.
 HTTP/2 redirect qualification is not claimed by this HTTP/1.1 fixture.
 
-Listeners poll at 20 ms; peer socket I/O is bounded to 2 s. The SDK operation
-budget is 10 s; strict DNS uses the owned resolver with 1 s attempts.
-Fixture shutdown shuts down a mutex-protected live socket. On Windows it also
-requests cancellation of pending synchronous I/O on the dedicated fixture
-thread, rather than relying on socket shutdown to interrupt an issued receive.
-That worker alone clears/closes the socket; every exit joins it before
-destroying TLS/provider/trust storage. The shutdown test retains its 1 s bound
-and joined/quiescent assertions, adds an incomplete TLS record, and reports
-each phase's actual elapsed time and native cancellation status. Native
-Windows execution of this correction is still required; cross-compilation is
-not timing evidence. This is fixture cleanup, **not** a new SDK blocked-TLS
-interruption capability or a change to runtime cancellation policy.
+Listeners poll at 20 ms; peer logical reads/writes retain 2 s budgets. The SDK
+operation budget is 10 s; strict DNS uses the owned resolver with 1 s attempts.
+Each backend owns a stable shutdown token and canonical `IoContext`, composing
+that token with the optional borrowed `Options.parent_context`. The parent and
+its owners must remain stable through backend/owner destruction. Local,
+external and ancestor cancellation states are OR-composed; the earliest
+parent deadline always clamps the local budget.
 
-### Combined corrected-input results
+The handshake uses `tls.acceptServerWithIo`: each 2 s budget covers a whole
+handshake-message operation across records and partial progress. All `TlsIo`
+application reads use `Connection.readWithContext`; writes use
+`writeAllWithContext`. A read gets one child deadline, and a writer drain shares
+one deadline across its buffered data, vector parts, splats and TLS fragments.
+Polling or partial progress does not restart that deadline. The budget does
+not cover an entire 32 MiB transfer. Concrete application I/O failures are
+retained rather than lost behind `ReadFailed`/`WriteFailed`.
+
+Stopping only signals the shutdown token and joins the worker; it neither
+shuts down/closes a socket off-thread nor calls `NtCancelSynchronousIoFile`.
+Only the worker clears/closes its socket, before TLS/provider/trust owners
+are destroyed. Normal TLS close-notify remains HTTPX's existing control-alert
+path with the configured socket timeout; cancellable control-alert sending
+is not claimed here. As in Core's factory, a one-request `finish` first allows
+bounded natural completion so queued early-abort request metadata is captured.
+No-request/scripted shutdown still cancels directly; join failures always
+perform cancellation and join before returning an error.
+
+The shutdown test retains the 1 s bound and joined/quiescent assertions for
+idle, incomplete-handshake and partial-record peers, with the caller's socket
+still open. Additional real-loopback cases exercise ancestor cancellation
+while both external tokens are false, and a 500 ms parent request deadline
+clamping a partial record's 2 s read budget. These are fixture cleanup checks,
+**not** new SDK blocked-TLS interruption capabilities.
+
+### Context-aware fixture integration results
+
+With exact `9c487bfc060c14df3d337d614ff4772eee45c0cd` and unchanged released
+Core 0.4.1, the targeted fixture selector passed **3/3** in Debug and ReleaseSafe.
+After the request-completion corrections, the full paired commands passed
+**38/38** in both modes on aarch64 Linux, Zig 0.16.0: the original 36 tests plus
+the two parent-context regressions. The original 60 TLS cases, shared Host/EOF
+contracts and both 33,554,689-byte directions within the 2,097,152-byte adapter
+budget remain passing. Formatting and Windows x86_64 compile-only checks also
+passed in both modes.
+
+An earlier full ReleaseSafe run failed the unchanged wide-length assertion:
+expected `4295032833`, observed an empty Content-Length. Cancelling before
+joining the expected one-request peer could discard queued request headers.
+Matching Core's natural-join contract fixed this ordering; the independently
+unused same-origin destination now correctly declares `expect_request = false`
+while retaining its zero-request assertion. Intermediate failures remain in
+the qualification logs; no shared assertion was weakened.
+
+Frozen `86a8e169` previously failed native Windows in both modes: its
+incomplete-handshake shutdown took 2,001,580/1,986,357 microseconds and the NT
+cancellation request returned `NOT_FOUND`. Its partial-record phase was never
+reached. Native Windows execution of this replacement is still required;
+cross-compilation and Linux timings do not establish a Windows pass.
+
+### Historical combined Core 0.4.1 / HTTPX `80e2` results
 
 Unchanged reviewed portable source
 `b24e2270ec0d2d1d0b796356b1c68481d10676db` was qualified in a new isolated
@@ -538,7 +588,7 @@ to publication paths (13 total); this documentation correction adds none.
   qualification. No native interruption capability is inferred.
 * Installation of those coherent pins and successful execution of all three
   fixed package CI contexts, including the mandatory paired/trusted suites.
-  Passing with the current `80e2` development input does not make it a release.
+  Passing with the current `9c487` development input does not make it a release.
 * Coordinator acceptance, ordinary implementation merge, then tags/releases.
   Package registration/history/catalog and sealed bootstrap are already
   coordinator-completed, not work to repeat here.

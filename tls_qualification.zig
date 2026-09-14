@@ -554,9 +554,12 @@ test "trusted HTTPS independent redirects verify actual credentials without hidi
         for ([_]enum { same_origin, cross_origin, see_other }{ .same_origin, .cross_origin, .see_other }) |case| {
             const owner = try https_fixture.Owner.create(testing.allocator, testing.io, .{ .version = version });
             defer owner.deinit();
-            var destination = try owner.factory().create(testing.allocator, testing.io, .{ .response = .{ .body = "destination" } });
-            defer destination.deinit();
             const same_origin = case == .same_origin;
+            var destination = try owner.factory().create(testing.allocator, testing.io, .{
+                .response = .{ .body = "destination" },
+                .expect_request = !same_origin,
+            });
+            defer destination.deinit();
             const headers = [_]https_fixture.conformance.scripted.Header{
                 .{ .name = "Location", .value = if (same_origin) "/continued#fragment" else destination.url },
                 .{ .name = "Set-Cookie", .value = "ambient=must-not-be-replayed" },
@@ -671,6 +674,28 @@ test "trusted HTTPS independent logical streaming keeps the shared allocation bu
     }
 }
 
+fn waitForFixtureActive(state: *https_fixture.Backend) !void {
+    const start = std.Io.Timestamp.now(testing.io, .awake);
+    while (true) {
+        state.mutex.lockUncancelable(testing.io);
+        const active = state.active != null;
+        state.mutex.unlock(testing.io);
+        if (active) return;
+        if (state.done.load(.acquire)) return error.FixtureCompletedBeforeHandshake;
+        if (std.Io.Timestamp.now(testing.io, .awake).toNanoseconds() - start.toNanoseconds() > 500 * std.time.ns_per_ms)
+            return error.FixtureHandshakeNotEntered;
+        try std.Io.sleep(testing.io, .fromMilliseconds(1), .awake);
+    }
+}
+
+fn waitForFixtureDone(state: *https_fixture.Backend, start: std.Io.Timestamp) !void {
+    while (!state.done.load(.acquire)) {
+        if (std.Io.Timestamp.now(testing.io, .awake).toNanoseconds() - start.toNanoseconds() > std.time.ns_per_s)
+            return error.FixtureCompletionTimedOut;
+        try std.Io.sleep(testing.io, .fromMilliseconds(1), .awake);
+    }
+}
+
 test "trusted HTTPS fixture shutdown joins an idle peer and an incomplete handshake" {
     const owner = try https_fixture.Owner.create(testing.allocator, testing.io, .{});
     defer owner.deinit();
@@ -687,30 +712,82 @@ test "trusted HTTPS fixture shutdown joins an idle peer and an incomplete handsh
         if (phase != .idle) {
             try socket.connectWithTimeout(try state.listener.getLocalAddress(), 1000);
             if (phase == .partial_record) try socket.sendAll("\x16\x03\x03");
-            const start = std.Io.Timestamp.now(testing.io, .awake);
-            while (true) {
-                state.mutex.lockUncancelable(testing.io);
-                const active = state.active != null;
-                state.mutex.unlock(testing.io);
-                if (active) break;
-                if (std.Io.Timestamp.now(testing.io, .awake).toNanoseconds() - start.toNanoseconds() > 500 * std.time.ns_per_ms)
-                    return error.FixtureHandshakeNotEntered;
-                try std.Io.sleep(testing.io, .fromMilliseconds(1), .awake);
-            }
+            try waitForFixtureActive(state);
+            try std.Io.sleep(testing.io, .fromMilliseconds(50), .awake);
+            try testing.expect(!state.done.load(.acquire));
         }
         const before = std.Io.Timestamp.now(testing.io, .awake);
         const finished = backend.finish();
         const elapsed = std.Io.Timestamp.now(testing.io, .awake).toNanoseconds() - before.toNanoseconds();
-        std.debug.print("trusted HTTPS fixture shutdown {s}: elapsed_us={d}, joined={}, active={}, cancel_status={s}\n", .{
+        std.debug.print("trusted HTTPS fixture shutdown {s}: elapsed_us={d}, joined={}, active={}, cancelled={}\n", .{
             @tagName(phase),
             @divTrunc(elapsed, std.time.ns_per_us),
             state.thread == null,
             state.active != null,
-            if (state.stop_cancel_status) |status| @tagName(status) else "not_requested",
+            state.io_context.isCancelled(),
         });
         try finished;
         try testing.expect(elapsed <= std.time.ns_per_s);
         try testing.expect(state.thread == null and state.active == null);
+        try testing.expect(state.done.load(.acquire));
         try backend.assertQuiescent();
     }
+}
+
+test "trusted HTTPS fixture ancestor cancellation is not masked by inactive tokens" {
+    var ancestor = httpx.io_context.IoContext.init(.{});
+    const dormant_token: httpx.CancellationToken = .{};
+    const parent = httpx.io_context.IoContext.init(.{ .parent = &ancestor, .external_cancel = &dormant_token });
+    const owner = try https_fixture.Owner.create(testing.allocator, testing.io, .{ .parent_context = &parent });
+    defer owner.deinit();
+    var backend = try owner.factory().create(testing.allocator, testing.io, .{ .expect_request = false });
+    defer backend.deinit();
+    const state: *https_fixture.Backend = @ptrCast(@alignCast(backend.context));
+    var socket = try httpx.Socket.create();
+    defer socket.close();
+    try socket.connectWithTimeout(try state.listener.getLocalAddress(), 1000);
+    try socket.sendAll("\x16\x03\x03");
+    try waitForFixtureActive(state);
+    try std.Io.sleep(testing.io, .fromMilliseconds(50), .awake);
+    try testing.expect(!state.done.load(.acquire));
+    const start = std.Io.Timestamp.now(testing.io, .awake);
+    ancestor.cancel();
+    try waitForFixtureDone(state, start);
+    try testing.expect(!state.shutdown_token.isCancelled());
+    try testing.expect(!dormant_token.isCancelled());
+    try testing.expectError(error.Cancelled, backend.finish());
+    const elapsed = std.Io.Timestamp.now(testing.io, .awake).toNanoseconds() - start.toNanoseconds();
+    std.debug.print("trusted HTTPS fixture ancestor cancellation: elapsed_us={d}, joined={}, active={}\n", .{
+        @divTrunc(elapsed, std.time.ns_per_us), state.thread == null, state.active != null,
+    });
+    try testing.expect(elapsed <= std.time.ns_per_s);
+    try testing.expect(state.thread == null and state.active == null);
+    try backend.assertQuiescent();
+}
+
+test "trusted HTTPS fixture earliest parent deadline bounds an incomplete record" {
+    var parent = httpx.io_context.IoContext.init(.{ .phase_deadline = httpx.io_context.Deadline.afterMs(5000) });
+    const owner = try https_fixture.Owner.create(testing.allocator, testing.io, .{ .parent_context = &parent });
+    defer owner.deinit();
+    parent.request_deadline = httpx.io_context.Deadline.afterMs(500);
+    const start = std.Io.Timestamp.now(testing.io, .awake);
+    var backend = try owner.factory().create(testing.allocator, testing.io, .{ .expect_request = false });
+    defer backend.deinit();
+    const state: *https_fixture.Backend = @ptrCast(@alignCast(backend.context));
+    var socket = try httpx.Socket.create();
+    defer socket.close();
+    try socket.connectWithTimeout(try state.listener.getLocalAddress(), 1000);
+    try socket.sendAll("\x16\x03\x03");
+    try waitForFixtureActive(state);
+    try testing.expectEqual(parent.request_deadline.?, state.io_context.selectedDeadline().?.deadline);
+    try waitForFixtureDone(state, start);
+    try testing.expect(!state.shutdown_token.isCancelled());
+    try testing.expectError(error.Timeout, backend.finish());
+    const elapsed = std.Io.Timestamp.now(testing.io, .awake).toNanoseconds() - start.toNanoseconds();
+    std.debug.print("trusted HTTPS fixture parent deadline: elapsed_us={d}, joined={}, active={}\n", .{
+        @divTrunc(elapsed, std.time.ns_per_us), state.thread == null, state.active != null,
+    });
+    try testing.expect(elapsed <= std.time.ns_per_s);
+    try testing.expect(state.thread == null and state.active == null);
+    try backend.assertQuiescent();
 }

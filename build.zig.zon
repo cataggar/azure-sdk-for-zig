@@ -10,8 +10,8 @@
         },
         // Unpublished development input, not the final qualified release.
         .httpx = .{
-            .url = "git+https://github.com/cataggar/httpx.zig#80e2cbb6976d65a0349976ab82301b1eb9c27b51",
-            .hash = "httpx-0.1.9-8qj2evcNMgBRYXXcklYYayJOyJmP51lzXn0xylUhlicH",
+            .url = "git+https://github.com/cataggar/httpx.zig#9c487bfc060c14df3d337d614ff4772eee45c0cd",
+            .hash = "httpx-0.1.9-8qj2euMfMwA79n2ul9N40WXlWpX7Fxo-bvJ2jw082GnZ",
         },
     },
     .paths = .{

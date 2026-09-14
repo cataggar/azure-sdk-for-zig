@@ -1,21 +1,24 @@
 //! Adapter-local TLS peer for the published Core factory contract. HTTP parsing
 //! uses std.http.Server; response scripts and captured-request types are Core's.
 const std = @import("std");
-const builtin = @import("builtin");
 const adapter = @import("azure_sdk_core_httpx");
 const httpx = adapter.httpx;
+const IoContext = httpx.io_context.IoContext;
+const Deadline = httpx.io_context.Deadline;
 const data = @import("tls_fixture_data");
 pub const conformance = @import("azure_sdk_core_http_conformance");
 const Binding = @typeInfo(@typeInfo(@TypeOf(httpx.tls.TrustContext.bind)).@"fn".return_type.?).error_union.payload;
 const Version = std.crypto.tls.ProtocolVersion;
 const valid_host = "api.example.test";
 const wrong_host = "wrong.example.test";
+const io_timeout_ms = 2000;
 
 pub const Options = struct {
     version: Version = .tls_1_3,
     wrong_hostname: bool = false,
     untrusted_root: bool = false,
     path_depth: usize = 8,
+    parent_context: ?*const IoContext = null,
 };
 
 pub const Owner = struct {
@@ -208,21 +211,32 @@ const Dns = struct {
 
 const TlsIo = struct {
     connection: *httpx.tls.Connection,
+    context: *const IoContext,
     reader: std.Io.Reader,
     writer: std.Io.Writer,
+    failure: ?anyerror = null,
 
-    fn init(connection: *httpx.tls.Connection, read_buffer: []u8, write_buffer: []u8) TlsIo {
+    fn init(connection: *httpx.tls.Connection, context: *const IoContext, read_buffer: []u8, write_buffer: []u8) TlsIo {
         return .{
             .connection = connection,
+            .context = context,
             .reader = .{ .vtable = &.{ .stream = stream }, .buffer = read_buffer, .seek = 0, .end = 0 },
             .writer = .{ .vtable = &.{ .drain = drain }, .buffer = write_buffer },
         };
     }
 
+    fn operationContext(self: *const TlsIo) IoContext {
+        return .init(.{ .parent = self.context, .phase_deadline = Deadline.afterMs(io_timeout_ms) });
+    }
+
     fn stream(reader: *std.Io.Reader, writer: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
         const self: *TlsIo = @fieldParentPtr("reader", reader);
         const output = limit.slice(try writer.writableSliceGreedy(1));
-        const count = self.connection.read(output) catch return error.ReadFailed;
+        const context = self.operationContext();
+        const count = self.connection.readWithContext(output, &context) catch |err| {
+            if (self.failure == null) self.failure = err;
+            return error.ReadFailed;
+        };
         if (count == 0) return error.EndOfStream;
         writer.advance(count);
         return count;
@@ -230,17 +244,26 @@ const TlsIo = struct {
 
     fn drain(writer: *std.Io.Writer, bytes: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
         const self: *TlsIo = @fieldParentPtr("writer", writer);
+        // One budget spans buffered bytes, all vector parts and every splat.
+        const context = self.operationContext();
         var count: usize = writer.buffered().len;
-        self.connection.writeAll(writer.buffered()) catch return error.WriteFailed;
+        self.writeAll(writer.buffered(), &context) catch return error.WriteFailed;
         for (bytes[0 .. bytes.len - 1]) |part| {
-            self.connection.writeAll(part) catch return error.WriteFailed;
+            self.writeAll(part, &context) catch return error.WriteFailed;
             count += part.len;
         }
         for (0..splat) |_| {
-            self.connection.writeAll(bytes[bytes.len - 1]) catch return error.WriteFailed;
+            self.writeAll(bytes[bytes.len - 1], &context) catch return error.WriteFailed;
             count += bytes[bytes.len - 1].len;
         }
         return writer.consume(count);
+    }
+
+    fn writeAll(self: *TlsIo, bytes: []const u8, context: *const IoContext) !void {
+        self.connection.writeAllWithContext(bytes, context) catch |err| {
+            if (self.failure == null) self.failure = err;
+            return err;
+        };
     }
 };
 
@@ -253,10 +276,11 @@ pub const Backend = struct {
     transport: adapter.HttpxTransport = undefined,
     url: []u8 = undefined,
     thread: ?std.Thread = null,
-    stopping: std.atomic.Value(bool) = .init(false),
+    shutdown_token: httpx.CancellationToken = .{},
+    io_context: IoContext = undefined,
+    done: std.atomic.Value(bool) = .init(false),
     mutex: std.Io.Mutex = .init,
     active: ?*httpx.Socket = null,
-    stop_cancel_status: ?std.os.windows.NTSTATUS = null,
     failure: ?anyerror = null,
     handshakes: usize = 0,
     requests: std.ArrayList(conformance.scripted.CapturedRequest) = .empty,
@@ -273,6 +297,10 @@ pub const Backend = struct {
             .listener = try httpx.TcpListener.init(try httpx.Address.parseIp("127.0.0.1", 0)),
         };
         errdefer self.listener.deinit();
+        self.io_context = .init(.{
+            .parent = owner.options.parent_context,
+            .external_cancel = &self.shutdown_token,
+        });
         self.url = try std.fmt.allocPrint(allocator, "https://{s}:{d}/conformance", .{
             if (owner.options.wrong_hostname) wrong_host else valid_host,
             (try self.listener.getLocalAddress()).getPort(),
@@ -311,22 +339,7 @@ pub const Backend = struct {
     }
 
     fn stop(self: *Backend) void {
-        self.stopping.store(true, .release);
-        self.mutex.lockUncancelable(self.owner.io);
-        if (self.active) |socket| {
-            socket.shutdownBoth() catch {};
-            if (builtin.os.tag == .windows) {
-                // Shutdown disallows subsequent receives; also cancel an already
-                // pending synchronous receive on this fixture-owned worker.
-                var status_block: std.os.windows.IO_STATUS_BLOCK = undefined;
-                self.stop_cancel_status = std.os.windows.ntdll.NtCancelSynchronousIoFile(
-                    self.thread.?.getHandle(),
-                    null,
-                    &status_block,
-                );
-            }
-        }
-        self.mutex.unlock(self.owner.io);
+        self.shutdown_token.cancel();
         if (self.thread) |thread| {
             thread.join();
             self.thread = null;
@@ -335,16 +348,22 @@ pub const Backend = struct {
 
     fn finish(context: *anyopaque) !void {
         const self: *Backend = @ptrCast(@alignCast(context));
+        const completion = self.waitForExpectedPeer();
         self.stop();
-        if (self.stop_cancel_status) |status| switch (status) {
-            .SUCCESS, .NOT_FOUND => {},
-            else => return error.FixtureIoCancellationFailed,
-        };
+        try completion;
         const dns_error = self.owner.dns.failure_code.load(.acquire);
         if (dns_error != 0) return @errorFromInt(dns_error);
         if (self.failure) |err| {
             if (!self.options.allow_peer_failure) return err;
         }
+    }
+
+    fn waitForExpectedPeer(self: *Backend) !void {
+        if (!self.options.expect_request or self.options.responses.len != 0) return;
+        // Core's one-request factory joins naturally before observing captures.
+        // Cancelling first can discard an already queued early-abort request.
+        const bound = IoContext.init(.{ .phase_deadline = Deadline.afterMs(io_timeout_ms) });
+        while (!self.done.load(.acquire)) try bound.waitForMs(1);
     }
 
     fn quiescent(context: *anyopaque) !void {
@@ -413,12 +432,13 @@ pub const Backend = struct {
     }
 
     fn run(self: *Backend) void {
+        defer self.done.store(true, .release);
         for (0..64) |_| {
-            while (!self.stopping.load(.acquire) and !self.listener.socket.waitReadable(20)) {}
-            if (self.stopping.load(.acquire)) return;
             self.serve() catch |err| {
-                if (!self.stopping.load(.acquire)) self.failure = err;
-                if (!self.options.allow_peer_failure) return;
+                if (self.shutdown_token.isCancelled()) return;
+                if (self.failure == null) self.failure = err;
+                if (!self.options.allow_peer_failure or self.io_context.isCancelled() or self.io_context.expiredDeadline() != null)
+                    return;
             };
             if (self.options.responses.len == 0) return;
         }
@@ -426,10 +446,15 @@ pub const Backend = struct {
     }
 
     fn serve(self: *Backend) !void {
+        while (true) {
+            try self.io_context.check();
+            if (self.listener.socket.waitReadable(20)) break;
+        }
+        try self.io_context.check();
         var accepted = try self.listener.accept();
         defer accepted.socket.close();
         self.mutex.lockUncancelable(self.owner.io);
-        if (self.stopping.load(.acquire)) {
+        if (self.shutdown_token.isCancelled()) {
             self.mutex.unlock(self.owner.io);
             return;
         }
@@ -440,9 +465,13 @@ pub const Backend = struct {
             self.active = null;
             self.mutex.unlock(self.owner.io);
         }
-        try accepted.socket.setRecvTimeout(2000);
-        try accepted.socket.setSendTimeout(2000);
-        var connection = try httpx.tls.acceptServer(self.fixture_allocator, &accepted.socket, &.{"http/1.1"}, self.owner.server_config);
+        try accepted.socket.setRecvTimeout(io_timeout_ms);
+        try accepted.socket.setSendTimeout(io_timeout_ms);
+        var connection = try httpx.tls.acceptServerWithIo(self.fixture_allocator, &accepted.socket, &.{"http/1.1"}, self.owner.server_config, .{
+            .context = &self.io_context,
+            .read_timeout_ms = io_timeout_ms,
+            .write_timeout_ms = io_timeout_ms,
+        });
         defer connection.deinit();
         self.handshakes += 1;
         try std.testing.expectEqual(self.owner.options.version, connection.tlsVersion());
@@ -450,7 +479,10 @@ pub const Backend = struct {
         try std.testing.expectEqualStrings(if (self.owner.options.wrong_hostname) wrong_host else valid_host, connection.sniHostname().?);
         var read_buffer: [16384]u8 = undefined;
         var write_buffer: [16384]u8 = undefined;
-        var tls_io = TlsIo.init(&connection, &read_buffer, &write_buffer);
+        var tls_io = TlsIo.init(&connection, &self.io_context, &read_buffer, &write_buffer);
+        errdefer if (!self.shutdown_token.isCancelled() and self.failure == null) {
+            self.failure = tls_io.failure;
+        };
         var server = std.http.Server.init(&tls_io.reader, &tls_io.writer);
         var incoming = try server.receiveHead();
         var captured: conformance.scripted.CapturedRequest = .{
