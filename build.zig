@@ -1,234 +1,103 @@
 const std = @import("std");
-const builtin = @import("builtin");
-
-/// Single source of truth for the package version: the manifest.
-const package_version = @import("build.zig.zon").version;
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-
-    const serde_dep = b.dependency("serde", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const serde_mod = serde_dep.module("serde");
-
-    const options = b.addOptions();
-    options.addOption([]const u8, "version", package_version);
-    const options_mod = options.createModule();
-
-    const core_mod = b.addModule("azure_sdk_core", .{
+    if (target.result.os.tag == .wasi) {
+        @panic("azure_sdk_core_httpx is optional native transport; use Core's WASI host backend");
+    }
+    const core = b.dependency("azure_sdk_core", .{ .target = target, .optimize = optimize });
+    const httpx = b.dependency("httpx", .{ .target = target, .optimize = optimize });
+    const httpx_module = httpx.module("httpx");
+    // Re-export the actual module, not another compilation of the HTTPX source.
+    b.modules.put(b.allocator, "httpx", httpx_module) catch @panic("out of memory");
+    b.modules.put(b.allocator, "azure_sdk_core", core.module("azure_sdk_core")) catch @panic("out of memory");
+    const adapter = b.addModule("azure_sdk_core_httpx", .{
         .root_source_file = b.path("root.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "serde", .module = serde_mod },
-            .{ .name = "build_options", .module = options_mod },
+            .{ .name = "azure_sdk_core", .module = core.module("azure_sdk_core") },
+            .{ .name = "httpx", .module = httpx_module },
         },
     });
-
-    const conformance_fakes_mod = b.createModule(.{
-        .root_source_file = b.path("conformance/fakes.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "azure_sdk_core", .module = core_mod },
-        },
-    });
-    const http_conformance_mod = b.addModule("azure_sdk_core_http_conformance", .{
-        .root_source_file = b.path("conformance/http_transport.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "azure_sdk_core", .module = core_mod },
-            .{
-                .name = "azure_sdk_core_conformance_fakes",
-                .module = conformance_fakes_mod,
-            },
-        },
-    });
-    const crypto_conformance_mod = b.addModule("azure_sdk_core_crypto_conformance", .{
-        .root_source_file = b.path("conformance/crypto_provider.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "azure_sdk_core", .module = core_mod },
-            .{
-                .name = "azure_sdk_core_conformance_fakes",
-                .module = conformance_fakes_mod,
-            },
-        },
-    });
-
+    // Propagate HTTPX's Windows socket imports to consumers, not just tests.
+    if (target.result.os.tag == .windows) {
+        adapter.linkSystemLibrary("ws2_32", .{});
+        adapter.linkSystemLibrary("mswsock", .{});
+    }
+    const test_filter = b.option([]const u8, "test-filter", "Run matching adapter tests");
     const tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("root.zig"),
+            .root_source_file = b.path("tests.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "serde", .module = serde_mod },
-                .{ .name = "build_options", .module = options_mod },
+                .{ .name = "azure_sdk_core_httpx", .module = adapter },
+                .{ .name = "httpx", .module = httpx_module },
+                .{ .name = "azure_sdk_core_http_conformance", .module = core.module("azure_sdk_core_http_conformance") },
             },
         }),
+        .filters = if (test_filter) |filter| &.{filter} else &.{},
     });
-    const http_conformance_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("conformance/http_transport.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "azure_sdk_core", .module = core_mod },
-                .{
-                    .name = "azure_sdk_core_conformance_fakes",
-                    .module = conformance_fakes_mod,
-                },
-            },
-        }),
-    });
-    const crypto_conformance_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("conformance/crypto_provider.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "azure_sdk_core", .module = core_mod },
-                .{
-                    .name = "azure_sdk_core_conformance_fakes",
-                    .module = conformance_fakes_mod,
-                },
-            },
-        }),
-    });
-    const wasi_adapter_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("wasi_adapter_test.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-
-    const consumer_check = b.addObject(.{
-        .name = "core-conformance-consumer-check",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("conformance/consumer.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "azure_sdk_core", .module = core_mod },
-                .{
-                    .name = "azure_sdk_core_http_conformance",
-                    .module = http_conformance_mod,
-                },
-                .{
-                    .name = "azure_sdk_core_crypto_conformance",
-                    .module = crypto_conformance_mod,
-                },
-            },
-        }),
-    });
-
-    const package_archive = b.addSystemCommand(&.{"tar"});
-    if (builtin.target.os.tag == .windows) {
-        package_archive.addArg("--force-local");
-    }
-    package_archive.addArg("-czf");
-    package_archive.has_side_effects = true;
-    const archive = package_archive.addOutputFileArg(
-        "azure_sdk_core-manifest-filtered.tar.gz",
-    );
-    package_archive.addArg("-C");
-    package_archive.addArg(b.pathFromRoot("."));
-    inline for (@import("build.zig.zon").paths) |included_path| {
-        package_archive.addArg(included_path);
-    }
-
-    const package_consumer_files = b.addWriteFiles();
-    _ = package_consumer_files.addCopyFile(
-        b.path("conformance/package_consumer/build.zig"),
-        "build.zig",
-    );
-    _ = package_consumer_files.addCopyFile(
-        b.path("conformance/package_consumer/build.zig.zon"),
-        "build.zig.zon",
-    );
-    _ = package_consumer_files.addCopyFile(
-        b.path("conformance/package_consumer/consumer.zig"),
-        "consumer.zig",
-    );
-    const package_consumer_dir = package_consumer_files.getDirectory();
-
-    const package_fetch = b.addSystemCommand(&.{
-        b.graph.zig_exe,
-        "fetch",
-        "--save=core",
-    });
-    package_fetch.setCwd(package_consumer_dir);
-    package_fetch.addFileArg(archive);
-
-    const package_consumer_test = b.addSystemCommand(&.{
-        b.graph.zig_exe,
-        "build",
-        "test",
-        "--summary",
-        "all",
-    });
-    package_consumer_test.setCwd(package_consumer_dir);
-    package_consumer_test.step.dependOn(&package_fetch.step);
-
-    const wasi_target = b.resolveTargetQuery(.{
-        .cpu_arch = .wasm32,
-        .os_tag = .wasi,
-    });
-    const wasi_serde_dep = b.dependency("serde", .{
-        .target = wasi_target,
-        .optimize = optimize,
-    });
-    const wasi_core_mod = b.createModule(.{
-        .root_source_file = b.path("root.zig"),
-        .target = wasi_target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "serde", .module = wasi_serde_dep.module("serde") },
-            .{ .name = "build_options", .module = options_mod },
-        },
-    });
-    const wasi_check = b.addObject(.{
-        .name = "core-wasi-build-check",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("conformance/wasi_build_check.zig"),
-            .target = wasi_target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "azure_sdk_core", .module = wasi_core_mod },
-            },
-        }),
-    });
-
-    const test_step = b.step("test", "Run Core tests");
+    b.default_step.dependOn(&tests.step);
+    const test_step = b.step("test", "Run offline adapter and published Core transport conformance");
     test_step.dependOn(&b.addRunArtifact(tests).step);
-    test_step.dependOn(&b.addRunArtifact(http_conformance_tests).step);
-    test_step.dependOn(&b.addRunArtifact(crypto_conformance_tests).step);
-    test_step.dependOn(&b.addRunArtifact(wasi_adapter_tests).step);
-    test_step.dependOn(&consumer_check.step);
-    test_step.dependOn(&package_consumer_test.step);
-    test_step.dependOn(&wasi_check.step);
 
-    const conformance_consumer_step = b.step(
-        "conformance-consumer-check",
-        "Compile a consumer of the exported conformance modules",
-    );
-    conformance_consumer_step.dependOn(&consumer_check.step);
-
-    const package_consumer_step = b.step(
-        "package-consumer-check",
-        "Test conformance modules from the manifest-filtered package archive",
-    );
-    package_consumer_step.dependOn(&package_consumer_test.step);
-
-    const wasi_step = b.step(
-        "wasi-check",
-        "Build-check the Core WASI HTTP transport (no runtime coverage)",
-    );
-    wasi_step.dependOn(&wasi_check.step);
+    if (b.option(bool, "paired-tls", "Require the paired API and run standard TLS plus trusted HTTPS contracts") orelse false) {
+        const certificates = b.createModule(.{
+            .root_source_file = httpx.path("src/tls/trust_fixtures.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        });
+        // Generate bytes in a separate std-only executable. Importing HTTPX's
+        // private fixture file into another test module violates Zig ownership.
+        const generator = b.addExecutable(.{
+            .name = "azure-httpx-test-certificates",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("tls_fixture_data.zig"),
+                .target = b.graph.host,
+                .optimize = optimize,
+                .imports = &.{.{ .name = "httpx_test_certificates", .module = certificates }},
+            }),
+        });
+        const generated = b.addRunArtifact(generator).addOutputDirectoryArg("certificates");
+        const fixture_data = b.createModule(.{
+            .root_source_file = generated.path(b, "fixtures.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        const paired_tests = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("tls_qualification.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "azure_sdk_core_httpx", .module = adapter },
+                    .{ .name = "httpx", .module = httpx_module },
+                    .{ .name = "tls_fixture_data", .module = fixture_data },
+                    .{ .name = "azure_sdk_core_http_conformance", .module = core.module("azure_sdk_core_http_conformance") },
+                },
+            }),
+            .filters = if (test_filter) |filter| &.{filter} else &.{},
+        });
+        b.default_step.dependOn(&paired_tests.step);
+        const run_paired = b.addRunArtifact(paired_tests);
+        test_step.dependOn(&run_paired.step);
+        const paired_step = b.step("paired-tls-test", "Run standard-provider TLS and trusted HTTPS Core conformance");
+        paired_step.dependOn(&run_paired.step);
+        const probe = b.addExecutable(.{
+            .name = "azure-httpx-public-https",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("public_https.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{.{ .name = "azure_sdk_core_httpx", .module = adapter }},
+            }),
+        });
+        const run_probe = b.addRunArtifact(probe);
+        if (b.args) |args| run_probe.addArgs(args);
+        const public_step = b.step("qualify-public-https", "Opt-in unauthenticated Azure HTTPS with canonical system trust");
+        public_step.dependOn(&run_probe.step);
+    }
 }

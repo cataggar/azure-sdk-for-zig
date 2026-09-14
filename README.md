@@ -1,302 +1,353 @@
-# azure_sdk_core
+# Azure Core HTTPX transport for Zig
 
-Core HTTP, authentication, error, paging, long-running-operation, URL, crypto,
-and utility infrastructure for the Azure SDK for Zig.
+**Version: 0.1.0.** Uses released Azure Core 0.4.1 and HTTPX 0.2.0.
 
-The canonical package/module name is `azure_sdk_core`, released from
-`sdk/core`. Identity remains part of this package. The current release line is
-`0.4.0`, adding opt-in tracing, owned request headers, and expanded real-backend
-conformance to the explicit provider/streaming runtime introduced in `0.3.0`.
+`azure_sdk_core_httpx` implements Azure Core's buffered and streaming HTTP
+transport contracts using HTTPX. It is optional: Core does not depend on HTTPX,
+and WASI applications keep Core's host backend. Requires Zig 0.16.0.
 
-## Core surface
+## Dependencies
 
-| API | Purpose |
+The manifest uses normal immutable commit URLs and actual Zig package hashes,
+without local paths. Core 0.4.1 and HTTPX 0.2.0 are released. HTTPX comes only
+from `cataggar/httpx.zig`; its release commit has the same complete source tree
+and package hash as the qualified input.
+
+| Package | Immutable URL | Zig package hash |
+| --- | --- | --- |
+| Core 0.4.1 | `git+https://github.com/cataggar/azure-sdk-for-zig.git#2c95f65be96b5ef48a50671de33e9e0926c624cb` | `azure_sdk_core-0.4.1-eFY0EpbrCgAKh2uJJ-DguKP7zx8Ywuf1UdP7HkJ_9CmI` |
+| HTTPX 0.2.0 | `git+https://github.com/cataggar/httpx.zig#2d418ce2ebbd8cbb0d930e80feeac0e45560f0c9` | `httpx-0.2.0-8qj2eonLMwDuDDJxDVzoax9VY68Lb0YjT_AtwZBAbqwV` |
+
+## Integration
+
+Import `dependency.module("azure_sdk_core_httpx")` in your application build.
+The package also exports `dependency.module("httpx")` and
+`dependency.module("azure_sdk_core")`, the same module objects used internally.
+Optional TLS providers must use that canonical HTTPX module or `adapter.httpx`
+types, never a second HTTPX compilation or copied provider/trust ABI.
+This package adds no C source or third-party native-crypto dependency, including
+SymCrypt. HTTPX uses operating-system libraries for Windows/macOS trust-store
+discovery; certificate cryptography still uses the selected provider.
+
+| Public API | Contract |
 | --- | --- |
-| `http.StdHttpTransport` | Streaming HTTP via `std.http.Client` with gzip, deflate, and zstd response decoding |
-| `http.MockTransport` | Canned buffered and streaming responses for tests |
-| `http.SequenceMockTransport` | Ordered responses for retry tests |
-| `http.HttpRuntime` | Selected HTTP transport and SDK crypto provider |
-| `http.HttpPipeline` | Policies followed by one runtime |
-| `http.RequestHeaders` | Owned case-insensitive request headers with allocation-free trace restoration |
-| `http.TelemetryPolicy` | Adds `User-Agent` |
-| `http.LoggingPolicy` | Logs requests through `std.log` |
-| `http.RetryPolicy` | Bounded exponential backoff, jitter, and `Retry-After` |
-| `http.BearerTokenAuthPolicy` | Bearer authentication with token caching |
-| `http.RequestIdPolicy` | Adds an `x-ms-client-request-id` UUID |
-| `crypto.CryptoProvider` | Pluggable random, MD5, SHA-256, and HMAC-SHA256 operations |
-| `crypto.StdCryptoProvider` | Pure-Zig provider backed by `std.Io` and `std.crypto` |
-| `credentials.CachedTokenCredential` | In-memory token cache with expiry |
-| `base64` | Provider-backed HMAC-SHA256, SHA-256, and integrity-only MD5 helpers |
-| `url` | URL parsing and RFC 3986 percent encoding |
-| `errors` | Azure error-envelope parsing |
-| `lro` | Long-running-operation polling |
-| `pager` | Generic `PipelinePager` |
-| `tracing` | Opt-in bounded spans and explicit OTLP JSON output |
-| `perf` | Wall-clock and allocation benchmark harness |
+| `HttpxTransport.init(allocator, io, Options)` | Creates a move-only transport owner; can fail |
+| `asTransport()` | Returns a copyable, borrowed `core.http.HttpTransport` descriptor |
+| `poolStats()` | Returns canonical HTTPX pool observations |
+| `trailers(operation)` | Borrows canonical response trailers after EOF/finish until operation deinit; rejects foreign operations |
+| `deinit()` | Closes the pool; all operations must already be deinitialized |
+| `Options`, `core`, `httpx` | Configuration and the actual dependency modules |
 
-`HttpTransport.open` and `HttpPipeline.open` return a heap-backed,
-single-owner `HttpOperation`. Consume its reader and call `finish` to drain for
-connection reuse, or `abort`/`cancel` to close early. Always call `deinit`;
-it aborts an active operation. Streaming request preparation runs once and
-does not replay a consumed reader.
+### Verified system trust and Azure pipeline
 
-HTTP construction has one explicit dependency path:
+This buffered GET example accepts an application-configured DNS-server IP.
+The caller owns and must deinitialize the returned `core.http.Response`.
+For repeated requests, keep these owners and the pipeline alive together
+rather than rebuilding the pool per request. Add Azure authentication,
+telemetry, tracing and retry policies to the pipeline as needed.
 
 ```zig
-var transport = core.http.StdHttpTransport.init(allocator, io);
-defer transport.deinit();
-var crypto = core.crypto.StdCryptoProvider.init(io);
-const runtime = core.http.HttpRuntime.init(
-    transport.asTransport(),
-    crypto.asProvider(),
-);
-var pipeline = core.http.HttpPipeline.init(runtime, policies);
+const std = @import("std");
+const adapter = @import("azure_sdk_core_httpx");
+const core = adapter.core;
+const httpx = adapter.httpx;
+
+pub fn get(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    dns_server: []const u8,
+    url: []const u8,
+) !core.http.Response {
+    _ = try httpx.Address.parseIp(dns_server, 53);
+    const windows_md5 = @import("builtin").os.tag == .windows;
+    var standard = httpx.StandardCryptoProvider.initWithOptions(io, allocator, .{
+        .allow_md5_identifier_hash = windows_md5,
+    });
+    var roots = try httpx.tls.TrustContext.init(allocator, io, .{ .source = .system });
+    defer roots.deinit();
+    var certificate_crypto = httpx.CryptoCertificateVerifier.init(standard.provider());
+    var binding = try roots.bind(&certificate_crypto, .{
+        .allow_sha1_identifiers = true,
+        .allow_md5_identifiers = windows_md5,
+    });
+    var resolver = httpx.DNSResolver.init(allocator, .{
+        .dns_servers = &.{.{ .ip = dns_server }},
+        .udp_timeout_ms = 2000,
+        .tcp_timeout_ms = 2000,
+    });
+    defer resolver.deinit();
+    var transport = try adapter.HttpxTransport.init(allocator, io, .{
+        .client = .{
+            .tls_crypto_provider = standard.provider(),
+            .tls_certificate_crypto = &certificate_crypto,
+            .server_authentication = .{ .verify = .{ .provider = binding.provider() } },
+            .tls_trust_limits = .{},
+            .dns_resolver = &resolver,
+            .timeouts = httpx.Timeouts.uniform(10_000),
+        },
+        .operation = .{ .require_interruptible_dns = true },
+    });
+    defer transport.deinit();
+    var azure_crypto = core.crypto.StdCryptoProvider.init(io);
+    var pipeline = core.http.HttpPipeline.init(
+        core.http.HttpRuntime.init(transport.asTransport(), azure_crypto.asProvider()),
+        &.{},
+    );
+    var request = core.http.Request.init(allocator, .GET, url);
+    defer request.deinit();
+    return pipeline.send(&request);
+}
 ```
 
-Transport and crypto descriptors, and therefore `HttpRuntime`, copy by value
-while borrowing their backend contexts. Keep `transport` and `crypto` alive
-for every pipeline, credential call, client, and open operation that uses
-them. `StdHttpTransport` remains caller-serialized. Custom crypto provider
-contexts must be concurrent-safe or caller-serialized. Incremental SHA-256
-operations own stable allocator-backed state and must be deinitialized once.
+`roots.bind` obtains certificate signature verification and production metadata
+hashing from the same typed adapter. The selected TLS provider must match its
+ABI, context and vtable; an erased signature handle alone cannot authorize a
+different provider. All owners remain stable through pooled TLS sessions.
 
-`Request.headers` is now an owned `http.RequestHeaders`, not a raw
-`std.StringHashMap`. Existing `Request.setHeader` / `getHeader` calls are
-unchanged. Direct map mutation and typed map pointers require the
-[request-header migration](http/request_headers.md). Response-header APIs are
-unchanged. This is a public source-compatibility change in `0.4.0`: migrate raw
-request-header access and keep transitive Core dependency pins coherent when
-upgrading consumers.
+SHA-1 identifier permission is independent of backend capability. The example
+also explicitly enables both Windows-only MD5 backend and metadata permissions
+needed by HTTPX's [P15/P25 Disallowed identity profile](https://github.com/cataggar/httpx.zig/blob/2d418ce2ebbd8cbb0d930e80feeac0e45560f0c9/docs/api/standard-trust.md#documented-disallowed-deny-identities). Those MD5
+permissions stay off on other platforms and in library defaults. Identifier
+permissions do not enable MD5/SHA-1 certificate signatures; the MD5 opt-ins do
+not enable HMAC, HKDF or TLS PRF. Unsupported platform metadata remains
+fail-closed. There is no OS chain-verification fallback.
 
-## Adapter conformance
+## Transport behavior
 
-Core exports two test-only build modules in addition to the production
-`azure_sdk_core` module:
+`Options.client` is a canonical `httpx.ClientConfig` copied by value;
+`Options.operation` is canonical `httpx.OpenOptions` copied per attempt.
+Routing, proxy/`no_proxy`, resolver, HTTP version, pool, timeouts, cancellation,
+trust/provider configuration and limits are forwarded. Borrowed fields are
+not deep-copied.
 
-- `azure_sdk_core_http_conformance`
-- `azure_sdk_core_crypto_conformance`
+### Azure-owned policy and headers
 
-Optional adapter packages import these modules from their pinned Core
-dependency and invoke the public factory-based runners. They are deliberately
-not imported by `root.zig`, and Core has no dependency on optional HTTP or
-crypto adapters.
+Azure alone controls authentication, retries, redirects, replay, request URL,
+headers and body. HTTPX retries, redirects, cookie storage/sending, User-Agent
+and Accept-Encoding synthesis are disabled at both client and operation
+levels, regardless of caller policy defaults. There is one `Client.open` call
+per Azure attempt.
 
-```zig
-const core_dep = b.dependency("azure_sdk_core", .{
-    .target = target,
-    .optimize = optimize,
-});
-const http_contracts = core_dep.module("azure_sdk_core_http_conformance");
-const crypto_contracts = core_dep.module("azure_sdk_core_crypto_conformance");
-```
+Ambient request overrides are rejected with `AzureOwnsRequestOptions`: base
+URL, default headers, request compression, query/auth/range/custom-method
+options, and alternate body/Expect settings. Put explicit headers on the Core
+request. Disabling verification with either `verify_ssl` or the explicit
+insecure `server_authentication` variant returns `TlsVerificationRequired`.
 
-HTTP factories publish explicit capabilities for streaming, response-header
-ordering, framing validation, response limits, cancellation grade,
-decompression ownership, lifecycle observation, and bounded-memory
-logical-large uploads/downloads. Crypto factories publish incremental-allocation and
-concurrency guarantees. A skipped capability is not evidence of runtime
-support.
+All Core methods and owned `RequestHeaders` are forwarded without mutating
+the request or losing header order/duplicates. Matching Content-Length or
+Transfer-Encoding is validated and emitted once; conflicting framing fails.
+HTTP/1 Connection defaults are emitted once; HTTP/2 has no Connection header.
+Responses retain Core's string map and owned, wire-ordered duplicate headers.
 
-Core runs the raw transport suite against `StdHttpTransport` and
-`MockTransport`, retains the fake redirect/retry/allocation contracts, and runs
-actual standard-backend attempt and allocation-failure contracts. The crypto
-suite uses `StdCryptoProvider`. The standard transport remains
-caller-serialized; the standard SDK crypto provider supports concurrent
-hash/HMAC calls. CI also archives exactly the manifest `.paths`,
-fetches that archive into a separate consumer package, and resolves all three
-modules through `b.dependency`; omitted package files therefore fail the
-package test.
+Core owns preflight checks and `transport_started`; the adapter never resets
+that flag. Core's HTTPS-only redirect rules regenerate Host on every followed
+redirect, preserve same-origin credentials, and strip cross-origin
+Authorization, Cookie, Cookie2 and Proxy-Authorization. The original caller
+request remains unchanged; HTTPX defaults cannot restore stripped credentials.
 
-### HTTP factory integration
+### Bodies, limits and errors
 
-Existing runner signatures, the three `CancellationGrade` tags, and required
-factory/instance fields are unchanged. New fields default to unsupported/null.
-Adapters opt in only when their fixture implements the associated contract:
+Both buffered `send` and streaming `open` use canonical `Client.open`,
+incremental writes, `waitForContinue`, `finishRequest(null)`, `read` and
+`finish(.{})`. Upload readers are consumed synchronously during Core `open`.
+Known lengths use `u64` framing; unknown lengths use chunked upload. An early
+final Expect response does not consume the upload source.
 
-- **`scripted_attempts`**: honor `BackendOptions.responses`, serving successive
-  responses at the same endpoint, and implement `BackendInstance.attemptFn`.
-  Each observation includes the method/path request line, body prefix and
-  length, credential headers, and `X-Conformance-Policy`. Record requests at
-  the peer, not just descriptor invocations: invisible backend retries must
-  fail the contract. `finish` must stop an unused scripted endpoint without
-  waiting for a request. An exhausted script must respond deterministically
-  (Core's server returns 418), not leave an extra attempt blocked.
-- The actual-backend suite asserts no raw retry, exactly one configured retry,
-  the retry ceiling, `retryable=false`, one-shot suppression, exact rewind
-  counts/errors, and policy invocation counts outside/inside the retry policy.
-  It also checks forbidden redirects, one-shot redirects, and rejection of
-  plaintext redirect targets before a destination request.
-- **`https_redirects`**, together with `scripted_attempts`: provide distinct,
-  trusted **HTTPS** endpoints. This additionally enables successful same-origin
-  and cross-origin redirects, credential stripping/preservation, fragment
-  removal, cross-origin Host replacement, 303 body/method rewriting, and
-  rewind-failure cleanup. Core's
-  standard fixture is HTTP loopback and does **not** claim this capability.
-  Existing fake positive redirect tests remain separate evidence. No test
-  weakens Core's HTTPS redirect requirement or substitutes for TLS trust tests.
-- **`bounded_memory_logical_large_upload` /
-  `bounded_memory_logical_large_download`**: honor `fixture_allocator` for
-  peer/harness allocations, while every backend/context/operation allocation
-  uses the allocator supplied to `createFn`. Each transfer gets a fixed
-  **2 MiB cumulative allocation budget**, independent of the generated
-  **32 MiB + 257-byte** body. Uploads cover known-length and chunked framing,
-  retaining a 4096-byte prefix and a seed-zero `std.hash.Wyhash` of the entire
-  received body in `Observation.body_hash`. Downloads honor
-  `Response.generated_body`, validate every byte and exact length, and exercise
-  full consumption, partial-read `finish` drainage, and early abort with both
-  framings. The buffered-response limit must not truncate streaming reads.
-- The wide-upload framing case advertises **4 GiB + 65537 bytes** but sends
-  only 65537 bytes, expecting `RequestBodyTooShort` and an unchanged wire
-  `Content-Length`. This is a width/framing test, **not a multi-GiB transfer**.
-  `finish` currently drains to EOF; these tests do not claim an independent
-  drain-byte ceiling or interruption of a blocked drain.
-- **`allocation_failure_cleanup`**: implement `allocationFixtureFn` and invoke
-  `runBackendAllocationFailureContracts(allocator, io, factory)`. It exhaustively
-  fails allocations in buffered, finish, abort, redirect, and retry scenarios.
-  `runBackendAllocationScenario` is a reusable implementation for that hook;
-  adapters must additionally account for native handles/pools and normalize
-  allocator-caused wrapper errors to `OutOfMemory`. The runner owns each
-  failing allocator and rejects OOM results without an induced failure;
-  `WriteFailed` is normalized only after an induced allocation failure.
-  The peer uses the separate
-  fixture allocator, never the failing allocator on a second thread. Without
-  HTTPS fixtures, the redirect scenario proves rejection-path cleanup only.
-  The original zero-argument `runAllocationFailureContracts()` still tests
-  **fakes only**.
-- **`assertQuiescentFn`** optionally verifies adapter-native resources after
-  operation teardown, including failed allocation paths. The standard factory
-  checks one remaining transport reference, no leased connections, and no
-  idle connections for the server's `Connection: close` responses. Lifecycle
-  counters, when advertised, must distinguish exactly one finish/abort/cancel
-  and one deinit; deinitializing an active operation aborts it once. These
-  counters also check intermediate retry/redirect cleanup. Counters belong to
-  the transport context that dispatched the operations, even when the peer
-  URL changes; peer request counts belong to each endpoint. These close-only
-  fixtures do not certify keep-alive pool reuse.
+Streaming does not copy whole bodies: upload and response-reader buffers are
+16 KiB each, with bounded HTTPX protocol/decoder storage. Buffered `send`
+materializes its returned body once and moves owned response metadata.
 
-### Stronger interruption evidence
-
-`Capabilities.interruption` has independent `token` and `deadline` phase sets:
-`connect`, `upload_read`, `upload_write`, `response_headers`, `response_body`,
-and `finish_drain`. Blocking caller-reader interruption is deliberately
-separate from interrupting an upload socket write.
-Populate them with `InterruptionPhases.initMany(...)` (or `insert`) only when
-the adapter implements `interruptionFixtureFn`. `runRawTransportContracts`
-invokes `runInterruptionContracts` automatically; either runner rejects a
-claimed phase without its integration hook.
-
-The adapter-local fixture must synchronize entry into a genuinely blocked
-phase, then signal the token or expire a deadline, measure completion within
-1000 ms of that trigger, and return `InterruptionEvidence`. It must use a
-bounded watchdog and join/clean up even on failure. Evidence must report the
-original `OperationCancelled` or `OperationTimedOut` outcome, a started
-transport, exactly one cleanup, zero live operations, and zero leased
-connections. Preflight cancellation, a late success, or cleanup after manually
-unblocking the phase is not proof of interruption.
-
-Standard Core still advertises only `cooperative_upload`; its stronger phase
-sets are empty. WASI gains no cancellation/runtime claim. Adapter/TLS trust
-fixtures, HTTPX and native SymCrypt composition, service-client provider
-selection, and the final supported-target/release matrix remain separate
-integration work.
-
-The WASI HTTP implementation separates target-neutral request adaptation from
-the `wasi:http@0.2.6` host externs. Native tests use an injectable fake host for
-the target-neutral seam. `zig build wasi-check` only proves that the
-`wasm32-wasi` guest code builds; it does **not** claim a runtime WASI engine,
-network, TLS, or trust-provider test.
-
-## Identity
-
-Identity remains part of `azure_sdk_core` and is available through
-`core.identity`.
-
-| Credential | Authentication source |
+| Setting | Meaning |
 | --- | --- |
-| `ClientSecretCredential` | OAuth 2.0 client credentials |
-| `EnvironmentCredential` | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and `AZURE_CLIENT_SECRET` |
-| `ManagedIdentityCredential` | Azure Instance Metadata Service |
-| `AzureCliCredential` | `az account get-access-token` |
-| `WorkloadIdentityCredential` | Kubernetes OIDC federation |
-| `ChainedTokenCredential` | First successful credential |
-| `DefaultAzureCredential` | A chain selected by `AZURE_TOKEN_CREDENTIALS` |
+| `max_buffered_response` | Buffered `send` only; 16 MiB by default |
+| `operation.response_limit = .{ .bytes = 0 }` | Empty response only, not unlimited |
+| `operation.response_limit = .unlimited` | No operation response-size limit |
+| `operation.response_limit = .inherit` | Uses `client.max_response_size`; zero there means unlimited |
+| `decompression` | `.enabled` by default, matching Core's standard backend; `.disabled` returns encoded bytes |
 
-### `AZURE_TOKEN_CREDENTIALS`
+Decompression never synthesizes Accept-Encoding or inherits HTTPX policy.
+The adapter's default client sets request/response size limits to zero.
+Replacing the `client` struct adopts that struct's canonical HTTPX defaults.
 
-`DefaultAzureCredential` builds its chain from `AZURE_TOKEN_CREDENTIALS`.
+`operation.timeouts.request_ms` bounds the whole native operation, including
+upload, response and drain. `timeout_ms` is a phase override, not a replacement
+whole-operation deadline. A nonzero Core request budget can only shorten the
+native budget; an explicit zero Core budget expires immediately. These are
+per-dispatch budgets; Core owns logical retry/redirect budgets. Core's tracing
+context is unchanged; the current native `OpenOptions` has no parent
+`IoContext` field.
 
-| Value | Chain |
-| --- | --- |
-| unset | `EnvironmentCredential`, `WorkloadIdentityCredential`, `AzureCliCredential`, `AzureDeveloperCliCredential` |
-| `prod` | `EnvironmentCredential`, `WorkloadIdentityCredential`, `ManagedIdentityCredential` |
-| `dev` | `AzureCliCredential`, `AzureDeveloperCliCredential` |
-| a credential name | just that credential |
+Cancellation, timeout, framing and size errors map to Core errors. Other
+concrete errors, including `OutOfMemory`, propagate unchanged.
+`HttpOperation.bodyError()` exposes the first read error behind
+`std.Io.Reader.ReadFailed`; later `finish` preserves it. Successful finish
+drains framing/trailers before reuse. Abort/cancel, malformed framing and
+partial construction failures discard or release resources.
 
-Values are matched ignoring ASCII case and surrounding whitespace; any other
-value fails with `error.UnknownTokenCredentialSelection`. A selected credential
-whose configuration is absent is left out of the chain, and a selection that
-leaves the chain empty fails with `error.NoCredentialConfigured`.
+## Ownership, concurrency and DNS
 
-`ManagedIdentityCredential` probes the Instance Metadata Service at
-`169.254.169.254`, which is unroutable outside Azure and stalls every token
-request until the connection times out. It is therefore never in the default
-chain. Set `AZURE_TOKEN_CREDENTIALS=prod` on deployed services, or name the
-credential directly, to use it.
+The transport is a **caller-serialized, move-only owner**. Keep its address
+stable after `asTransport`; do not mutate, move or deinitialize it while
+descriptors or operations use it. Multiple operations may remain open, but
+all owner methods and allocator access must be serialized.
 
-## Benchmarking
+Allocator, `std.Io`, borrowed configuration strings, resolver, backend and
+trust/provider owners must outlive transport deinit, including **idle pooled
+TLS sessions**. Operations own request metadata after open; upload bytes/readers
+are borrowed only during open. Tokens stay borrowed until operation deinit.
+The Azure pipeline/runtime is copied by value, not its borrowed owners.
 
-`core.perf` measures a closure against the monotonic clock and counts the
-allocations it makes.
+Only cancellation tokens may be signalled concurrently. Core cancellation is
+bridged to one canonical HTTPX token by a joined per-operation monitor thread
+with a 1 ms observation interval; a configured HTTPX token is also honored.
+The monitor accesses stable tokens, not operation handles. `std.Io` must support
+event waits/signals across those threads. Operation methods, including cancel
+and deinit, are not concurrent methods.
 
-```zig
-fn encodeOnce() !void { ... }
+Cancellation is checked around upload reads, but cannot preempt an arbitrary
+blocking borrowed reader. Native I/O observes cancellation/deadlines under
+HTTPX's contract. Strict hostname DNS requires a configured pure-Zig resolver
+on **every OS**; literals and Unix routes are exempt. HTTPX checks the final
+proxy/`no_proxy` route. Adapter defaults enable strict DNS; when replacing
+`operation`, explicitly set `require_interruptible_dns = true`. Cancellation
+of a non-strict detached native DNS worker is not advertised.
 
-const result = core.perf.benchmark(io, "encode", 10_000, encodeOnce);
-core.perf.printResult(result);
+## Platforms and conformance
+
+Native HTTP/1.1 and HTTP/2 are supported. Public HTTP/3 is rejected. Unix plus
+HTTP/2 or TLS is explicitly rejected, never rerouted to TCP or downgraded.
+WASI builds intentionally reject this package with Core host-backend guidance.
+Windows uses the system Winsock ABI, not an added C transport library.
+
+Default tests are offline. CI also requires the opt-in paired standard TLS
+suite in Debug and ReleaseSafe; neither mode can silently fall back to plain
+HTTP. The workflow runs both modes even if one fails, then reports failure if
+either failed. The public Azure probe is never part of these commands.
+
+```sh
+zig fmt --check build.zig build.zig.zon root.zig transport.zig test_backend.zig interruption_fixture.zig tests.zig tls_qualification.zig tls_fixture_data.zig https_fixture.zig public_https.zig
+zig build test --cache-dir .zig-cache/local --global-cache-dir .zig-cache/global --summary all
+zig build test -Dpaired-tls=true -Doptimize=Debug -j2 --cache-dir .zig-cache/local --global-cache-dir .zig-cache/global --summary all
+zig build test -Dpaired-tls=true -Doptimize=ReleaseSafe -j2 --cache-dir .zig-cache/local --global-cache-dir .zig-cache/global --summary all
 ```
 
-`benchmark` needs a `std.Io` because it reads `std.Io.Timestamp.now(io, .awake)`,
-the monotonic clock that keeps running while a task sleeps. Pass the same `Io`
-the code under test uses; `std.testing.io` works in tests.
+`zig build -Dpaired-tls=true` compiles without running the tests.
+Use `-Dtest-filter='trusted HTTPS'` or `-Dtest-filter='paired standard TLS'`
+to select those contracts. The published Core conformance module and
+std-only certificate generator are reused, not copied or compiled into a
+second HTTPX ABI.
 
-To attribute allocations, run through `benchmarkAllocating`, which wraps the
-allocator you hand it and reports `allocationsPerOp` and `bytesPerOp` alongside
-`avgNs`:
+[SDK CI run 34870976350](https://github.com/cataggar/azure-sdk-for-zig/actions/runs/34870976350)
+passed **38/38 tests in each mode** in all three fixed contexts:
+`package-test (ubuntu-latest)`, `package-test (windows-latest)` and
+`package-test (macos-latest)`. That run executed accepted SDK source
+`cbda8daa26d928b96990fb3c0d84b078d654e2a9` with the same HTTPX source tree and
+package hash as the released dependency selected here.
 
-```zig
-fn encodeWith(allocator: std.mem.Allocator) !void { ... }
+Coverage includes the 24 adapter/shared-Core tests and 14 paired tests:
+48 TLS 1.2/1.3 x H1/H2 provider/trust cases plus 12 terminal abort/cancel/token
+cases, real three-certificate paths, selected-provider identity, independent
+SHA-1 gates, OOM/signature errors, path depth, output cleanup and pooled owners.
+Synthetic SHA-1 metadata uses restriction-only `.constraints` /
+`.certificate_der` entries with explicit 20-byte identifiers, not AuthRoot
+grants or Windows Disallowed aliases; it enables no MD5.
 
-const result = core.perf.benchmarkAllocating(io, "encode", 10_000, gpa, encodeWith);
+The trusted HTTPS factory directly runs Core's pipeline, raw transport and
+allocation-failure suites over verified TLS 1.2/1.3 HTTP/1.1 loopback peers.
+It checks real same/cross-origin credentials, Host regeneration, Azure-owned
+retry/redirect counts, invalid destination rejection before sending HTTP,
+and **33,554,689 bytes each direction within a 2,097,152-byte adapter allocation
+budget**. Test-owned CA and DNS avoid public fixtures and OS trust changes.
+HTTP/2 HTTPS redirect coverage is not claimed.
+
+### Fixture cancellation scope
+
+`https_fixture.Owner.create` owns the test provider, typed binding, CA, DNS and
+server; `owner.factory()` returns Core's `BackendFactory`. Deinitialize every
+backend before its owner. Each backend's stable shutdown token is OR-composed
+with optional borrowed `Options.parent_context`; parent owners must outlive it.
+Context-aware server handshake and application I/O retain 2 s logical budgets,
+clamped to earlier parent deadlines without resets across partial progress.
+Stopping signals the token and joins; only the worker closes its socket.
+Expected single requests finish naturally under a bounded join before request
+capture. Normal close-notify retains HTTPX's control-alert timeout path;
+cancellable control-alert transmission is not claimed.
+
+The native Windows CI above measured these times in microseconds; every case
+joined and became quiescent without weakening the 1 s acceptance bound:
+
+| Case | Debug | ReleaseSafe |
+| --- | ---: | ---: |
+| Idle shutdown | 417 | 580 |
+| Incomplete handshake shutdown | 16,502 | 12,183 |
+| Partial-record shutdown | 887 | 12,150 |
+| Ancestor cancellation | 2,239 | 15,672 |
+| 500 ms parent request deadline | 516,491 | 512,873 |
+
+These are fixture cleanup/parent-context results, **not** general SDK
+blocked-TLS interruption capabilities.
+
+### Per-phase SDK interruption scope
+
+Recorded blocked-I/O evidence remains Linux-scoped: token and whole-operation
+deadline interruption of SOCKS5 CONNECT-reply wait, H2 upload flow-control
+wait, response-head wait, response-body read and finish/drain. Peer-observed
+protocol acknowledgements establish entry; both owner completion and peer
+EOF/reset must meet the unchanged 1 s bound, with one close and no live/leased
+operations. A bounded joined watchdog fails rather than manufacturing evidence.
+
+```sh
+zig build test -Dtest-filter=interruption -j2 --cache-dir .zig-cache/local --global-cache-dir .zig-cache/global --summary all
 ```
 
-`CountingAllocator` is also usable on its own to assert an operation stays
-allocation-free. It counts only events that obtain new memory: a failed
-allocation, an in-place `resize`, and a `remap` that succeeds without moving
-are all excluded, so the count reflects real allocation churn rather than
-allocator bookkeeping.
+This does not establish arbitrary upload-reader preemption, H1 backpressure,
+stalled raw TCP SYN, DNS or client TLS-handshake interruption, or a general
+Windows/macOS interruption matrix. CI loopback success does not qualify
+SymCrypt, another native provider, FIPS, every architecture or OS version,
+or public-CA/platform combinations.
 
-`avgNs` and `opsPerSecond` are reciprocals — both derive from the summed
-per-iteration laps. `total_ns` is wall-clock for the whole run and also
-includes the harness's own timer reads, so it is always larger. Each lap costs
-two clock reads, which puts a floor of roughly one clock read on `min_ns`;
-give each iteration enough work to dominate it.
+## Manual public Azure HTTPS probe
 
-## Related packages
+The sole argument is a configured DNS-server IP for the pure-Zig resolver.
+This Linux example reads existing resolver configuration without changing it:
 
-- [AMQP](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/amqp)
-- [Event Hubs](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/eventhubs)
-- [Service Bus](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/servicebus)
-- [Testing](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/testing)
-
-`tracing` and `perf` are namespaces of this package, not separate packages.
-
-## Development
-
-```bash
-zig build test --summary all
-zig build package-consumer-check --summary all
-zig build wasi-check --summary all
+```sh
+zig build qualify-public-https -Dpaired-tls=true -j2 \
+  --cache-dir .zig-cache/local --global-cache-dir .zig-cache/global \
+  --summary all -- "$(awk '/^nameserver / {print $2; exit}' /etc/resolv.conf)"
 ```
 
-The package depends on `serde`. See the
-[package model](https://github.com/cataggar/azure-sdk-for-zig/blob/main/doc/package-branch-model.md).
+The probe makes unauthenticated `GET https://management.azure.com/` using
+HTTP/1.1 only, `HTTPX.StandardCryptoProvider` and canonical system roots.
+It offers no H2 ALPN and follows no proxy, cookies, retries or redirects.
+Certificate/path/hostname verification is required, with exactly one
+successful verification and zero live operations/connections after finish.
+It logs no payload, credentials or certificate material, installs no roots,
+mutates no stores and uses no verification bypass or OS chain fallback.
+Windows-only MD5 identifier opt-ins follow the example above.
+
+Bounds: 64 KiB response, 10 s whole operation, 5 s connect/read/write phases,
+2 s DNS attempts, 16 peer certificates, 256 KiB per certificate, 1 MiB chain,
+path depth 8 and 64 candidate attempts. Both modes received verified HTTP 400
+on aarch64 Linux with the source-identical composed HTTPX input. That is HTTPS
+acceptance, not Azure API success. Core does not expose negotiated TLS version,
+so none is asserted for this endpoint. No native Windows/macOS public-endpoint,
+public-H2 or native-provider qualification follows from that observation.
+
+## Source and package contents
+
+Source belongs to the `sdk/core_httpx` package branch, not `main`; `main`
+contains shared tooling and package metadata only. The 13 archive paths in
+`build.zig.zon` are:
+
+```text
+build.zig                  build.zig.zon           root.zig
+transport.zig              tests.zig               test_backend.zig
+interruption_fixture.zig   tls_qualification.zig   https_fixture.zig
+tls_fixture_data.zig       public_https.zig        README.md
+LICENSE.txt
+```
+
+Earlier preparation failures and qualification records remain in Git history
+and session logs; they are not current API guidance or new release claims.
