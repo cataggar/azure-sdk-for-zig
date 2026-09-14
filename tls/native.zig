@@ -28,14 +28,14 @@ extern fn SymCryptZigHmacSha512Algorithm() c.PCSYMCRYPT_MAC;
 pub fn mac(algorithm: p.HashAlgorithm) p.ProviderError!c.PCSYMCRYPT_MAC {
     if (comptime @import("builtin").os.tag == .windows and symcrypt.linkage == .dynamic) {
         return switch (algorithm) {
-            .sha1 => error.UnsupportedAlgorithm,
+            .sha1, .md5 => error.UnsupportedAlgorithm,
             .sha256 => SymCryptZigHmacSha256Algorithm(),
             .sha384 => SymCryptZigHmacSha384Algorithm(),
             .sha512 => SymCryptZigHmacSha512Algorithm(),
         };
     }
     return switch (algorithm) {
-        .sha1 => error.UnsupportedAlgorithm,
+        .sha1, .md5 => error.UnsupportedAlgorithm,
         .sha256 => c.SymCryptHmacSha256Algorithm,
         .sha384 => c.SymCryptHmacSha384Algorithm,
         .sha512 => c.SymCryptHmacSha512Algorithm,

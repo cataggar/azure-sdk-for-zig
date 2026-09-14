@@ -6,7 +6,7 @@ primitive binding.
 
 - Package version: `0.2.0`
 - Release branch: `sdk/core_symcrypt`
-- Core dependency: `azure_sdk_core` `0.4.0`
+- Core dependency: `azure_sdk_core` `0.4.1`
 - Native wrapper dependency: `zig_symcrypt` `0.1.0`
 - Supported targets: `x86_64-linux-gnu`, `aarch64-linux-gnu`,
   `x86_64-windows-msvc`, and `aarch64-windows-msvc`
@@ -24,9 +24,11 @@ It **does not** replace the TLS cryptography or X.509 trust implementation
 beneath `std.http.Client`. Selecting this package therefore does not make
 `std.http.Client` TLS use SymCrypt.
 
-MD5 is enabled in `zig_symcrypt` only because Azure Storage compatibility and
-integrity paths require it. The SDK provider exposes neither SHA-1 nor RSA.
-MD5 must not be used as a security primitive.
+The existing `zig_symcrypt` legacy MD5 support serves Azure Storage
+compatibility and integrity paths. That availability does not grant the
+separate, default-disabled TLS metadata permission described below. The SDK
+provider exposes neither SHA-1 nor RSA. MD5 must not be used as a security
+primitive.
 
 ## Provider API
 
@@ -133,7 +135,7 @@ const tls_primitives = tls_crypto.provider();
 _ = tls_primitives;
 ```
 
-This descriptor implements HTTPX CryptoProvider ABI v1. Selecting SDK
+This descriptor implements HTTPX CryptoProvider ABI 2. Selecting SDK
 `Provider.asProvider()` and selecting TLS `Provider.provider()` are independent
 decisions. Neither operation changes `std.http.Client` TLS. The TLS binding
 does not implement a TrustProvider, load roots, validate hostnames or validity,
@@ -145,18 +147,18 @@ qualified HTTPX runtime.
 | Operation | Enabled |
 | --- | --- |
 | Transcript hashes, clone/snapshot | SHA-256, SHA-384, SHA-512 |
-| Trust metadata identifier hashes | SHA-1 only with explicit opt-in below; disabled by default |
+| Trust metadata identifier hashes | SHA-1 and MD5 with separate explicit opt-ins below; both disabled by default |
 | HMAC, HKDF extract/expand, TLS 1.2 PRF | SHA-256, SHA-384, SHA-512 |
 | AEAD, detached 16-byte tags and 12-byte nonces | AES-128-GCM, AES-256-GCM, ChaCha20-Poly1305 |
 | Ephemeral agreement | X25519, P-256, P-384 |
 | ECDSA sign/verify | P-256/SHA-256, P-384/SHA-384; DER signatures |
 | RSA sign/verify | RSAe PKCS#1 v1.5 and PSS with SHA-256/384/512; PSS salt is exactly the digest length |
 
-SHA-1 signatures, HMAC, HKDF and TLS PRF, Ed25519, AEGIS, ML-KEM, hybrid groups,
+MD5/SHA-1 signatures, HMAC, HKDF and TLS PRF, Ed25519, AEGIS, ML-KEM, hybrid groups,
 and restricted RSASSA-PSS keys are not advertised. Unsupported provider operations return
 `UnsupportedAlgorithm`/`UnsupportedOperation`; there is no `std.crypto`
-primitive fallback. Legacy MD5 remains confined to the existing SDK provider,
-not the TLS provider.
+primitive fallback. TLS MD5 is raw identifier hashing only, separate from the
+existing Core SDK MD5 operation.
 
 EC private imports accept canonical raw scalars, SEC1, and unencrypted PKCS#8
 with matching curve identifiers. Included EC public points must match the
@@ -194,7 +196,7 @@ does not invoke a primitive; partial overlaps are not supported.
 
 Some Windows trust metadata identifies a certificate with a raw SHA-1 digest.
 Deployments that explicitly permit those identifier forms can enable the
-existing ABI-v1 hash operations without enabling SHA-1 security algorithms:
+existing hash operations without enabling SHA-1 security algorithms:
 
 ```zig
 var tls_crypto = try symcrypt_tls.Provider.init(allocator, .{
@@ -207,15 +209,15 @@ The default is `false`: SHA-1 is not advertised and creation returns
 create/update/snapshot/clone/destruction through the already-pinned SymCrypt
 primitive. SHA-1 certificate/TLS signatures, HMAC, HKDF and PRF remain
 unsupported, including direct callbacks. Neither the Core SDK hash ABI nor its
-legacy-MD5-only scope changes. MD5 is absent from the HTTPX hash enum and cannot
-be used for trust identifiers.
+compatibility MD5 operation changes. Enabling SHA-1 does not enable MD5.
 
 Raw hashing does not establish trust: a fingerprint match alone never grants
 anchor status. The trust-policy binding must pair identifier hashing and
 signature verification from the **same selected provider**, and independently
 permit the metadata form; missing algorithms or unsupported policy forms must
-fail closed, never select stdlib, Crypt32 or native-chain fallback. Request and
-provider-vtable ABI-v1 layouts remain unchanged.
+fail closed, never select stdlib, Crypt32 or native-chain fallback. Trust
+request/vtable layouts remain unchanged. The provider descriptor now
+declares ABI 2 because raw MD5 adds a new hash tag and semantic contract.
 
 Keep the borrowed provider, policy binding and roots alive at stable addresses
 through their configurations and pooled TLS sessions. Each digest uses
@@ -223,16 +225,58 @@ independent caller-allocated hash state, with cloned/snapshot state wiped and
 released on all paths; shared provider use requires a concurrent-safe allocator.
 SHA-1 snapshot buffers must be exactly 20 bytes. Operational callback failures
 clear output and return the exact provider error; ABI preflight rejections leave
-output unchanged. A policy-digest helper promising cleared output on every
-failure must also clear its own preflight-error output. Identifier support does
+output unchanged at the facade. Direct native snapshots reject incorrect
+lengths and clear their output. A policy-digest helper promising cleared output
+on every failure must also clear its own preflight-error output. Identifier support does
 not replace canonical certificate/key checks or per-request current-time policy.
+
+### Independent ABI 2 MD5 metadata permission
+
+```zig
+var tls_crypto = try symcrypt_tls.Provider.init(allocator, .{
+    .allow_md5_identifier_hash = true, // false by default
+});
+var certificate_crypto = httpx.CryptoCertificateVerifier.init(tls_crypto.provider());
+const metadata = certificate_crypto.metadataHasher(.{
+    .allow_md5_identifiers = true, // independent, also false by default
+});
+```
+
+Both permissions are required. Core MD5 availability, Core deployment options,
+native-conformance approval, or the SHA-1 opt-in do not grant either permission.
+The ABI 2 provider advertises raw MD5 at hash tag `4` / capability bit `0x10`
+only when its own option is enabled. MD5 uses the already-pinned SymCrypt hash
+context, requires exactly 16 output bytes, and supports incremental updates,
+independent clone/snapshot state, transfer, and wiped destruction. No new C
+binding, native library, or fallback is introduced. MD5 is never a transcript,
+certificate-signature, HMAC, HKDF or PRF permission: wrappers, direct vtable
+callbacks and both native MAC-selection branches reject it, including empty
+outputs and forged all-bits capability masks.
+
+The selected HTTPX adapter captures one of four metadata callback ceilings:
+none, SHA-1, MD5, or both. Widening a copied descriptor's public options cannot
+widen the callback's captured permissions; narrowing the options still applies
+at `hash`. Direct callbacks retain their captured gates, exact sizing and
+all-error clearing. Allocation/partial creation, update, snapshot and clone
+failures release owned hash state without provider substitution. Keep the
+borrowed owner and adapter immutable at stable addresses. Exact selected
+provider ABI/context/vtable pairing still applies; another adapter over the
+same provider is not the same bound handle.
+
+ABI 1 compatibility is implemented by the HTTPX consumer boundary, not by
+relabeling an old native provider. The reviewed canonical/runtime harness is
+retained. This metadata primitive does not implement Windows property/domain
+matching, create anchor trust, authorize unsupported signatures, or replace
+canonical policy. Those platform/composition gates remain separately owned.
 
 ### Qualification boundary
 
-The immutable HTTPX dependency currently records the published ABI foundation
-`2257fcdd28fb0e1bbd7da33350846d522d29d034`, not a qualified end-to-end
-SymCrypt TLS runtime. `httpx_source` is an explicit local development override
-for the HTTPX source root, valid only with `enable_httpx_tls=true`; it is not a
+The immutable HTTPX dependency currently records reviewed development foundation
+`cf9655baac9062f2bc799e25bd123de3c536594b`, paired with released Core 0.4.1
+`2c95f65be96b5ef48a50671de33e9e0926c624cb`. Its full URLs/hashes are in the
+manifest. The HTTPX source is reachable but **not the final HTTPX release** or
+complete native SDK qualification. `httpx_source` is an explicit local development
+override for the HTTPX source root, valid only with `enable_httpx_tls=true`; it is not a
 replacement release pin.
 
 Primitive vectors alone do **not** establish TLS interoperability. The opt-in
@@ -267,7 +311,7 @@ retried provider/trust failures. HTTPX currently maps provider
 at the provider boundary. The canonical trust engine maps an injected
 certificate signature failure to `TlsCertificateSignatureInvalid`.
 
-Frozen local HTTPX `ff720540b759dbf28c15eea385b2a6598e04f201` was exercised on
+Historical ABI 1 HTTPX `ff720540b759dbf28c15eea385b2a6598e04f201` was exercised on
 Linux Arm64 with SymCrypt dynamic/static linkage in Debug and ReleaseSafe,
 using OpenSSL 3.5.5: **42 authenticated SymCrypt combinations**, the same 42
 standard-provider controls, and 212 combined trust/provider-negative cases
@@ -328,8 +372,8 @@ try session.handshake("service.example");
 ```
 
 The native owner must separately enable `allow_sha1_identifier_hash` when this
-metadata policy is needed. The snippet requires the paired runtime, not the
-ABI-only manifest pin. These are local candidate results, not an independently
+metadata policy is needed. These historical candidate results are not a new
+ABI 2 full-matrix run or an independently
 approved or published release. Final reviewed immutable HTTPX/SDK-adapter
 pins, versioning, Windows CTL/system-store and other native-target execution,
 public-CA interoperability, mutual authentication and wider server/KeyUpdate
@@ -394,9 +438,27 @@ conformance targets with dynamic SymCrypt in Debug against frozen HTTPX
 42 native plus 42 standard authenticated OpenSSL sessions, and 212 negatives.
 The three input-guard tests and source/package checks also passed; the actual
 candidate manifests correctly fail the unresolved HTTPX-identity gate.
-This CI-helper run does not replace the earlier four-way native results or
-claim Linux x64/Windows reference-build or native execution. Those remote
-matrix runs and final reviewed release pins remain publication gates.
+This historical CI-helper run does not replace the earlier four-way native
+results or qualify the new ABI 2 candidate. Subsequent evidence-only
+[run 34793232241](https://github.com/cataggar/azure-sdk-for-zig/actions/runs/34793232241)
+at `fa2d00b766b3df14fef057a74aef5ae277f9293c` qualified the unchanged CLI builder
+on all four native targets; this is not SDK/TLS/provider qualification.
+Production Windows already uses PowerShell and needs no evidence-shell fix.
+
+The ABI 2 port uses targeted Core/provider/TLS native tests, including independent
+backend/policy flags, captured ceilings, direct keyed-operation rejection,
+allocation/partial-failure wiping, cloning, concurrency and exact provenance.
+Linux Arm64 dynamic/static × Debug/ReleaseSafe each passed 42 tests (10 Core,
+32 TLS). Both ReleaseSafe archive consumers compiled; Linux x64 headers also
+compiled without execution. A Windows x64 header-only attempt was blocked by
+missing local MSVC/Windows SDK headers; neither Windows architecture is
+qualified by these local runs.
+The full four-target dynamic/static Debug/ReleaseSafe SDK transport matrix
+remains blocked until the actual released SDK adapter ref and final coherent
+HTTPX release are supplied. `SDK_HTTPX_CONFORMANCE_REF` stays empty; neither its
+released-source/hash-coherence guard nor mixed `.path` rejection is relaxed.
+Current package version and Main publication metadata are not release approvals
+or changed by this port.
 
 This binding and its algorithm list make no FIPS-validation claim. In
 particular, availability of ChaCha20-Poly1305 or a successful native integrity

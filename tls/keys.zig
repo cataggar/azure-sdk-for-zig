@@ -75,7 +75,7 @@ pub fn destroy(allocator: Allocator, raw: *anyopaque) void {
 
 fn digestParts(allocator: Allocator, algorithm: p.HashAlgorithm, parts: []const []const u8, out: []u8) Error!void {
     switch (algorithm) {
-        .sha1 => return error.UnsupportedAlgorithm,
+        .sha1, .md5 => return error.UnsupportedAlgorithm,
         inline else => |a| {
             const state = symcrypt.hash.Context(@field(symcrypt.hash.Algorithm, @tagName(a))).create(allocator) catch |err| return mapError(err);
             defer state.deinit();
@@ -90,7 +90,7 @@ fn digestParts(allocator: Allocator, algorithm: p.HashAlgorithm, parts: []const 
 fn hashAlgorithm(scheme: p.SignatureScheme) Error!p.HashAlgorithm {
     if (scheme.keyAlgorithm() == .rsa_pss) return error.UnsupportedAlgorithm;
     const algorithm = scheme.hashAlgorithm() orelse return error.UnsupportedAlgorithm;
-    if (algorithm == .sha1) return error.UnsupportedAlgorithm;
+    if (algorithm == .sha1 or algorithm == .md5) return error.UnsupportedAlgorithm;
     return algorithm;
 }
 
@@ -103,7 +103,7 @@ pub fn sign(allocator: Allocator, raw: *anyopaque, scheme: p.SignatureScheme, pa
     const digest = storage[0..algorithm.digestLength()];
     try digestParts(allocator, algorithm, parts, digest);
     switch (algorithm) {
-        .sha1 => unreachable,
+        .sha1, .md5 => unreachable,
         inline else => |a| {
             const hash = @field(symcrypt.hash.Algorithm, @tagName(a));
             switch (state.value) {
@@ -131,7 +131,7 @@ pub fn verify(allocator: Allocator, scheme: p.SignatureScheme, input: p.PublicKe
     const digest = storage[0..algorithm.digestLength()];
     try digestParts(allocator, algorithm, parts, digest);
     switch (algorithm) {
-        .sha1 => unreachable,
+        .sha1, .md5 => unreachable,
         inline else => |a| {
             const hash = @field(symcrypt.hash.Algorithm, @tagName(a));
             switch (input.algorithm) {

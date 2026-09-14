@@ -9,6 +9,7 @@ test "optional TLS capabilities exclude unimplemented and legacy algorithms" {
     const caps = try owner.provider().capabilities();
     try std.testing.expect(caps.supportsHash(.sha256));
     try std.testing.expect(!caps.supportsHash(.sha1));
+    try std.testing.expect(!caps.supportsHash(.md5));
     try std.testing.expect(!caps.supportsSign(.ed25519));
     try std.testing.expect(!caps.supportsVerify(.rsa_pss_pss_sha256));
     try std.testing.expect(!caps.supportsKem(.ml_kem_768));
@@ -32,7 +33,7 @@ test "SHA1 identifier hashing requires opt in without enabling security algorith
     try testing.expect(!caps.supportsTls12Prf(.sha1));
     try testing.expect(!caps.supportsSign(.rsa_pkcs1_sha1));
     try testing.expect(!caps.supportsVerify(.rsa_pkcs1_sha1));
-    try testing.expect(!@hasField(p.HashAlgorithm, "md5"));
+    try testing.expect(!caps.supportsHash(.md5));
     var output = [_]u8{0xaa} ** 20;
     const prk = [_]u8{1} ** 20;
     try testing.expectError(error.UnsupportedAlgorithm, provider.hmac(.sha1, "key", &.{"metadata"}, &output));

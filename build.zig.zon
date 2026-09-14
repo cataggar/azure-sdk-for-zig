@@ -5,16 +5,17 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .azure_sdk_core = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#be32073994f37422f2f6b5e9255d208b1284de85",
-            .hash = "azure_sdk_core-0.4.0-eFY0EufqCgD3plkaubfUTeY5Jvr__1k0noWHdQjBVAdX",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#2c95f65be96b5ef48a50671de33e9e0926c624cb",
+            .hash = "azure_sdk_core-0.4.1-eFY0EpbrCgAKh2uJJ-DguKP7zx8Ywuf1UdP7HkJ_9CmI",
         },
         .zig_symcrypt = .{
             .url = "git+https://github.com/cataggar/zig-symcrypt.git#9b3c94a2a4e0d98e055f0d908e11e1d7031b9a4b",
             .hash = "zig_symcrypt-0.1.0-QIw66SjCEAAi9B86kkwa2aD-unj5hbQsGhuhTZdL4XFf",
         },
         .httpx = .{
-            .url = "git+https://github.com/cataggar/httpx.zig.git#2257fcdd28fb0e1bbd7da33350846d522d29d034",
-            .hash = "httpx-0.1.9-8qj2ep9LIgDK5Y7K1rYbcpYQ9CGGdw8Uaq8hSWrRR-oA",
+            // Reviewed ABI 2 development foundation, pending the final HTTPX release.
+            .url = "git+https://github.com/cataggar/httpx.zig#cf9655baac9062f2bc799e25bd123de3c536594b",
+            .hash = "httpx-0.1.9-8qj2enSTMgAnUCmuz0zXLDF8vMH6jKpgNbqhMdNExLHq",
             .lazy = true,
         },
     },

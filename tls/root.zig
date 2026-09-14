@@ -14,6 +14,7 @@ pub const Provider = struct {
     scratch_allocator: Allocator,
     max_scratch_bytes: usize,
     allow_sha1_identifier_hash: bool,
+    allow_md5_identifier_hash: bool,
 
     pub const Options = struct {
         /// Bounds concatenated AEAD AAD, HKDF info, PRF seed, and key encodings.
@@ -22,6 +23,9 @@ pub const Provider = struct {
         /// Raw SHA-1 for explicitly permitted trust metadata identifiers only.
         /// Does not enable SHA-1 signatures, HMAC, HKDF, or TLS PRF.
         allow_sha1_identifier_hash: bool = false,
+        /// ABI 2 raw MD5 identifiers only; independent of Core's MD5 support.
+        /// Does not enable MD5 signatures, HMAC, HKDF, or TLS PRF.
+        allow_md5_identifier_hash: bool = false,
     };
 
     /// No native global shutdown is performed. Keep this owner and its
@@ -33,6 +37,7 @@ pub const Provider = struct {
             .scratch_allocator = scratch_allocator,
             .max_scratch_bytes = options.max_scratch_bytes,
             .allow_sha1_identifier_hash = options.allow_sha1_identifier_hash,
+            .allow_md5_identifier_hash = options.allow_md5_identifier_hash,
         };
     }
 
@@ -57,6 +62,7 @@ fn destroy(comptime T: type, allocator: Allocator, value: *T) void {
 fn capabilities(context: *anyopaque) p.Capabilities {
     var result: p.Capabilities = .{ .random = true, .constant_time_equal = true };
     result.setHash(.sha1, owner(context).allow_sha1_identifier_hash);
+    result.setHash(.md5, owner(context).allow_md5_identifier_hash);
     inline for (.{ p.HashAlgorithm.sha256, .sha384, .sha512 }) |a| {
         result.setHash(a, true);
         result.setHmac(a, true);
@@ -93,10 +99,12 @@ const HashState = union(p.HashAlgorithm) {
     sha256: *symcrypt.hash.Context(.sha256),
     sha384: *symcrypt.hash.Context(.sha384),
     sha512: *symcrypt.hash.Context(.sha512),
+    md5: *symcrypt.hash.Context(.md5),
 };
 
 fn hashCreate(context: *anyopaque, allocator: Allocator, algorithm: p.HashAlgorithm, out: *?*anyopaque) Error!void {
     if (algorithm == .sha1 and !owner(context).allow_sha1_identifier_hash) return error.UnsupportedAlgorithm;
+    if (algorithm == .md5 and !owner(context).allow_md5_identifier_hash) return error.UnsupportedAlgorithm;
     const state = try allocator.create(HashState);
     errdefer destroy(HashState, allocator, state);
     state.* = switch (algorithm) {
@@ -112,8 +120,10 @@ fn hashUpdate(_: *anyopaque, raw: *anyopaque, data: []const u8) Error!void {
 }
 
 fn hashSnapshot(_: *anyopaque, raw: *anyopaque, out: []u8) Error!void {
+    errdefer p.secureWipe(out);
     switch (cast(HashState, raw).*) {
-        inline else => |state| {
+        inline else => |state, algorithm| {
+            if (out.len != algorithm.digestLength()) return error.InvalidDigestLength;
             var digest = state.snapshot() catch |err| return mapError(err);
             defer p.secureWipe(&digest);
             @memcpy(out, &digest);
@@ -140,7 +150,7 @@ fn hashDestroy(_: *anyopaque, allocator: Allocator, raw: *anyopaque) void {
 
 fn hmac(context: *anyopaque, algorithm: p.HashAlgorithm, key: []const u8, parts: []const []const u8, out: []u8) Error!void {
     switch (algorithm) {
-        .sha1 => return error.UnsupportedAlgorithm,
+        .sha1, .md5 => return error.UnsupportedAlgorithm,
         inline else => |a| {
             const Hmac = symcrypt.hmac.Context(@field(symcrypt.hmac.Algorithm, @tagName(a)));
             const state = Hmac.create(owner(context).scratch_allocator, key) catch |err| return mapError(err);
@@ -388,4 +398,5 @@ comptime {
 
 test {
     _ = @import("tests.zig");
+    _ = @import("metadata_test.zig");
 }
