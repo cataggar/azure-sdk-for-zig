@@ -407,6 +407,15 @@ Windows Arm64 uses checksum-verified x86-64 Zig under emulation on the native
 Arm64 runner. That does not change the native test target or qualify the native
 Arm64 Zig 0.16.0 compiler, whose observed crashes remain a separate limitation.
 
+Windows Arm64 CI limits the whole job to 90 minutes and its native matrix,
+examples and archive-consumer phase to 60 minutes. That phase uses `-j1` for
+the outer Zig build graphs to limit concurrent emulated compiler work, with
+phase labels and `--verbose` command logging. This is a scheduling and
+observability policy, not a diagnosis of earlier stalls. It does not remove
+cases or serialize concurrency inside the tests, and it leaves the static Core
+launcher's separate 60-second execution limit unchanged. Exceeding either CI
+budget fails the release gate; there is no retry or build-only fallback.
+
 `SDK_HTTPX_CONFORMANCE_REF` pins the actual reviewed standard SDK 0.1.0 release
 `21b2bd41afa768fc2895041d8176fe06de9ccde6`, tagged with lightweight
 `azure_sdk_core_httpx/v0.1.0`. Its package hash is
