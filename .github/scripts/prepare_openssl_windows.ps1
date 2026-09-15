@@ -29,11 +29,13 @@ foreach ($name in @("cl.exe", "link.exe", "lib.exe", "nmake.exe")) {
         throw "MSVC $($toolset.Name) lacks the required $binaryArchitecture host/target tool $name"
     }
 }
-$developerShell = Join-Path $installation "Common7/Tools/Launch-VsDevShell.ps1"
-if (-not (Get-Command $developerShell).Parameters.ContainsKey("DevCmdArguments")) {
+$developerModule = Join-Path $installation "Common7/Tools/Microsoft.VisualStudio.DevShell.dll"
+Import-Module $developerModule
+$developerShell = Get-Command Enter-VsDevShell -CommandType Cmdlet
+if (-not $developerShell.Parameters.ContainsKey("DevCmdArguments")) {
     throw "Visual Studio developer shell cannot accept explicit toolset selection"
 }
-. $developerShell -SkipAutomaticLocation `
+Enter-VsDevShell -VsInstallPath $installation -SkipAutomaticLocation `
     -DevCmdArguments "-arch=$developerArchitecture -host_arch=$developerArchitecture -vcvars_ver=$($toolset.Name)"
 if ($env:VCToolsVersion -ne $toolset.Name) {
     throw "Developer shell selected MSVC '$env:VCToolsVersion', expected '$($toolset.Name)'"
