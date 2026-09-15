@@ -54,6 +54,7 @@ jobs:
           zig build source-check -Dsource_only=true --summary all
           zig build package-check -Dsource_only=true --summary all
           zig test conformance/ci_inputs.zig
+          python3 -B -m unittest discover -s .github/scripts/tests
       - name: Confirm unsupported macOS native diagnostic
         if: matrix.platform == 'macos'
         shell: bash
@@ -331,6 +332,7 @@ jobs:
         run: |
           set -euo pipefail
           zig test conformance/ci_inputs.zig
+          python3 -B -m unittest discover -s .github/scripts/tests
           if [[ ! "$SDK_HTTPX_CONFORMANCE_REF" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::Pending release gate: set SDK_HTTPX_CONFORMANCE_REF to the reviewed released full commit. Native conformance is not skipped."
             exit 1
