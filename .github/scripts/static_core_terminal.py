@@ -17,6 +17,7 @@ import threading
 import time
 
 BASE = "b30a03ca047f53677fb12a66ba46a0b5459129af"
+PARENT = "9263896361f7db00cea0023e81526076840e8483"
 SDK = "21b2bd41afa768fc2895041d8176fe06de9ccde6"
 WRAPPER = "9b3c94a2a4e0d98e055f0d908e11e1d7031b9a4b"
 NATIVE = "286762b7730e2b780678f5ab11fef2b1bad639e0"
@@ -76,8 +77,8 @@ def source_guard():
     require(os.environ["GITHUB_EVENT_NAME"] == "push", "Only branch-scoped pushes are supported")
     require(expected == os.environ["GITHUB_SHA"] == git(ROOT, "rev-parse", "HEAD"),
             "Source/event SHA mismatch")
-    require(git(ROOT, "rev-list", "--parents", "-n", "1", "HEAD").split() == [expected, BASE],
-            "Evidence must be a single-parent direct b30 child")
+    require(git(ROOT, "rev-list", "--parents", "-n", "1", "HEAD").split() == [expected, PARENT],
+            "Evidence must directly continue the reviewed 926 diagnostic")
     allowed_diff(git(ROOT, "diff", "--name-status", "--no-renames", BASE, "HEAD"))
     require(not git(ROOT, "status", "--porcelain", "--untracked-files=no"),
             "Tracked evidence/production files changed")
@@ -259,6 +260,16 @@ class Evidence:
         require(not self.snapshot(known, phase, remaining()), "Live owned descendants remain")
         self.emit("CLEANUP_END", phase=phase)
 
+    def finish_children(self, process, known, phase, cleanup):
+        survivors = self.snapshot(known, phase)
+        if not survivors:
+            return
+        require(phase == "fixture-build" and process.returncode == 0,
+                "Command left live owned descendants")
+        # MSBuild can retain owned workers after a successful fixture build.
+        self.emit("FIXTURE_HELPERS_DRAIN", phase=phase, pids=[row["pid"] for row in survivors])
+        cleanup()
+
     def run(self, phase, command, seconds):
         command = [str(arg) for arg in command]
         self.emit("START", phase=phase, command=command, cwd=str(ROOT), seconds=seconds,
@@ -312,6 +323,14 @@ class Evidence:
             thread.start()
         passed = False
         process_elapsed = None
+        cleanup_started = False
+
+        def cleanup_once():
+            nonlocal cleanup_started
+            require(not cleanup_started, "Owned cleanup already attempted")
+            cleanup_started = True
+            self.cleanup(process, known, phase)
+
         try:
             while process.poll() is None:
                 if time.monotonic() - started >= seconds or errors:
@@ -330,14 +349,15 @@ class Evidence:
                 require(not thread.is_alive(), "Output pipe remained open")
             require(not errors, str(errors))
             require(process.returncode == 0, f"{phase} exited {process.returncode}")
-            require(not self.snapshot(known, phase), "Command left live owned descendants")
+            self.finish_children(process, known, phase, cleanup_once)
             passed = True
         finally:
             stop.set()
             observer.join(10)
             if not passed:
                 self.emit("FAIL", phase=phase, elapsed=time.monotonic() - started, error=str(sys.exception()))
-                self.cleanup(process, known, phase)
+                if not cleanup_started:
+                    cleanup_once()
             for thread in readers:
                 thread.join(5)
             require(not observer.is_alive() and all(not thread.is_alive() for thread in readers),

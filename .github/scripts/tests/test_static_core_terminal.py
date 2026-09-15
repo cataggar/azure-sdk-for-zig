@@ -5,7 +5,7 @@ import json
 import pathlib
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 spec = importlib.util.spec_from_file_location(
     "terminal", pathlib.Path(__file__).resolve().parents[1] / "static_core_terminal.py"
@@ -114,6 +114,51 @@ class TerminalEvidenceTests(unittest.TestCase):
         self.assertIn("receipt.addFileArg(core.getEmittedBin())", source)
         self.assertNotIn("addTest(", source)
         self.assertNotIn("addRunArtifact(", source)
+
+    def child_policy(self, survivors):
+        evidence = object.__new__(terminal.Evidence)
+        evidence.snapshot = Mock(return_value=survivors)
+        evidence.emit = Mock()
+        return evidence
+
+    def test_successful_fixture_helpers_are_drained(self):
+        evidence = self.child_policy([{"pid": 6700}, {"pid": 8532}])
+        cleanup = Mock()
+        evidence.finish_children(Mock(returncode=0), {}, "fixture-build", cleanup)
+        cleanup.assert_called_once_with()
+        evidence.emit.assert_called_once_with(
+            "FIXTURE_HELPERS_DRAIN", phase="fixture-build", pids=[6700, 8532]
+        )
+
+    def test_core_and_other_commands_still_reject_survivors(self):
+        for phase in ("core-terminal", "core-compile-receipt", "guard-run"):
+            with self.subTest(phase=phase):
+                evidence = self.child_policy([{"pid": 6700}])
+                cleanup = Mock()
+                with self.assertRaisesRegex(RuntimeError, "live owned descendants"):
+                    evidence.finish_children(Mock(returncode=0), {}, phase, cleanup)
+                cleanup.assert_not_called()
+
+    def test_failed_fixture_build_is_not_accepted(self):
+        evidence = self.child_policy([{"pid": 6700}])
+        cleanup = Mock()
+        with self.assertRaisesRegex(RuntimeError, "live owned descendants"):
+            evidence.finish_children(Mock(returncode=1), {}, "fixture-build", cleanup)
+        cleanup.assert_not_called()
+
+    def test_no_children_needs_no_drain(self):
+        evidence = self.child_policy([])
+        cleanup = Mock()
+        evidence.finish_children(Mock(returncode=0), {}, "fixture-build", cleanup)
+        cleanup.assert_not_called()
+        evidence.emit.assert_not_called()
+
+    def test_fixture_drain_failure_propagates(self):
+        evidence = self.child_policy([{"pid": 6700}])
+        cleanup = Mock(side_effect=RuntimeError("owned cleanup failed"))
+        with self.assertRaisesRegex(RuntimeError, "owned cleanup failed"):
+            evidence.finish_children(Mock(returncode=0), {}, "fixture-build", cleanup)
+        cleanup.assert_called_once_with()
 
 
 if __name__ == "__main__":

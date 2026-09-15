@@ -18,9 +18,9 @@ jobs:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         timeout-minutes: 5
         with:
-          fetch-depth: 2
+          fetch-depth: 3
           persist-credentials: false
-      - name: Create evidence logs and require direct b30 source
+      - name: Create evidence logs and require unchanged b30 production source
         timeout-minutes: 2
         shell: pwsh
         run: |
@@ -117,6 +117,9 @@ jobs:
           required. Core execution has a 60-second whole-process limit (not the
           production response-watchdog semantics); observed owned-process cleanup has
           a separate 90-second bound. Logs are capped at 8 MiB per stream.
+          After the fixture builder exits zero, its observed owned build helpers
+          are drained within that cleanup bound. Core or other command descendants,
+          cleanup failures, timeouts and nonzero exits still fail the diagnostic.
           Preflight is bounded to seven cumulative minutes, Core compilation to ten,
           native fixture construction to twenty, and the complete job to one hundred.
           No OpenSSL reference, TLS interop, post-loop examples/consumers, other
