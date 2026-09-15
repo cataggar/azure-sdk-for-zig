@@ -1,0 +1,469 @@
+name: Windows Arm64 phase evidence
+
+# Diagnostic only: serialization and -j1 are observations, not a production fix.
+# This workflow does not replace any production package context or matrix axis.
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact reviewed evidence-branch commit (not Main)
+        required: true
+        type: string
+      linkage:
+        description: One diagnostic configuration; other configurations remain unqualified
+        required: true
+        default: dynamic
+        type: choice
+        options: [dynamic, static]
+      optimize:
+        description: Debug reproduces the first affected production configuration
+        required: true
+        default: Debug
+        type: choice
+        options: [Debug, ReleaseSafe]
+
+permissions:
+  contents: read
+
+env:
+  SYMCRYPT_COMMIT: 286762b7730e2b780678f5ab11fef2b1bad639e0
+  ZIG_SYMCRYPT_COMMIT: 9b3c94a2a4e0d98e055f0d908e11e1d7031b9a4b
+  SDK_HTTPX_CONFORMANCE_REF: "21b2bd41afa768fc2895041d8176fe06de9ccde6"
+
+jobs:
+  phase-evidence:
+    name: ARM64 diagnostic (${{ inputs.linkage }}, ${{ inputs.optimize }})
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        timeout-minutes: 5
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Require exact evidence source with unchanged production tree
+        timeout-minutes: 2
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          base=92f87e6520dfc791daf78f2d328af5f7c2e18671
+          if [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+             [[ "$(git rev-parse HEAD)" != "$EXPECTED_SHA" ]] ||
+             [[ "$GITHUB_SHA" != "$EXPECTED_SHA" ]] ||
+             [[ "$(git rev-parse HEAD^)" != "$base" ]]; then
+            echo "::error::Select the reviewed evidence feature branch and its exact SHA, not Main. The evidence commit must be a direct child of 92f."
+            exit 1
+          fi
+          test -z "$(git status --porcelain)"
+          git diff --exit-code "$base" HEAD -- . \
+            ':(exclude).github/workflows/windows-arm64-phase-evidence.yml'
+          printf 'EVIDENCE_SOURCE sha=%s base=%s production_tree=unchanged\n' "$EXPECTED_SHA" "$base"
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        timeout-minutes: 5
+        with:
+          repository: cataggar/zig-symcrypt
+          ref: ${{ env.ZIG_SYMCRYPT_COMMIT }}
+          path: .zig-symcrypt-ci
+          persist-credentials: false
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        timeout-minutes: 5
+        with:
+          repository: microsoft/SymCrypt
+          ref: ${{ env.SYMCRYPT_COMMIT }}
+          path: .symcrypt-ci-source
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
+        timeout-minutes: 5
+        with:
+          version: 0.16.0
+      - name: Use unchanged verified x86-64 Zig under Windows Arm64 emulation
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $tools = "$env:GITHUB_WORKSPACE/.tools"
+          $archive = "$tools/zig-x86_64-windows-0.16.0.zip"
+          $directory = "$tools/zig-x86_64"
+          New-Item -ItemType Directory -Force -Path $tools | Out-Null
+          Invoke-WebRequest `
+            -Uri "https://ziglang.org/download/0.16.0/zig-x86_64-windows-0.16.0.zip" `
+            -OutFile $archive
+          $actual = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          $expected = "68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e"
+          if ($actual -ne $expected) {
+            throw "x86-64 Zig archive SHA-256 mismatch: found $actual, expected $expected"
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $directory
+          (Join-Path $directory "zig-x86_64-windows-0.16.0") |
+            Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Require unchanged immutable SDK conformance release input
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          zig test conformance/ci_inputs.zig
+          if [[ ! "$SDK_HTTPX_CONFORMANCE_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Pending release gate: set SDK_HTTPX_CONFORMANCE_REF to the reviewed released full commit. Native conformance is not skipped."
+            exit 1
+          fi
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        timeout-minutes: 5
+        with:
+          repository: cataggar/azure-sdk-for-zig
+          ref: ${{ env.SDK_HTTPX_CONFORMANCE_REF }}
+          path: .sdk-httpx-conformance
+          persist-credentials: false
+      - name: Verify unchanged released SDK source and coherent package identities
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git -C .sdk-httpx-conformance rev-parse HEAD)"
+          test -z "$(git -C .sdk-httpx-conformance status --porcelain)"
+          zig run conformance/ci_inputs.zig -- build.zig.zon \
+            .sdk-httpx-conformance/build.zig.zon "$SDK_HTTPX_CONFORMANCE_REF" "$actual"
+          if ! git ls-remote --refs --tags https://github.com/cataggar/azure-sdk-for-zig.git \
+            'refs/tags/azure_sdk_core_httpx/v*' |
+            awk -v expected="$SDK_HTTPX_CONFORMANCE_REF" '$1 == expected { found = 1 } END { exit !found }'; then
+            echo "::error::SDK conformance input must be a published lightweight package release tag."
+            exit 1
+          fi
+      - name: Build unchanged verified Windows Arm64 fixtures
+        timeout-minutes: 30
+        shell: pwsh
+        run: |
+          ./.zig-symcrypt-ci/tools/build-windows-fixtures.ps1 `
+            -Source "$env:GITHUB_WORKSPACE/.symcrypt-ci-source" `
+            -Output "$env:GITHUB_WORKSPACE/.symcrypt-ci/aarch64" `
+            -Architecture aarch64
+      - name: Build unchanged pinned native OpenSSL 3.5.5 CLI reference
+        timeout-minutes: 45
+        shell: pwsh
+        run: |
+          ./.github/scripts/prepare_openssl_windows.ps1 -Architecture aarch64
+      - name: Supervise separate compile and native execution phases
+        timeout-minutes: 95
+        shell: python3 {0}
+        env:
+          EVIDENCE_LINKAGE: ${{ inputs.linkage }}
+          EVIDENCE_OPTIMIZE: ${{ inputs.optimize }}
+        run: |
+          import ctypes
+          from ctypes import wintypes
+          import datetime
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+          import shutil
+          import struct
+          import subprocess
+          import sys
+          import time
+
+          root = pathlib.Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          os.chdir(root)
+          logs = root / ".agent-scratch/arm64-phase-evidence"
+          logs.mkdir(parents=True, exist_ok=False)
+          events = (logs / "events.jsonl").open("x", encoding="utf-8", buffering=1)
+          suite_deadline = time.monotonic() + 90 * 60
+
+          def emit(kind, **fields):
+              row = dict(event=kind, utc=datetime.datetime.now(datetime.timezone.utc).isoformat(), **fields)
+              text = json.dumps(row, sort_keys=True)
+              print(text, flush=True)
+              events.write(text + "\n")
+
+          def require(condition, message):
+              if not condition:
+                  raise RuntimeError(message)
+
+          def output(command):
+              return subprocess.check_output(command, text=True, timeout=30).strip()
+
+          def digest(path):
+              with pathlib.Path(path).open("rb") as source:
+                  return hashlib.file_digest(source, "sha256").hexdigest()
+
+          def pe_machine(path):
+              with pathlib.Path(path).open("rb") as source:
+                  require(source.read(2) == b"MZ", f"Not a PE executable: {path}")
+                  source.seek(0x3C)
+                  source.seek(struct.unpack("<I", source.read(4))[0])
+                  require(source.read(4) == b"PE\0\0", f"Invalid PE signature: {path}")
+                  return struct.unpack("<H", source.read(2))[0]
+
+          def verify_run_images(paths, phase):
+              pattern = re.compile(r'(?i)(?:"([^"\r\n]*[\\/](?:test|symcrypt-tls-interop)\.exe)"|(?<!\S)([^\s"]*[\\/](?:test|symcrypt-tls-interop)\.exe))(?=\s|$)')
+              images = set()
+              for path in paths:
+                  with path.open(encoding="utf-8", errors="replace") as stream:
+                      for line in stream:
+                          for match in pattern.finditer(line):
+                              images.add(pathlib.Path(match[1] or match[2]))
+              require(images, f"{phase}: no verbose native invocation receipt; cached/unobserved execution cannot pass this diagnostic")
+              for image in sorted(images):
+                  require(pe_machine(image) == 0xAA64, f"Invocation did not select an ARM64 executable: {image}")
+                  emit("NATIVE_IMAGE", phase=phase, image=str(image), pe_machine="0xaa64", sha256=digest(image))
+
+          require(os.name == "nt", "This evidence requires an actual Windows host")
+          kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+          kernel.GetCurrentProcess.restype = wintypes.HANDLE
+          kernel.IsWow64Process2.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.USHORT), ctypes.POINTER(wintypes.USHORT)]
+          kernel.IsWow64Process2.restype = wintypes.BOOL
+          process_machine, native_machine = wintypes.USHORT(), wintypes.USHORT()
+          require(kernel.IsWow64Process2(kernel.GetCurrentProcess(), ctypes.byref(process_machine), ctypes.byref(native_machine)), "IsWow64Process2 failed")
+          require(native_machine.value == 0xAA64, "Native host is not Windows ARM64")
+          kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+          kernel.GetProcessTimes.restype = wintypes.BOOL
+          kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+          kernel.OpenProcess.restype = wintypes.HANDLE
+          kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+          kernel.TerminateProcess.restype = wintypes.BOOL
+          kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+          kernel.WaitForSingleObject.restype = wintypes.DWORD
+          kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+          kernel.CloseHandle.restype = wintypes.BOOL
+
+          def creation_identity(handle):
+              created, exited, kernel_time, user_time = (wintypes.FILETIME() for _ in range(4))
+              require(kernel.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited), ctypes.byref(kernel_time), ctypes.byref(user_time)), "Cannot bind process creation identity")
+              # CIM datetime retains microseconds, not FILETIME's final 100ns digit.
+              ticks = (created.dwHighDateTime << 32) | created.dwLowDateTime
+              return str(ticks // 10 * 10)
+
+          linkage, optimize = os.environ["EVIDENCE_LINKAGE"], os.environ["EVIDENCE_OPTIMIZE"]
+          require(linkage in ("dynamic", "static") and optimize in ("Debug", "ReleaseSafe"), "Invalid diagnostic configuration")
+          zig = pathlib.Path(shutil.which("zig") or "")
+          expected_zig = root / ".tools/zig-x86_64/zig-x86_64-windows-0.16.0/zig.exe"
+          require(zig.is_file() and zig.samefile(expected_zig), "PATH does not select the verified x64 compiler")
+          require(pe_machine(zig) == 0x8664 and output([str(zig), "version"]) == "0.16.0", "Compiler identity mismatch")
+          fixture = root / ".symcrypt-ci/aarch64"
+          peer = root / ".openssl-reference/openssl-3.5.5/apps/openssl.exe"
+          selected_peer = pathlib.Path(shutil.which("openssl") or "")
+          require(selected_peer.is_file() and selected_peer.samefile(peer), "PATH does not select the independent native OpenSSL peer")
+          require(pe_machine(peer) == 0xAA64, "OpenSSL peer is not native ARM64")
+          proof = json.loads((root / ".openssl-reference/provenance.json").read_text())
+          require(proof["target"] == "aarch64-windows-msvc" and proof["configure_target"] == "VC-WIN64-ARM", "OpenSSL target mismatch")
+          require(proof["source_url"] == "https://github.com/openssl/openssl/releases/download/openssl-3.5.5/openssl-3.5.5.tar.gz", "OpenSSL source URL mismatch")
+          require(proof["source_sha256"] == "b28c91532a8b65a1f983b4c28b7488174e4a01008e29ce8e69bd789f28bc2a89", "OpenSSL source identity mismatch")
+          require(digest(root / ".openssl-reference/openssl-3.5.5.tar.gz") == proof["source_sha256"], "OpenSSL archive changed")
+          require(proof["configure_options"] == ["no-shared", "no-tests", "no-asm", "no-module"], "OpenSSL options changed")
+          require(digest(peer) == proof["executable_sha256"], "OpenSSL executable changed")
+          version = output([str(peer), "version"])
+          require(version == proof["version"] and version.startswith("OpenSSL 3.5.5 "), "OpenSSL version mismatch")
+          require(pathlib.Path(os.environ["OPENSSL_CONF"]).samefile(root / ".openssl-reference/openssl.cnf"), "OpenSSL configuration changed")
+          require((root / ".openssl-reference/openssl.cnf").read_text() == "[req]\ndistinguished_name = test_identity\n[test_identity]\n", "OpenSSL configuration content mismatch")
+          reference_before = {name: digest(root / ".openssl-reference" / name) for name in ("provenance.json", "openssl.cnf")}
+          runtime = json.loads((fixture / "provenance.json").read_text())["runtime"]["dynamic"]
+          require(pe_machine(fixture / runtime["path"]) == 0xAA64, "SymCrypt runtime is not native ARM64")
+          for directory, expected in ((".zig-symcrypt-ci", os.environ["ZIG_SYMCRYPT_COMMIT"]), (".symcrypt-ci-source", os.environ["SYMCRYPT_COMMIT"]), (".sdk-httpx-conformance", os.environ["SDK_HTTPX_CONFORMANCE_REF"])):
+              require(output(["git", "-C", directory, "rev-parse", "HEAD"]) == expected, f"Unexpected source: {directory}")
+              require(not output(["git", "-C", directory, "diff", "--name-only", "HEAD"]), f"Modified tracked source: {directory}")
+          fixture_before = {str(p.relative_to(fixture)): digest(p) for p in fixture.rglob("*") if p.is_file()}
+          emit("INPUTS", source=os.environ["GITHUB_SHA"], native_machine=hex(native_machine.value), driver_process_machine=hex(process_machine.value), compiler=str(zig), compiler_machine="0x8664", target="aarch64-windows-msvc", linkage=linkage, optimize=optimize, openssl=version, sdk=os.environ["SDK_HTTPX_CONFORMANCE_REF"], provider_manifest_sha256=digest(root / "build.zig.zon"), sdk_manifest_sha256=digest(root / ".sdk-httpx-conformance/build.zig.zon"), fixture_manifest_sha256=digest(fixture / "provenance.json"), global_cache=os.environ.get("ZIG_GLOBAL_CACHE_DIR"), local_cache=os.environ.get("ZIG_LOCAL_CACHE_DIR"))
+
+          # Inventory only PID ancestry/times globally; image/resource details are
+          # queried and returned only for this phase's creation-identity-bound tree.
+          snapshot_script = r"""
+          $ErrorActionPreference = "Stop"
+          $known = ConvertFrom-Json -AsHashtable $env:EVIDENCE_OWNED_PIDS
+          $all = @(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,CreationDate -OperationTimeoutSec 5)
+          $owned = @{}
+          foreach ($p in $all) {
+            $key = [string]$p.ProcessId
+            if ($null -ne $p.CreationDate -and $known.ContainsKey($key) -and [string]($p.CreationDate.ToFileTimeUtc()) -eq [string]$known[$key]) {
+              $owned[$key] = $p.CreationDate.ToFileTimeUtc()
+            }
+          }
+          do {
+            $changed = $false
+            foreach ($p in $all) {
+              $key = [string]$p.ProcessId
+              $parent = [string]$p.ParentProcessId
+              if ($null -ne $p.CreationDate -and !$owned.ContainsKey($key) -and $owned.ContainsKey($parent) -and $p.CreationDate.ToFileTimeUtc() -ge $owned[$parent]) {
+                $owned[$key] = $p.CreationDate.ToFileTimeUtc()
+                $changed = $true
+              }
+            }
+          } while ($changed)
+          $rows = @()
+          if ($owned.Count) {
+            $filter = ($owned.Keys | ForEach-Object { "ProcessId = $_" }) -join " OR "
+            $rows = @(foreach ($p in (Get-CimInstance Win32_Process -Filter $filter -OperationTimeoutSec 5)) {
+              if ($null -ne $p.CreationDate -and $p.CreationDate.ToFileTimeUtc() -eq $owned[[string]$p.ProcessId]) {
+                [pscustomobject]@{pid=$p.ProcessId; parent=$p.ParentProcessId; created=[string]($p.CreationDate.ToFileTimeUtc()); name=$p.Name; image=$p.ExecutablePath; cpu_seconds=([double]$p.KernelModeTime+[double]$p.UserModeTime)/10000000; working_set=$p.WorkingSetSize; private_bytes=$p.PrivatePageCount; threads=$p.ThreadCount}
+              }
+            })
+          }
+          ConvertTo-Json -InputObject @($rows) -Compress
+          """
+
+          def snapshot(known, phase, timeout=20):
+              environment = os.environ.copy()
+              environment["EVIDENCE_OWNED_PIDS"] = json.dumps(known)
+              rows = json.loads(subprocess.check_output(["pwsh", "-NoProfile", "-NonInteractive", "-Command", snapshot_script], env=environment, text=True, timeout=timeout))
+              for row in rows:
+                  known[str(row["pid"])] = row["created"]
+                  image = row["image"]
+                  if image and pathlib.Path(image).is_file():
+                      try:
+                          row["pe_machine"] = hex(pe_machine(image))
+                      except (FileNotFoundError, PermissionError) as error:
+                          row["pe_observation"] = type(error).__name__
+                      if row["name"].lower() in ("test.exe", "symcrypt-tls-interop.exe") and "pe_machine" in row:
+                          require(row["pe_machine"] == "0xaa64", f"Non-native test executable: {image}")
+                  emit("PROCESS", phase=phase, **row)
+              require(len(known) <= 512, "Owned process evidence exceeded its bounded identity budget")
+              emit("HEARTBEAT", phase=phase, live_owned_processes=len(rows))
+              return rows
+
+          def terminate_owned(process, known, phase):
+              emit("CLEANUP_BEGIN", phase=phase, root_pid=process.pid)
+              cleanup_deadline = time.monotonic() + 90
+              def remaining(limit=20):
+                  seconds = cleanup_deadline - time.monotonic()
+                  require(seconds > 0, "Owned cleanup deadline exceeded; diagnostic failed")
+                  return min(limit, seconds)
+              # The retained Popen handle binds the live root to its creation.
+              if process.poll() is None:
+                  result = subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], timeout=remaining(), capture_output=True, text=True)
+                  emit("ROOT_TREE_TERMINATION", phase=phase, pid=process.pid, exit_code=result.returncode, stdout=result.stdout, stderr=result.stderr)
+                  process.wait(timeout=remaining())
+              for row in snapshot(known, phase, timeout=remaining()):
+                  remaining()
+                  # Keep a handle across identity comparison and termination so
+                  # PID reuse cannot retarget an orphan-cleanup operation.
+                  handle = kernel.OpenProcess(0x101001, False, row["pid"])
+                  if not handle:
+                      require(ctypes.get_last_error() == 87, "Cannot inspect owned descendant for cleanup")
+                      emit("DESCENDANT_EXITED", phase=phase, pid=row["pid"])
+                      continue
+                  try:
+                      if creation_identity(handle) != row["created"]:
+                          emit("PID_REUSED_NOT_KILLED", phase=phase, pid=row["pid"])
+                          continue
+                      terminated = kernel.TerminateProcess(handle, 1)
+                      require(terminated or kernel.WaitForSingleObject(handle, 0) == 0, "Cannot terminate owned descendant")
+                      require(kernel.WaitForSingleObject(handle, int(remaining(5) * 1000)) == 0, "Owned descendant did not exit")
+                      emit("DESCENDANT_TERMINATED", phase=phase, pid=row["pid"], created=row["created"])
+                  finally:
+                      kernel.CloseHandle(handle)
+              require(not snapshot(known, phase, timeout=remaining()), "Owned descendants remain after cleanup")
+              emit("CLEANUP_END", phase=phase)
+
+          common = [
+              "-Denable_httpx_tls=true",
+              f"-Dhttpx_adapter_source={root / '.sdk-httpx-conformance'}",
+              "-Dtarget=aarch64-windows-msvc", "-Dtarget_can_run=true",
+              f"-Dlinkage={linkage}", f"-Doptimize={optimize}",
+              f"-Dsymcrypt_include_dir={root / '.zig-symcrypt-ci/vendor/symcrypt/include'}",
+              f"-Dsymcrypt_provenance={fixture / 'provenance.json'}",
+              f"-Dsymcrypt_libraries={fixture / 'lib/symcrypt_plus_NoCIL.lib'}",
+              f"-Dsymcrypt_libraries={fixture / ('dll/symcrypt_zig_103_13.lib' if linkage == 'dynamic' else 'lib/symcrypt_static_NoCIL.lib')}",
+          ]
+          phases = [
+              ("provenance", "provenance-check", 5),
+              ("core-compile-link", "test-compile", 20),
+              ("core-native-run", "test", 5),
+              ("tls-compile-link", "tls-test-compile", 35),
+              ("tls-native-run", "tls-test", 10),
+              ("paired-build-link-run", "tls-paired-check", 30),
+              ("interop-build-link-run", "tls-interop-check", 30),
+          ]
+          emit("POLICY", phase_minutes={name: minutes for name, _, minutes in phases}, cumulative_minutes=90, snapshot_seconds=15, snapshot_timeout_seconds=20, cleanup_seconds=90, log_bytes_per_stream=64 * 1024 * 1024, qualification=False)
+
+          def run_phase(name, target, minutes):
+              started = time.monotonic()
+              deadline = min(started + minutes * 60, suite_deadline)
+              require(started < deadline, f"Cumulative deadline expired before {name}; diagnostic incomplete")
+              command = [str(zig), "build", target, "-j1", *common, "--summary", "all", "--verbose"]
+              emit("PHASE_START", phase=name, command=command, budget_seconds=round(deadline-started, 3))
+              paths = [logs / f"{name}.{stream}.log" for stream in ("stdout", "stderr")]
+              with paths[0].open("xb") as stdout, paths[1].open("xb") as stderr:
+                  process = subprocess.Popen(command, stdout=stdout, stderr=stderr)
+                  known = {}
+                  passed = False
+                  try:
+                      known[str(process.pid)] = creation_identity(wintypes.HANDLE(int(process._handle)))
+                      emit("ROOT", phase=name, pid=process.pid, created=known[str(process.pid)])
+                      next_snapshot = started
+                      while process.poll() is None:
+                          now = time.monotonic()
+                          require(now < deadline, f"PHASE_TIMEOUT {name}; no inference about the original six-hour cancellation")
+                          require(all(p.stat().st_size <= 64 * 1024 * 1024 for p in paths), f"LOG_LIMIT {name}")
+                          if now >= next_snapshot:
+                              snapshot(known, name)
+                              for path in paths:
+                                  with path.open("rb") as stream:
+                                      stream.seek(max(0, path.stat().st_size - 4096))
+                                      tail = stream.read().decode("utf-8", errors="replace")
+                                  emit("OUTPUT_TAIL", phase=name, stream=path.name, tail=tail)
+                              next_snapshot = time.monotonic() + 15
+                          time.sleep(1)
+                      require(time.monotonic() <= deadline, f"PHASE_TIMEOUT {name} during final observation")
+                      require(process.returncode == 0, f"{name} exited {process.returncode}")
+                      require(all(p.stat().st_size <= 64 * 1024 * 1024 for p in paths), f"LOG_LIMIT {name}")
+                      require(not snapshot(known, name), f"{name} left live descendants")
+                      if target in ("test", "tls-test", "tls-paired-check", "tls-interop-check"):
+                          verify_run_images(paths, name)
+                      require(time.monotonic() <= deadline, f"PHASE_TIMEOUT {name} during final evidence")
+                      passed = True
+                  finally:
+                      try:
+                          if not passed:
+                              emit("PHASE_FAIL", phase=name, error=str(sys.exception()), elapsed_seconds=round(time.monotonic()-started, 3))
+                              terminate_owned(process, known, name)
+                      finally:
+                          for path in paths:
+                              print(f"=== RAW {path.name} ===", flush=True)
+                              with path.open("rb") as stream:
+                                  shutil.copyfileobj(stream, sys.stdout.buffer)
+                              sys.stdout.buffer.flush()
+              emit("PHASE_PASS", phase=name, elapsed_seconds=round(time.monotonic()-started, 3))
+
+          try:
+              for name, target, minutes in phases:
+                  run_phase(name, target, minutes)
+          finally:
+              fixture_after = {str(p.relative_to(fixture)): digest(p) for p in fixture.rglob("*") if p.is_file()}
+              require(fixture_before == fixture_after, "Native fixture tree changed during diagnostic")
+              require(digest(peer) == proof["executable_sha256"], "Independent OpenSSL peer changed during diagnostic")
+              require(reference_before == {name: digest(root / ".openssl-reference" / name) for name in reference_before}, "OpenSSL provenance or configuration changed during diagnostic")
+              for directory in (".", ".zig-symcrypt-ci", ".symcrypt-ci-source", ".sdk-httpx-conformance"):
+                  require(not output(["git", "-C", directory, "diff", "--name-only", "HEAD"]), f"Source changed during diagnostic: {directory}")
+              require(not output(["git", "-C", ".sdk-httpx-conformance", "status", "--porcelain"]), "Released SDK checkout is no longer clean")
+              emit("POST_INPUTS", fixture_tree="unchanged", tracked_sources="unchanged", sdk_checkout="clean", openssl="unchanged")
+          emit("DIAGNOSTIC_PASS", linkage=linkage, optimize=optimize, mandatory_targets=["test", "tls-test", "tls-paired-check", "tls-interop-check"], qualification=False)
+      - name: Record evidence scope even on failure
+        if: always()
+        timeout-minutes: 2
+        shell: pwsh
+        env:
+          EVIDENCE_LINKAGE: ${{ inputs.linkage }}
+          EVIDENCE_OPTIMIZE: ${{ inputs.optimize }}
+        run: |
+          @"
+          ## Windows ARM64 diagnostic only
+          Source: $env:GITHUB_SHA. Selected configuration: $env:EVIDENCE_LINKAGE / $env:EVIDENCE_OPTIMIZE.
+          Separate mandatory targets use -j1; production concurrency and caches are not repaired or replaced.
+          Phase budgets: provenance 5m; Core compile/link 20m, run 5m; TLS compile/link 35m, run 10m; paired 30m; interop 30m. Cumulative supervised budget: 90m, plus bounded observation/cleanup.
+          Samples identify live descendants, creation identities, CPU/memory, images and observable PE machines. Short-lived processes can escape sampling; native executable receipts additionally require verbose invocation paths and ARM64 PE headers. Cached/unobserved native invocation fails rather than qualifying. Embedded compiler linking is not separately profiled.
+          A timeout or earlier failure leaves later phases incomplete, never passed. The earlier standard TLS1.2/P256 case remains in the unchanged full interoperability harness.
+          Even complete success establishes only this serialized configuration; it does not explain the old cancellation, qualify other axes, or authorize a production fix/release.
+          No FIPS, private-chain equivalence, SDK OpenSSL linkage, or macOS native-support claim.
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+      - name: Preserve only diagnostic logs (no native keys or fixture trees)
+        if: always()
+        timeout-minutes: 5
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: arm64-phase-evidence-${{ inputs.linkage }}-${{ inputs.optimize }}-${{ github.run_attempt }}
+          path: .agent-scratch/arm64-phase-evidence/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
