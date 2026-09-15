@@ -46,10 +46,13 @@ see `codegen/devops/README.md`. It is one package covering all 44 Azure
 DevOps API areas, with a Zig namespace per area.
 
 `azure_sdk_core_httpx` declares the external `httpx` dependency.
-`azure_sdk_core_symcrypt` pins the external `zig_symcrypt` dependency.
-Its forthcoming optional TLS adapter will add a lazy `httpx` dependency and a
-`tls` publication path when the reviewed package branch advances. Until then,
-the registry must match the published SDK-crypto-only 0.2.0 package so existing
-release verification continues to work. The HTTPX transport and its qualification
-fixtures remain branch-owned; no package source is kept on Main.
+`azure_sdk_core_symcrypt` pins the external `zig_symcrypt` dependency and a lazy
+`httpx` dependency for its explicitly enabled TLS adapter. Its `tls` publication
+path and dependency metadata match the reviewed package branch. See the
+[native backend README](https://github.com/cataggar/azure-sdk-for-zig/blob/1cd6c495203f69149eacd1bf50fe9ee77d648436/README.md)
+for SDK-versus-TLS cryptography, trust policy, linkage, ownership and matrix
+requirements. Native execution supports Linux and Windows on x64 and ARM64;
+macOS is source-only. Neither native linkage nor a static build implies FIPS
+validation. Both optional adapters and their qualification fixtures remain
+branch-owned; no package source is kept on Main.
 `azure_sdk_kusto` pins the external `serde` dependency.
