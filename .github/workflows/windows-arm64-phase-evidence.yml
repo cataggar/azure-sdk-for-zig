@@ -3,6 +3,8 @@ name: Windows Arm64 phase evidence
 # Diagnostic only: serialization and -j1 are observations, not a production fix.
 # This workflow does not replace any production package context or matrix axis.
 on:
+  push:
+    branches: [fleet/416-arm64-phase-evidence]
   workflow_dispatch:
     inputs:
       expected_sha:
@@ -32,28 +34,29 @@ env:
 
 jobs:
   phase-evidence:
-    name: ARM64 diagnostic (${{ inputs.linkage }}, ${{ inputs.optimize }})
+    name: ARM64 diagnostic (${{ inputs.linkage || 'dynamic' }}, ${{ inputs.optimize || 'Debug' }})
     runs-on: windows-11-vs2026-arm
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         timeout-minutes: 5
         with:
-          fetch-depth: 2
+          fetch-depth: 3
           persist-credentials: false
       - name: Require exact evidence source with unchanged production tree
         timeout-minutes: 2
         shell: bash
         env:
-          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          EXPECTED_SHA: ${{ inputs.expected_sha || github.event.after }}
         run: |
           set -euo pipefail
           base=92f87e6520dfc791daf78f2d328af5f7c2e18671
+          reviewed_driver=91f816f4becd82545e137f7905bb0127529ac350
           if [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] ||
              [[ "$(git rev-parse HEAD)" != "$EXPECTED_SHA" ]] ||
              [[ "$GITHUB_SHA" != "$EXPECTED_SHA" ]] ||
-             [[ "$(git rev-parse HEAD^)" != "$base" ]]; then
-            echo "::error::Select the reviewed evidence feature branch and its exact SHA, not Main. The evidence commit must be a direct child of 92f."
+             [[ "$(git rev-parse HEAD^)" != "$reviewed_driver" ]]; then
+            echo "::error::Select the reviewed evidence feature branch and its exact SHA, not Main. The push driver must be a direct child of 91f."
             exit 1
           fi
           test -z "$(git status --porcelain)"
@@ -148,8 +151,8 @@ jobs:
         timeout-minutes: 95
         shell: python3 {0}
         env:
-          EVIDENCE_LINKAGE: ${{ inputs.linkage }}
-          EVIDENCE_OPTIMIZE: ${{ inputs.optimize }}
+          EVIDENCE_LINKAGE: ${{ inputs.linkage || 'dynamic' }}
+          EVIDENCE_OPTIMIZE: ${{ inputs.optimize || 'Debug' }}
         run: |
           import ctypes
           from ctypes import wintypes
@@ -444,8 +447,8 @@ jobs:
         timeout-minutes: 2
         shell: pwsh
         env:
-          EVIDENCE_LINKAGE: ${{ inputs.linkage }}
-          EVIDENCE_OPTIMIZE: ${{ inputs.optimize }}
+          EVIDENCE_LINKAGE: ${{ inputs.linkage || 'dynamic' }}
+          EVIDENCE_OPTIMIZE: ${{ inputs.optimize || 'Debug' }}
         run: |
           @"
           ## Windows ARM64 diagnostic only
@@ -462,7 +465,7 @@ jobs:
         timeout-minutes: 5
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: arm64-phase-evidence-${{ inputs.linkage }}-${{ inputs.optimize }}-${{ github.run_attempt }}
+          name: arm64-phase-evidence-${{ inputs.linkage || 'dynamic' }}-${{ inputs.optimize || 'Debug' }}-${{ github.run_attempt }}
           path: .agent-scratch/arm64-phase-evidence/
           include-hidden-files: true
           if-no-files-found: warn
