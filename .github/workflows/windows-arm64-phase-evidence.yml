@@ -37,11 +37,14 @@ jobs:
     name: ARM64 diagnostic (${{ inputs.linkage || 'dynamic' }}, ${{ inputs.optimize || 'Debug' }})
     runs-on: windows-11-vs2026-arm
     timeout-minutes: 240
+    env:
+      EVIDENCE_LINKAGE: ${{ inputs.linkage || 'dynamic' }}
+      EVIDENCE_OPTIMIZE: ${{ inputs.optimize || 'Debug' }}
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         timeout-minutes: 5
         with:
-          fetch-depth: 3
+          fetch-depth: 4
           persist-credentials: false
       - name: Require exact evidence source with unchanged production tree
         timeout-minutes: 2
@@ -51,12 +54,12 @@ jobs:
         run: |
           set -euo pipefail
           base=92f87e6520dfc791daf78f2d328af5f7c2e18671
-          reviewed_driver=91f816f4becd82545e137f7905bb0127529ac350
+          reviewed_driver=5f732c72e278e817d9173f0ef843d09a198c9273
           if [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] ||
              [[ "$(git rev-parse HEAD)" != "$EXPECTED_SHA" ]] ||
              [[ "$GITHUB_SHA" != "$EXPECTED_SHA" ]] ||
              [[ "$(git rev-parse HEAD^)" != "$reviewed_driver" ]]; then
-            echo "::error::Select the reviewed evidence feature branch and its exact SHA, not Main. The push driver must be a direct child of 91f."
+            echo "::error::Select the reviewed evidence feature branch and its exact SHA, not Main. The preflight driver must be a direct child of 5f."
             exit 1
           fi
           test -z "$(git status --porcelain)"
@@ -102,57 +105,11 @@ jobs:
           Expand-Archive -LiteralPath $archive -DestinationPath $directory
           (Join-Path $directory "zig-x86_64-windows-0.16.0") |
             Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-      - name: Require unchanged immutable SDK conformance release input
+      - name: Supervise compiler identity and unchanged guard tests
         timeout-minutes: 10
-        shell: bash
-        run: |
-          set -euo pipefail
-          zig test conformance/ci_inputs.zig
-          if [[ ! "$SDK_HTTPX_CONFORMANCE_REF" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Pending release gate: set SDK_HTTPX_CONFORMANCE_REF to the reviewed released full commit. Native conformance is not skipped."
-            exit 1
-          fi
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        timeout-minutes: 5
-        with:
-          repository: cataggar/azure-sdk-for-zig
-          ref: ${{ env.SDK_HTTPX_CONFORMANCE_REF }}
-          path: .sdk-httpx-conformance
-          persist-credentials: false
-      - name: Verify unchanged released SDK source and coherent package identities
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          set -euo pipefail
-          actual="$(git -C .sdk-httpx-conformance rev-parse HEAD)"
-          test -z "$(git -C .sdk-httpx-conformance status --porcelain)"
-          zig run conformance/ci_inputs.zig -- build.zig.zon \
-            .sdk-httpx-conformance/build.zig.zon "$SDK_HTTPX_CONFORMANCE_REF" "$actual"
-          if ! git ls-remote --refs --tags https://github.com/cataggar/azure-sdk-for-zig.git \
-            'refs/tags/azure_sdk_core_httpx/v*' |
-            awk -v expected="$SDK_HTTPX_CONFORMANCE_REF" '$1 == expected { found = 1 } END { exit !found }'; then
-            echo "::error::SDK conformance input must be a published lightweight package release tag."
-            exit 1
-          fi
-      - name: Build unchanged verified Windows Arm64 fixtures
-        timeout-minutes: 30
-        shell: pwsh
-        run: |
-          ./.zig-symcrypt-ci/tools/build-windows-fixtures.ps1 `
-            -Source "$env:GITHUB_WORKSPACE/.symcrypt-ci-source" `
-            -Output "$env:GITHUB_WORKSPACE/.symcrypt-ci/aarch64" `
-            -Architecture aarch64
-      - name: Build unchanged pinned native OpenSSL 3.5.5 CLI reference
-        timeout-minutes: 45
-        shell: pwsh
-        run: |
-          ./.github/scripts/prepare_openssl_windows.ps1 -Architecture aarch64
-      - name: Supervise separate compile and native execution phases
-        timeout-minutes: 95
         shell: python3 {0}
         env:
-          EVIDENCE_LINKAGE: ${{ inputs.linkage || 'dynamic' }}
-          EVIDENCE_OPTIMIZE: ${{ inputs.optimize || 'Debug' }}
+          EVIDENCE_MODE: preflight
         run: |
           import ctypes
           from ctypes import wintypes
@@ -170,13 +127,19 @@ jobs:
 
           root = pathlib.Path(os.environ["GITHUB_WORKSPACE"]).resolve()
           os.chdir(root)
+          mode = os.environ["EVIDENCE_MODE"]
+          if mode not in ("preflight", "coherence", "native"):
+              raise RuntimeError("Invalid evidence mode")
           logs = root / ".agent-scratch/arm64-phase-evidence"
-          logs.mkdir(parents=True, exist_ok=False)
-          events = (logs / "events.jsonl").open("x", encoding="utf-8", buffering=1)
-          suite_deadline = time.monotonic() + 90 * 60
+          driver = root / ".agent-scratch/arm64-phase-driver.py"
+          if mode == "preflight":
+              logs.mkdir(parents=True, exist_ok=False)
+          events = (logs / f"{mode}-events.jsonl").open("x", encoding="utf-8", buffering=1)
+          total_minutes = 90 if mode == "native" else 7
+          suite_deadline = time.monotonic() + total_minutes * 60
 
           def emit(kind, **fields):
-              row = dict(event=kind, utc=datetime.datetime.now(datetime.timezone.utc).isoformat(), **fields)
+              row = dict(event=kind, mode=mode, utc=datetime.datetime.now(datetime.timezone.utc).isoformat(), **fields)
               text = json.dumps(row, sort_keys=True)
               print(text, flush=True)
               events.write(text + "\n")
@@ -184,6 +147,11 @@ jobs:
           def require(condition, message):
               if not condition:
                   raise RuntimeError(message)
+
+          emit("SUPERVISOR_START", source=os.environ["GITHUB_SHA"], global_cache=os.environ.get("ZIG_GLOBAL_CACHE_DIR"), local_cache=os.environ.get("ZIG_LOCAL_CACHE_DIR"), cache_policy="inherited without clearing or relocation", cumulative_minutes=total_minutes)
+          if mode == "preflight":
+              # Reuse this exact workflow-supplied program in subsequent steps.
+              shutil.copyfile(__file__, driver)
 
           def output(command):
               return subprocess.check_output(command, text=True, timeout=30).strip()
@@ -220,6 +188,7 @@ jobs:
           kernel.IsWow64Process2.restype = wintypes.BOOL
           process_machine, native_machine = wintypes.USHORT(), wintypes.USHORT()
           require(kernel.IsWow64Process2(kernel.GetCurrentProcess(), ctypes.byref(process_machine), ctypes.byref(native_machine)), "IsWow64Process2 failed")
+          emit("HOST", native_machine=hex(native_machine.value), driver_process_machine=hex(process_machine.value), guard_isa="x64 under emulation, not SDK ARM64 qualification")
           require(native_machine.value == 0xAA64, "Native host is not Windows ARM64")
           kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
           kernel.GetProcessTimes.restype = wintypes.BOOL
@@ -241,34 +210,14 @@ jobs:
 
           linkage, optimize = os.environ["EVIDENCE_LINKAGE"], os.environ["EVIDENCE_OPTIMIZE"]
           require(linkage in ("dynamic", "static") and optimize in ("Debug", "ReleaseSafe"), "Invalid diagnostic configuration")
-          zig = pathlib.Path(shutil.which("zig") or "")
+          selected_zig = shutil.which("zig")
           expected_zig = root / ".tools/zig-x86_64/zig-x86_64-windows-0.16.0/zig.exe"
+          emit("COMPILER_LOOKUP", selected=selected_zig, expected=str(expected_zig))
+          require(selected_zig is not None, "Zig is missing from PATH")
+          zig = pathlib.Path(selected_zig)
           require(zig.is_file() and zig.samefile(expected_zig), "PATH does not select the verified x64 compiler")
-          require(pe_machine(zig) == 0x8664 and output([str(zig), "version"]) == "0.16.0", "Compiler identity mismatch")
-          fixture = root / ".symcrypt-ci/aarch64"
-          peer = root / ".openssl-reference/openssl-3.5.5/apps/openssl.exe"
-          selected_peer = pathlib.Path(shutil.which("openssl") or "")
-          require(selected_peer.is_file() and selected_peer.samefile(peer), "PATH does not select the independent native OpenSSL peer")
-          require(pe_machine(peer) == 0xAA64, "OpenSSL peer is not native ARM64")
-          proof = json.loads((root / ".openssl-reference/provenance.json").read_text())
-          require(proof["target"] == "aarch64-windows-msvc" and proof["configure_target"] == "VC-WIN64-ARM", "OpenSSL target mismatch")
-          require(proof["source_url"] == "https://github.com/openssl/openssl/releases/download/openssl-3.5.5/openssl-3.5.5.tar.gz", "OpenSSL source URL mismatch")
-          require(proof["source_sha256"] == "b28c91532a8b65a1f983b4c28b7488174e4a01008e29ce8e69bd789f28bc2a89", "OpenSSL source identity mismatch")
-          require(digest(root / ".openssl-reference/openssl-3.5.5.tar.gz") == proof["source_sha256"], "OpenSSL archive changed")
-          require(proof["configure_options"] == ["no-shared", "no-tests", "no-asm", "no-module"], "OpenSSL options changed")
-          require(digest(peer) == proof["executable_sha256"], "OpenSSL executable changed")
-          version = output([str(peer), "version"])
-          require(version == proof["version"] and version.startswith("OpenSSL 3.5.5 "), "OpenSSL version mismatch")
-          require(pathlib.Path(os.environ["OPENSSL_CONF"]).samefile(root / ".openssl-reference/openssl.cnf"), "OpenSSL configuration changed")
-          require((root / ".openssl-reference/openssl.cnf").read_text() == "[req]\ndistinguished_name = test_identity\n[test_identity]\n", "OpenSSL configuration content mismatch")
-          reference_before = {name: digest(root / ".openssl-reference" / name) for name in ("provenance.json", "openssl.cnf")}
-          runtime = json.loads((fixture / "provenance.json").read_text())["runtime"]["dynamic"]
-          require(pe_machine(fixture / runtime["path"]) == 0xAA64, "SymCrypt runtime is not native ARM64")
-          for directory, expected in ((".zig-symcrypt-ci", os.environ["ZIG_SYMCRYPT_COMMIT"]), (".symcrypt-ci-source", os.environ["SYMCRYPT_COMMIT"]), (".sdk-httpx-conformance", os.environ["SDK_HTTPX_CONFORMANCE_REF"])):
-              require(output(["git", "-C", directory, "rev-parse", "HEAD"]) == expected, f"Unexpected source: {directory}")
-              require(not output(["git", "-C", directory, "diff", "--name-only", "HEAD"]), f"Modified tracked source: {directory}")
-          fixture_before = {str(p.relative_to(fixture)): digest(p) for p in fixture.rglob("*") if p.is_file()}
-          emit("INPUTS", source=os.environ["GITHUB_SHA"], native_machine=hex(native_machine.value), driver_process_machine=hex(process_machine.value), compiler=str(zig), compiler_machine="0x8664", target="aarch64-windows-msvc", linkage=linkage, optimize=optimize, openssl=version, sdk=os.environ["SDK_HTTPX_CONFORMANCE_REF"], provider_manifest_sha256=digest(root / "build.zig.zon"), sdk_manifest_sha256=digest(root / ".sdk-httpx-conformance/build.zig.zon"), fixture_manifest_sha256=digest(fixture / "provenance.json"), global_cache=os.environ.get("ZIG_GLOBAL_CACHE_DIR"), local_cache=os.environ.get("ZIG_LOCAL_CACHE_DIR"))
+          require(pe_machine(zig) == 0x8664, "Selected compiler is not x64")
+          emit("COMPILER_IMAGE", path=str(zig), pe_machine="0x8664", sha256=digest(zig))
 
           # Inventory only PID ancestry/times globally; image/resource details are
           # queried and returned only for this phase's creation-identity-bound tree.
@@ -318,8 +267,9 @@ jobs:
                           row["pe_machine"] = hex(pe_machine(image))
                       except (FileNotFoundError, PermissionError) as error:
                           row["pe_observation"] = type(error).__name__
-                      if row["name"].lower() in ("test.exe", "symcrypt-tls-interop.exe") and "pe_machine" in row:
-                          require(row["pe_machine"] == "0xaa64", f"Non-native test executable: {image}")
+                      if row["name"].lower() in ("test.exe", "symcrypt-tls-interop.exe", "ci_inputs_tests.exe", "ci_inputs_check.exe") and "pe_machine" in row:
+                          expected_machine = "0xaa64" if mode == "native" else "0x8664"
+                          require(row["pe_machine"] == expected_machine, f"Unexpected test/checker ISA: {image}")
                   emit("PROCESS", phase=phase, **row)
               require(len(known) <= 512, "Owned process evidence exceeded its bounded identity budget")
               emit("HEARTBEAT", phase=phase, live_owned_processes=len(rows))
@@ -359,32 +309,12 @@ jobs:
               require(not snapshot(known, phase, timeout=remaining()), "Owned descendants remain after cleanup")
               emit("CLEANUP_END", phase=phase)
 
-          common = [
-              "-Denable_httpx_tls=true",
-              f"-Dhttpx_adapter_source={root / '.sdk-httpx-conformance'}",
-              "-Dtarget=aarch64-windows-msvc", "-Dtarget_can_run=true",
-              f"-Dlinkage={linkage}", f"-Doptimize={optimize}",
-              f"-Dsymcrypt_include_dir={root / '.zig-symcrypt-ci/vendor/symcrypt/include'}",
-              f"-Dsymcrypt_provenance={fixture / 'provenance.json'}",
-              f"-Dsymcrypt_libraries={fixture / 'lib/symcrypt_plus_NoCIL.lib'}",
-              f"-Dsymcrypt_libraries={fixture / ('dll/symcrypt_zig_103_13.lib' if linkage == 'dynamic' else 'lib/symcrypt_static_NoCIL.lib')}",
-          ]
-          phases = [
-              ("provenance", "provenance-check", 5),
-              ("core-compile-link", "test-compile", 20),
-              ("core-native-run", "test", 5),
-              ("tls-compile-link", "tls-test-compile", 35),
-              ("tls-native-run", "tls-test", 10),
-              ("paired-build-link-run", "tls-paired-check", 30),
-              ("interop-build-link-run", "tls-interop-check", 30),
-          ]
-          emit("POLICY", phase_minutes={name: minutes for name, _, minutes in phases}, cumulative_minutes=90, snapshot_seconds=15, snapshot_timeout_seconds=20, cleanup_seconds=90, log_bytes_per_stream=64 * 1024 * 1024, qualification=False)
+          emit("POLICY", cumulative_minutes=total_minutes, snapshot_seconds=15, snapshot_timeout_seconds=20, cleanup_seconds=90, log_bytes_per_stream=64 * 1024 * 1024, qualification=False)
 
-          def run_phase(name, target, minutes):
+          def run_command(name, command, minutes, native_receipt=False):
               started = time.monotonic()
               deadline = min(started + minutes * 60, suite_deadline)
               require(started < deadline, f"Cumulative deadline expired before {name}; diagnostic incomplete")
-              command = [str(zig), "build", target, "-j1", *common, "--summary", "all", "--verbose"]
               emit("PHASE_START", phase=name, command=command, budget_seconds=round(deadline-started, 3))
               paths = [logs / f"{name}.{stream}.log" for stream in ("stdout", "stderr")]
               with paths[0].open("xb") as stdout, paths[1].open("xb") as stderr:
@@ -397,7 +327,7 @@ jobs:
                       next_snapshot = started
                       while process.poll() is None:
                           now = time.monotonic()
-                          require(now < deadline, f"PHASE_TIMEOUT {name}; no inference about the original six-hour cancellation")
+                          require(now < deadline, f"PHASE_TIMEOUT {name}; phase location is evidence, not a compiler-fix diagnosis")
                           require(all(p.stat().st_size <= 64 * 1024 * 1024 for p in paths), f"LOG_LIMIT {name}")
                           if now >= next_snapshot:
                               snapshot(known, name)
@@ -412,7 +342,7 @@ jobs:
                       require(process.returncode == 0, f"{name} exited {process.returncode}")
                       require(all(p.stat().st_size <= 64 * 1024 * 1024 for p in paths), f"LOG_LIMIT {name}")
                       require(not snapshot(known, name), f"{name} left live descendants")
-                      if target in ("test", "tls-test", "tls-paired-check", "tls-interop-check"):
+                      if native_receipt:
                           verify_run_images(paths, name)
                       require(time.monotonic() <= deadline, f"PHASE_TIMEOUT {name} during final evidence")
                       passed = True
@@ -428,36 +358,178 @@ jobs:
                                   shutil.copyfileobj(stream, sys.stdout.buffer)
                               sys.stdout.buffer.flush()
               emit("PHASE_PASS", phase=name, elapsed_seconds=round(time.monotonic()-started, 3))
+              return paths
 
+          def verify_compiler_version():
+              paths = run_command(f"{mode}-compiler-version", [str(zig), "version"], 0.5)
+              version = paths[0].read_text().strip()
+              require(version == "0.16.0", f"Unexpected selected compiler version: {version}")
+              emit("COMPILER_VERSION", path=str(zig), version=version, pe_machine="0x8664")
+
+          def run_guard_binary(name, binary, arguments):
+              machine = pe_machine(binary)
+              emit("GUARD_IMAGE", phase=name, path=str(binary), pe_machine=hex(machine), expected_machine="0x8664", sha256=digest(binary), qualification=False)
+              require(machine == 0x8664, "Default-target guard/checker is not x64")
+              return run_command(name, [str(binary), *arguments], 2)
+
+          def run_preflight():
+              bash = pathlib.Path(os.environ["ProgramFiles"]) / "Git/bin/bash.exe"
+              paths = run_command("guard-shell-lookup", [str(bash), "--noprofile", "--norc", "-c", 'set -euo pipefail; selected="$(command -v zig)"; cygpath -aw "$selected"'], 0.5)
+              bash_zig = pathlib.Path(paths[0].read_text().strip())
+              emit("BASH_COMPILER_LOOKUP", path=str(bash_zig))
+              require(bash_zig.is_file() and bash_zig.samefile(zig), "Original Git Bash PATH selects a different compiler")
+              verify_compiler_version()
+              binary = root / ".agent-scratch/ci_inputs_tests.exe"
+              run_command("guard-compile-link", [str(zig), "test", "conformance/ci_inputs.zig", "--test-no-exec", f"-femit-bin={binary}"], 6)
+              paths = run_guard_binary("guard-test-execute", binary, [])
+              require(any("All 4 tests passed." in p.read_text(errors="replace") for p in paths), "Missing completion of the four unchanged guard tests")
+              emit("PREFLIGHT_PASS", guard_tests=4, guard_isa="x64 default target under emulation", qualification=False)
+
+          def run_coherence():
+              verify_compiler_version()
+              actual = output(["git", "-C", ".sdk-httpx-conformance", "rev-parse", "HEAD"])
+              require(not output(["git", "-C", ".sdk-httpx-conformance", "status", "--porcelain"]), "Released SDK checkout is not clean")
+              binary = root / ".agent-scratch/ci_inputs_check.exe"
+              run_command("coherence-compile-link", [str(zig), "build-exe", "conformance/ci_inputs.zig", f"-femit-bin={binary}"], 6)
+              run_guard_binary("coherence-execute", binary, ["build.zig.zon", ".sdk-httpx-conformance/build.zig.zon", os.environ["SDK_HTTPX_CONFORMANCE_REF"], actual])
+              emit("COHERENCE_PASS", sdk=actual, lightweight_release_tag="still required by the following unchanged shell guard", qualification=False)
+
+          def run_native():
+              verify_compiler_version()
+              fixture = root / ".symcrypt-ci/aarch64"
+              peer = root / ".openssl-reference/openssl-3.5.5/apps/openssl.exe"
+              selected_peer = pathlib.Path(shutil.which("openssl") or "")
+              require(selected_peer.is_file() and selected_peer.samefile(peer), "PATH does not select the independent native OpenSSL peer")
+              require(pe_machine(peer) == 0xAA64, "OpenSSL peer is not native ARM64")
+              proof = json.loads((root / ".openssl-reference/provenance.json").read_text())
+              require(proof["target"] == "aarch64-windows-msvc" and proof["configure_target"] == "VC-WIN64-ARM", "OpenSSL target mismatch")
+              require(proof["source_url"] == "https://github.com/openssl/openssl/releases/download/openssl-3.5.5/openssl-3.5.5.tar.gz", "OpenSSL source URL mismatch")
+              require(proof["source_sha256"] == "b28c91532a8b65a1f983b4c28b7488174e4a01008e29ce8e69bd789f28bc2a89", "OpenSSL source identity mismatch")
+              require(digest(root / ".openssl-reference/openssl-3.5.5.tar.gz") == proof["source_sha256"], "OpenSSL archive changed")
+              require(proof["configure_options"] == ["no-shared", "no-tests", "no-asm", "no-module"], "OpenSSL options changed")
+              require(digest(peer) == proof["executable_sha256"], "OpenSSL executable changed")
+              version = output([str(peer), "version"])
+              require(version == proof["version"] and version.startswith("OpenSSL 3.5.5 "), "OpenSSL version mismatch")
+              require(pathlib.Path(os.environ["OPENSSL_CONF"]).samefile(root / ".openssl-reference/openssl.cnf"), "OpenSSL configuration changed")
+              require((root / ".openssl-reference/openssl.cnf").read_text() == "[req]\ndistinguished_name = test_identity\n[test_identity]\n", "OpenSSL configuration content mismatch")
+              reference_before = {name: digest(root / ".openssl-reference" / name) for name in ("provenance.json", "openssl.cnf")}
+              runtime = json.loads((fixture / "provenance.json").read_text())["runtime"]["dynamic"]
+              require(pe_machine(fixture / runtime["path"]) == 0xAA64, "SymCrypt runtime is not native ARM64")
+              for directory, expected in ((".zig-symcrypt-ci", os.environ["ZIG_SYMCRYPT_COMMIT"]), (".symcrypt-ci-source", os.environ["SYMCRYPT_COMMIT"]), (".sdk-httpx-conformance", os.environ["SDK_HTTPX_CONFORMANCE_REF"])):
+                  require(output(["git", "-C", directory, "rev-parse", "HEAD"]) == expected, f"Unexpected source: {directory}")
+                  require(not output(["git", "-C", directory, "diff", "--name-only", "HEAD"]), f"Modified tracked source: {directory}")
+              fixture_before = {str(p.relative_to(fixture)): digest(p) for p in fixture.rglob("*") if p.is_file()}
+              emit("INPUTS", source=os.environ["GITHUB_SHA"], native_machine=hex(native_machine.value), driver_process_machine=hex(process_machine.value), compiler=str(zig), compiler_machine="0x8664", target="aarch64-windows-msvc", linkage=linkage, optimize=optimize, openssl=version, sdk=os.environ["SDK_HTTPX_CONFORMANCE_REF"], provider_manifest_sha256=digest(root / "build.zig.zon"), sdk_manifest_sha256=digest(root / ".sdk-httpx-conformance/build.zig.zon"), fixture_manifest_sha256=digest(fixture / "provenance.json"), global_cache=os.environ.get("ZIG_GLOBAL_CACHE_DIR"), local_cache=os.environ.get("ZIG_LOCAL_CACHE_DIR"))
+              common = [
+                  "-Denable_httpx_tls=true",
+                  f"-Dhttpx_adapter_source={root / '.sdk-httpx-conformance'}",
+                  "-Dtarget=aarch64-windows-msvc", "-Dtarget_can_run=true",
+                  f"-Dlinkage={linkage}", f"-Doptimize={optimize}",
+                  f"-Dsymcrypt_include_dir={root / '.zig-symcrypt-ci/vendor/symcrypt/include'}",
+                  f"-Dsymcrypt_provenance={fixture / 'provenance.json'}",
+                  f"-Dsymcrypt_libraries={fixture / 'lib/symcrypt_plus_NoCIL.lib'}",
+                  f"-Dsymcrypt_libraries={fixture / ('dll/symcrypt_zig_103_13.lib' if linkage == 'dynamic' else 'lib/symcrypt_static_NoCIL.lib')}",
+              ]
+              phases = [
+                  ("provenance", "provenance-check", 5),
+                  ("core-compile-link", "test-compile", 20),
+                  ("core-native-run", "test", 5),
+                  ("tls-compile-link", "tls-test-compile", 35),
+                  ("tls-native-run", "tls-test", 10),
+                  ("paired-build-link-run", "tls-paired-check", 30),
+                  ("interop-build-link-run", "tls-interop-check", 30),
+              ]
+              emit("NATIVE_POLICY", phase_minutes={name: minutes for name, _, minutes in phases})
+              try:
+                  for name, target, minutes in phases:
+                      command = [str(zig), "build", target, "-j1", *common, "--summary", "all", "--verbose"]
+                      run_command(name, command, minutes, native_receipt=target in ("test", "tls-test", "tls-paired-check", "tls-interop-check"))
+              finally:
+                  fixture_after = {str(p.relative_to(fixture)): digest(p) for p in fixture.rglob("*") if p.is_file()}
+                  require(fixture_before == fixture_after, "Native fixture tree changed during diagnostic")
+                  require(digest(peer) == proof["executable_sha256"], "Independent OpenSSL peer changed during diagnostic")
+                  require(reference_before == {name: digest(root / ".openssl-reference" / name) for name in reference_before}, "OpenSSL provenance or configuration changed during diagnostic")
+                  for directory in (".", ".zig-symcrypt-ci", ".symcrypt-ci-source", ".sdk-httpx-conformance"):
+                      require(not output(["git", "-C", directory, "diff", "--name-only", "HEAD"]), f"Source changed during diagnostic: {directory}")
+                  require(not output(["git", "-C", ".sdk-httpx-conformance", "status", "--porcelain"]), "Released SDK checkout is no longer clean")
+                  emit("POST_INPUTS", fixture_tree="unchanged", tracked_sources="unchanged", sdk_checkout="clean", openssl="unchanged")
+              emit("DIAGNOSTIC_PASS", linkage=linkage, optimize=optimize, mandatory_targets=["test", "tls-test", "tls-paired-check", "tls-interop-check"], qualification=False)
+
+          guard_before = digest(root / "conformance/ci_inputs.zig")
           try:
-              for name, target, minutes in phases:
-                  run_phase(name, target, minutes)
+              {"preflight": run_preflight, "coherence": run_coherence, "native": run_native}[mode]()
           finally:
-              fixture_after = {str(p.relative_to(fixture)): digest(p) for p in fixture.rglob("*") if p.is_file()}
-              require(fixture_before == fixture_after, "Native fixture tree changed during diagnostic")
-              require(digest(peer) == proof["executable_sha256"], "Independent OpenSSL peer changed during diagnostic")
-              require(reference_before == {name: digest(root / ".openssl-reference" / name) for name in reference_before}, "OpenSSL provenance or configuration changed during diagnostic")
-              for directory in (".", ".zig-symcrypt-ci", ".symcrypt-ci-source", ".sdk-httpx-conformance"):
-                  require(not output(["git", "-C", directory, "diff", "--name-only", "HEAD"]), f"Source changed during diagnostic: {directory}")
-              require(not output(["git", "-C", ".sdk-httpx-conformance", "status", "--porcelain"]), "Released SDK checkout is no longer clean")
-              emit("POST_INPUTS", fixture_tree="unchanged", tracked_sources="unchanged", sdk_checkout="clean", openssl="unchanged")
-          emit("DIAGNOSTIC_PASS", linkage=linkage, optimize=optimize, mandatory_targets=["test", "tls-test", "tls-paired-check", "tls-interop-check"], qualification=False)
+              require(digest(root / "conformance/ci_inputs.zig") == guard_before, "Guard source changed during diagnostic")
+              require(not output(["git", "diff", "--name-only", "HEAD"]), "Tracked source changed during diagnostic")
+              emit("POST_SOURCE", guard_source="unchanged", tracked_source="unchanged")
+      - name: Require unchanged immutable SDK conformance release input
+        timeout-minutes: 1
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$SDK_HTTPX_CONFORMANCE_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Pending release gate: set SDK_HTTPX_CONFORMANCE_REF to the reviewed released full commit. Native conformance is not skipped."
+            exit 1
+          fi
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        timeout-minutes: 5
+        with:
+          repository: cataggar/azure-sdk-for-zig
+          ref: ${{ env.SDK_HTTPX_CONFORMANCE_REF }}
+          path: .sdk-httpx-conformance
+          persist-credentials: false
+      - name: Verify unchanged released SDK source and coherent package identities
+        timeout-minutes: 10
+        shell: bash
+        env:
+          EVIDENCE_MODE: coherence
+        run: |
+          set -euo pipefail
+          actual="$(git -C .sdk-httpx-conformance rev-parse HEAD)"
+          test -z "$(git -C .sdk-httpx-conformance status --porcelain)"
+          python3 .agent-scratch/arm64-phase-driver.py
+          if ! git ls-remote --refs --tags https://github.com/cataggar/azure-sdk-for-zig.git \
+            'refs/tags/azure_sdk_core_httpx/v*' |
+            awk -v expected="$SDK_HTTPX_CONFORMANCE_REF" '$1 == expected { found = 1 } END { exit !found }'; then
+            echo "::error::SDK conformance input must be a published lightweight package release tag."
+            exit 1
+          fi
+      - name: Build unchanged verified Windows Arm64 fixtures
+        timeout-minutes: 30
+        shell: pwsh
+        run: |
+          ./.zig-symcrypt-ci/tools/build-windows-fixtures.ps1 `
+            -Source "$env:GITHUB_WORKSPACE/.symcrypt-ci-source" `
+            -Output "$env:GITHUB_WORKSPACE/.symcrypt-ci/aarch64" `
+            -Architecture aarch64
+      - name: Build unchanged pinned native OpenSSL 3.5.5 CLI reference
+        timeout-minutes: 45
+        shell: pwsh
+        run: |
+          ./.github/scripts/prepare_openssl_windows.ps1 -Architecture aarch64
+      - name: Supervise separate compile and native execution phases
+        timeout-minutes: 95
+        shell: pwsh
+        env:
+          EVIDENCE_MODE: native
+        run: |
+          python3 .agent-scratch/arm64-phase-driver.py
+          if ($LASTEXITCODE -ne 0) { throw "Native phase evidence failed" }
       - name: Record evidence scope even on failure
         if: always()
         timeout-minutes: 2
         shell: pwsh
-        env:
-          EVIDENCE_LINKAGE: ${{ inputs.linkage || 'dynamic' }}
-          EVIDENCE_OPTIMIZE: ${{ inputs.optimize || 'Debug' }}
         run: |
           @"
           ## Windows ARM64 diagnostic only
           Source: $env:GITHUB_SHA. Selected configuration: $env:EVIDENCE_LINKAGE / $env:EVIDENCE_OPTIMIZE.
+          Supervision and logs begin before the first guard compilation. Original Git Bash and Windows PATH must select the verified x64 Zig; version and PE identity are required before compiling.
+          The four unchanged guard tests use separate compile/link (6m) and execution (2m) phases. Coherence checking also uses separate compile/link (6m) and execution (2m). Each early mode has a 7m cumulative budget inside its existing 10m step, leaving cleanup/source-check margin; compiler-version and shell lookup each allow 30s. Generated guard/checker binaries must be x64 under emulation, NOT native SDK ARM64 evidence.
           Separate mandatory targets use -j1; production concurrency and caches are not repaired or replaced.
           Phase budgets: provenance 5m; Core compile/link 20m, run 5m; TLS compile/link 35m, run 10m; paired 30m; interop 30m. Cumulative supervised budget: 90m, plus bounded observation/cleanup.
           Samples identify live descendants, creation identities, CPU/memory, images and observable PE machines. Short-lived processes can escape sampling; native executable receipts additionally require verbose invocation paths and ARM64 PE headers. Cached/unobserved native invocation fails rather than qualifying. Embedded compiler linking is not separately profiled.
           A timeout or earlier failure leaves later phases incomplete, never passed. The earlier standard TLS1.2/P256 case remains in the unchanged full interoperability harness.
-          Even complete success establishes only this serialized configuration; it does not explain the old cancellation, qualify other axes, or authorize a production fix/release.
+          The original 92f automated six-hour timeout is confirmed. The 5f early guard timeout occurred after a cache MISS, not a restored-corrupt cache. Neither identifies the underlying compile/link/execute stall. Even complete success establishes only this serialized configuration; it does not qualify other axes or authorize a production fix/release.
           No FIPS, private-chain equivalence, SDK OpenSSL linkage, or macOS native-support claim.
           "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
       - name: Preserve only diagnostic logs (no native keys or fixture trees)
