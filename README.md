@@ -514,6 +514,28 @@ zig build example-run [linkage and fixture options]
 zig build package-consumer-check [linkage and fixture options]
 ```
 
+For **Windows ARM64 static Core tests only**, in both Debug and ReleaseSafe,
+`zig build test` runs the same compiled test artifact through the published
+`conformance/run_core_tests.py` launcher instead of Zig's test-server protocol.
+It retains the build's seed, cache directory and working directory, and requires
+native Windows ARM64, an ARM64 PE image, the existing static provenance gate,
+all ten named completed cases, zero skips and exit zero. TLS, paired, example,
+consumer and all other Core execution paths are unchanged.
+
+Python remains required for native conformance. The launcher allows one
+60-second whole-launch interval, including a gated worker's startup, and buffers
+at most 1 MiB of non-TTY output, replayed on completion or failure. A private
+Windows Job Object owns the worker, Core process and descendants before the
+Core executable can start. Timeout, output overflow, containment/cleanup errors,
+surviving descendants, leaks and logged errors fail; there is no retry or
+unbounded fallback. Cleanup has a separate five-second job deadline and bounded
+worker/output waits. No SymCrypt DLL is staged for this static path.
+
+This narrow execution policy follows a successful native standalone observation;
+it does not establish an IPC-only cause for earlier runner stalls or identity
+with an earlier executable. Final-head native matrix and post-loop
+examples/consumer acceptance remain mandatory.
+
 Build-only and source checks:
 
 ```bash
@@ -522,6 +544,10 @@ zig build headers-check -Dheaders_only=true [header options]
 zig build source-check -Dsource_only=true
 zig build package-check -Dsource_only=true --summary all
 ```
+
+`source-check` also runs the build's platform/linkage selection regression.
+Portable launcher regressions use the existing Python unittest runner in CI;
+they do not substitute for native Windows execution.
 
 macOS and all unlisted native targets fail with a diagnostic naming the four
 supported triples. They can still run `source-check` and `package-check` with

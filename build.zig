@@ -316,7 +316,7 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run Core conformance and adapter tests");
     if (target_can_run) {
-        const run = runArtifactStep(
+        const run = runCoreTestStep(
             b,
             symcrypt_dep,
             tests,
@@ -410,8 +410,10 @@ fn addSourceCheck(b: *std.Build) *std.Build.Step {
         "examples",
         "conformance",
     });
-    const step = b.step("source-check", "Check all package Zig source formatting");
+    const policy = b.addSystemCommand(&.{ b.graph.zig_exe, "test", "build.zig" });
+    const step = b.step("source-check", "Check package formatting and Core runner selection");
     step.dependOn(&format.step);
+    step.dependOn(&policy.step);
     return step;
 }
 
@@ -547,6 +549,49 @@ fn addProvenanceVerification(
         command.addFileArg(library);
     }
     return &command.step;
+}
+
+fn coreTestsUseTerminal(os: std.Target.Os.Tag, arch: std.Target.Cpu.Arch, linkage: Linkage) bool {
+    return os == .windows and arch == .aarch64 and linkage == .static;
+}
+
+fn runCoreTestStep(
+    b: *std.Build,
+    symcrypt_dep: *std.Build.Dependency,
+    artifact: *std.Build.Step.Compile,
+    target: std.Build.ResolvedTarget,
+    linkage: Linkage,
+    provenance: ?std.Build.LazyPath,
+    libraries: []const std.Build.LazyPath,
+) *std.Build.Step {
+    if (!coreTestsUseTerminal(target.result.os.tag, target.result.cpu.arch, linkage))
+        return runArtifactStep(b, symcrypt_dep, artifact, target, linkage, provenance, libraries);
+
+    const command = b.addSystemCommand(&.{ "python3", "-B" });
+    command.addFileArg(b.path("conformance/run_core_tests.py"));
+    command.addArg("--fixture-tools");
+    command.addFileArg(symcrypt_dep.path("tools/fixture_manifest.py"));
+    command.addArtifactArg(artifact);
+    command.addPrefixedDirectoryArg("--cache-dir=", .{ .cwd_relative = b.cache_root.path orelse "." });
+    command.addArg(b.fmt("--seed=0x{x}", .{b.graph.random_seed}));
+    command.has_side_effects = true;
+    return &command.step;
+}
+
+test "terminal policy selects only Windows ARM64 static Core tests" {
+    const cases = .{
+        .{ .windows, .aarch64, .static, true },
+        .{ .windows, .aarch64, .dynamic, false },
+        .{ .windows, .x86_64, .static, false },
+        .{ .windows, .x86_64, .dynamic, false },
+        .{ .linux, .aarch64, .static, false },
+        .{ .linux, .aarch64, .dynamic, false },
+        .{ .linux, .x86_64, .static, false },
+        .{ .linux, .x86_64, .dynamic, false },
+        .{ .macos, .aarch64, .static, false },
+    };
+    inline for (cases) |case|
+        try std.testing.expectEqual(case[3], coreTestsUseTerminal(case[0], case[1], case[2]));
 }
 
 fn runArtifactStep(
