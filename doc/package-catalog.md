@@ -49,7 +49,7 @@ DevOps API areas, with a Zig namespace per area.
 `azure_sdk_core_symcrypt` pins the external `zig_symcrypt` dependency and a lazy
 `httpx` dependency for its explicitly enabled TLS adapter. Its `tls` publication
 path and dependency metadata match the reviewed package branch. See the
-[native backend README](https://github.com/cataggar/azure-sdk-for-zig/blob/1cd6c495203f69149eacd1bf50fe9ee77d648436/README.md)
+[native backend README](https://github.com/cataggar/azure-sdk-for-zig/blob/31bc73fa918787dd45dc78ea6007ba72f9efa7a5/README.md)
 for SDK-versus-TLS cryptography, trust policy, linkage, ownership and matrix
 requirements. Native execution supports Linux and Windows on x64 and ARM64;
 macOS is source-only. Neither native linkage nor a static build implies FIPS
