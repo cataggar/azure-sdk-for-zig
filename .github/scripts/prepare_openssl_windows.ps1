@@ -50,7 +50,8 @@ if (Test-Path "C:/Strawberry/perl/bin/perl.exe") {
 }
 
 function Get-ReferenceTool([string]$Name, [string]$VersionPrefix) {
-    $actual = (Get-Command $Name -CommandType Application).Source
+    # Validate the PATH winner, not the array of all matching applications.
+    $actual = (Get-Command $Name -CommandType Application | Select-Object -First 1).Source
     $expected = Join-Path $toolBin $Name
     if ([IO.Path]::GetFullPath($actual) -ine [IO.Path]::GetFullPath($expected)) {
         throw "PATH selected '$actual' instead of pinned reference tool '$expected'"
