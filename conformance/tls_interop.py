@@ -4,6 +4,7 @@
 import datetime
 import os
 import pathlib
+import re
 import socket
 import subprocess
 import sys
@@ -46,7 +47,33 @@ def authority(directory, name, parent=None):
     return key, certificate, der
 
 
-def run_fixture(command, directory, algorithm, validity, root, intermediate, unrelated):
+def peer_log_evidence(name, servers, logs):
+    for version, server, log in zip(("tls1_2", "tls1_3"), servers, logs):
+        log.flush()
+        path = pathlib.Path(log.name)
+        size = path.stat().st_size
+        with path.open("rb") as source:
+            source.seek(max(0, size - 64 * 1024))
+            lines = source.read(64 * 1024).decode("utf-8", errors="replace").splitlines()
+        print("interop peer:", name, version, "pid=", server.pid,
+              "exit_before_cleanup=", server.poll(), "log_bytes=", size,
+              "prefix_truncated=", size > 64 * 1024,
+              "readiness_probe=unauthenticated_tcp", flush=True)
+        omitted = 0
+        for line in lines:
+            # OpenSSL's info callback emits state/alert names, never record data.
+            if line.startswith(("SSL_accept:", "SSL3 alert ")):
+                print("interop peer state:", line, flush=True)
+                continue
+            error = re.search(r"error:([0-9A-Fa-f]{8}):([A-Za-z0-9 _()-]{0,80}):([A-Za-z0-9_]{0,80}):([A-Za-z0-9 _()./-]{0,160}):", line)
+            if error:
+                print("interop peer error:", ":".join(error.groups()), flush=True)
+            else:
+                omitted += 1
+        print("interop peer omitted_non_state_lines=", omitted, flush=True)
+
+
+def run_fixture(command, directory, algorithm, validity, root, intermediate, unrelated, diagnostics=False):
     name = algorithm + "-" + validity
     key = directory / (name + "-key.pem")
     certificate = directory / (name + "-cert.pem")
@@ -60,6 +87,7 @@ def run_fixture(command, directory, algorithm, validity, root, intermediate, unr
     ]
     servers = []
     logs = []
+    completed = False
     try:
         subprocess.run([
             "openssl", "req", "-new", "-x509", *key_options, "-nodes",
@@ -84,6 +112,7 @@ def run_fixture(command, directory, algorithm, validity, root, intermediate, unr
             server = subprocess.Popen([
                 "openssl", "s_server", "-accept", "127.0.0.1:" + str(address),
                 "-" + version, "-www", "-no_cache", "-quiet",
+                *(["-state"] if diagnostics else []),
                 *signature_options,
                 "-cert", str(certificate), "-key", str(key), "-cert_chain", str(intermediate[1]),
             ], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
@@ -95,24 +124,36 @@ def run_fixture(command, directory, algorithm, validity, root, intermediate, unr
             *command, str(der.resolve()), *(str(value) for value in ports), validity,
             str(root[2].resolve()), str(unrelated[2].resolve()),
         ], check=True, timeout=180)
+        completed = True
     finally:
-        for server in servers:
-            if server.poll() is None:
-                server.terminate()
-            try:
-                server.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                server.kill()
-                server.wait(timeout=5)
-        for log in logs:
-            log.close()
-        for path in (key, certificate, der):
-            path.unlink(missing_ok=True)
+        try:
+            if diagnostics and not completed:
+                try:
+                    peer_log_evidence(name, servers, logs)
+                except OSError as error:
+                    print("interop peer evidence unavailable:", type(error).__name__,
+                          "errno=", error.errno, flush=True)
+        finally:
+            for server in servers:
+                if server.poll() is None:
+                    server.terminate()
+                try:
+                    server.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    server.kill()
+                    server.wait(timeout=5)
+            for log in logs:
+                log.close()
+            for path in (key, certificate, der):
+                path.unlink(missing_ok=True)
 
 
 def main():
     if len(sys.argv) < 2:
         raise SystemExit("usage: tls_interop.py [verified-native-launcher arguments ...] executable")
+    diagnostics = os.environ.get("AZURE_SDK_TLS_INTEROP_DIAGNOSTICS", "0")
+    if diagnostics not in ("0", "1"):
+        raise ValueError("AZURE_SDK_TLS_INTEROP_DIAGNOSTICS must be 0 or 1")
     directory = pathlib.Path(".agent-scratch/tls-interop") / (str(os.getpid()) + "-" + str(time.time_ns()))
     directory.mkdir(mode=0o700, parents=True, exist_ok=False)
     subprocess.run(["openssl", "version"], check=True, timeout=10)
@@ -121,9 +162,9 @@ def main():
         intermediate = authority(directory, "Intermediate", root)
         unrelated = authority(directory, "Unrelated")
         for algorithm in ("p256", "p384", "rsa"):
-            run_fixture(sys.argv[1:], directory, algorithm, "valid", root, intermediate, unrelated)
+            run_fixture(sys.argv[1:], directory, algorithm, "valid", root, intermediate, unrelated, diagnostics == "1")
         for validity in ("expired", "future"):
-            run_fixture(sys.argv[1:], directory, "rsa", validity, root, intermediate, unrelated)
+            run_fixture(sys.argv[1:], directory, "rsa", validity, root, intermediate, unrelated, diagnostics == "1")
     finally:
         for path in directory.iterdir():
             if path.suffix in (".pem", ".der"):

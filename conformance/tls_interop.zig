@@ -212,6 +212,16 @@ const Scenario = union(enum) {
     record_failure: p.Operation,
 };
 
+const CasePhase = enum {
+    bind_trust,
+    connect,
+    handshake,
+    authenticate,
+    write_request,
+    read_response,
+    validate_response,
+};
+
 fn expectError(expected: anyerror, result: anyerror!void) !void {
     if (result) |_| return error.UnexpectedSuccess else |actual| {
         if (actual != expected) {
@@ -223,6 +233,26 @@ fn expectError(expected: anyerror, result: anyerror!void) !void {
 
 fn runCase(comptime Backend: type, backend: Backend, allocator: std.mem.Allocator, trust: *FixtureTrust, port: u16, version: Version, aead: p.AeadAlgorithm, group: p.KeyAgreementAlgorithm, host: []const u8, scenario: Scenario) !void {
     var observed = Observed(Backend).init(backend, aead, group);
+    var phase: CasePhase = .bind_trust;
+    var handshake_complete = false;
+    var total: usize = 0;
+    var read_calls: usize = 0;
+    var last_read: usize = 0;
+    errdefer std.debug.print("interop phase={s} handshake_complete={} response_read_calls={d} response_bytes={d} last_read_bytes={d} trust_calls={d} random_calls={d} hash_create_calls={d} verify_calls={d} prf_calls={d} seal_calls={d} open_calls={d} injected={d}\n", .{
+        @tagName(phase),
+        handshake_complete,
+        read_calls,
+        total,
+        last_read,
+        trust.calls,
+        observed.count(.random),
+        observed.count(.hash_create),
+        observed.count(.verify),
+        observed.count(.tls12_prf),
+        observed.count(.aead_seal),
+        observed.count(.aead_open),
+        observed.injected,
+    });
     errdefer std.debug.print("{s} {s} {s} {s} {s} failed\n", .{
         if (Backend == binding.Provider) "SymCrypt" else "standard",
         @tagName(version),
@@ -237,6 +267,7 @@ fn runCase(comptime Backend: type, backend: Backend, allocator: std.mem.Allocato
         .allow_sha1_identifiers = true,
     });
     trust.bound = paired.provider();
+    phase = .connect;
     var socket = try httpx.Socket.create();
     defer socket.close();
     try socket.connectWithTimeout(.initIp4(.{ 127, 0, 0, 1 }, port), 5000);
@@ -250,23 +281,43 @@ fn runCase(comptime Backend: type, backend: Backend, allocator: std.mem.Allocato
     });
     defer session.deinit();
     session.attachSocket(&socket);
+    // Capture only counters/flags before the caller's teardown wipes session state.
+    errdefer std.debug.print("interop session failed={} close_notify={} read_seq={d} write_seq={d} encrypted_buffer_pos={d} encrypted_buffer_len={d} plaintext_buffer_pos={d} plaintext_buffer_len={d} post_handshake_bytes={d}\n", .{
+        session.failed,
+        session.received_close_notify,
+        session.read_seq,
+        session.write_seq,
+        session.encrypted_buf_pos,
+        session.encrypted_buf_len,
+        session.read_buf_pos,
+        session.read_buf_len,
+        session.post_handshake_len,
+    });
+    phase = .handshake;
     switch (scenario) {
         .trust_failure => |expected| {
-            try expectError(expected, session.handshake(host));
+            const result = session.handshake(host);
+            handshake_complete = if (result) |_| true else |_| false;
+            try expectError(expected, result);
             if (trust.calls != 1) return error.TrustFailureRetried;
             return;
         },
         .handshake_failure => |operation| {
-            try expectError(expectedTlsError(operation, false), session.handshake(host));
+            const result = session.handshake(host);
+            handshake_complete = if (result) |_| true else |_| false;
+            try expectError(expectedTlsError(operation, false), result);
             if (observed.injected != 1) return error.ProviderFailureRetried;
             return;
         },
         .success, .record_failure => {},
     }
     try session.handshake(host);
+    handshake_complete = true;
+    phase = .authenticate;
     if (session.tls_version != version or trust.calls != 1) return error.InvalidAuthenticatedSession;
     const request = "GET / HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n";
     var response: [4096]u8 = undefined;
+    phase = .write_request;
     if (scenario == .record_failure) {
         const operation = scenario.record_failure;
         if (operation == .aead_seal) {
@@ -275,24 +326,31 @@ fn runCase(comptime Backend: type, backend: Backend, allocator: std.mem.Allocato
         } else {
             try session.writeAll(request);
             observed.failure = operation;
-            const result: anyerror!void = if (session.read(&response)) |_| {} else |err| err;
+            phase = .read_response;
+            read_calls += 1;
+            const result: anyerror!void = if (session.read(&response)) |count| {
+                last_read = count;
+            } else |err| err;
             try expectError(expectedTlsError(operation, true), result);
         }
         if (observed.injected != 1) return error.RecordFailureRetried;
         return;
     }
     try session.writeAll(request);
-    var total: usize = 0;
+    phase = .read_response;
     while (true) {
+        read_calls += 1;
         const count = session.read(&response) catch |err| switch (err) {
             error.TlsCloseNotify => break,
             else => return err,
         };
+        last_read = count;
         if (count == 0) break;
         if (total == 0 and !std.mem.startsWith(u8, response[0..count], "HTTP/1.")) return error.InvalidHttpResponse;
         total += count;
         if (total > 512 * 1024) return error.ResponseLimitExceeded;
     }
+    phase = .validate_response;
     if (total < 1024) return error.IncompleteHttpResponse;
     if (observed.count(.random) == 0 or observed.count(.hash_create) == 0 or
         observed.count(.hash_update) == 0 or observed.count(.hash_snapshot) == 0 or
