@@ -430,6 +430,13 @@ environment on Windows. Missing tools, download/hash/version failures, or
 non-runnable targets fail the job. It uses `no-shared no-tests no-asm no-module`,
 checks executable/library version, and writes and logs source/configuration/
 executable-digest provenance in `.openssl-reference/provenance.json`.
+The Windows reference helper explicitly selects an installed **MSVC 14.44**
+servicing toolset for both native architectures, with no fallback to a newer
+Visual Studio default and no automatic installation. It verifies the selected
+compiler, linker, librarian and nmake paths/versions/hashes and records them,
+the exact toolset and SDK/UCRT versions in the reference provenance. This
+reference-only compatibility selection does not change Zig or SymCrypt builds;
+successful full native interoperability qualification remains required.
 The generated minimal `OPENSSL_CONF` applies only to the disposable test peer.
 OpenSSL is neither linked into the SDK nor a fallback provider or a FIPS
 qualification claim.

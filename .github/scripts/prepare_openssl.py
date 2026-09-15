@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import tarfile
@@ -48,18 +49,58 @@ def require(command):
     return found
 
 
-def build(target):
+def windows_toolchain(path, target):
+    if path is None:
+        raise RuntimeError("Windows reference builds require prepare_openssl_windows.ps1 toolset selection")
+    with path.open("rb") as source:
+        data = source.read(128 * 1024 + 1)
+    if len(data) > 128 * 1024:
+        raise RuntimeError("Windows toolchain metadata exceeds its size budget")
+    metadata = json.loads(data)
+    architecture = {"aarch64-windows-msvc": "arm64", "x86_64-windows-msvc": "x64"}[target]
+    if (metadata["policy"] != "installed-msvc-14.44-no-fallback"
+            or not re.fullmatch(r"14\.44\.\d+(?:\.\d+)?", metadata["toolset_version"])
+            or metadata["host_architecture"] != architecture
+            or metadata["target_architecture"] != architecture):
+        raise RuntimeError("Unexpected Windows reference toolset or architecture")
+    toolset = pathlib.Path(metadata["toolset_directory"])
+    if (toolset.name != metadata["toolset_version"]
+            or not metadata["windows_sdk_version"] or not metadata["ucrt_version"]):
+        raise RuntimeError("Windows toolset directory or SDK identity is inconsistent")
+    binary_directory = toolset / "bin" / ("Host" + architecture) / architecture
+    for key, command, prefix in (
+        ("compiler", "cl", "19.44."),
+        ("linker", "link", "14.44."),
+        ("librarian", "lib", "14.44."),
+        ("make", "nmake", "14.44."),
+    ):
+        tool = metadata[key]
+        actual = pathlib.Path(require(command))
+        if (not actual.samefile(binary_directory / (command + ".exe"))
+                or not actual.samefile(tool["executable"])
+                or not tool["file_version"].startswith(prefix)
+                or digest(actual) != tool["sha256"]):
+            raise RuntimeError("Selected Windows reference tool differs from verified metadata: " + command)
+    for name, expected in (("CC", "cl"), ("LD", "link"), ("AR", "lib")):
+        override = os.environ.get(name)
+        if override and override not in (expected, expected + ".exe"):
+            raise RuntimeError("External " + name + " override conflicts with the pinned reference toolchain")
+    return metadata
+
+
+def build(target, toolchain_path=None):
     windows = target.endswith("-windows-msvc")
     if windows != (os.name == "nt"):
         raise RuntimeError("reference must execute on its native CI operating system")
+    toolchain = windows_toolchain(toolchain_path, target) if windows else None
+    if not windows and toolchain_path is not None:
+        raise RuntimeError("Windows toolchain metadata cannot be used for a non-Windows reference")
     perl = require("perl")
     make = require("nmake" if windows else "make")
     subprocess.run(
         [perl, "-MFindBin", "-MFile::Spec::Functions", "-MIPC::Cmd", "-e", "1"],
         check=True, timeout=15,
     )
-    if windows:
-        require("cl")
     directory = pathlib.Path(".openssl-reference")
     directory.mkdir(exist_ok=False)
     scratch = directory / "scratch"
@@ -90,6 +131,8 @@ def build(target):
     subprocess.run(command, cwd=source, env=environment, check=True, timeout=2400)
     executable = source / "apps" / ("openssl.exe" if windows else "openssl")
     actual = version(executable.resolve())
+    if toolchain is not None and windows_toolchain(toolchain_path, target) != toolchain:
+        raise RuntimeError("Windows reference toolchain metadata changed during the build")
     configuration = directory / "openssl.cnf"
     configuration.write_text(CONFIG, encoding="utf-8")
     provenance = {
@@ -102,6 +145,8 @@ def build(target):
         "configure_options": options,
         "executable_sha256": digest(executable),
     }
+    if toolchain is not None:
+        provenance["toolchain"] = toolchain
     (directory / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(provenance, indent=2), flush=True)
     with open(os.environ["GITHUB_PATH"], "a", encoding="utf-8") as output:
@@ -114,11 +159,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", choices=TARGETS)
     parser.add_argument("--check-existing", type=pathlib.Path)
+    parser.add_argument("--windows-toolchain", type=pathlib.Path)
     args = parser.parse_args()
     if args.check_existing is not None:
         version(args.check_existing)
     elif args.target is not None:
-        build(args.target)
+        build(args.target, args.windows_toolchain)
     else:
         parser.error("--target or --check-existing is required")
 
