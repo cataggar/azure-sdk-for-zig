@@ -83,6 +83,9 @@ pub fn build(b: *std.Build) void {
         "headers_only",
         "Compile adapter/header ABI only without native libraries",
     ) orelse false;
+    const enable_httpx_tls = b.option(bool, "enable_httpx_tls", "Expose the optional HTTPX TLS primitive provider") orelse false;
+    const httpx_source = b.option(std.Build.LazyPath, "httpx_source", "Development-only HTTPX source root; never a release dependency pin");
+    const httpx_adapter_source = b.option(std.Build.LazyPath, "httpx_adapter_source", "Development-only SDK HTTPX transport source for paired conformance");
 
     if (!headers_only and libraries.len == 0) {
         std.log.err(
@@ -143,6 +146,132 @@ pub fn build(b: *std.Build) void {
     headers_step.dependOn(&header_object.step);
     b.getInstallStep().dependOn(&header_object.step);
 
+    if (enable_httpx_tls) {
+        const httpx_dep = b.lazyDependency("httpx", .{ .target = target, .optimize = optimize }) orelse return;
+        const httpx_mod = httpx_dep.module("httpx");
+        if (httpx_source) |path| httpx_mod.root_source_file = path.path(b, "src/httpx.zig");
+        const tls_mod = b.addModule("azure_sdk_core_symcrypt_tls", .{
+            .root_source_file = b.path("tls/root.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "httpx", .module = httpx_mod },
+                .{ .name = "symcrypt", .module = symcrypt_dep.module("symcrypt") },
+            },
+        });
+        tls_mod.addIncludePath(include_dir orelse symcrypt_dep.path("vendor/symcrypt/include"));
+        for (system_include_dirs) |path| tls_mod.addSystemIncludePath(path);
+        if (checked) tls_mod.addCMacro("DBG", "1");
+        if (!headers_only) addLinuxDynamicRPath(tls_mod, target, linkage, libraries);
+        const tls_headers = b.addObject(.{
+            .name = "symcrypt-tls-headers",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("tls/header_check.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{.{ .name = "binding", .module = tls_mod }},
+            }),
+        });
+        headers_step.dependOn(&tls_headers.step);
+        b.getInstallStep().dependOn(&tls_headers.step);
+        const tls_tests = b.addTest(.{ .root_module = tls_mod });
+        const tls_compile_step = b.step("tls-test-compile", "Compile optional TLS provider tests without execution");
+        const tls_test_step = b.step("tls-test", "Run optional HTTPX TLS provider tests");
+        if (headers_only) {
+            tls_compile_step.dependOn(&b.addFail("tls-test-compile requires native libraries; use headers-check for ABI-only compilation").step);
+            tls_test_step.dependOn(&b.addFail("tls-test requires native SymCrypt libraries and provenance").step);
+        } else {
+            tls_compile_step.dependOn(&tls_tests.step);
+            if (target_can_run) {
+                const run = runArtifactStep(b, symcrypt_dep, tls_tests, target, linkage, provenance, libraries);
+                run.dependOn(addProvenanceVerification(b, symcrypt_dep, target, linkage, provenance, libraries));
+                tls_test_step.dependOn(run);
+            } else {
+                tls_test_step.dependOn(&b.addFail("the selected target is build-only; use tls-test-compile").step);
+            }
+        }
+        const interop_step = b.step("tls-interop-check", "Qualify selected TLS providers against authenticated local OpenSSL servers");
+        if (headers_only or !target_can_run) {
+            interop_step.dependOn(&b.addFail("tls-interop-check requires a runnable target and native libraries").step);
+        } else {
+            const interop_mod = b.createModule(.{
+                .root_source_file = b.path("conformance/tls_interop.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "httpx", .module = httpx_mod },
+                    .{ .name = "azure_sdk_core_symcrypt_tls", .module = tls_mod },
+                },
+            });
+            addLinuxDynamicRPath(interop_mod, target, linkage, libraries);
+            const interop = b.addExecutable(.{ .name = "symcrypt-tls-interop", .root_module = interop_mod });
+            const run = b.addSystemCommand(&.{"python3"});
+            run.addFileArg(b.path("conformance/tls_interop.py"));
+            if (target.result.os.tag == .windows and linkage == .dynamic) {
+                run.addArg("python3");
+                run.addFileArg(symcrypt_dep.path("tools/run_verified.py"));
+                run.addArg("--manifest");
+                if (provenance) |manifest| run.addFileArg(manifest);
+                run.addArgs(&.{ "--target", canonicalTargetTriple(b, target) });
+                for (libraries) |library| {
+                    run.addArg("--library");
+                    run.addFileArg(library);
+                }
+            }
+            run.addArtifactArg(interop);
+            run.step.dependOn(addProvenanceVerification(b, symcrypt_dep, target, linkage, provenance, libraries));
+            interop_step.dependOn(&run.step);
+        }
+        const paired_step = b.step("tls-paired-check", "Qualify native crypto through canonical trust, public TLS and HTTP streaming");
+        if (headers_only or !target_can_run) {
+            paired_step.dependOn(&b.addFail("tls-paired-check requires a runnable target and native libraries").step);
+        } else {
+            // Copy the std-only fixture outside HTTPX's module ownership boundary.
+            const fixture_files = b.addWriteFiles();
+            const fixtures = b.createModule(.{
+                .root_source_file = fixture_files.addCopyFile(if (httpx_source) |path|
+                    path.path(b, "src/tls/trust_fixtures.zig")
+                else
+                    httpx_dep.path("src/tls/trust_fixtures.zig"), "trust_fixtures.zig"),
+                .target = target,
+                .optimize = optimize,
+            });
+            const paired_mod = b.createModule(.{
+                .root_source_file = b.path("conformance/tls_pairing.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "httpx", .module = httpx_mod },
+                    .{ .name = "azure_sdk_core_symcrypt_tls", .module = tls_mod },
+                    .{ .name = "httpx_certificate_fixtures", .module = fixtures },
+                },
+            });
+            const paired_options = b.addOptions();
+            paired_options.addOption(bool, "sdk_transport", httpx_adapter_source != null);
+            paired_mod.addOptions("paired_options", paired_options);
+            if (httpx_adapter_source) |path| {
+                const sdk_httpx = b.createModule(.{
+                    .root_source_file = path.path(b, "root.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                    .imports = &.{
+                        .{ .name = "httpx", .module = httpx_mod },
+                        .{ .name = "azure_sdk_core", .module = core_dep.module("azure_sdk_core") },
+                    },
+                });
+                paired_mod.addImport("sdk_httpx", sdk_httpx);
+            }
+            addLinuxDynamicRPath(paired_mod, target, linkage, libraries);
+            const paired = b.addTest(.{ .root_module = paired_mod, .filters = &.{"native paired"} });
+            const run = runArtifactStep(b, symcrypt_dep, paired, target, linkage, provenance, libraries);
+            run.dependOn(addProvenanceVerification(b, symcrypt_dep, target, linkage, provenance, libraries));
+            paired_step.dependOn(run);
+        }
+    } else if (httpx_source != null or httpx_adapter_source != null) {
+        std.log.err("HTTPX development sources require enable_httpx_tls=true", .{});
+        b.invalid_user_input = true;
+    }
+
     if (headers_only) return;
 
     const test_mod = b.createModule(.{
@@ -187,7 +316,7 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run Core conformance and adapter tests");
     if (target_can_run) {
-        const run = runArtifactStep(
+        const run = runCoreTestStep(
             b,
             symcrypt_dep,
             tests,
@@ -259,6 +388,7 @@ pub fn build(b: *std.Build) void {
         system_include_dirs,
         checked,
         provenance,
+        enable_httpx_tls,
     );
     const package_consumer_step = b.step(
         "package-consumer-check",
@@ -276,11 +406,14 @@ fn addSourceCheck(b: *std.Build) *std.Build.Step {
         "build.zig",
         "build.zig.zon",
         "root.zig",
+        "tls",
         "examples",
         "conformance",
     });
-    const step = b.step("source-check", "Check all package Zig source formatting");
+    const policy = b.addSystemCommand(&.{ b.graph.zig_exe, "test", "build.zig" });
+    const step = b.step("source-check", "Check package formatting and Core runner selection");
     step.dependOn(&format.step);
+    step.dependOn(&policy.step);
     return step;
 }
 
@@ -350,6 +483,7 @@ fn addPackageConsumerBuild(
     system_include_dirs: []const std.Build.LazyPath,
     checked: bool,
     provenance: ?std.Build.LazyPath,
+    enable_httpx_tls: bool,
 ) *std.Build.Step.Run {
     const command = b.addSystemCommand(&.{
         b.graph.zig_exe,
@@ -361,6 +495,7 @@ fn addPackageConsumerBuild(
         b.fmt("-Doptimize={s}", .{@tagName(optimize)}),
         b.fmt("-Dlinkage={s}", .{@tagName(linkage)}),
         b.fmt("-Dsymcrypt_checked={s}", .{if (checked) "true" else "false"}),
+        b.fmt("-Denable_httpx_tls={s}", .{if (enable_httpx_tls) "true" else "false"}),
     });
     command.setCwd(package.consumer_dir);
     command.step.dependOn(&package.fetch.step);
@@ -414,6 +549,49 @@ fn addProvenanceVerification(
         command.addFileArg(library);
     }
     return &command.step;
+}
+
+fn coreTestsUseTerminal(os: std.Target.Os.Tag, arch: std.Target.Cpu.Arch, linkage: Linkage) bool {
+    return os == .windows and arch == .aarch64 and linkage == .static;
+}
+
+fn runCoreTestStep(
+    b: *std.Build,
+    symcrypt_dep: *std.Build.Dependency,
+    artifact: *std.Build.Step.Compile,
+    target: std.Build.ResolvedTarget,
+    linkage: Linkage,
+    provenance: ?std.Build.LazyPath,
+    libraries: []const std.Build.LazyPath,
+) *std.Build.Step {
+    if (!coreTestsUseTerminal(target.result.os.tag, target.result.cpu.arch, linkage))
+        return runArtifactStep(b, symcrypt_dep, artifact, target, linkage, provenance, libraries);
+
+    const command = b.addSystemCommand(&.{ "python3", "-B" });
+    command.addFileArg(b.path("conformance/run_core_tests.py"));
+    command.addArg("--fixture-tools");
+    command.addFileArg(symcrypt_dep.path("tools/fixture_manifest.py"));
+    command.addArtifactArg(artifact);
+    command.addPrefixedDirectoryArg("--cache-dir=", .{ .cwd_relative = b.cache_root.path orelse "." });
+    command.addArg(b.fmt("--seed=0x{x}", .{b.graph.random_seed}));
+    command.has_side_effects = true;
+    return &command.step;
+}
+
+test "terminal policy selects only Windows ARM64 static Core tests" {
+    const cases = .{
+        .{ .windows, .aarch64, .static, true },
+        .{ .windows, .aarch64, .dynamic, false },
+        .{ .windows, .x86_64, .static, false },
+        .{ .windows, .x86_64, .dynamic, false },
+        .{ .linux, .aarch64, .static, false },
+        .{ .linux, .aarch64, .dynamic, false },
+        .{ .linux, .x86_64, .static, false },
+        .{ .linux, .x86_64, .dynamic, false },
+        .{ .macos, .aarch64, .static, false },
+    };
+    inline for (cases) |case|
+        try std.testing.expectEqual(case[3], coreTestsUseTerminal(case[0], case[1], case[2]));
 }
 
 fn runArtifactStep(

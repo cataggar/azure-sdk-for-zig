@@ -6,6 +6,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const linkage = b.option(Linkage, "linkage", "SymCrypt linkage") orelse .dynamic;
+    const enable_httpx_tls = b.option(bool, "enable_httpx_tls", "Consume optional HTTPX TLS exports") orelse false;
     const libraries = b.option(
         []const std.Build.LazyPath,
         "symcrypt_libraries",
@@ -41,6 +42,7 @@ pub fn build(b: *std.Build) void {
         .symcrypt_system_include_dirs = system_include_dirs,
         .symcrypt_checked = checked,
         .symcrypt_provenance = provenance,
+        .enable_httpx_tls = enable_httpx_tls,
     });
     const module = b.createModule(.{
         .root_source_file = b.path("consumer.zig"),
@@ -53,6 +55,11 @@ pub fn build(b: *std.Build) void {
             },
         },
     });
+    const options = b.addOptions();
+    options.addOption(bool, "enable_httpx_tls", enable_httpx_tls);
+    module.addOptions("consumer_options", options);
+    if (enable_httpx_tls)
+        module.addImport("azure_sdk_core_symcrypt_tls", adapter.module("azure_sdk_core_symcrypt_tls"));
     if (target.result.os.tag == .linux and linkage == .dynamic) {
         module.addRPath(libraries[libraries.len - 1].dirname());
     }
