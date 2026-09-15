@@ -275,6 +275,7 @@ jobs:
   architecture-test:
     name: architecture-test (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.platform == 'windows' && 90 || 360 }}
     strategy:
       fail-fast: false
       matrix:
@@ -434,6 +435,7 @@ jobs:
           ./.github/scripts/prepare_openssl_windows.ps1 -Architecture "${{ matrix.arch }}"
       - name: Validate Windows Arm64
         if: matrix.platform == 'windows'
+        timeout-minutes: 60
         shell: pwsh
         run: |
           $fixture = "$env:GITHUB_WORKSPACE/.symcrypt-ci/${{ matrix.arch }}"
@@ -461,16 +463,22 @@ jobs:
             "-Dsymcrypt_libraries=$fixture/lib/symcrypt_static_NoCIL.lib"
           )
           foreach ($optimize in @("Debug", "ReleaseSafe")) {
-            zig build test tls-test tls-paired-check tls-interop-check "-Doptimize=$optimize" @dynamic --summary all
+            Write-Host "Windows ARM64 dynamic $optimize suite"
+            zig build test tls-test tls-paired-check tls-interop-check "-Doptimize=$optimize" @dynamic -j1 --verbose --summary all
             if ($LASTEXITCODE -ne 0) { throw "dynamic Arm64 $optimize tests failed" }
-            zig build test tls-test tls-paired-check tls-interop-check "-Doptimize=$optimize" @static --summary all
+            Write-Host "Windows ARM64 static $optimize suite"
+            zig build test tls-test tls-paired-check tls-interop-check "-Doptimize=$optimize" @static -j1 --verbose --summary all
             if ($LASTEXITCODE -ne 0) { throw "static Arm64 $optimize tests failed" }
           }
-          zig build example-run -Doptimize=ReleaseSafe @dynamic --summary all
+          Write-Host "Windows ARM64 dynamic ReleaseSafe example"
+          zig build example-run -Doptimize=ReleaseSafe @dynamic -j1 --verbose --summary all
           if ($LASTEXITCODE -ne 0) { throw "dynamic Arm64 example failed" }
-          zig build example-run -Doptimize=ReleaseSafe @static --summary all
+          Write-Host "Windows ARM64 static ReleaseSafe example"
+          zig build example-run -Doptimize=ReleaseSafe @static -j1 --verbose --summary all
           if ($LASTEXITCODE -ne 0) { throw "static Arm64 example failed" }
-          zig build package-consumer-check -Doptimize=ReleaseSafe @dynamic --summary all
+          Write-Host "Windows ARM64 dynamic ReleaseSafe archive consumer"
+          zig build package-consumer-check -Doptimize=ReleaseSafe @dynamic -j1 --verbose --summary all
           if ($LASTEXITCODE -ne 0) { throw "dynamic Arm64 package consumer failed" }
-          zig build package-consumer-check -Doptimize=ReleaseSafe @static --summary all
+          Write-Host "Windows ARM64 static ReleaseSafe archive consumer"
+          zig build package-consumer-check -Doptimize=ReleaseSafe @static -j1 --verbose --summary all
           if ($LASTEXITCODE -ne 0) { throw "static Arm64 package consumer failed" }
