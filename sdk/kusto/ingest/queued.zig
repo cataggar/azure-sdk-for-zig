@@ -1802,7 +1802,7 @@ test "queued file reader and replay reader sources submit through temporary blob
 
 test "queued gzip reader preserves raw length and uses bounded source reads" {
     const allocator = std.testing.allocator;
-    const bytes = [_]u8{'x'} ** (128 * 1024);
+    const bytes: [128 * 1024]u8 = @splat('x');
     var source = std.Io.Reader.fixed(&bytes);
     var gzip: GzipReader = undefined;
     try gzip.init(&source, bytes.len);

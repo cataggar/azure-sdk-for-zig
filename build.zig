@@ -529,9 +529,7 @@ pub fn build(b: *std.Build) void {
 
     const run_example = b.addRunArtifact(example);
     run_example.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        run_example.addArgs(args);
-    }
+    run_example.addPassthruArgs();
 
     const run_step = b.step("run", "Run the example");
     run_step.dependOn(&run_example.step);
@@ -554,7 +552,7 @@ pub fn build(b: *std.Build) void {
 
     const run_kusto_example = b.addRunArtifact(kusto_example);
     run_kusto_example.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run_kusto_example.addArgs(args);
+    run_kusto_example.addPassthruArgs();
     const run_kusto_step = b.step(
         "run-kusto-examples",
         "Run an opt-in Kusto example",
@@ -591,7 +589,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("codegen/tspconfigs/main.zig"),
             .target = b.graph.host,
-            .optimize = .Debug,
+            .optimize = .debug,
         }),
     });
 

@@ -482,7 +482,7 @@ pub const ResourceManager = struct {
     last_refresh_failure: ?kusto_common.KustoError = null,
     last_refresh_local_error: ?anyerror = null,
     account_scores: std.ArrayList(AccountScore) = .empty,
-    cursors: [resource_kind_count]u64 = [_]u64{0} ** resource_kind_count,
+    cursors: [resource_kind_count]u64 = @splat(0),
     next_generation: u64 = 1,
 
     /// Manager methods may be called concurrently only when the supplied
@@ -900,7 +900,7 @@ pub const ResourceManager = struct {
             .choices = choices,
             .scores = self.account_scores.items,
         }, SelectionOrder.lessThan);
-        const cursor_index = @intFromEnum(kind);
+        const cursor_index = @backingInt(kind);
         const cursor = self.cursors[cursor_index];
         self.cursors[cursor_index] +%= 1;
 
@@ -971,7 +971,7 @@ fn accountWasAttempted(
     return false;
 }
 
-const resource_kind_count = @typeInfo(ResourceKind).@"enum".fields.len;
+const resource_kind_count = @typeInfo(ResourceKind).@"enum".field_names.len;
 
 const SelectionOrder = struct {
     choices: []const StorageResource,
@@ -1538,7 +1538,7 @@ const TestExecutor = struct {
     responses: []const TestResponse,
     mutex: std.Io.Mutex = .init,
     calls: usize = 0,
-    commands: [8]?[]const u8 = [_]?[]const u8{null} ** 8,
+    commands: [8]?[]const u8 = @splat(null),
     block_first: bool = false,
     entered: std.Io.Semaphore = .{},
     release: std.Io.Semaphore = .{},
@@ -2167,5 +2167,17 @@ test "resource manager releases its mutex after cached lease allocation failures
             defer cached.deinit(allocator);
         }
     };
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, Fixture.run, .{});
+    // In-place growth availability varies between failure-injection runs.
+    // Force growth through alloc so every allocation index is reproducible.
+    const no_resize_vtable: std.mem.Allocator.VTable = .{
+        .alloc = std.testing.allocator.vtable.alloc,
+        .resize = std.mem.Allocator.noResize,
+        .remap = std.mem.Allocator.noRemap,
+        .free = std.testing.allocator.vtable.free,
+    };
+    const no_resize_allocator: std.mem.Allocator = .{
+        .ptr = std.testing.allocator.ptr,
+        .vtable = &no_resize_vtable,
+    };
+    try std.testing.checkAllAllocationFailures(no_resize_allocator, Fixture.run, .{});
 }

@@ -27,6 +27,7 @@
 //! literal — e.g. `DatastoreStatus { Unknown, Accessible, ... }`.
 
 const std = @import("std");
+const reflection = @import("serde").compat.reflection;
 
 /// Deserialize an open-enum union from a JSON string. Returns the
 /// matching void variant, or `.unrecognized = "<raw>"` for values not
@@ -39,7 +40,7 @@ pub fn deserialize(
     deserializer: anytype,
 ) @TypeOf(deserializer.*).Error!T {
     const s = try deserializer.deserializeString(allocator);
-    inline for (comptime std.meta.fields(@TypeOf(wire_names))) |f| {
+    inline for (comptime reflection.typeFields(@TypeOf(wire_names))) |f| {
         const wire: []const u8 = @field(wire_names, f.name);
         if (std.mem.eql(u8, s, wire)) {
             allocator.free(s);
@@ -55,7 +56,7 @@ pub fn deserialize(
 pub fn serialize(value: anytype, comptime wire_names: anytype, serializer: anytype) !void {
     const T = @TypeOf(value);
     const Tag = std.meta.Tag(T);
-    inline for (comptime std.meta.fields(T)) |field| {
+    inline for (comptime reflection.typeFields(T)) |field| {
         if (@as(Tag, value) == @field(Tag, field.name)) {
             if (comptime std.mem.eql(u8, field.name, "unrecognized")) {
                 return serializer.serializeString(@field(value, "unrecognized"));
@@ -75,7 +76,7 @@ pub fn serialize(value: anytype, comptime wire_names: anytype, serializer: anyty
 pub fn toWire(value: anytype, comptime wire_names: anytype) []const u8 {
     const T = @TypeOf(value);
     const Tag = std.meta.Tag(T);
-    inline for (comptime std.meta.fields(T)) |field| {
+    inline for (comptime reflection.typeFields(T)) |field| {
         if (@as(Tag, value) == @field(Tag, field.name)) {
             if (comptime std.mem.eql(u8, field.name, "unrecognized")) {
                 return @field(value, "unrecognized");

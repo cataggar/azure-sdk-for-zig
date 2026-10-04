@@ -214,8 +214,8 @@ pub const RecordingTracer = struct {
 
 /// W3C Trace Context for distributed trace propagation.
 pub const TraceContext = struct {
-    trace_id: [32]u8 = [_]u8{'0'} ** 32,
-    span_id: [16]u8 = [_]u8{'0'} ** 16,
+    trace_id: [32]u8 = @splat('0'),
+    span_id: [16]u8 = @splat('0'),
     trace_flags: u8 = 0,
     trace_state: ?[]const u8 = null,
 
