@@ -66,7 +66,7 @@ allocation-test determinism fix are isolated from service behavior.
 
 | Source dependency | Version | Commit |
 | --- | --- | --- |
-| serde (legacy XML fixes plus Zig 0.17 compatibility) | 1.0.1 | `a276b0d7d551cea5670ba12fd935eadde971a296` |
+| serde (legacy XML fixes plus Zig 0.17 compatibility) | 1.0.1 | `f554eb66239f24927fc217958d8404b71c22ab7b` |
 
 ```bash
 zig build           # compile SDK + example

@@ -9,7 +9,7 @@
             .hash = "uamqp-0.1.0-lXMcafDqAQD3LSUZbUbyfrWhQfGG7OevKFUwhWxvGZDU",
         },
         .serde = .{
-            .url = "git+https://github.com/cataggar/serde.zig#a276b0d7d551cea5670ba12fd935eadde971a296",
+            .url = "git+https://github.com/cataggar/serde.zig#f554eb66239f24927fc217958d8404b71c22ab7b",
             .hash = "serde-1.0.1-1DszTwHODAAZc2IDtnbeW_brHIJNmhsgU7NxFXx8wKll",
         },
     },
