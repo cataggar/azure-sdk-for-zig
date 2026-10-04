@@ -152,7 +152,7 @@ test "SAS queue reports received rejection and validates message size" {
         else => return error.TestUnexpectedResult,
     }
 
-    const too_large = [_]u8{0} ** (max_queue_message_bytes + 1);
+    const too_large: [max_queue_message_bytes + 1]u8 = @splat(0);
     try std.testing.expectError(error.QueueMessageTooLarge, client.sendMessage(&too_large));
     try std.testing.expectEqual(@as(usize, 1), transport.call_count);
 }

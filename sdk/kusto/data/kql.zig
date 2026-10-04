@@ -4,6 +4,7 @@
 //! returned `ClientRequestProperties` owns its copied wire values. Query text
 //! is never assembled from runtime parameter values.
 const std = @import("std");
+const reflection = @import("serde").compat.reflection;
 const serde = @import("serde");
 const kusto_common = @import("azure_kusto_common");
 
@@ -78,7 +79,7 @@ pub fn QueryParameters(comptime T: type) type {
         pub fn bind(allocator: std.mem.Allocator, values: T) !ClientRequestProperties {
             var properties = ClientRequestProperties{};
             errdefer properties.deinit(allocator);
-            inline for (std.meta.fields(T)) |field| {
+            inline for (reflection.typeFields(T)) |field| {
                 try bindField(
                     allocator,
                     &properties,
@@ -232,7 +233,7 @@ fn validateParameterStruct(comptime T: type) void {
     };
     if (info.is_tuple)
         @compileError("kql.QueryParameters requires a non-tuple struct");
-    inline for (std.meta.fields(T)) |field| {
+    inline for (reflection.typeFields(T)) |field| {
         validateParameterName(field.name);
         _ = classifyParameterType(field.name, field.type);
     }
@@ -300,9 +301,9 @@ fn isByteString(comptime T: type) bool {
 }
 
 fn makeDeclaration(comptime T: type) []const u8 {
-    if (std.meta.fields(T).len == 0) return "";
+    if (reflection.typeFields(T).len == 0) return "";
     comptime var result: []const u8 = "declare query_parameters (";
-    inline for (std.meta.fields(T), 0..) |field, index| {
+    inline for (reflection.typeFields(T), 0..) |field, index| {
         if (index != 0) result = result ++ ", ";
         result = result ++ "['" ++ field.name ++ "']:" ++ classifyParameterType(field.name, field.type).declarationType();
     }

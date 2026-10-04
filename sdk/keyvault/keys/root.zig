@@ -1043,9 +1043,9 @@ fn validateContinuationUrl(vault_url: []const u8, next_url: []const u8) !void {
 
     var expected_host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
     var candidate_host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
-    const expected_host = expected.getHost(&expected_host_buffer) catch
+    const expected_host = std.Io.net.HostName.fromUri(expected, &expected_host_buffer) catch
         return error.InvalidContinuationUrl;
-    const candidate_host = candidate.getHost(&candidate_host_buffer) catch
+    const candidate_host = std.Io.net.HostName.fromUri(candidate, &candidate_host_buffer) catch
         return error.InvalidContinuationUrl;
     if (!std.ascii.eqlIgnoreCase(expected_host.bytes, candidate_host.bytes))
         return error.InvalidContinuationUrl;
@@ -1204,7 +1204,7 @@ test "RS512 signing uses exact digest and returns decoded signature bytes" {
     );
     defer client.deinit();
 
-    const digest = [_]u8{0} ** 64;
+    const digest: [64]u8 = @splat(0);
     var signature = try client.sign(allocator, .rs512, &digest);
     defer signature.deinit(allocator);
     try std.testing.expectEqualSlices(u8, &.{ 0xfb, 0xff, 0xfe }, signature.bytes);
@@ -1244,7 +1244,7 @@ test "Key Vault service errors remain structured" {
     );
     defer client.deinit();
 
-    const digest = [_]u8{0} ** 64;
+    const digest: [64]u8 = @splat(0);
     const cases = [_]struct {
         status: u16,
         code: []const u8,
@@ -1447,7 +1447,7 @@ test "cryptography requires a version and verifies the response key id" {
         .{},
     );
     defer client.deinit();
-    const digest = [_]u8{0} ** 64;
+    const digest: [64]u8 = @splat(0);
     try std.testing.expectError(
         error.SignatureKeyIdMismatch,
         client.sign(allocator, .rs512, &digest),
@@ -1481,7 +1481,7 @@ test "sign retries throttling responses" {
     );
     defer client.deinit();
 
-    const digest = [_]u8{0} ** 64;
+    const digest: [64]u8 = @splat(0);
     var signature = try client.sign(allocator, .rs512, &digest);
     defer signature.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 2), service_mock.call_count);

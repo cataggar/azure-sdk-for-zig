@@ -930,7 +930,7 @@ test "SAS blob does not commit after an unknown commit transport failure" {
 
 test "SAS blob block reader stays bounded and short sources are unknown" {
     const allocator = std.testing.allocator;
-    const bytes = [_]u8{'x'} ** (64 * 1024 + 1);
+    const bytes: [64 * 1024 + 1]u8 = @splat('x');
     var source = BoundedReadSource.init(&bytes);
     var transport = core.http.MockTransport.init(allocator, 201, "");
     defer transport.deinit();

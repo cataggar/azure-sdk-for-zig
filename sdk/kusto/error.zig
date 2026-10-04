@@ -125,9 +125,9 @@ fn deinitValue(comptime T: type, value: *T, allocator: std.mem.Allocator) void {
         .pointer => |pointer| {
             if (comptime pointer.size == .one and @hasDecl(pointer.child, "deinit")) {
                 const deinit_info = @typeInfo(@TypeOf(pointer.child.deinit)).@"fn";
-                if (comptime deinit_info.params.len == 1) {
+                if (comptime deinit_info.param_types.len == 1) {
                     value.*.deinit();
-                } else if (comptime deinit_info.params.len == 2) {
+                } else if (comptime deinit_info.param_types.len == 2) {
                     value.*.deinit(allocator);
                 } else {
                     @compileError("KustoResult pointer payload deinit must accept self and optionally an allocator");

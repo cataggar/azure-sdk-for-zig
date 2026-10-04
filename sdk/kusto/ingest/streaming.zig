@@ -4,6 +4,7 @@
 //! body for an existing URI).  It intentionally does not accept queued
 //! ingestion properties such as extent tags or inline mappings.
 const std = @import("std");
+const reflection = @import("serde").compat.reflection;
 const serde = @import("serde");
 const core = @import("azure_core");
 const kusto_common = @import("azure_kusto_common");
@@ -960,7 +961,7 @@ pub fn JsonRows(comptime Row: type) type {
         /// named mapping with a management command, then use its name through
         /// `IngestOptions.mapping_name`.
         pub fn mapping(allocator: std.mem.Allocator) ![]u8 {
-            const fields = std.meta.fields(Row);
+            const fields = reflection.typeFields(Row);
             var entries: [fields.len]MappingEntry = undefined;
             var paths: [fields.len][]u8 = undefined;
             var path_count: usize = 0;

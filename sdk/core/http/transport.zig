@@ -451,10 +451,10 @@ const StdStreamingOperation = struct {
             .redirect_behavior = if (authenticated or request.redirect_policy == .not_allowed)
                 .unhandled
             else
-                @enumFromInt(3),
+                @fromBackingInt(@intCast(3)),
         });
         self.request_active = true;
-        self.request.accept_encoding[@intFromEnum(std.http.ContentEncoding.zstd)] = true;
+        self.request.accept_encoding[@backingInt(std.http.ContentEncoding.zstd)] = true;
 
         if (options.body) |body| {
             try self.sendStream(body, options.cancellation);
@@ -467,7 +467,7 @@ const StdStreamingOperation = struct {
         }
 
         self.response = try self.request.receiveHead(self.redirect_buffer);
-        const status_code: u16 = @intFromEnum(self.response.head.status);
+        const status_code: u16 = @backingInt(self.response.head.status);
         var headers = try copyResponseHeaders(allocator, &self.response.head);
         errdefer deinitOwnedHeaders(allocator, &headers);
 
