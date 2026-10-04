@@ -58,7 +58,7 @@ pub fn main(init: std.process.Init) !void {
 
 Requires [Zig 0.17.0](https://ziglang.org/download/) or later.
 
-This legacy runz compatibility branch derives from
+This legacy aggregate compatibility branch derives from
 `2f77ec103f15f2b1e1d9f7f651c468bb67d40a33`. It retains the aggregate package,
 module names, IMDS response fixes, and runtime behavior rather than refreshing
 to the newer branch-native SDK APIs. Compiler/build/reflection changes and an
