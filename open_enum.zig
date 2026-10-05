@@ -39,11 +39,11 @@ pub fn deserialize(
     deserializer: anytype,
 ) @TypeOf(deserializer.*).Error!T {
     const s = try deserializer.deserializeString(allocator);
-    inline for (comptime std.meta.fields(@TypeOf(wire_names))) |f| {
-        const wire: []const u8 = @field(wire_names, f.name);
+    inline for (@typeInfo(@TypeOf(wire_names)).@"struct".field_names) |name| {
+        const wire: []const u8 = @field(wire_names, name);
         if (std.mem.eql(u8, s, wire)) {
             allocator.free(s);
-            return @unionInit(T, f.name, {});
+            return @unionInit(T, name, {});
         }
     }
     return @unionInit(T, "unrecognized", s);
@@ -55,12 +55,12 @@ pub fn deserialize(
 pub fn serialize(value: anytype, comptime wire_names: anytype, serializer: anytype) !void {
     const T = @TypeOf(value);
     const Tag = std.meta.Tag(T);
-    inline for (comptime std.meta.fields(T)) |field| {
-        if (@as(Tag, value) == @field(Tag, field.name)) {
-            if (comptime std.mem.eql(u8, field.name, "unrecognized")) {
+    inline for (@typeInfo(T).@"union".field_names) |name| {
+        if (@as(Tag, value) == @field(Tag, name)) {
+            if (comptime std.mem.eql(u8, name, "unrecognized")) {
                 return serializer.serializeString(@field(value, "unrecognized"));
             }
-            const wire: []const u8 = @field(wire_names, field.name);
+            const wire: []const u8 = @field(wire_names, name);
             return serializer.serializeString(wire);
         }
     }
@@ -75,12 +75,12 @@ pub fn serialize(value: anytype, comptime wire_names: anytype, serializer: anyty
 pub fn toWire(value: anytype, comptime wire_names: anytype) []const u8 {
     const T = @TypeOf(value);
     const Tag = std.meta.Tag(T);
-    inline for (comptime std.meta.fields(T)) |field| {
-        if (@as(Tag, value) == @field(Tag, field.name)) {
-            if (comptime std.mem.eql(u8, field.name, "unrecognized")) {
+    inline for (@typeInfo(T).@"union".field_names) |name| {
+        if (@as(Tag, value) == @field(Tag, name)) {
+            if (comptime std.mem.eql(u8, name, "unrecognized")) {
                 return @field(value, "unrecognized");
             }
-            const wire: []const u8 = @field(wire_names, field.name);
+            const wire: []const u8 = @field(wire_names, name);
             return wire;
         }
     }
@@ -97,9 +97,9 @@ pub fn fromWire(
     allocator: std.mem.Allocator,
     s: []const u8,
 ) std.mem.Allocator.Error!T {
-    inline for (comptime std.meta.fields(@TypeOf(wire_names))) |f| {
-        const wire: []const u8 = @field(wire_names, f.name);
-        if (std.mem.eql(u8, s, wire)) return @unionInit(T, f.name, {});
+    inline for (@typeInfo(@TypeOf(wire_names)).@"struct".field_names) |name| {
+        const wire: []const u8 = @field(wire_names, name);
+        if (std.mem.eql(u8, s, wire)) return @unionInit(T, name, {});
     }
     return @unionInit(T, "unrecognized", try allocator.dupe(u8, s));
 }

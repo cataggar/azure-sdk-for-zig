@@ -3,6 +3,9 @@
 Core HTTP, authentication, error, paging, long-running-operation, URL, crypto,
 and utility infrastructure for the Azure SDK for Zig.
 
+This compatibility branch preserves the Core 0.3.0 APIs used by Unikraft while
+requiring Zig 0.17.0 and the immutable Zig 0.17-compatible Serde dependency.
+
 The canonical package/module name is `azure_sdk_core`, released from
 `sdk/core`. Identity remains part of this package. The current breaking
 provider/streaming release line is `0.3.0`.
