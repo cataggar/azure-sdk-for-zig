@@ -954,7 +954,7 @@ const StdStreamingOperation = struct {
             .redirect_behavior = .unhandled,
         });
         self.request_active = true;
-        self.request.accept_encoding[@intFromEnum(std.http.ContentEncoding.zstd)] = true;
+        self.request.accept_encoding[@backingInt(std.http.ContentEncoding.zstd)] = true;
 
         if (options.body) |body| {
             try self.sendStream(body, options.cancellation);
@@ -967,7 +967,7 @@ const StdStreamingOperation = struct {
         }
 
         self.response = try self.request.receiveHead(self.redirect_buffer);
-        const status_code: u16 = @intFromEnum(self.response.head.status);
+        const status_code: u16 = @backingInt(self.response.head.status);
         var header_set = try copyResponseHeaders(allocator, &self.response.head);
         errdefer header_set.deinit(allocator);
 
@@ -1724,18 +1724,18 @@ pub const SequenceMockTransport = struct {
     responses: []const CannedResponse,
     call_count: usize = 0,
     allocator: std.mem.Allocator,
-    captured_methods: [16]?Method = .{null} ** 16,
-    captured_authorization: [16]bool = .{false} ** 16,
-    captured_cookie: [16]bool = .{false} ** 16,
-    captured_proxy_authorization: [16]bool = .{false} ** 16,
-    captured_host: [16]bool = .{false} ** 16,
-    captured_content_type: [16]bool = .{false} ** 16,
-    captured_content_length: [16]bool = .{false} ** 16,
-    captured_transfer_encoding: [16]bool = .{false} ** 16,
-    captured_url_lengths: [16]usize = .{0} ** 16,
+    captured_methods: [16]?Method = @splat(null),
+    captured_authorization: [16]bool = @splat(false),
+    captured_cookie: [16]bool = @splat(false),
+    captured_proxy_authorization: [16]bool = @splat(false),
+    captured_host: [16]bool = @splat(false),
+    captured_content_type: [16]bool = @splat(false),
+    captured_content_length: [16]bool = @splat(false),
+    captured_transfer_encoding: [16]bool = @splat(false),
+    captured_url_lengths: [16]usize = @splat(0),
     captured_urls: [16][512]u8 = undefined,
-    captured_body_present: [16]bool = .{false} ** 16,
-    captured_body_lengths: [16]usize = .{0} ** 16,
+    captured_body_present: [16]bool = @splat(false),
+    captured_body_lengths: [16]usize = @splat(0),
     captured_bodies: [16][512]u8 = undefined,
     cancel_after_open: ?*CancellationToken = null,
 
