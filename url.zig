@@ -105,7 +105,7 @@ pub fn validateHttpsUrl(raw: []const u8, expected_hosts: []const []const u8) !vo
         return error.InvalidUrl;
 
     var host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
-    const host = uri.getHost(&host_buffer) catch return error.InvalidUrl;
+    const host = std.Io.net.HostName.fromUri(uri, &host_buffer) catch return error.InvalidUrl;
     if (expected_hosts.len == 0) return;
     for (expected_hosts) |expected| {
         if (std.ascii.eqlIgnoreCase(host.bytes, expected)) return;
@@ -140,8 +140,8 @@ pub fn sameOrigin(left_raw: []const u8, right_raw: []const u8) !bool {
 
     var left_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
     var right_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
-    const left_host = left.getHost(&left_buffer) catch return error.InvalidUrl;
-    const right_host = right.getHost(&right_buffer) catch return error.InvalidUrl;
+    const left_host = std.Io.net.HostName.fromUri(left, &left_buffer) catch return error.InvalidUrl;
+    const right_host = std.Io.net.HostName.fromUri(right, &right_buffer) catch return error.InvalidUrl;
     return std.ascii.eqlIgnoreCase(left.scheme, right.scheme) and
         std.ascii.eqlIgnoreCase(left_host.bytes, right_host.bytes) and
         effectivePort(left) == effectivePort(right);
