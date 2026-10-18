@@ -19,7 +19,7 @@ test "RequestHeaders owns case-insensitive values and exposes read-only iteratio
     var iterator = headers.iterator();
     var count: usize = 0;
     while (iterator.next()) |entry| {
-        comptime std.debug.assert(@typeInfo(@TypeOf(entry.value_ptr)).pointer.is_const);
+        comptime std.debug.assert(@typeInfo(@TypeOf(entry.value_ptr)).pointer.attrs.@"const");
         try std.testing.expectEqualStrings(headers.get(entry.key_ptr.*).?, entry.value_ptr.*);
         count += 1;
     }

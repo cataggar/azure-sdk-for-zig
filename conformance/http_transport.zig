@@ -15,8 +15,8 @@ pub const InterruptionPhase = enum { connect, upload_read, upload_write, respons
 pub const InterruptionTrigger = enum { token, deadline };
 pub const InterruptionPhases = std.enums.EnumSet(InterruptionPhase);
 pub const InterruptionCapabilities = struct {
-    token: InterruptionPhases = .initEmpty(),
-    deadline: InterruptionPhases = .initEmpty(),
+    token: InterruptionPhases = .empty,
+    deadline: InterruptionPhases = .empty,
 };
 
 pub const InterruptionEvidence = struct {

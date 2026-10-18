@@ -207,7 +207,7 @@ fn hasPayloadDeinit(comptime T: type) bool {
     const Fn = @TypeOf(T.deinit);
     const info = @typeInfo(Fn);
     if (info != .@"fn") return false;
-    const params = info.@"fn".params;
+    const params = info.@"fn".param_types;
     return params.len == 2;
 }
 
