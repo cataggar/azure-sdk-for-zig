@@ -9159,7 +9159,7 @@ test "a pumped transfer allocates only what it hands the caller" {
     while (i < count) : (i += 1) {
         try peer.pushTransfer(0, .{
             .handle = 0,
-            .delivery_id = i,
+            .delivery_id = i + 1,
             .delivery_tag = "tag!",
             .message_format = 0,
             .settled = true,
