@@ -64,7 +64,7 @@ pub fn build(b: *std.Build) void {
     examples_step.dependOn(&complete_sas_message.step);
     test_step.dependOn(&complete_sas_message.step);
     const run_complete_sas_message = b.addRunArtifact(complete_sas_message);
-    if (b.args) |args| run_complete_sas_message.addArgs(args);
+    run_complete_sas_message.addPassthruArgs();
     const complete_sas_message_step = b.step(
         "complete-sas-message",
         "Send a message through a complete Queue SAS URL",

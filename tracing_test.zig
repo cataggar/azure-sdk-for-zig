@@ -269,7 +269,7 @@ test "tracing SAS Queue options preserve all outcomes credentials and header-com
                 defer client.deinit();
                 if (configuration != 0) client.setInstrumentation(instrumentation(&provider));
                 if (configuration == 2) client.setInstrumentation(null);
-                const too_large = [_]u8{0} ** (queues.max_queue_message_bytes + 1);
+                const too_large: [queues.max_queue_message_bytes + 1]u8 = @splat(0);
                 const result = client.sendMessage(if (mode == .pre_dispatch) &too_large else "private-body");
                 switch (mode) {
                     .accepted, .drain_failure, .buffered_only => try std.testing.expectEqual(@as(u16, 201), (try result).accepted.status_code),
