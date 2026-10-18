@@ -27,8 +27,8 @@ The root `test` step includes only these offline tests, never `interop.sh`.
 The historical Core 0.1.2 consumer remains separate and unchanged.
 
 The manifest pins App Configuration **0.3.1** at
-`7efda6d0d658ab29cad8cd1c811be4608df8ee9a` and Core **0.4.1** at
-`2c95f65be96b5ef48a50671de33e9e0926c624cb`, with their released package hashes.
+`7efda6d0d658ab29cad8cd1c811be4608df8ee9a` and Core **0.4.2** at
+`7ddae016914df9ba34f5f0c6705ea83beacd6a43`, with their released package hashes.
 The build asserts one canonical Core module identity with the service client.
 No branch source or local dependency override is used.
 
@@ -51,7 +51,7 @@ These offline verifier tests are **not themselves interoperability evidence**.
 
 ## Explicit real Collector validation (Linux only)
 
-Prerequisites: Zig 0.16.0, Bash, GNU `timeout`, standard Linux utilities and readable
+Prerequisites: Zig 0.17.0, Bash, GNU `timeout`, standard Linux utilities and readable
 `/proc/<child>/fd` and `/proc/<child>/net/tcp`. Supply an **absolute path** to the
 official core-distribution `otelcol` executable from release archive **v0.120.0**.
 That official archive **reports binary version 0.120.1**, matching the pinned

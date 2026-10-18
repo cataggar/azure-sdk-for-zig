@@ -238,8 +238,11 @@ bootstrap_main() (
     printf 'preview: create %s at %s from %s (no release)\n' "$destination" "$commit" "$tag"
   else
     # One explicit refspec and one empty expected-old OID: never replace a branch.
-    bootstrap_git push --porcelain --no-follow-tags --recurse-submodules=no \
-      "--force-with-lease=$destination:" "$PUSH_URL" "$commit:$destination" >"$BOOTSTRAP_WORK/push-result.tsv"
+    if ! bootstrap_git push --porcelain --no-follow-tags --recurse-submodules=no \
+      "--force-with-lease=$destination:" "$PUSH_URL" "$commit:$destination" >"$BOOTSTRAP_WORK/push-result.tsv"; then
+      cat "$BOOTSTRAP_WORK/push-result.tsv" >&2
+      bootstrap_fail "push failed"
+    fi
     cat "$BOOTSTRAP_WORK/push-result.tsv"
     grep -Fx -- "*"$'\t'"$commit:$destination"$'\t'"[new branch]" "$BOOTSTRAP_WORK/push-result.tsv" >/dev/null ||
       bootstrap_fail "push did not create a new branch; a concurrent identical ref is not bootstrap success"

@@ -49,11 +49,11 @@ pub fn main(init: std.process.Init) !void {
     const expected: std.http.Status = if (post) .ok else .method_not_allowed;
     if (result.status != expected) {
         std.debug.print("Collector {s}: HTTP {d}, expected {d}\n", .{
-            args[1], @intFromEnum(result.status), @intFromEnum(expected),
+            args[1], @backingInt(result.status), @backingInt(expected),
         });
         return error.UnexpectedCollectorResponse;
     }
-    std.debug.print("Collector {s}: HTTP {d}\n", .{ args[1], @intFromEnum(result.status) });
+    std.debug.print("Collector {s}: HTTP {d}\n", .{ args[1], @backingInt(result.status) });
 }
 
 test "HTTP tooling accepts only a nonzero port on fixed loopback" {

@@ -89,7 +89,7 @@ const arm_avs = Example{
     \\        test_step.dependOn(&executable.step);
     \\
     \\        const run = b.addRunArtifact(executable);
-    \\        if (b.args) |args| run.addArgs(args);
+    \\        run.addPassthruArgs();
     \\        const run_step = b.step(example.step, example.description);
     \\        run_step.dependOn(&run.step);
     \\    }
@@ -116,7 +116,7 @@ const arm_avs_wasi = Example{
     \\
     \\pub fn build(b: *std.Build) void {
     \\    const optimize = b.standardOptimizeOption(.{
-    \\        .preferred_optimize_mode = .ReleaseSmall,
+    \\        .preferred_optimize_mode = .small,
     \\    });
     \\    const target = b.resolveTargetQuery(.{
     \\        .cpu_arch = .wasm32,
@@ -345,7 +345,7 @@ fn renderManifest(allocator: std.mem.Allocator, example: Example) ![]u8 {
         \\    .name = .{s},
         \\    .version = "{s}",
         \\    .fingerprint = {s},
-        \\    .minimum_zig_version = "0.16.0",
+        \\    .minimum_zig_version = "0.17.0",
         \\    .dependencies = .{{
         \\        .azure_sdk_core = .{{
         \\            .path = ".",

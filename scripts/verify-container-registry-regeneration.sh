@@ -101,9 +101,8 @@ codegen_args=(
 
 (
   cd "$ROOT/codegen/cli"
-  zig build \
+  ZIG_GLOBAL_CACHE_DIR="$SCRATCH/global-cache" zig build \
     --cache-dir "$SCRATCH/codegen-cache" \
-    --global-cache-dir "$SCRATCH/global-cache" \
     "${codegen_args[@]}" \
     generate-container-registry-package
 )

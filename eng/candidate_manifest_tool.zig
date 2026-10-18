@@ -223,7 +223,7 @@ test "render pins local dependencies and preserves external dependencies" {
         \\    .name = .azure_sdk_example,
         \\    .version = "0.1.0",
         \\    .fingerprint = 0x1234,
-        \\    .minimum_zig_version = "0.16.0",
+        \\    .minimum_zig_version = "0.17.0",
         \\    .dependencies = .{
         \\        .azure_sdk_core = .{
         \\            .path = "../core",
@@ -270,7 +270,7 @@ test "render uses canonical syntax for empty dependencies" {
         \\    .name = .empty_dependencies,
         \\    .version = "0.1.0",
         \\    .fingerprint = 0x1234,
-        \\    .minimum_zig_version = "0.16.0",
+        \\    .minimum_zig_version = "0.17.0",
         \\    .dependencies = .{},
         \\    .paths = .{
         \\        "root.zig",

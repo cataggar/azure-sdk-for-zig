@@ -453,9 +453,9 @@ test "Container Registry golden preserves protocol fidelity" {
 }
 
 fn expectValidZig(allocator: std.mem.Allocator, source: []const u8) !void {
-    const zsource = try allocator.dupeZ(u8, source);
+    const zsource = try allocator.dupeSentinel(u8, source, 0);
     defer allocator.free(zsource);
-    var tree = try std.zig.Ast.parse(allocator, zsource, .zig);
+    var tree = try std.zig.Ast.parse(allocator, zsource, .{ .mode = .zig });
     defer tree.deinit(allocator);
     for (tree.errors) |parse_error| {
         const location = tree.tokenLocation(0, parse_error.token);

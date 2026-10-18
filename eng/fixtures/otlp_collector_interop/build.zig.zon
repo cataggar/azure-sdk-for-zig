@@ -2,11 +2,11 @@
     .name = .otlp_collector_interop_fixture,
     .version = "0.0.0",
     .fingerprint = 0x90e47ea5b18134a4,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .azure_sdk_core = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#2c95f65be96b5ef48a50671de33e9e0926c624cb",
-            .hash = "azure_sdk_core-0.4.1-eFY0EpbrCgAKh2uJJ-DguKP7zx8Ywuf1UdP7HkJ_9CmI",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#7ddae016914df9ba34f5f0c6705ea83beacd6a43",
+            .hash = "azure_sdk_core-0.4.2-eFY0ErHsCgCVUEhCkETDe_QacW0t4f8OSdQhxgtOjTp_",
         },
         .azure_sdk_data_appconfiguration = .{
             .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#7efda6d0d658ab29cad8cd1c811be4608df8ee9a",
