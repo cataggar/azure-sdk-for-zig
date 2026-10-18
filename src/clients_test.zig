@@ -33,7 +33,7 @@ fn expectPublicMethods(comptime Client: type, comptime methods: []const []const 
     }
 }
 
-const tracing_user_agent = "azsdk-zig-azure_rest_data_tables/0.2.1";
+const tracing_user_agent = "azsdk-zig-azure_rest_data_tables/0.2.2";
 const tracing_parent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
 
 const TraceProbe = struct {
@@ -119,10 +119,10 @@ fn expectPipelineCopies(comptime Client: type, client: *Client, expected: core.h
     try std.testing.expectEqualDeep(expected, client.pipeline);
     var descendants: usize = 0;
     inline for (comptime std.meta.declarations(Client)) |decl| {
-        const method = @field(Client, decl.name);
+        const method = @field(Client, decl);
         const info = @typeInfo(@TypeOf(method));
-        if (info == .@"fn" and info.@"fn".params.len == 1 and
-            info.@"fn".params[0].type == *Client)
+        if (info == .@"fn" and info.@"fn".param_types.len == 1 and
+            info.@"fn".param_types[0] == *Client)
         {
             const Result = info.@"fn".return_type.?;
             if (@typeInfo(Result) == .@"struct" and @hasField(Result, "pipeline")) {
