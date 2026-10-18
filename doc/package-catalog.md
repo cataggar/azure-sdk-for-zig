@@ -33,11 +33,11 @@ its source lives at the root of the named branch.
 | `azure_sdk_devops` | Branch | — | [`sdk/devops`](https://github.com/cataggar/azure-sdk-for-zig/tree/sdk/devops) | `azure_sdk_core`, `azure_rest_devops` |
 
 `azure_sdk_core_httpx`
-[0.1.0](https://github.com/cataggar/azure-sdk-for-zig/tree/azure_sdk_core_httpx/v0.1.0)
+[0.1.1](https://github.com/cataggar/azure-sdk-for-zig/tree/azure_sdk_core_httpx/v0.1.1)
 is released following the completed [sealed branch-native
 bootstrap](package-bootstrap.md). This optional HTTPX transport pins released
-Core 0.4.1 and HTTPX 0.2.0. See the
-[released package README](https://github.com/cataggar/azure-sdk-for-zig/blob/21b2bd41afa768fc2895041d8176fe06de9ccde6/README.md)
+Core 0.4.2 and HTTPX 0.2.0. See the
+[released package README](https://github.com/cataggar/azure-sdk-for-zig/blob/486220a57155759b8c0e2b20719b8ce23824401b/README.md)
 for configuration, ownership, DNS and trust-policy requirements.
 
 `azure_rest_devops` is the only REST package generated from
@@ -49,7 +49,7 @@ DevOps API areas, with a Zig namespace per area.
 `azure_sdk_core_symcrypt` pins the external `zig_symcrypt` dependency and a lazy
 `httpx` dependency for its explicitly enabled TLS adapter. Its `tls` publication
 path and dependency metadata match the reviewed package branch. See the
-[native backend README](https://github.com/cataggar/azure-sdk-for-zig/blob/31bc73fa918787dd45dc78ea6007ba72f9efa7a5/README.md)
+[native backend README](https://github.com/cataggar/azure-sdk-for-zig/blob/5070ba8ec96b2a966d4f5bad40abef32997c80b8/README.md)
 for SDK-versus-TLS cryptography, trust policy, linkage, ownership and matrix
 requirements. Native execution supports Linux and Windows on x64 and ARM64;
 macOS is source-only. Neither native linkage nor a static build implies FIPS

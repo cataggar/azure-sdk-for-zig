@@ -26,8 +26,8 @@ in Zig's package cache; after restoration, execution and tests are offline.
 The root `test` step includes only these offline tests, never `interop.sh`.
 The historical Core 0.1.2 consumer remains separate and unchanged.
 
-The manifest pins App Configuration **0.3.1** at
-`7efda6d0d658ab29cad8cd1c811be4608df8ee9a` and Core **0.4.2** at
+The manifest pins App Configuration **0.3.2** at
+`51073d12c37856f69e5f61f95ff4a85b4aa41faa` and Core **0.4.2** at
 `7ddae016914df9ba34f5f0c6705ea83beacd6a43`, with their released package hashes.
 The build asserts one canonical Core module identity with the service client.
 No branch source or local dependency override is used.
