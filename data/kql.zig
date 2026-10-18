@@ -78,13 +78,14 @@ pub fn QueryParameters(comptime T: type) type {
         pub fn bind(allocator: std.mem.Allocator, values: T) !ClientRequestProperties {
             var properties = ClientRequestProperties{};
             errdefer properties.deinit(allocator);
-            inline for (std.meta.fields(T)) |field| {
+            const struct_info = @typeInfo(T).@"struct";
+            inline for (struct_info.field_names, struct_info.field_types) |field_name, field_type| {
                 try bindField(
                     allocator,
                     &properties,
-                    field.name,
-                    classifyParameterType(field.name, field.type),
-                    @field(values, field.name),
+                    field_name,
+                    classifyParameterType(field_name, field_type),
+                    @field(values, field_name),
                 );
             }
             return properties;
@@ -232,9 +233,9 @@ fn validateParameterStruct(comptime T: type) void {
     };
     if (info.is_tuple)
         @compileError("kql.QueryParameters requires a non-tuple struct");
-    inline for (std.meta.fields(T)) |field| {
-        validateParameterName(field.name);
-        _ = classifyParameterType(field.name, field.type);
+    inline for (info.field_names, info.field_types) |field_name, field_type| {
+        validateParameterName(field_name);
+        _ = classifyParameterType(field_name, field_type);
     }
 }
 
@@ -300,11 +301,12 @@ fn isByteString(comptime T: type) bool {
 }
 
 fn makeDeclaration(comptime T: type) []const u8 {
-    if (std.meta.fields(T).len == 0) return "";
+    const struct_info = @typeInfo(T).@"struct";
+    if (struct_info.field_names.len == 0) return "";
     comptime var result: []const u8 = "declare query_parameters (";
-    inline for (std.meta.fields(T), 0..) |field, index| {
+    inline for (struct_info.field_names, struct_info.field_types, 0..) |field_name, field_type, index| {
         if (index != 0) result = result ++ ", ";
-        result = result ++ "['" ++ field.name ++ "']:" ++ classifyParameterType(field.name, field.type).declarationType();
+        result = result ++ "['" ++ field_name ++ "']:" ++ classifyParameterType(field_name, field_type).declarationType();
     }
     return result ++ ");\n";
 }

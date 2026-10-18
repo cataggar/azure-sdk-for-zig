@@ -1,28 +1,28 @@
 .{
     .name = .azure_sdk_kusto,
-    .version = "0.3.1",
+    .version = "0.3.2",
     .fingerprint = 0x897430dd7c19e528,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .azure_sdk_core = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#2c95f65be96b5ef48a50671de33e9e0926c624cb",
-            .hash = "azure_sdk_core-0.4.1-eFY0EpbrCgAKh2uJJ-DguKP7zx8Ywuf1UdP7HkJ_9CmI",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#7ddae016914df9ba34f5f0c6705ea83beacd6a43",
+            .hash = "azure_sdk_core-0.4.2-eFY0ErHsCgCVUEhCkETDe_QacW0t4f8OSdQhxgtOjTp_",
         },
         .azure_sdk_storage_common = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#c422891793d33b8078f032167fe8fd42ecf05bcc",
-            .hash = "azure_sdk_storage_common-0.4.1-JzoreFOJAQCzO8pA3xms3n0gCloSYeSj52Vh490MaXle",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#ea54ab76f653883bb133def9859fbccb7b953964",
+            .hash = "azure_sdk_storage_common-0.4.2-JzoreKmJAQD19e_gytlhJcFD5wtjpptn22SMouFWpIY1",
         },
         .azure_sdk_storage_blobs = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#fb8f312f4d4672174a6cafafc3c0b82a1838a4a0",
-            .hash = "azure_sdk_storage_blobs-0.4.1-I5lGdnAmCwDY9NXYtzIgxOY3jTJGIG9Y5sgR18-b_Vuj",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#8d48b3f26c3dff6c1bd4e76ecb45719b41d0d893",
+            .hash = "azure_sdk_storage_blobs-0.4.2-I5lGdkQmCwA44DYQW57Bew8uhbT72Y9k7IyB218v1VZY",
         },
         .azure_sdk_storage_queues = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#c74f826e923171081ff0fa340156f42078c735c2",
-            .hash = "azure_sdk_storage_queues-0.3.1-LKTiC6TiAAAABBFRQ8h1umiZqlufeF2_q9T1XBLYCbsM",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#f8bcd3ea0d9519d20d36eead87af6421bd9a9718",
+            .hash = "azure_sdk_storage_queues-0.3.2-LKTiC5fiAACb7nU_H-jNXuMzUq5lgnfFGYUxL46TEaIf",
         },
         .serde = .{
-            .url = "git+https://github.com/cataggar/serde.zig#7012f58c7ddf490125852e1d22006b552a1693c7",
-            .hash = "serde-1.0.1-1DszT-e9DABp6u1PoDvGFzeGaST2hRp2KGtGn_CkIl0J",
+            .url = "git+https://github.com/cataggar/serde.zig#7ecb2014a30b6b1203a94f377836763a03ab0658",
+            .hash = "serde-1.0.1-1DszT3vxDABKmINtLJvIUkhktMnhkZUQIGQUslp73pfb",
         },
     },
     .paths = .{

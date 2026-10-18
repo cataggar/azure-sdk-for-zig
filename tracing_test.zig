@@ -70,7 +70,7 @@ const Capture = struct {
     }
 
     fn stageCount(self: *const Capture, stage: Stage) usize {
-        return self.counts[@intFromEnum(stage)];
+        return self.counts[@backingInt(stage)];
     }
 
     fn record(self: *Capture, request: *core.http.Request) !void {
@@ -100,7 +100,7 @@ const Capture = struct {
             try std.testing.expectEqualStrings(trace_state, request.getHeader("tracestate").?);
         } else try std.testing.expect(request.getHeader("tracestate") == null);
         self.count += 1;
-        self.counts[@intFromEnum(stage)] += 1;
+        self.counts[@backingInt(stage)] += 1;
         if (self.fail_stage == stage) return error.FixtureTransportFailure;
         self.mock.response_headers_list = &.{};
         self.mock.stream_fail_response_after = if (stage == .status_read and self.fail_status_body) 0 else null;
