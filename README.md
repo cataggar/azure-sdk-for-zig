@@ -1,22 +1,22 @@
 # Azure Core HTTPX transport for Zig
 
-**Version: 0.1.0.** Uses released Azure Core 0.4.1 and HTTPX 0.2.0.
+**Version: 0.1.1.** Uses released Azure Core 0.4.2 and HTTPX 0.2.0.
 
 `azure_sdk_core_httpx` implements Azure Core's buffered and streaming HTTP
 transport contracts using HTTPX. It is optional: Core does not depend on HTTPX,
-and WASI applications keep Core's host backend. Requires Zig 0.16.0.
+and WASI applications keep Core's host backend. Requires Zig 0.17.0.
 
 ## Dependencies
 
 The manifest uses normal immutable commit URLs and actual Zig package hashes,
-without local paths. Core 0.4.1 and HTTPX 0.2.0 are released. HTTPX comes only
+without local paths. Core 0.4.2 and HTTPX 0.2.0 are released. HTTPX comes only
 from `cataggar/httpx.zig`; its release commit has the same complete source tree
 and package hash as the qualified input.
 
 | Package | Immutable URL | Zig package hash |
 | --- | --- | --- |
-| Core 0.4.1 | `git+https://github.com/cataggar/azure-sdk-for-zig.git#2c95f65be96b5ef48a50671de33e9e0926c624cb` | `azure_sdk_core-0.4.1-eFY0EpbrCgAKh2uJJ-DguKP7zx8Ywuf1UdP7HkJ_9CmI` |
-| HTTPX 0.2.0 | `git+https://github.com/cataggar/httpx.zig#2d418ce2ebbd8cbb0d930e80feeac0e45560f0c9` | `httpx-0.2.0-8qj2eonLMwDuDDJxDVzoax9VY68Lb0YjT_AtwZBAbqwV` |
+| Core 0.4.2 | `git+https://github.com/cataggar/azure-sdk-for-zig.git#7ddae016914df9ba34f5f0c6705ea83beacd6a43` | `azure_sdk_core-0.4.2-eFY0ErHsCgCVUEhCkETDe_QacW0t4f8OSdQhxgtOjTp_` |
+| HTTPX 0.2.0 | `git+https://github.com/cataggar/httpx.zig#1f7d2690a47734dbf9e99a474f9cb7b92ef7690a` | `httpx-0.2.0-8qj2enHSMwCFoghRwKnSCZkMj0hb-8zdWv_Wa3Vg98Gs` |
 
 ## Integration
 
@@ -106,7 +106,7 @@ different provider. All owners remain stable through pooled TLS sessions.
 
 SHA-1 identifier permission is independent of backend capability. The example
 also explicitly enables both Windows-only MD5 backend and metadata permissions
-needed by HTTPX's [P15/P25 Disallowed identity profile](https://github.com/cataggar/httpx.zig/blob/2d418ce2ebbd8cbb0d930e80feeac0e45560f0c9/docs/api/standard-trust.md#documented-disallowed-deny-identities). Those MD5
+needed by HTTPX's [P15/P25 Disallowed identity profile](https://github.com/cataggar/httpx.zig/blob/1f7d2690a47734dbf9e99a474f9cb7b92ef7690a/docs/api/standard-trust.md#documented-disallowed-deny-identities). Those MD5
 permissions stay off on other platforms and in library defaults. Identifier
 permissions do not enable MD5/SHA-1 certificate signatures; the MD5 opt-ins do
 not enable HMAC, HKDF or TLS PRF. Unsupported platform metadata remains
@@ -221,15 +221,15 @@ WASI builds intentionally reject this package with Core host-backend guidance.
 Windows uses the system Winsock ABI, not an added C transport library.
 
 Default tests are offline. CI also requires the opt-in paired standard TLS
-suite in Debug and ReleaseSafe; neither mode can silently fall back to plain
+suite in debug and safe; neither mode can silently fall back to plain
 HTTP. The workflow runs both modes even if one fails, then reports failure if
 either failed. The public Azure probe is never part of these commands.
 
 ```sh
 zig fmt --check build.zig build.zig.zon root.zig transport.zig test_backend.zig interruption_fixture.zig tests.zig tls_qualification.zig tls_fixture_data.zig https_fixture.zig public_https.zig
-zig build test --cache-dir .zig-cache/local --global-cache-dir .zig-cache/global --summary all
-zig build test -Dpaired-tls=true -Doptimize=Debug -j2 --cache-dir .zig-cache/local --global-cache-dir .zig-cache/global --summary all
-zig build test -Dpaired-tls=true -Doptimize=ReleaseSafe -j2 --cache-dir .zig-cache/local --global-cache-dir .zig-cache/global --summary all
+ZIG_GLOBAL_CACHE_DIR=.zig-cache/global zig build test --cache-dir .zig-cache/local --summary all
+ZIG_GLOBAL_CACHE_DIR=.zig-cache/global zig build test -Dpaired-tls=true -Doptimize=debug -j2 --cache-dir .zig-cache/local --summary all
+ZIG_GLOBAL_CACHE_DIR=.zig-cache/global zig build test -Dpaired-tls=true -Doptimize=safe -j2 --cache-dir .zig-cache/local --summary all
 ```
 
 `zig build -Dpaired-tls=true` compiles without running the tests.
@@ -298,7 +298,7 @@ EOF/reset must meet the unchanged 1 s bound, with one close and no live/leased
 operations. A bounded joined watchdog fails rather than manufacturing evidence.
 
 ```sh
-zig build test -Dtest-filter=interruption -j2 --cache-dir .zig-cache/local --global-cache-dir .zig-cache/global --summary all
+ZIG_GLOBAL_CACHE_DIR=.zig-cache/global zig build test -Dtest-filter=interruption -j2 --cache-dir .zig-cache/local --summary all
 ```
 
 This does not establish arbitrary upload-reader preemption, H1 backpressure,
@@ -313,8 +313,8 @@ The sole argument is a configured DNS-server IP for the pure-Zig resolver.
 This Linux example reads existing resolver configuration without changing it:
 
 ```sh
-zig build qualify-public-https -Dpaired-tls=true -j2 \
-  --cache-dir .zig-cache/local --global-cache-dir .zig-cache/global \
+ZIG_GLOBAL_CACHE_DIR=.zig-cache/global zig build qualify-public-https -Dpaired-tls=true -j2 \
+  --cache-dir .zig-cache/local \
   --summary all -- "$(awk '/^nameserver / {print $2; exit}' /etc/resolv.conf)"
 ```
 
