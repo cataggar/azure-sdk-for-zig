@@ -231,22 +231,22 @@ fn expectEveryPipeline(client: *DevOpsClient) !void {
     @setEvalBranchQuota(500_000);
     var areas: usize = 0;
     var groups: usize = 0;
-    inline for (comptime std.meta.declarations(DevOpsClient)) |decl| {
-        const accessor = @field(DevOpsClient, decl.name);
+    inline for (comptime std.meta.declarations(DevOpsClient)) |decl_name| {
+        const accessor = @field(DevOpsClient, decl_name);
         const info = @typeInfo(@TypeOf(accessor));
-        if (info == .@"fn" and info.@"fn".params.len == 1 and
-            info.@"fn".params[0].type == *DevOpsClient)
+        if (info == .@"fn" and info.@"fn".param_types.len == 1 and
+            info.@"fn".param_types[0] == *DevOpsClient)
         {
             const Area = info.@"fn".return_type.?;
             if (@typeInfo(Area) == .@"struct" and @hasField(Area, "pipeline")) {
                 var area = @call(.auto, accessor, .{client});
                 try std.testing.expectEqualDeep(client.pipeline, area.pipeline);
                 areas += 1;
-                inline for (comptime std.meta.declarations(Area)) |group_decl| {
-                    const group_accessor = @field(Area, group_decl.name);
+                inline for (comptime std.meta.declarations(Area)) |group_decl_name| {
+                    const group_accessor = @field(Area, group_decl_name);
                     const group_info = @typeInfo(@TypeOf(group_accessor));
-                    if (group_info == .@"fn" and group_info.@"fn".params.len == 1 and
-                        group_info.@"fn".params[0].type == *Area)
+                    if (group_info == .@"fn" and group_info.@"fn".param_types.len == 1 and
+                        group_info.@"fn".param_types[0] == *Area)
                     {
                         const Group = group_info.@"fn".return_type.?;
                         if (@typeInfo(Group) == .@"struct" and @hasField(Group, "pipeline")) {
@@ -309,7 +309,7 @@ test "optional tracing survives SDK and area copies without changing auth result
             } else {
                 try repositories.delete(std.testing.allocator, client.organization, "repository", "project");
             }
-            try std.testing.expectEqualStrings("azsdk-zig-devops/0.2.1", transport.last_headers.get("User-Agent").?);
+            try std.testing.expectEqualStrings("azsdk-zig-devops/0.2.2", transport.last_headers.get("User-Agent").?);
             try std.testing.expectStringStartsWith(transport.last_headers.get("Authorization").?, "Basic ");
             try std.testing.expectEqual(traced, transport.last_headers.contains("traceparent"));
             if (traced) try probe.capture(&transport, 0) else try std.testing.expect(!transport.last_headers.contains("tracestate"));
