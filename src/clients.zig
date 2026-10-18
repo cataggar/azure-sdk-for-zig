@@ -1207,7 +1207,7 @@ pub const ContainerRegistryBlob = struct {
         defer alloc.free(encoded_path_0);
         const endpoint_uri = std.Uri.parse(self.endpoint) catch return error.InvalidUrl;
         var endpoint_host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
-        const endpoint_host = endpoint_uri.getHost(&endpoint_host_buffer) catch return error.InvalidUrl;
+        const endpoint_host = std.Io.net.HostName.fromUri(endpoint_uri, &endpoint_host_buffer) catch return error.InvalidUrl;
         const base_url = try core.url.resolveAndValidateUrl(
             alloc,
             self.endpoint,
@@ -1265,7 +1265,7 @@ pub const ContainerRegistryBlob = struct {
         defer alloc.free(encoded_path_0);
         const endpoint_uri = std.Uri.parse(self.endpoint) catch return error.InvalidUrl;
         var endpoint_host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
-        const endpoint_host = endpoint_uri.getHost(&endpoint_host_buffer) catch return error.InvalidUrl;
+        const endpoint_host = std.Io.net.HostName.fromUri(endpoint_uri, &endpoint_host_buffer) catch return error.InvalidUrl;
         const base_url = try core.url.resolveAndValidateUrl(
             alloc,
             self.endpoint,
@@ -1333,7 +1333,7 @@ pub const ContainerRegistryBlob = struct {
         defer alloc.free(encoded_path_0);
         const endpoint_uri = std.Uri.parse(self.endpoint) catch return error.InvalidUrl;
         var endpoint_host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
-        const endpoint_host = endpoint_uri.getHost(&endpoint_host_buffer) catch return error.InvalidUrl;
+        const endpoint_host = std.Io.net.HostName.fromUri(endpoint_uri, &endpoint_host_buffer) catch return error.InvalidUrl;
         const base_url = try core.url.resolveAndValidateUrl(
             alloc,
             self.endpoint,
@@ -1404,7 +1404,7 @@ pub const ContainerRegistryBlob = struct {
         defer alloc.free(encoded_path_0);
         const endpoint_uri = std.Uri.parse(self.endpoint) catch return error.InvalidUrl;
         var endpoint_host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
-        const endpoint_host = endpoint_uri.getHost(&endpoint_host_buffer) catch return error.InvalidUrl;
+        const endpoint_host = std.Io.net.HostName.fromUri(endpoint_uri, &endpoint_host_buffer) catch return error.InvalidUrl;
         const base_url = try core.url.resolveAndValidateUrl(
             alloc,
             self.endpoint,
