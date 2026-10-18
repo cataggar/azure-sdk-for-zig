@@ -248,10 +248,13 @@ pub fn runBackendAllocationFailureContracts(
     if (!factory.capabilities.allocation_failure_cleanup) return;
     if (factory.allocationFixtureFn == null) return error.AllocationFixtureRequired;
     inline for (std.meta.tags(AllocationScenario)) |scenario| {
-        var baseline = std.testing.FailingAllocator.init(allocator, .{});
+        var baseline = std.testing.FailingAllocator.init(allocator, .{ .resize_fail_index = 0 });
         try backendAllocationFixture(&baseline, allocator, io, factory, scenario);
         for (0..baseline.alloc_index) |fail_index| {
-            var failing = std.testing.FailingAllocator.init(allocator, .{ .fail_index = fail_index });
+            var failing = std.testing.FailingAllocator.init(allocator, .{
+                .fail_index = fail_index,
+                .resize_fail_index = 0,
+            });
             if (backendAllocationFixture(&failing, allocator, io, factory, scenario)) |_| {
                 return if (failing.has_induced_failure)
                     error.SwallowedOutOfMemoryError
