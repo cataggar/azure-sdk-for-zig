@@ -99,7 +99,7 @@ var client = try devops.DevOpsClient.init(allocator, .{
 
 ## Optional automatic tracing
 
-Version **0.2.1** pins published Core **0.4.1** and REST DevOps **0.2.1**.
+Version **0.2.2** pins published Core **0.4.2** and REST DevOps **0.2.2**.
 This patch updates dependency pins only; public APIs and tracing behavior
 are unchanged.
 
@@ -113,7 +113,7 @@ var client = try devops.DevOpsClient.init(allocator, .{
     .instrumentation = .{
         .provider = provider.asProvider(),
         .scope_name = "azure_sdk_devops",
-        .scope_version = "0.2.1",
+        .scope_version = "0.2.2",
         .namespace = "Azure.DevOps",
     },
 });
@@ -125,7 +125,7 @@ The complete options value, including custom scope/version/namespace and optiona
 `parent_context`, is copied unchanged into the canonical pipeline before any of
 the 44 areas or 371 subgroups receive it. The Entra ID `scope` option remains
 separate and unchanged. No tracing state is added to `HttpRuntime`; the SDK's
-actual user agent is `azsdk-zig-devops/0.2.1`.
+actual user agent is `azsdk-zig-devops/0.2.2`.
 
 Provider/exporter, borrowed scope strings and parent tracestate must outlive
 every client copy and operation. Derived clients and pager fetchers also borrow
