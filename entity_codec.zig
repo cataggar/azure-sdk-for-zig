@@ -17,18 +17,20 @@ pub fn EntityCodec(comptime T: type) type {
 
     return struct {
         const Self = @This();
-        const fields = std.meta.fields(T);
+        const struct_info = @typeInfo(T).@"struct";
+        const field_names = struct_info.field_names;
+        const field_types = struct_info.field_types;
 
         /// Writes an OData JSON object. The caller owns no allocations.
         pub fn serialize(value: T, writer: anytype) !void {
             var first = true;
             try writer.writeByte('{');
-            inline for (fields) |field| {
-                if (comptime std.mem.eql(u8, field.name, "timestamp")) continue;
-                try writePropertyPrefix(writer, &first, wireName(T, field.name));
-                try writeTypedValue(field.type, @field(value, field.name), writer);
-                if (comptime annotationFor(field.type)) |annotation| {
-                    try writeAnnotationPrefix(writer, &first, wireName(T, field.name));
+            inline for (field_names, field_types) |field_name, field_type| {
+                if (comptime std.mem.eql(u8, field_name, "timestamp")) continue;
+                try writePropertyPrefix(writer, &first, wireName(T, field_name));
+                try writeTypedValue(field_type, @field(value, field_name), writer);
+                if (comptime annotationFor(field_type)) |annotation| {
+                    try writeAnnotationPrefix(writer, &first, wireName(T, field_name));
                     try writeJsonString(writer, annotation);
                 }
             }
@@ -62,27 +64,27 @@ pub fn EntityCodec(comptime T: type) type {
         /// Frees strings, binary values, GUIDs, and DateTimes allocated by
         /// `deserialize`. Calling this on caller-borrowed values is invalid.
         pub fn deinit(allocator: std.mem.Allocator, value: *T) void {
-            inline for (fields) |field| {
-                deinitTypedValue(field.type, allocator, &@field(value.*, field.name));
+            inline for (field_names, field_types) |field_name, field_type| {
+                deinitTypedValue(field_type, allocator, &@field(value.*, field_name));
             }
         }
 
         fn deserializeObject(allocator: std.mem.Allocator, object: std.json.ObjectMap) !T {
             var result: T = undefined;
-            var initialized: [fields.len]bool = .{false} ** fields.len;
-            errdefer inline for (fields, 0..) |field, index| {
-                if (initialized[index]) deinitTypedValue(field.type, allocator, &@field(result, field.name));
+            var initialized: [field_names.len]bool = @splat(false);
+            errdefer inline for (field_names, field_types, 0..) |field_name, field_type, index| {
+                if (initialized[index]) deinitTypedValue(field_type, allocator, &@field(result, field_name));
             };
 
-            inline for (fields, 0..) |field, index| {
-                const wire_name = wireName(T, field.name);
+            inline for (field_names, field_types, 0..) |field_name, field_type, index| {
+                const wire_name = wireName(T, field_name);
                 const maybe_value = object.get(wire_name);
                 if (maybe_value) |json_value| {
                     const annotation = getAnnotation(object, wire_name);
-                    @field(result, field.name) = try decodeTypedValue(field.type, allocator, json_value, annotation, std.mem.eql(u8, field.name, "timestamp"));
+                    @field(result, field_name) = try decodeTypedValue(field_type, allocator, json_value, annotation, std.mem.eql(u8, field_name, "timestamp"));
                 } else {
-                    if (comptime isOptional(field.type)) {
-                        @field(result, field.name) = null;
+                    if (comptime isOptional(field_type)) {
+                        @field(result, field_name) = null;
                     } else {
                         return error.MissingRequiredProperty;
                     }
@@ -179,41 +181,43 @@ fn isEntityMetadataAnnotation(name: []const u8) bool {
 
 fn validateEntity(comptime T: type) void {
     if (@typeInfo(T) != .@"struct") @compileError("EntityCodec requires a struct type");
-    const fields = std.meta.fields(T);
-    const partition_field = findField(T, "partition_key") orelse @compileError("EntityCodec requires a string partition_key field");
-    const row_field = findField(T, "row_key") orelse @compileError("EntityCodec requires a string row_key field");
-    if (!isString(partition_field.type)) @compileError("EntityCodec partition_key must be []const u8 or []u8");
-    if (!isString(row_field.type)) @compileError("EntityCodec row_key must be []const u8 or []u8");
+    const struct_info = @typeInfo(T).@"struct";
+    const field_names = struct_info.field_names;
+    const field_types = struct_info.field_types;
+    const partition_type = findFieldType(T, "partition_key") orelse @compileError("EntityCodec requires a string partition_key field");
+    const row_type = findFieldType(T, "row_key") orelse @compileError("EntityCodec requires a string row_key field");
+    if (!isString(partition_type)) @compileError("EntityCodec partition_key must be []const u8 or []u8");
+    if (!isString(row_type)) @compileError("EntityCodec row_key must be []const u8 or []u8");
 
     if (customPropertyCount(T) > entity.max_custom_properties) {
         @compileError("EntityCodec supports at most 252 custom properties");
     }
 
-    inline for (fields) |field| {
-        if (std.mem.eql(u8, field.name, "timestamp")) {
-            if (field.type != ?edm.EdmDateTime) @compileError("EntityCodec timestamp must be ?EdmDateTime");
-        } else if (!isSupported(field.type)) {
-            @compileError("EntityCodec field '" ++ field.name ++ "' has an unsupported EDM type");
+    inline for (field_names, field_types) |field_name, field_type| {
+        if (std.mem.eql(u8, field_name, "timestamp")) {
+            if (field_type != ?edm.EdmDateTime) @compileError("EntityCodec timestamp must be ?EdmDateTime");
+        } else if (!isSupported(field_type)) {
+            @compileError("EntityCodec field '" ++ field_name ++ "' has an unsupported EDM type");
         }
 
-        const name = wireName(T, field.name);
-        if (!std.mem.eql(u8, field.name, "partition_key") and
-            !std.mem.eql(u8, field.name, "row_key") and
-            !std.mem.eql(u8, field.name, "timestamp"))
+        const name = wireName(T, field_name);
+        if (!std.mem.eql(u8, field_name, "partition_key") and
+            !std.mem.eql(u8, field_name, "row_key") and
+            !std.mem.eql(u8, field_name, "timestamp"))
         {
             if (std.mem.eql(u8, name, "PartitionKey") or
                 std.mem.eql(u8, name, "RowKey") or
                 std.mem.eql(u8, name, "Timestamp"))
             {
-                @compileError("EntityCodec field '" ++ field.name ++ "' uses a reserved wire name");
+                @compileError("EntityCodec field '" ++ field_name ++ "' uses a reserved wire name");
             }
-            comptime entity.validatePropertyName(name) catch @compileError("EntityCodec field '" ++ field.name ++ "' has an invalid wire name");
+            comptime entity.validatePropertyName(name) catch @compileError("EntityCodec field '" ++ field_name ++ "' has an invalid wire name");
         }
     }
-    inline for (fields, 0..) |field, index| {
-        const name = wireName(T, field.name);
-        inline for (fields[index + 1 ..]) |other| {
-            if (std.mem.eql(u8, name, wireName(T, other.name))) {
+    inline for (field_names, 0..) |field_name, index| {
+        const name = wireName(T, field_name);
+        inline for (field_names[index + 1 ..]) |other_name| {
+            if (std.mem.eql(u8, name, wireName(T, other_name))) {
                 @compileError("EntityCodec has duplicate wire name '" ++ name ++ "'");
             }
         }
@@ -222,8 +226,8 @@ fn validateEntity(comptime T: type) void {
 
 fn customPropertyCount(comptime T: type) usize {
     var count: usize = 0;
-    inline for (std.meta.fields(T)) |field| {
-        if (!isSystemField(field.name)) count += 1;
+    inline for (@typeInfo(T).@"struct".field_names) |field_name| {
+        if (!isSystemField(field_name)) count += 1;
     }
     return count;
 }
@@ -234,9 +238,10 @@ fn isSystemField(comptime name: []const u8) bool {
         std.mem.eql(u8, name, "timestamp");
 }
 
-fn findField(comptime T: type, comptime name: []const u8) ?std.builtin.Type.StructField {
-    inline for (std.meta.fields(T)) |field| {
-        if (std.mem.eql(u8, field.name, name)) return field;
+fn findFieldType(comptime T: type, comptime name: []const u8) ?type {
+    const struct_info = @typeInfo(T).@"struct";
+    inline for (struct_info.field_names, struct_info.field_types) |field_name, field_type| {
+        if (std.mem.eql(u8, field_name, name)) return field_type;
     }
     return null;
 }
@@ -461,7 +466,7 @@ fn propertyBoundaryEntity(
     const field_count = 2 + custom_count + @intFromBool(include_timestamp);
     var names: [field_count][:0]const u8 = undefined;
     var types: [field_count]type = undefined;
-    const attributes: [field_count]std.builtin.Type.StructField.Attributes = @splat(.{});
+    const attributes: [field_count]std.builtin.Type.Struct.FieldAttributes = @splat(.{});
     names[0] = "partition_key";
     types[0] = []const u8;
     names[1] = "row_key";

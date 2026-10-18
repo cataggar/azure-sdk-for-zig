@@ -2,10 +2,10 @@
 
 Hand-written, idiomatic Zig conveniences for **Azure Storage Tables**.
 
-Release branch: `sdk/data_tables`. Package version: `0.4.1`.
+Release branch: `sdk/data_tables`. Package version: `0.4.2`.
 Version 0.3.0 introduced the breaking single-initializer API described below;
 0.4.0 preserves that API while adopting Core 0.4.0 and opt-in HTTP tracing.
-Patch 0.4.1 updates the Core and REST dependency pins only; public APIs and
+Patch 0.4.2 updates the Core and REST dependency pins only; public APIs and
 tracing behavior are unchanged.
 The `TableClient`, `TableServiceClient`, and `TableEntity` exports remain while the parity roadmap in
 [tracker #148](https://github.com/cataggar/azure-sdk-for-zig/issues/148) is
@@ -35,10 +35,10 @@ immutable upstream commit every time it is regenerated. A generic Storage
 `x-ms-version` is not a substitute for a Tables contract version.
 
 The SDK pins generated package commit
-`ef3053ef18cec178359d0f4350c18ad93b46bbd5` and Zig package hash
-`azure_rest_data_tables-0.2.1-CqXnR_mdAQDLzOpI7cPJxGE3DV9S-U062Q7JshjaaxuG`,
-and Core commit `2c95f65be96b5ef48a50671de33e9e0926c624cb` with hash
-`azure_sdk_core-0.4.1-eFY0EpbrCgAKh2uJJ-DguKP7zx8Ywuf1UdP7HkJ_9CmI`.
+`348867bc04b163b918a8cec6a29c519a3958289e` and Zig package hash
+`azure_rest_data_tables-0.2.2-CqXnR_mdAQDIyHblMmXMlA3FvHd9OjO2PpyoV02NgMZE`,
+and Core commit `7ddae016914df9ba34f5f0c6705ea83beacd6a43` with hash
+`azure_sdk_core-0.4.2-eFY0ErHsCgCVUEhCkETDe_QacW0t4f8OSdQhxgtOjTp_`.
 It re-exports the REST package public root as `protocol`. The REST provenance
 records upstream spec commit `0744f52a86919d243ba2225e55bdb9c87bf521a5`,
 generator commit `c83a1cbef5f728d7530fdec4a724cc453233cfa4`, and stable

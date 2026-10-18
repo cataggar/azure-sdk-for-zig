@@ -39,7 +39,7 @@ fn orderedFlags(
     buffer: *[mapping.len]u8,
 ) []const u8 {
     comptime {
-        const fields = std.meta.fields(T);
+        const fields = @typeInfo(T).@"struct".field_names;
         if (fields.len != mapping.len)
             @compileError(@typeName(T) ++ " must map every flag exactly once");
         for (mapping, 0..) |entry, index| {
@@ -637,16 +637,20 @@ test "stored SAS identifiers count Unicode scalar values" {
 
     var ascii = try (TableSignatureValues{
         .tableName = "People",
-        .accessPolicy = .{ .stored = "a" ** 64 },
+        .accessPolicy = .{ .stored = &@as([64]u8, @splat('a')) },
     }).sign(allocator, &credential, testingCrypto());
     ascii.deinit();
     var multibyte = try (TableSignatureValues{
         .tableName = "People",
-        .accessPolicy = .{ .stored = "雪" ** 64 },
+        .accessPolicy = .{ .stored = std.mem.asBytes(&@as([64][3]u8, @splat("雪"[0..3].*))) },
     }).sign(allocator, &credential, testingCrypto());
     multibyte.deinit();
 
-    const invalid = [_][]const u8{ "a" ** 65, "雪" ** 65, "\xff" };
+    const invalid = [_][]const u8{
+        &@as([65]u8, @splat('a')),
+        std.mem.asBytes(&@as([65][3]u8, @splat("雪"[0..3].*))),
+        "\xff",
+    };
     for (invalid) |identifier| {
         try std.testing.expectError(
             error.InvalidSasIdentifier,

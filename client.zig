@@ -1879,7 +1879,7 @@ test "token client survives moves and applies all client options" {
         mock.last_headers.get("x-ms-client-request-id").?,
     );
     try std.testing.expectEqualStrings(
-        "my-app/1.0 azsdk-zig-data-tables/0.4.1",
+        "my-app/1.0 azsdk-zig-data-tables/0.4.2",
         mock.last_headers.get("User-Agent").?,
     );
     try std.testing.expectEqualStrings(
@@ -2356,7 +2356,7 @@ test "stored access policy limits preserve empty zero and five lists" {
         .{ .id = "two", .access_policy = .{} },
         .{ .id = "three", .access_policy = .{} },
         .{ .id = "four", .access_policy = .{} },
-        .{ .id = "x" ** 64, .access_policy = .{} },
+        .{ .id = &@as([64]u8, @splat('x')), .access_policy = .{} },
     };
     var five_set = try table_client.setAccessPolicy(allocator, &five, .{});
     five_set.deinit();
@@ -2370,7 +2370,7 @@ test "stored access policy limits preserve empty zero and five lists" {
         error.InvalidSignedIdentifier,
         table_client.setAccessPolicyResult(
             std.testing.failing_allocator,
-            &.{.{ .id = "雪" ** 65, .access_policy = .{} }},
+            &.{.{ .id = std.mem.asBytes(&@as([65][3]u8, @splat("雪"[0..3].*))), .access_policy = .{} }},
             .{},
         ),
     );

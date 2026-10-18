@@ -1473,10 +1473,10 @@ fn expectTransactionRedirectRejected(
 
 test "transaction 307 and 308 redirects are rejected without replay for every auth mode" {
     for ([_]u16{ 307, 308 }) |status| {
-        inline for (std.meta.fields(TransactionAuthMode)) |field| {
+        inline for (@typeInfo(TransactionAuthMode).@"enum".field_names) |field_name| {
             try expectTransactionRedirectRejected(
                 status,
-                @field(TransactionAuthMode, field.name),
+                @field(TransactionAuthMode, field_name),
             );
         }
     }

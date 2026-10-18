@@ -94,9 +94,9 @@ test "all canonical authentication paths and derived construction are allocation
 
 test "clients expose one initializer without legacy constructor wrappers" {
     inline for (.{ TableClient, TableServiceClient }) |Client| {
-        inline for (@typeInfo(Client).@"struct".decls) |declaration| {
-            if (std.mem.startsWith(u8, declaration.name, "init")) {
-                try std.testing.expectEqualStrings("init", declaration.name);
+        inline for (@typeInfo(Client).@"struct".decl_names) |decl_name| {
+            if (std.mem.startsWith(u8, decl_name, "init")) {
+                try std.testing.expectEqualStrings("init", decl_name);
             }
         }
         try std.testing.expect(@hasDecl(Client, "init"));
