@@ -86,9 +86,27 @@ fn constructionAllocationFixture(allocator: std.mem.Allocator, mode: Mode) !void
     try std.testing.expectEqual(@as(usize, 0), transport.call_count);
 }
 
+const deterministic_testing_allocator: std.mem.Allocator = .{
+    .ptr = undefined,
+    .vtable = &.{
+        .alloc = struct {
+            fn alloc(_: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+                return std.testing.allocator.rawAlloc(len, alignment, ret_addr);
+            }
+        }.alloc,
+        .resize = std.mem.Allocator.noResize,
+        .remap = std.mem.Allocator.noRemap,
+        .free = struct {
+            fn free(_: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+                std.testing.allocator.rawFree(memory, alignment, ret_addr);
+            }
+        }.free,
+    },
+};
+
 test "all canonical authentication paths and derived construction are allocation-safe" {
     inline for (std.meta.tags(Mode)) |mode| {
-        try std.testing.checkAllAllocationFailures(std.testing.allocator, constructionAllocationFixture, .{mode});
+        try std.testing.checkAllAllocationFailures(deterministic_testing_allocator, constructionAllocationFixture, .{mode});
     }
 }
 
@@ -193,6 +211,6 @@ fn RejectedConfigurationFixture(comptime Client: type) type {
 
 test "rejected options release connection-string credentials at every allocation failure" {
     inline for (.{ TableClient, TableServiceClient }) |Client| {
-        try std.testing.checkAllAllocationFailures(std.testing.allocator, RejectedConfigurationFixture(Client).run, .{});
+        try std.testing.checkAllAllocationFailures(deterministic_testing_allocator, RejectedConfigurationFixture(Client).run, .{});
     }
 }
