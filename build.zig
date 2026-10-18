@@ -34,7 +34,7 @@ pub fn build(b: *std.Build) void {
     examples_step.dependOn(&example.step);
 
     const run_example = b.addRunArtifact(example);
-    if (b.args) |args| run_example.addArgs(args);
+    run_example.addPassthruArgs();
     const run_example_step = b.step("run-example", "Run a Kusto example");
     run_example_step.dependOn(&run_example.step);
 

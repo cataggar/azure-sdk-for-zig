@@ -56,6 +56,7 @@ pub const Config = struct {
 pub const Session = struct {
     allocator: std.mem.Allocator,
     transport: core.http.StdHttpTransport,
+    crypto: core.crypto.StdCryptoProvider,
     credential: core.identity.DefaultAzureCredential,
     connection: *common.KustoConnection,
 
@@ -70,19 +71,23 @@ pub const Session = struct {
         self.allocator = allocator;
         self.transport = core.http.StdHttpTransport.init(allocator, io);
         errdefer self.transport.deinit();
+        self.crypto = core.crypto.StdCryptoProvider.init(io);
         self.credential = try core.identity.DefaultAzureCredential.init(
             allocator,
             io,
-            self.transport.asTransport(),
             env,
         );
         errdefer self.credential.deinit();
         var builder = common.KustoConnectionStringBuilder.init(cluster_url);
         _ = builder.withTokenCredential(self.credential.asCredential());
+        const runtime = core.http.HttpRuntime.init(
+            self.transport.asTransport(),
+            self.crypto.asProvider(),
+        );
         self.connection = try common.KustoConnection.init(
             allocator,
             builder.build(),
-            self.transport.asTransport(),
+            runtime,
             .{},
         );
         return self;
@@ -107,7 +112,7 @@ pub fn runStreamingIngestion(
     session: *Session,
     config: Config,
 ) !ingest.IngestionStatus {
-    var client = ingest.StreamingIngestClient.initWithConnection(session.connection);
+    var client = ingest.StreamingIngestClient.init(session.connection);
     var result = try client.ingestResult(
         allocator,
         config.ingestionTarget(),
@@ -127,7 +132,9 @@ pub fn runQueuedIngestion(
     session: *Session,
     config: Config,
 ) !ingest.QueuedSubmissionOutcome {
-    var client = ingest.QueuedIngestClient.initWithConnection(session.connection);
+    var client = ingest.QueuedIngestClient.init(session.connection.runtime, .{
+        .connection = session.connection,
+    });
     var result = try client.ingest(
         allocator,
         config.ingestionTarget(),
@@ -143,7 +150,7 @@ pub fn runManagedIngestion(
     session: *Session,
     config: Config,
 ) !ingest.ManagedIngestionRoute {
-    var client = ingest.ManagedIngestClient.initWithConnection(session.connection);
+    var client = ingest.ManagedIngestClient.init(session.connection, null);
     var result = try client.ingestResult(
         allocator,
         config.ingestionTarget(),
@@ -173,7 +180,9 @@ pub fn runStatusPolling(
     session: *Session,
     config: Config,
 ) !PollSummary {
-    var client = ingest.QueuedIngestClient.initWithConnection(session.connection);
+    var client = ingest.QueuedIngestClient.init(session.connection.runtime, .{
+        .connection = session.connection,
+    });
     var submission = try client.ingest(
         allocator,
         config.ingestionTarget(),
