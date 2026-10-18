@@ -51,10 +51,10 @@ fn expectDescendantPipelines(client: *clients.AVSClient, expected: core.http.Htt
     try std.testing.expectEqualDeep(expected, client.pipeline);
     var count: usize = 0;
     inline for (comptime std.meta.declarations(clients.AVSClient)) |decl| {
-        const accessor = @field(clients.AVSClient, decl.name);
+        const accessor = @field(clients.AVSClient, decl);
         const info = @typeInfo(@TypeOf(accessor));
-        if (info == .@"fn" and info.@"fn".params.len == 1 and
-            info.@"fn".params[0].type == *clients.AVSClient)
+        if (info == .@"fn" and info.@"fn".param_types.len == 1 and
+            info.@"fn".param_types[0] == *clients.AVSClient)
         {
             const Result = info.@"fn".return_type.?;
             if (@typeInfo(Result) == .@"struct" and @hasField(Result, "pipeline")) {
@@ -87,7 +87,7 @@ test "AVS constructor and all subgroups retain optional tracing with real automa
             .{},
         );
         defer provider.deinit() catch unreachable;
-        var telemetry = core.http.TelemetryPolicy.init("azsdk-zig-azure_rest_arm_avs/0.3.1");
+        var telemetry = core.http.TelemetryPolicy.init("azsdk-zig-azure_rest_arm_avs/0.3.2");
         var policies = [_]*core.http.HttpPolicy{telemetry.asPolicy()};
         var pipeline = core.http.HttpPipeline.init(runtime, &policies);
         try std.testing.expect(pipeline.instrumentation == null);
@@ -112,7 +112,7 @@ test "AVS constructor and all subgroups retain optional tracing with real automa
             "https://management.azure.com/subscriptions/subscription/resourceGroups/group/providers/Microsoft.AVS/privateClouds/cloud/hcxEnterpriseSites/site?api-version=2025-09-01",
             mock.last_url.?,
         );
-        try std.testing.expectEqualStrings("azsdk-zig-azure_rest_arm_avs/0.3.1", mock.last_headers.get("User-Agent").?);
+        try std.testing.expectEqualStrings("azsdk-zig-azure_rest_arm_avs/0.3.2", mock.last_headers.get("User-Agent").?);
         try std.testing.expectEqual(mode == .enabled, mock.last_headers.contains("traceparent"));
         if (mode == .enabled) {
             try std.testing.expectEqualStrings("vendor=caller", mock.last_headers.get("tracestate").?);
