@@ -1171,7 +1171,7 @@ test "RS512 signing uses exact digest and returns decoded signature bytes" {
     );
     defer client.deinit();
 
-    const digest = [_]u8{0} ** 64;
+    const digest: [64]u8 = @splat(0);
     var signature = try client.sign(allocator, .rs512, &digest);
     defer signature.deinit(allocator);
     try probe.expectSingleSpan(&tracing, &service_mock);
@@ -1204,7 +1204,7 @@ test "Key Vault service errors remain structured" {
     );
     defer client.deinit();
 
-    const digest = [_]u8{0} ** 64;
+    const digest: [64]u8 = @splat(0);
     const cases = [_]struct {
         status: u16,
         code: []const u8,
@@ -1375,7 +1375,7 @@ test "cryptography requires a version and verifies the response key id" {
         .{},
     );
     defer client.deinit();
-    const digest = [_]u8{0} ** 64;
+    const digest: [64]u8 = @splat(0);
     try std.testing.expectError(
         error.SignatureKeyIdMismatch,
         client.sign(allocator, .rs512, &digest),
@@ -1401,7 +1401,7 @@ test "sign retries throttling responses" {
     );
     defer client.deinit();
 
-    const digest = [_]u8{0} ** 64;
+    const digest: [64]u8 = @splat(0);
     var signature = try client.sign(allocator, .rs512, &digest);
     defer signature.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 2), service_mock.call_count);
@@ -1550,7 +1550,7 @@ test "derived cryptography client and pager preserve runtime providers" {
         cryptography.pipeline().runtime.crypto.context,
     );
 
-    const digest = [_]u8{0} ** 64;
+    const digest: [64]u8 = @splat(0);
     var signature = try cryptography.sign(allocator, .rs512, &digest);
     defer signature.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 1), crypto_spy.random_calls);
@@ -1619,7 +1619,7 @@ test "selected crypto failure prevents derived cryptography transport dispatch" 
         request.getHeader("Authorization").?,
     );
 
-    const digest = [_]u8{0} ** 64;
+    const digest: [64]u8 = @splat(0);
     try std.testing.expectError(
         error.SelectedCryptoFailure,
         cryptography.sign(allocator, .rs512, &digest),
@@ -1668,7 +1668,7 @@ test "KeyClient tracing survives borrowed cryptography and pager teardown" {
         try std.testing.expect(!cryptography.owns_pipeline_state);
         try std.testing.expectEqual(client.pipeline_state, cryptography.pipeline_state);
         mock.response_body = "{\"kid\":\"https://vault.example/keys/ssh-ca/version1\",\"value\":\"-__-\"}";
-        const digest = [_]u8{0} ** 64;
+        const digest: [64]u8 = @splat(0);
         var signature = try cryptography.sign(allocator, .rs512, &digest);
         defer signature.deinit(allocator);
         try std.testing.expectEqualSlices(u8, &.{ 0xfb, 0xff, 0xfe }, signature.bytes);
