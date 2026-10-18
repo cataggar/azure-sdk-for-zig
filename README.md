@@ -6,8 +6,8 @@ Azure Data Lake Storage clients:
 - `DataLakeFileClient`
 
 Release branch: `sdk/storage_files_datalake`. The package depends on
-`azure_sdk_core` 0.4.1 at `2c95f65be96b5ef48a50671de33e9e0926c624cb`.
-Package version 0.3.1 updates that Core pin without API changes.
+`azure_sdk_core` 0.4.2 at `7ddae016914df9ba34f5f0c6705ea83beacd6a43`.
+Package version 0.3.2 updates that Core pin without API changes.
 
 ## Construction and lifetime
 
@@ -29,7 +29,7 @@ var pipeline = core.http.HttpPipeline.init(runtime, &.{});
 pipeline.setInstrumentation(.{
     .provider = tracing_provider,
     .scope_name = "azure_sdk_storage_files_datalake",
-    .scope_version = "0.3.1",
+    .scope_version = "0.3.2",
     .namespace = "Microsoft.Storage",
 });
 var filesystem = datalake.DataLakeFileSystemClient.init(pipeline, .{
