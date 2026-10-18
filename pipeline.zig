@@ -112,9 +112,9 @@ pub fn validateHttpsOrigin(expected_origin: []const u8, candidate_url: []const u
 
     var expected_host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
     var candidate_host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
-    const expected_host = expected.getHost(&expected_host_buffer) catch
+    const expected_host = std.Io.net.HostName.fromUri(expected, &expected_host_buffer) catch
         return error.InvalidContinuationUrl;
-    const candidate_host = candidate.getHost(&candidate_host_buffer) catch
+    const candidate_host = std.Io.net.HostName.fromUri(candidate, &candidate_host_buffer) catch
         return error.InvalidContinuationUrl;
     if (!std.ascii.eqlIgnoreCase(expected_host.bytes, candidate_host.bytes))
         return error.InvalidContinuationUrl;
