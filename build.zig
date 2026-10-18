@@ -138,7 +138,7 @@ pub fn build(b: *std.Build) void {
         "azure_sdk_core-manifest-filtered.tar.gz",
     );
     package_archive.addArg("-C");
-    package_archive.addArg(b.pathFromRoot("."));
+    package_archive.addDirectoryArg(b.path("."));
     inline for (@import("build.zig.zon").paths) |included_path| {
         package_archive.addArg(included_path);
     }

@@ -126,9 +126,11 @@ test "W3C strict IDs versions and tracestate" {
     }
     try std.testing.expect(TraceContext.extract(good, "bad").?.trace_state == null);
     try std.testing.expect(TraceContext.extract(null, "a=x") == null);
-    const too_long = "a=" ++ "x" ** 511;
+    const x511: [511]u8 = @splat('x');
+    const too_long = "a=" ++ x511;
     try std.testing.expect(!TraceContext.validTracestate(too_long));
-    try std.testing.expect(!TraceContext.validTracestate("a=" ++ "x" ** 257));
+    const x257: [257]u8 = @splat('x');
+    try std.testing.expect(!TraceContext.validTracestate("a=" ++ x257));
     var members: [512]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&members);
     for (0..33) |i| try writer.print("{s}k{d}=x", .{ if (i == 0) "" else ",", i });
@@ -145,5 +147,6 @@ test "W3C empty tracestate members do not consume member limits" {
     try std.testing.expect(!TraceContext.validTracestate(writer.buffered()));
     try std.testing.expect(!TraceContext.validTracestate("a=x, ,a=y"));
     try std.testing.expect(!TraceContext.validTracestate("a=x,\r"));
-    try std.testing.expect(!TraceContext.validTracestate(" " ** 513));
+    const spaces513: [513]u8 = @splat(' ');
+    try std.testing.expect(!TraceContext.validTracestate(&spaces513));
 }

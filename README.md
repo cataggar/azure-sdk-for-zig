@@ -4,8 +4,9 @@ Core HTTP, authentication, error, paging, long-running-operation, URL, crypto,
 and utility infrastructure for the Azure SDK for Zig.
 
 The canonical package/module name is `azure_sdk_core`, released from
-`sdk/core`. Identity remains part of this package. Version `0.4.1` corrects the
-shared HTTPS redirect conformance contract without changing runtime behavior.
+`sdk/core`. Identity remains part of this package. Version `0.4.2` updates the
+package for Zig 0.17.0; `0.4.1` corrects the shared HTTPS redirect conformance
+contract without changing runtime behavior.
 The `0.4` line adds opt-in tracing, owned request headers, and expanded
 real-backend conformance to the explicit provider/streaming runtime introduced
 in `0.3.0`.
