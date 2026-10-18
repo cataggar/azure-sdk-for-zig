@@ -7,7 +7,7 @@ const core = @import("azure_sdk_core");
 const serde = @import("serde");
 
 pub const cosmos_scope = "https://cosmos.azure.com/.default";
-pub const user_agent = "azsdk-zig-data-cosmos/0.3.1";
+pub const user_agent = "azsdk-zig-data-cosmos/0.3.2";
 
 // ─────────────────────── Enums ───────────────────────
 
@@ -1440,7 +1440,7 @@ const DateCapturingTransport = struct {
     allocator: std.mem.Allocator,
     calls: usize = 0,
     dates: [2][32]u8 = undefined,
-    date_lengths: [2]usize = .{0} ** 2,
+    date_lengths: [2]usize = @splat(0),
 
     const vtable: core.http.HttpTransport.VTable = .{ .send = &send };
 
