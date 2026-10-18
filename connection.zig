@@ -818,14 +818,18 @@ pub const Driver = struct {
         if (self.state == .err or self.state == .closed) return error.ConnectionClosed;
         while (true) {
             var consumed = false;
+            var retryable_timeout = false;
             // A terminal transport read means the stream is gone even when no
             // byte of this frame was buffered. Only a zero-byte deadline is
             // retryable; once any frame byte was consumed, even timeout leaves
             // the parser unable to resume that frame safely.
-            errdefer |err| if (consumed or err != error.Timeout) self.invalidate();
+            errdefer if (!retryable_timeout) self.invalidate();
 
             var header_bytes: [frame.frame_header_size]u8 = undefined;
-            try self.readExactTracked(&header_bytes, deadline_ms, &consumed);
+            self.readExactTracked(&header_bytes, deadline_ms, &consumed) catch |err| {
+                retryable_timeout = !consumed and err == error.Timeout;
+                return err;
+            };
             const header = FrameHeader.parse(&header_bytes) catch return error.MalformedFrame;
             if (header.size > self.acceptMaxFrameSize()) return error.FrameTooLarge;
 
@@ -1910,8 +1914,8 @@ test "the frame buffer grows to the largest body and is not resized below it" {
     // rather than resize it, and must be handed out at its own length — a
     // frame sliced to the buffer instead of to its body would carry 496 bytes
     // of the previous frame behind it.
-    const big = [_]u8{'a'} ** 512;
-    const small = [_]u8{'b'} ** 16;
+    const big: [512]u8 = @splat('a');
+    const small: [16]u8 = @splat('b');
     inline for (.{ big, small }) |payload| {
         const header = frameHeaderBytes(8 + payload.len, 2, 0, 0);
         try mem.pushPeerBytes(&header);

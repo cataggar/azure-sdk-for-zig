@@ -62,8 +62,8 @@ pub const Properties = struct {
     reply_to_group_id: ?[]const u8 = null,
 
     fn isEmpty(self: Properties) bool {
-        inline for (@typeInfo(Properties).@"struct".fields) |f| {
-            if (@field(self, f.name) != null) return false;
+        inline for (@typeInfo(Properties).@"struct".field_names) |field_name| {
+            if (@field(self, field_name) != null) return false;
         }
         return true;
     }
