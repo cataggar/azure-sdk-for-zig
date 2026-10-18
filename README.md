@@ -6,8 +6,8 @@ errors, exact-byte manifest operations, bounded-memory resumable blob uploads,
 and bounded blob downloads to the generated
 `azure_rest_container_registry` protocol package.
 
-Version **0.3.1** pins published **Core 0.4.1** and
-**REST Container Registry 0.3.1** by full Git commit URL and package hash.
+Version **0.3.2** pins published **Core 0.4.2** and
+**REST Container Registry 0.3.2** by full Git commit URL and package hash.
 This patch updates dependency pins only; public APIs and tracing behavior
 are unchanged.
 
@@ -250,7 +250,7 @@ var client = try acr.ContainerRegistryClient.init(allocator, registry_endpoint, 
     .instrumentation = .{
         .provider = tracer_provider,
         .scope_name = "azure_sdk_container_registry",
-        .scope_version = "0.3.1",
+        .scope_version = "0.3.2",
         .namespace = "Microsoft.ContainerRegistry",
         // .parent_context = default_parent,
     },

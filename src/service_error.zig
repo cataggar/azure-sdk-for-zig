@@ -230,5 +230,5 @@ fn hasDeinit(comptime T: type) bool {
     if (@typeInfo(T) != .@"struct") return false;
     if (!@hasDecl(T, "deinit")) return false;
     const info = @typeInfo(@TypeOf(T.deinit));
-    return info == .@"fn" and info.@"fn".params.len == 1;
+    return info == .@"fn" and info.@"fn".param_types.len == 1;
 }

@@ -70,7 +70,7 @@ const ScriptedTransport = struct {
     allocator: std.mem.Allocator,
     actions: []const TestAction,
     call_count: usize = 0,
-    captures: [64]TestCapture = [_]TestCapture{.{}} ** 64,
+    captures: [64]TestCapture = @splat(.{}),
     finish_count: usize = 0,
     abort_count: usize = 0,
     deinit_count: usize = 0,

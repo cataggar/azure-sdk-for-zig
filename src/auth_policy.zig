@@ -742,7 +742,7 @@ pub const ChallengeAuthenticationPolicy = struct {
         if (!std.mem.eql(u8, path, "/oauth2/token")) return error.InvalidChallengeRealm;
 
         var host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
-        const realm_host = realm_uri.getHost(&host_buffer) catch
+        const realm_host = std.Io.net.HostName.fromUri(realm_uri, &host_buffer) catch
             return error.InvalidChallengeRealm;
         if (!serviceMatchesOrigin(
             challenge.service,
@@ -1479,7 +1479,7 @@ fn trustedOriginFromUrl(
     if (path.len != 0 and !std.mem.eql(u8, path, "/"))
         return error.InvalidExpectedOrigin;
     var host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
-    const host = uri.getHost(&host_buffer) catch return error.InvalidExpectedOrigin;
+    const host = std.Io.net.HostName.fromUri(uri, &host_buffer) catch return error.InvalidExpectedOrigin;
     return .{
         .host = try allocator.dupe(u8, host.bytes),
         .port = effectiveHttpsPort(uri),
@@ -1514,7 +1514,7 @@ fn validateTrustedHttpsUrl(
         return error.InvalidUrl;
     }
     var host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
-    const host = uri.getHost(&host_buffer) catch return error.InvalidUrl;
+    const host = std.Io.net.HostName.fromUri(uri, &host_buffer) catch return error.InvalidUrl;
     const port = effectiveHttpsPort(uri);
     for (trusted_origins) |origin| {
         if (origin.port == port and
