@@ -83,7 +83,7 @@ pub fn build(b: *std.Build) void {
     examples_step.dependOn(&complete_sas_upload.step);
     test_step.dependOn(&complete_sas_upload.step);
     const run_complete_sas_upload = b.addRunArtifact(complete_sas_upload);
-    if (b.args) |args| run_complete_sas_upload.addArgs(args);
+    run_complete_sas_upload.addPassthruArgs();
     const complete_sas_upload_step = b.step(
         "complete-sas-upload",
         "Upload a file through a complete Blob SAS URL",
@@ -105,7 +105,7 @@ pub fn build(b: *std.Build) void {
     examples_step.dependOn(&list_live.step);
     test_step.dependOn(&list_live.step);
     const run_list_live = b.addRunArtifact(list_live);
-    if (b.args) |args| run_list_live.addArgs(args);
+    run_list_live.addPassthruArgs();
     const list_live_step = b.step(
         "list-live",
         "Live: list containers and blobs via AAD token",
@@ -127,7 +127,7 @@ pub fn build(b: *std.Build) void {
     examples_step.dependOn(&conv_live.step);
     test_step.dependOn(&conv_live.step);
     const run_conv_live = b.addRunArtifact(conv_live);
-    if (b.args) |args| run_conv_live.addArgs(args);
+    run_conv_live.addPassthruArgs();
     const conv_live_step = b.step(
         "blob-convenience-live",
         "Live: exists + auto-chunking upload + download round trip via AAD token",
