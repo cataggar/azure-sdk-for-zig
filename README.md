@@ -7,13 +7,13 @@ Azure Event Hubs clients:
 - `Processor`
 - [`checkpoint_store_blob`](checkpoint_store_blob/README.md)
 
-Package version **0.7.1**, release branch `sdk/eventhubs`. This patch pins
-published Core 0.4.1 (`2c95f65be96b5ef48a50671de33e9e0926c624cb`),
-Messaging Common 0.4.1 (`2abee8f00c54e11877034783997434da6c90208a`), and
-Blobs 0.4.1 (`fb8f312f4d4672174a6cafafc3c0b82a1838a4a0`) with one canonical
-Core identity. The AMQP 0.5.2 pin and protocol APIs are unchanged. The manifest
-remains the source of the package version, user agent, and AMQP open-property
-version.
+Package version **0.7.2**, release branch `sdk/eventhubs`. This patch pins
+published Core 0.4.2 (`7ddae016914df9ba34f5f0c6705ea83beacd6a43`),
+Messaging Common 0.4.2 (`a1e19f37aaf4e5f0cc6b11fa89bf954ff4e2d826`),
+Blobs 0.4.2 (`8d48b3f26c3dff6c1bd4e76ecb45719b41d0d893`), and
+AMQP 0.5.3 (`6483021176e4f8fb93b3b9a2ecb95703e3ba2bd2`) with one canonical
+Core identity. The manifest remains the source of the package version, user
+agent, and AMQP open-property version.
 
 ## Optional checkpoint HTTP tracing
 

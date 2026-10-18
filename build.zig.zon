@@ -1,28 +1,28 @@
 .{
     .name = .azure_sdk_eventhubs,
-    .version = "0.7.1",
+    .version = "0.7.2",
     .fingerprint = 0xcb7772a1125a8d42,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .azure_sdk_core = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#2c95f65be96b5ef48a50671de33e9e0926c624cb",
-            .hash = "azure_sdk_core-0.4.1-eFY0EpbrCgAKh2uJJ-DguKP7zx8Ywuf1UdP7HkJ_9CmI",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#7ddae016914df9ba34f5f0c6705ea83beacd6a43",
+            .hash = "azure_sdk_core-0.4.2-eFY0ErHsCgCVUEhCkETDe_QacW0t4f8OSdQhxgtOjTp_",
         },
         .azure_sdk_messaging_common = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#2abee8f00c54e11877034783997434da6c90208a",
-            .hash = "azure_sdk_messaging_common-0.4.1-YklmSg6tAAAhUdf9gXfGEG52kyn5gZpc5V6LxbrQ7iVX",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#a1e19f37aaf4e5f0cc6b11fa89bf954ff4e2d826",
+            .hash = "azure_sdk_messaging_common-0.4.2-YklmSg6tAADNZwkwlOfoMTTOMOM804QzvsPLoIq-oaU4",
         },
         .azure_sdk_storage_blobs = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#fb8f312f4d4672174a6cafafc3c0b82a1838a4a0",
-            .hash = "azure_sdk_storage_blobs-0.4.1-I5lGdnAmCwDY9NXYtzIgxOY3jTJGIG9Y5sgR18-b_Vuj",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#8d48b3f26c3dff6c1bd4e76ecb45719b41d0d893",
+            .hash = "azure_sdk_storage_blobs-0.4.2-I5lGdkQmCwA44DYQW57Bew8uhbT72Y9k7IyB218v1VZY",
         },
         .azure_sdk_amqp = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#1f79509cef0bd4a85b913b0cd3457b2e22ba8297",
-            .hash = "azure_sdk_amqp-0.5.2-fUByfyGnCwCTf2xaEDjrtnKyBirhCDq8r7XxFJoYzXfN",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#6483021176e4f8fb93b3b9a2ecb95703e3ba2bd2",
+            .hash = "azure_sdk_amqp-0.5.3-fUByf_fhCwDspbzQ46C0chSnPMXxggExHRhXeHMgj-hb",
         },
         .serde = .{
-            .url = "git+https://github.com/cataggar/serde.zig#73d872776b0361b6fc92f6cecd7ccf2f05e77cdd",
-            .hash = "serde-1.0.1-1DszT1XhDACnteUU3yWahMMjLjkJqB34hwROPIfhZc7l",
+            .url = "git+https://github.com/cataggar/serde.zig#7ecb2014a30b6b1203a94f377836763a03ab0658",
+            .hash = "serde-1.0.1-1DszT3vxDABKmINtLJvIUkhktMnhkZUQIGQUslp73pfb",
         },
     },
     .paths = .{

@@ -552,7 +552,7 @@ pub fn main(init: std.process.Init) !void {
     defer allocator.free(send_eight_script);
 
     std.debug.print("Event Hubs benchmarks (mode: {s})\n", .{@tagName(builtin.mode)});
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         std.debug.print(
             "  NOTE: Debug build. Re-run with -Doptimize=ReleaseFast for timings that\n" ++
                 "  mean anything; allocation counts are valid in either mode.\n",

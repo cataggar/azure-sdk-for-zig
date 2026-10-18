@@ -1201,7 +1201,7 @@ test "MessageId round-trips through an AMQP value" {
         .{ .string = "id-1" },
         .{ .binary = "\x00\x01\x02" },
         .{ .ulong = 42 },
-        .{ .uuid = [_]u8{7} ** 16 },
+        .{ .uuid = @splat(7) },
     };
     for (cases) |message_id| {
         const decoded = MessageId.fromAmqpValue(message_id.toAmqpValue()).?;
@@ -1246,7 +1246,7 @@ test "non-string property values survive the round trip" {
     try event.setProperty(allocator, "double", .{ .double = 1.5 });
     try event.setProperty(allocator, "bytes", .{ .binary = "\xde\xad" });
     try event.setProperty(allocator, "when", .{ .timestamp = 1617235200000 });
-    try event.setProperty(allocator, "id", .{ .uuid = [_]u8{3} ** 16 });
+    try event.setProperty(allocator, "id", .{ .uuid = @splat(3) });
     try event.setProperty(allocator, "nothing", .null);
 
     var message = try event.toAmqpMessage(allocator);
@@ -1258,7 +1258,7 @@ test "non-string property values survive the round trip" {
     try std.testing.expectEqual(@as(f64, 1.5), decoded.properties().get("double").?.double);
     try std.testing.expectEqualStrings("\xde\xad", decoded.properties().get("bytes").?.binary);
     try std.testing.expectEqual(@as(i64, 1617235200000), decoded.properties().get("when").?.timestamp);
-    try std.testing.expectEqualSlices(u8, &[_]u8{3} ** 16, &decoded.properties().get("id").?.uuid);
+    try std.testing.expectEqualSlices(u8, &@as([16]u8, @splat(3)), &decoded.properties().get("id").?.uuid);
     try std.testing.expectEqual(AmqpValue.null, decoded.properties().get("nothing").?);
 }
 
@@ -1458,7 +1458,7 @@ test "correlation id round-trips every AMQP representation" {
         .{ .string = "corr" },
         .{ .binary = "\x01\x02" },
         .{ .ulong = 900 },
-        .{ .uuid = [_]u8{9} ** 16 },
+        .{ .uuid = @splat(9) },
     };
     for (cases) |correlation_id| {
         var event = EventData.init("body");
