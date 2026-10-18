@@ -728,7 +728,7 @@ const TestCryptoProvider = struct {
 const TestWipeAllocator = struct {
     backing: std.mem.Allocator,
     free_count: usize = 0,
-    freed_was_zero: [16]bool = [_]bool{false} ** 16,
+    freed_was_zero: [16]bool = @splat(false),
 
     const vtable: std.mem.Allocator.VTable = .{
         .alloc = &alloc,
@@ -834,7 +834,7 @@ test "Shared Key matches Azure SDK arbitrary x-ms header vector" {
 
     const expected_string =
         "GET\n" ++
-        "\n" ** 11 ++
+        &@as([11:0]u8, @splat('\n')) ++
         "x-ms-blob-content-md5:2OD7XGeI0jSOrsBn8ZwHTw==\n" ++
         "x-ms-client-request-id:8f978611-738a-4cd4-a318-33b2f31068d9\n" ++
         "x-ms-creation-time:Tue, 25 Oct 2022 16:47:17 GMT\n" ++
@@ -903,9 +903,9 @@ test "Shared Key matches authoritative punctuation header ordering vector" {
 
     const expected_string =
         "GET\n" ++
-        "\n" ** 5 ++
+        &@as([5:0]u8, @splat('\n')) ++
         "Fri, 26 Jun 2015 23:39:12 GMT\n" ++
-        "\n" ** 5 ++
+        &@as([5:0]u8, @splat('\n')) ++
         "x-ms-meta-a!z:bang\n" ++
         "x-ms-meta-a#z:hash\n" ++
         "x-ms-meta-a$z:dollar\n" ++

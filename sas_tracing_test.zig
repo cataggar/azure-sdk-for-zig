@@ -128,10 +128,10 @@ fn capturedHeader(mock: *const core.http.MockTransport, name: []const u8) ?[]con
 }
 
 test "SAS send public options expose tracing only and package version follows manifest" {
-    const fields = @typeInfo(sas.SendOptions).@"struct".fields;
-    try std.testing.expectEqual(@as(usize, 1), fields.len);
-    try std.testing.expectEqualStrings("instrumentation", fields[0].name);
-    try std.testing.expect(fields[0].type == ?core.tracing.InstrumentationOptions);
+    const struct_info = @typeInfo(sas.SendOptions).@"struct";
+    try std.testing.expectEqual(@as(usize, 1), struct_info.field_names.len);
+    try std.testing.expectEqualStrings("instrumentation", struct_info.field_names[0]);
+    try std.testing.expect(struct_info.field_types[0] == ?core.tracing.InstrumentationOptions);
     try std.testing.expect((sas.SendOptions{}).instrumentation == null);
     try std.testing.expectEqualStrings(@import("build.zig.zon").version, @import("root.zig").version);
 }
