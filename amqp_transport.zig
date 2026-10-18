@@ -46,7 +46,7 @@ fn testingRuntime() core.http.HttpRuntime {
 }
 
 /// Version reported to the service in the `open` properties.
-pub const sdk_version = "0.3.1";
+pub const sdk_version = "0.3.2";
 
 /// The product half of the user agent, matching the other SDKs' shape.
 pub const user_agent_product = "azsdk-zig-servicebus";
@@ -2158,11 +2158,11 @@ test "the user agent leads with the application id when there is one" {
 
     const plain = try (ConnectionOptions{}).userAgent(allocator);
     defer allocator.free(plain);
-    try testing.expect(std.mem.startsWith(u8, plain, "azsdk-zig-servicebus/0.3.1"));
+    try testing.expect(std.mem.startsWith(u8, plain, "azsdk-zig-servicebus/0.3.2"));
 
     const tagged = try (ConnectionOptions{ .application_id = "contoso-app" }).userAgent(allocator);
     defer allocator.free(tagged);
-    try testing.expect(std.mem.startsWith(u8, tagged, "contoso-app azsdk-zig-servicebus/0.3.1"));
+    try testing.expect(std.mem.startsWith(u8, tagged, "contoso-app azsdk-zig-servicebus/0.3.2"));
 }
 
 test "a connection string is parsed once and yields its entity path" {
@@ -2775,8 +2775,9 @@ test "a received message outlives the delivery it was decoded from" {
     try scriptEntityReceiver(&h, allocator, "orders");
     // The second delivery is much larger than the first, so a borrowed slice
     // would be overwritten rather than left readable by luck.
+    const second_body: [240]u8 = @splat('s');
     try pushMessage(h.peer(), allocator, 2, 1, "tag-a", "first", 1);
-    try pushMessage(h.peer(), allocator, 2, 2, "tag-bbbbbbbbbbbbbbbb", "second" ** 40, 2);
+    try pushMessage(h.peer(), allocator, 2, 2, "tag-bbbbbbbbbbbbbbbb", &second_body, 2);
 
     try h.start(.{});
 
@@ -2789,7 +2790,7 @@ test "a received message outlives the delivery it was decoded from" {
     try testing.expectEqual(@as(usize, 2), batch.count());
     try testing.expectEqualStrings("first", batch.messages[0].body);
     try testing.expectEqualStrings("tag-a", batch.messages[0].delivery_tag.?);
-    try testing.expectEqualStrings("second" ** 40, batch.messages[1].body);
+    try testing.expectEqualStrings(&second_body, batch.messages[1].body);
 }
 
 test "settling a batch costs one disposition, not one per message" {
@@ -4096,7 +4097,7 @@ test "a lock the broker has already released is reported as lost, not as a failu
 
     try h.start(.{});
 
-    const tag = [_]u8{0} ** 16;
+    const tag: [16]u8 = @splat(0);
     try testing.expectError(error.MessageLockLost, h.transport.renewMessageLock(allocator, .{
         .body = "x",
         .entity = "orders",
@@ -4128,7 +4129,7 @@ test "a delivery tag that is not a lock token is refused before anything is sent
     }));
     try testing.expectError(error.MissingEntity, h.transport.renewMessageLock(allocator, .{
         .body = "x",
-        .delivery_tag = &[_]u8{0} ** 16,
+        .delivery_tag = &@as([16]u8, @splat(0)),
     }));
 }
 

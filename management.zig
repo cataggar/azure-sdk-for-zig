@@ -325,7 +325,7 @@ test "a delivery tag that is not sixteen bytes is not a lock token" {
     // arrived by some other route may not, and a short read here would be a
     // buffer overrun rather than a refusal.
     try testing.expectError(error.InvalidLockToken, lockTokenFromDeliveryTag("short"));
-    try testing.expectError(error.InvalidLockToken, lockTokenFromDeliveryTag(&[_]u8{0} ** 17));
+    try testing.expectError(error.InvalidLockToken, lockTokenFromDeliveryTag(&@as([17]u8, @splat(0))));
 }
 
 test "the schedule body carries every message whole, under the keys the broker reads" {
@@ -387,11 +387,11 @@ test "sequence numbers and lock tokens go out as typed arrays, not lists" {
     try testing.expect(numbers == .array);
     try testing.expectEqual(@as(i64, 7), numbers.array[0].long);
 
-    const renew = try renewLockBody(a, &.{ [_]u8{1} ** 16, [_]u8{2} ** 16 });
+    const renew = try renewLockBody(a, &.{ @splat(1), @splat(2) });
     const tokens = bodyField(.{ .value = renew }, "lock-tokens").?;
     try testing.expect(tokens == .array);
     try testing.expect(tokens.array[0] == .uuid);
-    try testing.expectEqualSlices(u8, &[_]u8{2} ** 16, &tokens.array[1].uuid);
+    try testing.expectEqualSlices(u8, &@as([16]u8, @splat(2)), &tokens.array[1].uuid);
 }
 
 test "a peek asks by sequence number as a long and by count as an int" {
