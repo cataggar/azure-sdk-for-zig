@@ -1,20 +1,20 @@
 .{
     .name = .azure_sdk_storage_blobs,
-    .version = "0.4.1",
+    .version = "0.4.2",
     .fingerprint = 0xd9bbf92976469923,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .azure_sdk_core = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#2c95f65be96b5ef48a50671de33e9e0926c624cb",
-            .hash = "azure_sdk_core-0.4.1-eFY0EpbrCgAKh2uJJ-DguKP7zx8Ywuf1UdP7HkJ_9CmI",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#7ddae016914df9ba34f5f0c6705ea83beacd6a43",
+            .hash = "azure_sdk_core-0.4.2-eFY0ErHsCgCVUEhCkETDe_QacW0t4f8OSdQhxgtOjTp_",
         },
         .azure_sdk_storage_common = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#c422891793d33b8078f032167fe8fd42ecf05bcc",
-            .hash = "azure_sdk_storage_common-0.4.1-JzoreFOJAQCzO8pA3xms3n0gCloSYeSj52Vh490MaXle",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#ea54ab76f653883bb133def9859fbccb7b953964",
+            .hash = "azure_sdk_storage_common-0.4.2-JzoreKmJAQD19e_gytlhJcFD5wtjpptn22SMouFWpIY1",
         },
         .serde = .{
-            .url = "git+https://github.com/cataggar/serde.zig#73d872776b0361b6fc92f6cecd7ccf2f05e77cdd",
-            .hash = "serde-1.0.1-1DszT1XhDACnteUU3yWahMMjLjkJqB34hwROPIfhZc7l",
+            .url = "git+https://github.com/cataggar/serde.zig#7ecb2014a30b6b1203a94f377836763a03ab0658",
+            .hash = "serde-1.0.1-1DszT3vxDABKmINtLJvIUkhktMnhkZUQIGQUslp73pfb",
         },
     },
     .paths = .{
