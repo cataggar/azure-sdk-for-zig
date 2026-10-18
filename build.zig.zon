@@ -1,17 +1,17 @@
 .{
     .name = .azure_sdk_core_httpx,
-    .version = "0.1.0",
+    .version = "0.1.1",
     .fingerprint = 0xb29304bb7a167c35,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .azure_sdk_core = .{
-            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#2c95f65be96b5ef48a50671de33e9e0926c624cb",
-            .hash = "azure_sdk_core-0.4.1-eFY0EpbrCgAKh2uJJ-DguKP7zx8Ywuf1UdP7HkJ_9CmI",
+            .url = "git+https://github.com/cataggar/azure-sdk-for-zig.git#7ddae016914df9ba34f5f0c6705ea83beacd6a43",
+            .hash = "azure_sdk_core-0.4.2-eFY0ErHsCgCVUEhCkETDe_QacW0t4f8OSdQhxgtOjTp_",
         },
         // Released HTTPX 0.2.0, pinned to its reviewed release commit.
         .httpx = .{
-            .url = "git+https://github.com/cataggar/httpx.zig#2d418ce2ebbd8cbb0d930e80feeac0e45560f0c9",
-            .hash = "httpx-0.2.0-8qj2eonLMwDuDDJxDVzoax9VY68Lb0YjT_AtwZBAbqwV",
+            .url = "git+https://github.com/cataggar/httpx.zig#1f7d2690a47734dbf9e99a474f9cb7b92ef7690a",
+            .hash = "httpx-0.2.0-8qj2enHSMwCFoghRwKnSCZkMj0hb-8zdWv_Wa3Vg98Gs",
         },
     },
     .paths = .{

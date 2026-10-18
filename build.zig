@@ -96,7 +96,7 @@ pub fn build(b: *std.Build) void {
             }),
         });
         const run_probe = b.addRunArtifact(probe);
-        if (b.args) |args| run_probe.addArgs(args);
+        run_probe.addPassthruArgs();
         const public_step = b.step("qualify-public-https", "Opt-in unauthenticated Azure HTTPS with canonical system trust");
         public_step.dependOn(&run_probe.step);
     }
