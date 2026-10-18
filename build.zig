@@ -53,7 +53,7 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&executable.step);
 
         const run = b.addRunArtifact(executable);
-        if (b.args) |args| run.addArgs(args);
+        run.addPassthruArgs();
         const run_step = b.step(example.step, example.description);
         run_step.dependOn(&run.step);
     }
