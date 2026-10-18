@@ -53,7 +53,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const run_list_private_clouds = b.addRunArtifact(list_private_clouds);
-    if (b.args) |args| run_list_private_clouds.addArgs(args);
+    run_list_private_clouds.addPassthruArgs();
     const list_private_clouds_step = b.step(
         "list-private-clouds",
         "List Microsoft.AVS private clouds in a subscription",
@@ -75,7 +75,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const run_list_clusters = b.addRunArtifact(list_clusters);
-    if (b.args) |args| run_list_clusters.addArgs(args);
+    run_list_clusters.addPassthruArgs();
     const list_clusters_step = b.step(
         "list-clusters",
         "List clusters in a private cloud",
