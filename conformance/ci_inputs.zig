@@ -42,12 +42,23 @@ fn validate(expected: []const u8, actual: []const u8, provider: Manifest, adapte
         return error.HttpxDependencyMismatch;
 }
 
-fn load(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !Manifest {
-    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(128 * 1024));
-    defer allocator.free(bytes);
-    const text = try allocator.dupeZ(u8, bytes);
-    defer allocator.free(text);
-    return std.zon.parse.fromSliceAlloc(Manifest, allocator, text, null, .{ .ignore_unknown_fields = true });
+fn parseManifest(gpa: std.mem.Allocator, arena: std.mem.Allocator, text: [:0]const u8) !Manifest {
+    var diagnostics: std.zon.parse.Diagnostics = undefined;
+    return std.zon.parse.fromSlice(Manifest, .{
+        .gpa = gpa,
+        .arena = arena,
+        .source = text,
+        .diagnostics = &diagnostics,
+        .ignore_unknown_fields = true,
+    });
+}
+
+fn load(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, path: []const u8) !Manifest {
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(128 * 1024));
+    defer gpa.free(bytes);
+    const text = try gpa.dupeSentinel(u8, bytes, 0);
+    defer gpa.free(text);
+    return parseManifest(gpa, arena, text);
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -56,15 +67,14 @@ pub fn main(init: std.process.Init) !void {
     defer args_arena.deinit();
     const args = try init.minimal.args.toSlice(args_arena.allocator());
     if (args.len != 5) return error.ExpectedProviderManifestAdapterManifestExpectedCommitActualCommit;
-    const provider = try load(allocator, init.io, args[1]);
-    defer std.zon.parse.free(allocator, provider);
-    const adapter = try load(allocator, init.io, args[2]);
-    defer std.zon.parse.free(allocator, adapter);
+    const provider = try load(allocator, args_arena.allocator(), init.io, args[1]);
+    const adapter = try load(allocator, args_arena.allocator(), init.io, args[2]);
     try validate(args[3], args[4], provider, adapter);
     std.debug.print("verified exact SDK checkout and matching immutable Core/HTTPX URL+hash inputs\n", .{});
 }
 
-const commit = "a" ** 40;
+const commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const other_commit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const fixture: Manifest = .{ .dependencies = .{
     .azure_sdk_core = .{ .url = "git+https://github.com/example/core#" ++ commit, .hash = "core-fixture" },
     .httpx = .{ .url = "git+https://github.com/example/httpx#" ++ commit, .hash = "httpx-fixture" },
@@ -73,7 +83,7 @@ const fixture: Manifest = .{ .dependencies = .{
 test "CI requires explicit immutable adapter input and exact checkout" {
     try std.testing.expectError(error.PendingImmutableSdkAdapterRelease, validate("", commit, fixture, fixture));
     try std.testing.expectError(error.PendingImmutableSdkAdapterRelease, validate("main", commit, fixture, fixture));
-    try std.testing.expectError(error.UnexpectedSdkAdapterCheckout, validate(commit, "b" ** 40, fixture, fixture));
+    try std.testing.expectError(error.UnexpectedSdkAdapterCheckout, validate(commit, other_commit, fixture, fixture));
     try validate(commit, commit, fixture, fixture);
 }
 
@@ -85,7 +95,7 @@ test "CI rejects differing Core and HTTPX package identities" {
     other.dependencies.azure_sdk_core.hash = "different";
     try std.testing.expectError(error.CoreDependencyMismatch, validate(commit, commit, fixture, other));
     other = fixture;
-    other.dependencies.httpx.url = "git+https://github.com/example/httpx#" ++ "b" ** 40;
+    other.dependencies.httpx.url = "git+https://github.com/example/httpx#" ++ other_commit;
     try std.testing.expectError(error.HttpxDependencyMismatch, validate(commit, commit, fixture, other));
     other.dependencies.httpx.url = "git+https://github.com/example/httpx#main";
     try std.testing.expectError(error.NonImmutableDependency, validate(commit, commit, fixture, other));
@@ -93,6 +103,8 @@ test "CI rejects differing Core and HTTPX package identities" {
 
 test "CI reads ZON manifests without accepting path dependencies" {
     const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
     const text =
         \\.{
         \\ .name = .test_package,
@@ -102,15 +114,16 @@ test "CI reads ZON manifests without accepting path dependencies" {
         \\ },
         \\}
     ;
-    const parsed = try std.zon.parse.fromSliceAlloc(Manifest, allocator, text, null, .{ .ignore_unknown_fields = true });
-    defer std.zon.parse.free(allocator, parsed);
+    const parsed = try parseManifest(allocator, arena.allocator(), text);
     try validate(commit, commit, fixture, parsed);
     const local = ".{ .dependencies = .{ .azure_sdk_core = .{ .path = \"../core\" }, .httpx = .{ .path = \"../httpx\" } } }";
-    try std.testing.expectError(error.ParseZon, std.zon.parse.fromSliceAlloc(Manifest, allocator, local, null, .{ .ignore_unknown_fields = true }));
+    try std.testing.expectError(error.ParseZon, parseManifest(allocator, arena.allocator(), local));
 }
 
 test "CI rejects local paths even when immutable pin fields are also present" {
     const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
     const text =
         \\.{
         \\ .dependencies = .{
@@ -119,8 +132,7 @@ test "CI rejects local paths even when immutable pin fields are also present" {
         \\ },
         \\}
     ;
-    const parsed = try std.zon.parse.fromSliceAlloc(Manifest, allocator, text, null, .{ .ignore_unknown_fields = true });
-    defer std.zon.parse.free(allocator, parsed);
+    const parsed = try parseManifest(allocator, arena.allocator(), text);
     try std.testing.expectError(error.NonImmutableDependency, validate(commit, commit, fixture, parsed));
     try std.testing.expectError(error.NonImmutableDependency, validate(commit, commit, parsed, fixture));
 }

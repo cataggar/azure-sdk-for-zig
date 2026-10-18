@@ -216,7 +216,7 @@ fn writeFrame(connection: *engine.Connection, frame_type: http.HTTP2FrameType, f
 fn requestKeyUpdate(connection: *engine.Connection) !void {
     // The peer uses HTTPX's existing provider-backed HKDF, not a test crypto implementation.
     try testing.expectEqual(std.crypto.tls.CipherSuite.AES_128_GCM_SHA256, connection.cipher_suite.?);
-    const update = [_]u8{ @intFromEnum(std.crypto.tls.HandshakeType.key_update), 0, 0, 1, 1 };
+    const update = [_]u8{ @backingInt(std.crypto.tls.HandshakeType.key_update), 0, 0, 1, 1 };
     try connection.writeEncryptedRecord(&update, .handshake);
     const provider = connection.cryptoProvider();
     var secret = try engine.hkdfExpandLabel(provider, connection.app_write_secret.?[0..32], "traffic upd", "", 32);

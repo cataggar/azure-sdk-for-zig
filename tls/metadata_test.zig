@@ -26,7 +26,7 @@ test "ABI2 MD5 permission is independent of native legacy availability and SHA1"
             });
             const provider = owner.provider();
             try testing.expectEqual(@as(u32, 2), provider.abi_version);
-            try testing.expectEqual(@as(u8, 4), @intFromEnum(p.HashAlgorithm.md5));
+            try testing.expectEqual(@as(u8, 4), @backingInt(p.HashAlgorithm.md5));
             const caps = try provider.capabilities();
             try testing.expectEqual(md5, caps.supportsHash(.md5));
             try testing.expectEqual(sha1, caps.supportsHash(.sha1));
@@ -68,7 +68,7 @@ test "ABI2 MD5 never permits keyed operations even with all capability bits or e
         table.capabilities = AllBits.capabilities;
         provider.vtable = &table;
         for ([_]usize{ 0, 16 }) |length| {
-            var storage = [_]u8{0xa5} ** 16;
+            var storage: [16]u8 = @splat(0xa5);
             const output = storage[0..length];
             try testing.expectError(error.UnsupportedAlgorithm, provider.hmac(.md5, "key", &.{}, output));
             try testing.expectError(error.UnsupportedAlgorithm, provider.hkdfExtract(.md5, "salt", &.{}, output));
@@ -111,7 +111,7 @@ test "ABI2 native MD5 snapshots clone transfer and exact direct or facade length
     try clone.snapshot(&digest);
     try expectMd5("a different", &digest);
     for ([_]usize{ 0, 15, 17 }) |length| {
-        var storage = [_]u8{0xa5} ** 17;
+        var storage: [17]u8 = @splat(0xa5);
         const output = storage[0..length];
         try testing.expectError(error.InvalidDigestLength, hash.snapshot(output));
         try testing.expect(std.mem.allEqual(u8, &storage, 0xa5));
@@ -134,7 +134,7 @@ test "ABI2 native MD5 streams with no scratch or post-create allocation" {
     var fail = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 2 });
     var hash = try owner.provider().hashCreate(fail.allocator(), .md5);
     defer hash.deinit();
-    const chunk = [_]u8{'a'} ** 1000;
+    const chunk: [1000]u8 = @splat('a');
     for (0..1000) |_| try hash.update(&chunk);
     var digest: [16]u8 = undefined;
     try hash.snapshot(&digest);
@@ -284,8 +284,8 @@ test "ABI2 MD5 partial create clone and every metadata provider error clean up a
     var adapter = httpx.CryptoCertificateVerifier.init(provider);
     const descriptor = adapter.metadataHasher(.{ .allow_md5_identifiers = true });
     var wipe: symcrypt.asymmetric.testing.WipeAllocator = .{ .backing = testing.allocator };
-    inline for (@typeInfo(p.ProviderError).error_set.?) |failure| {
-        Fault.failure = @field(p.ProviderError, failure.name);
+    inline for (@typeInfo(p.ProviderError).error_set.error_names.?) |failure_name| {
+        Fault.failure = @field(p.ProviderError, failure_name);
         inline for (.{ .create, .update, .snapshot }) |stage| {
             Fault.stage = stage;
             var output: [16]u8 = @splat(0xa5);

@@ -34,8 +34,8 @@ test "SHA1 identifier hashing requires opt in without enabling security algorith
     try testing.expect(!caps.supportsSign(.rsa_pkcs1_sha1));
     try testing.expect(!caps.supportsVerify(.rsa_pkcs1_sha1));
     try testing.expect(!caps.supportsHash(.md5));
-    var output = [_]u8{0xaa} ** 20;
-    const prk = [_]u8{1} ** 20;
+    var output: [20]u8 = @splat(0xaa);
+    const prk: [20]u8 = @splat(1);
     try testing.expectError(error.UnsupportedAlgorithm, provider.hmac(.sha1, "key", &.{"metadata"}, &output));
     try testing.expectError(error.UnsupportedAlgorithm, provider.hkdfExtract(.sha1, "salt", &.{"metadata"}, &output));
     try testing.expectError(error.UnsupportedAlgorithm, provider.hkdfExpand(.sha1, &prk, &.{"info"}, &output));
@@ -49,7 +49,7 @@ test "SHA1 identifier hashing requires opt in without enabling security algorith
         .encoding = .rsa_pkcs1_der,
         .bytes = &.{},
     }, &.{"metadata"}, &.{}));
-    try testing.expectEqualSlices(u8, &([_]u8{0xaa} ** 20), &output);
+    try testing.expectEqualSlices(u8, &@as([20]u8, @splat(0xaa)), &output);
 }
 
 test "native SHA1 identifiers snapshot clone and require exact digest buffers" {
@@ -71,12 +71,12 @@ test "native SHA1 identifiers snapshot clone and require exact digest buffers" {
     std.crypto.hash.Sha1.hash("a different", &expected, .{});
     try testing.expectEqualSlices(u8, &expected, &digest);
 
-    var short = [_]u8{0xaa} ** 19;
-    var long = [_]u8{0xaa} ** 21;
+    var short: [19]u8 = @splat(0xaa);
+    var long: [21]u8 = @splat(0xaa);
     try testing.expectError(error.InvalidDigestLength, state.snapshot(&short));
     try testing.expectError(error.InvalidDigestLength, state.snapshot(&long));
-    try testing.expectEqualSlices(u8, &([_]u8{0xaa} ** 19), &short);
-    try testing.expectEqualSlices(u8, &([_]u8{0xaa} ** 21), &long);
+    try testing.expectEqualSlices(u8, &@as([19]u8, @splat(0xaa)), &short);
+    try testing.expectEqualSlices(u8, &@as([21]u8, @splat(0xaa)), &long);
     try state.snapshot(&digest);
     try testing.expectEqualSlices(u8, &hex("a9993e364706816aba3e25717850c26c9cd0d89d"), &digest);
 }
@@ -96,9 +96,9 @@ test "SHA1 identifier snapshot failures wipe outputs without fallback" {
     var state = try provider.hashCreate(testing.allocator, .sha1);
     defer state.deinit();
     try state.update("metadata");
-    var digest = [_]u8{0xaa} ** 20;
+    var digest: [20]u8 = @splat(0xaa);
     try testing.expectError(error.InternalError, state.snapshot(&digest));
-    try testing.expectEqualSlices(u8, &([_]u8{0} ** 20), &digest);
+    try testing.expectEqualSlices(u8, &@as([20]u8, @splat(0)), &digest);
 }
 
 test "SHA1 identifier hashing streams without further allocation" {
@@ -109,7 +109,7 @@ test "SHA1 identifier hashing streams without further allocation" {
     var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 2 });
     var hash = try owner.provider().hashCreate(failing.allocator(), .sha1);
     defer hash.deinit();
-    const chunk = [_]u8{'a'} ** 1000;
+    const chunk: [1000]u8 = @splat('a');
     for (0..1000) |_| try hash.update(&chunk);
     var digest: [20]u8 = undefined;
     try hash.snapshot(&digest);
@@ -177,7 +177,7 @@ test "RFC5869 HKDF and independent OpenSSL TLS12 PRF vectors" {
     const provider = owner.provider();
     var prk: [32]u8 = undefined;
     var output: [42]u8 = undefined;
-    const ikm = [_]u8{0x0b} ** 22;
+    const ikm: [22]u8 = @splat(0x0b);
     const salt = hex("000102030405060708090a0b0c");
     const info = hex("f0f1f2f3f4f5f6f7f8f9");
     try provider.hkdfExtract(.sha256, &salt, &.{ ikm[0..11], ikm[11..] }, &prk);
@@ -198,8 +198,8 @@ test "all advertised AEADs interoperate and wipe disjoint and in-place tag failu
             .aes_256_gcm => std.crypto.aead.aes_gcm.Aes256Gcm,
             .chacha20_poly1305 => std.crypto.aead.chacha_poly.ChaCha20Poly1305,
         };
-        const key = [_]u8{0x42} ** Aead.key_length;
-        const nonce = [_]u8{0x24} ** Aead.nonce_length;
+        const key: [Aead.key_length]u8 = @splat(0x42);
+        const nonce: [Aead.nonce_length]u8 = @splat(0x24);
         const message = "record bytes";
         var ciphertext: [message.len]u8 = undefined;
         var tag: [16]u8 = undefined;
@@ -214,9 +214,9 @@ test "all advertised AEADs interoperate and wipe disjoint and in-place tag failu
         try testing.expectEqualStrings(message, &plaintext);
         tag[0] ^= 1;
         try testing.expectError(error.AuthenticationFailed, provider.aeadOpen(algorithm, &key, &nonce, &.{"AAD"}, &ciphertext, &tag, &plaintext));
-        try testing.expectEqualSlices(u8, &([_]u8{0} ** message.len), &plaintext);
+        try testing.expectEqualSlices(u8, &@as([message.len]u8, @splat(0)), &plaintext);
         try testing.expectError(error.AuthenticationFailed, provider.aeadOpen(algorithm, &key, &nonce, &.{"AAD"}, &ciphertext, &tag, &ciphertext));
-        try testing.expectEqualSlices(u8, &([_]u8{0} ** message.len), &ciphertext);
+        try testing.expectEqualSlices(u8, &@as([message.len]u8, @splat(0)), &ciphertext);
         @memcpy(&plaintext, message);
         try provider.aeadSeal(algorithm, &key, &nonce, &.{"AAD"}, &plaintext, &plaintext, &tag);
         try testing.expectEqualSlices(u8, &expected, &plaintext);
@@ -235,14 +235,14 @@ test "X25519 P256 and P384 agreements interoperate with independent keys" {
         try key.publicKey(&public);
         if (algorithm == .x25519) {
             const X = std.crypto.dh.X25519;
-            const peer = try X.KeyPair.generateDeterministic([_]u8{9} ** X.seed_length);
+            const peer = X.KeyPair.generateDeterministic(@splat(9));
             const expected = try X.scalarmult(peer.secret_key, public);
             try key.agree(&peer.public_key, &actual);
             try testing.expectEqualSlices(u8, &expected, &actual);
         } else {
             const Curve = if (algorithm == .secp256r1) std.crypto.ecc.P256 else std.crypto.ecc.P384;
             const Ecdsa = if (algorithm == .secp256r1) std.crypto.sign.ecdsa.EcdsaP256Sha256 else std.crypto.sign.ecdsa.EcdsaP384Sha384;
-            const peer = try Ecdsa.KeyPair.generateDeterministic([_]u8{9} ** Ecdsa.KeyPair.seed_length);
+            const peer = try Ecdsa.KeyPair.generateDeterministic(@splat(9));
             const point = try Curve.fromSec1(&public);
             const shared = try point.mul(peer.secret_key.bytes, .big);
             const expected = shared.affineCoordinates().x.toBytes(.big);
@@ -256,7 +256,7 @@ test "ECDSA signing owns imported scalar and produces strict independently verif
     var owner = try binding.Provider.init(testing.allocator, .{});
     inline for ([_]p.SignatureScheme{ .ecdsa_secp256r1_sha256, .ecdsa_secp384r1_sha384 }) |scheme| {
         const Ecdsa = if (scheme == .ecdsa_secp256r1_sha256) std.crypto.sign.ecdsa.EcdsaP256Sha256 else std.crypto.sign.ecdsa.EcdsaP384Sha384;
-        var scalar = [_]u8{0} ** Ecdsa.SecretKey.encoded_length;
+        var scalar: [Ecdsa.SecretKey.encoded_length]u8 = @splat(0);
         scalar[scalar.len - 1] = 1;
         const independent = try Ecdsa.KeyPair.fromSecretKey(.{ .bytes = scalar });
         var key = try owner.provider().signingKeyImport(testing.allocator, .{
@@ -288,16 +288,16 @@ test "ECDSA signing owns imported scalar and produces strict independently verif
 
 test "native provider failures propagate without primitive fallback and wipe outputs" {
     var owner = try binding.Provider.init(testing.allocator, .{});
-    var digest = [_]u8{0xaa} ** 32;
+    var digest: [32]u8 = @splat(0xaa);
     symcrypt.testing.failNextHmacCreateAfterAllocation();
     try testing.expectError(error.OutOfMemory, owner.provider().hmac(.sha256, "key", &.{"data"}, &digest));
-    try testing.expectEqualSlices(u8, &([_]u8{0} ** 32), &digest);
-    var ciphertext = [_]u8{0xaa} ** 4;
-    var tag = [_]u8{0xaa} ** 16;
+    try testing.expectEqualSlices(u8, &@as([32]u8, @splat(0)), &digest);
+    var ciphertext: [4]u8 = @splat(0xaa);
+    var tag: [16]u8 = @splat(0xaa);
     symcrypt.testing.failNextAesGcmCreateAfterAllocation();
-    try testing.expectError(error.OutOfMemory, owner.provider().aeadSeal(.aes_128_gcm, &([_]u8{0} ** 16), &([_]u8{0} ** 12), &.{}, "data", &ciphertext, &tag));
-    try testing.expectEqualSlices(u8, &([_]u8{0} ** 4), &ciphertext);
-    try testing.expectEqualSlices(u8, &([_]u8{0} ** 16), &tag);
+    try testing.expectError(error.OutOfMemory, owner.provider().aeadSeal(.aes_128_gcm, &@as([16]u8, @splat(0)), &@as([12]u8, @splat(0)), &.{}, "data", &ciphertext, &tag));
+    try testing.expectEqualSlices(u8, &@as([4]u8, @splat(0)), &ciphertext);
+    try testing.expectEqualSlices(u8, &@as([16]u8, @splat(0)), &tag);
 }
 
 fn allocationFixture(allocator: std.mem.Allocator) !void {
@@ -319,7 +319,7 @@ fn allocationFixture(allocator: std.mem.Allocator) !void {
     try key.publicKey(&public);
     var shared: [32]u8 = undefined;
     try key.agree(&public, &shared);
-    var scalar = [_]u8{0} ** 32;
+    var scalar: [32]u8 = @splat(0);
     scalar[31] = 1;
     var signing = try provider.signingKeyImport(allocator, .{ .algorithm = .ecdsa_p256, .encoding = .raw_secret, .bytes = &scalar });
     defer signing.deinit();
@@ -327,7 +327,7 @@ fn allocationFixture(allocator: std.mem.Allocator) !void {
     _ = try signing.sign(.ecdsa_secp256r1_sha256, &.{"data"}, &signature);
     var ciphertext: [4]u8 = undefined;
     var tag: [16]u8 = undefined;
-    try provider.aeadSeal(.aes_128_gcm, &([_]u8{1} ** 16), &([_]u8{2} ** 12), &.{"aad"}, "data", &ciphertext, &tag);
+    try provider.aeadSeal(.aes_128_gcm, &@as([16]u8, @splat(1)), &@as([12]u8, @splat(2)), &.{"aad"}, "data", &ciphertext, &tag);
 }
 
 test "every injected allocation failure releases partial native and adapter ownership" {
@@ -336,9 +336,9 @@ test "every injected allocation failure releases partial native and adapter owne
 
 test "bounded concatenation rejects excess scratch rather than truncating inputs" {
     var owner = try binding.Provider.init(testing.allocator, .{ .max_scratch_bytes = 3 });
-    var output = [_]u8{0xaa} ** 32;
-    try testing.expectError(error.InvalidInput, owner.provider().hkdfExpand(.sha256, &([_]u8{1} ** 32), &.{ "ab", "cd" }, &output));
-    try testing.expectEqualSlices(u8, &([_]u8{0} ** 32), &output);
+    var output: [32]u8 = @splat(0xaa);
+    try testing.expectError(error.InvalidInput, owner.provider().hkdfExpand(.sha256, &@as([32]u8, @splat(1)), &.{ "ab", "cd" }, &output));
+    try testing.expectEqualSlices(u8, &@as([32]u8, @splat(0)), &output);
     try testing.expect(try owner.provider().constantTimeEqual("same", "same"));
     try testing.expect(!try owner.provider().constantTimeEqual("same", "diff"));
 }
@@ -407,11 +407,11 @@ test "RSA private ownership PKCS1 and PKCS8 import PSS and PKCS1 signatures" {
         .bytes = encoded.bytes(),
     });
     defer key.deinit();
-    var rejected_signature = [_]u8{0xaa} ** 256;
+    var rejected_signature: [256]u8 = @splat(0xaa);
     try testing.expectError(error.UnsupportedAlgorithm, key.sign(.rsa_pkcs1_sha1, &.{"metadata"}, &rejected_signature));
     const provider = owner.provider();
     try testing.expectError(error.UnsupportedAlgorithm, provider.vtable.sign(provider.context, key.raw_handle.?, .rsa_pkcs1_sha1, &.{"metadata"}, &rejected_signature));
-    try testing.expectEqualSlices(u8, &([_]u8{0xaa} ** 256), &rejected_signature);
+    try testing.expectEqualSlices(u8, &@as([256]u8, @splat(0xaa)), &rejected_signature);
     var pkcs8_fields: DerBuilder = .{};
     defer p.secureWipeValue(&pkcs8_fields);
     try pkcs8_fields.integer(&.{0});
@@ -451,12 +451,12 @@ test "RSA private ownership PKCS1 and PKCS8 import PSS and PKCS1 signatures" {
         };
         var output: [256]u8 = undefined;
         const signature = try key.sign(scheme, &.{ "mes", "sage" }, &output);
-        try Signature.concatVerify(256, Signature.fromBytes(256, signature), &.{"message"}, independent, Hash);
+        try Signature.concatVerify(256, &Signature.fromBytes(256, signature), &.{"message"}, independent, Hash);
         const public_key: p.PublicKey = .{ .algorithm = .rsa, .encoding = .rsa_pkcs1_der, .bytes = public.bytes() };
         try owner.provider().verify(scheme, public_key, &.{"message"}, signature);
         try testing.expectError(error.SignatureInvalid, owner.provider().verify(scheme, public_key, &.{"wrong"}, signature));
         _ = try imported_pkcs8.sign(scheme, &.{"message"}, &output);
-        try Signature.concatVerify(256, Signature.fromBytes(256, &output), &.{"message"}, independent, Hash);
+        try Signature.concatVerify(256, &Signature.fromBytes(256, &output), &.{"message"}, independent, Hash);
     }
 }
 
@@ -484,7 +484,7 @@ test "shared borrowed provider supports concurrent independent operations" {
         }
     };
     var owner = try binding.Provider.init(std.heap.page_allocator, .{ .allow_sha1_identifier_hash = true });
-    var results = [_]?p.ProviderError{null} ** 4;
+    var results: [4]?p.ProviderError = @splat(null);
     {
         var threads: [4]std.Thread = undefined;
         var started: usize = 0;
@@ -526,7 +526,7 @@ test "SEC1 and PKCS8 EC imports check curve identifiers and embedded public poin
     var owner = try binding.Provider.init(testing.allocator, .{});
     inline for ([_]p.SignatureScheme{ .ecdsa_secp256r1_sha256, .ecdsa_secp384r1_sha384 }) |scheme| {
         const Ecdsa = if (scheme == .ecdsa_secp256r1_sha256) std.crypto.sign.ecdsa.EcdsaP256Sha256 else std.crypto.sign.ecdsa.EcdsaP384Sha384;
-        var scalar = [_]u8{0} ** Ecdsa.SecretKey.encoded_length;
+        var scalar: [Ecdsa.SecretKey.encoded_length]u8 = @splat(0);
         scalar[scalar.len - 1] = 1;
         const independent = try Ecdsa.KeyPair.fromSecretKey(.{ .bytes = scalar });
         const public = independent.public_key.toUncompressedSec1();
@@ -592,9 +592,9 @@ test "zero X25519 agreement is rejected and wipes output" {
     var owner = try binding.Provider.init(testing.allocator, .{});
     var key = try owner.provider().keyAgreementGenerate(testing.allocator, .x25519);
     defer key.deinit();
-    var output = [_]u8{0xaa} ** 32;
-    try testing.expectError(error.InvalidEncoding, key.agree(&([_]u8{0} ** 32), &output));
-    try testing.expectEqualSlices(u8, &([_]u8{0} ** 32), &output);
+    var output: [32]u8 = @splat(0xaa);
+    try testing.expectError(error.InvalidEncoding, key.agree(&@as([32]u8, @splat(0)), &output));
+    try testing.expectEqualSlices(u8, &@as([32]u8, @splat(0)), &output);
 }
 
 test "handle and scratch allocations are zeroed before release" {

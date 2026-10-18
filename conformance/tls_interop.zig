@@ -55,7 +55,7 @@ fn Observed(comptime Backend: type) type {
         table: p.VTable,
         failure: ?p.Operation = null,
         injected: usize = 0,
-        calls: [std.meta.fields(p.Operation).len]usize = @splat(0),
+        calls: [@typeInfo(p.Operation).@"enum".field_names.len]usize = @splat(0),
 
         fn init(backend: Backend, aead: p.AeadAlgorithm, group: p.KeyAgreementAlgorithm) Self {
             var inner = backend;
@@ -89,11 +89,11 @@ fn Observed(comptime Backend: type) type {
         }
 
         fn count(self: *const Self, operation: p.Operation) usize {
-            return self.calls[@intFromEnum(operation)];
+            return self.calls[@backingInt(operation)];
         }
 
         fn observe(self: *Self, operation: p.Operation) p.ProviderError!void {
-            self.calls[@intFromEnum(operation)] += 1;
+            self.calls[@backingInt(operation)] += 1;
             if (self.failure == operation) {
                 self.injected += 1;
                 return injectedError(operation);

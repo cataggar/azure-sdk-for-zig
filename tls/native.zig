@@ -4,15 +4,7 @@ const p = @import("httpx").crypto_provider;
 
 // These operations exist in the already-pinned native library, but the 0.1.0
 // Zig wrapper does not expose separate HKDF expansion or the TLS PRF.
-pub const c = @cImport({
-    if (@import("builtin").os.tag == .windows) {
-        @cUndef("_MSC_VER");
-        @cDefine("__GNUC__", "4");
-    }
-    @cDefine("SYMCRYPT_ZIG_IMPORT", "1");
-    @cInclude("stddef.h");
-    @cInclude("symcrypt.h");
-});
+pub const c = @import("symcrypt_c_raw");
 
 comptime {
     if (c.SYMCRYPT_CODE_VERSION_API != symcrypt.header_version.api or
