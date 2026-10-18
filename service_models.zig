@@ -559,12 +559,12 @@ test "set policy validation matches SAS identifiers and permission order" {
     );
     try std.testing.expectError(
         error.InvalidSignedIdentifier,
-        validateForSet(&.{.{ .id = "x" ** 65, .access_policy = .{} }}),
+        validateForSet(&.{.{ .id = &@as([65]u8, @splat('x')), .access_policy = .{} }}),
     );
-    try validateForSet(&.{.{ .id = "雪" ** 64, .access_policy = .{} }});
+    try validateForSet(&.{.{ .id = std.mem.asBytes(&@as([64][3]u8, @splat("雪"[0..3].*))), .access_policy = .{} }});
     try std.testing.expectError(
         error.InvalidSignedIdentifier,
-        validateForSet(&.{.{ .id = "雪" ** 65, .access_policy = .{} }}),
+        validateForSet(&.{.{ .id = std.mem.asBytes(&@as([65][3]u8, @splat("雪"[0..3].*))), .access_policy = .{} }}),
     );
     try std.testing.expectError(
         error.InvalidSignedIdentifier,

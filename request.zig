@@ -55,7 +55,7 @@ fn parseEndpoint(endpoint: []const u8) !ParsedEndpoint {
     if (uri.host == null or uri.user != null or uri.password != null or uri.fragment != null)
         return error.InvalidEndpoint;
     var host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
-    const host = uri.getHost(&host_buffer) catch return error.InvalidEndpoint;
+    const host = std.Io.net.HostName.fromUri(uri, &host_buffer) catch return error.InvalidEndpoint;
     if (host.bytes.len == 0) return error.InvalidEndpoint;
 
     var end = base_input.len;
@@ -99,7 +99,7 @@ pub fn validateSasEndpoint(endpoint: []const u8) !void {
 fn validateLocalEmulator(endpoint: []const u8) !void {
     const uri = std.Uri.parse(endpoint) catch return error.InvalidEndpoint;
     var host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
-    const host = uri.getHost(&host_buffer) catch return error.InvalidEndpoint;
+    const host = std.Io.net.HostName.fromUri(uri, &host_buffer) catch return error.InvalidEndpoint;
     if (!std.mem.eql(u8, host.bytes, "127.0.0.1") and
         !std.ascii.eqlIgnoreCase(host.bytes, "localhost"))
     {
@@ -165,7 +165,7 @@ pub fn validateIfMatch(value: []const u8) !void {
 pub fn isSecondaryStorageEndpoint(endpoint: []const u8) bool {
     const uri = std.Uri.parse(endpoint) catch return false;
     var host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
-    const host = uri.getHost(&host_buffer) catch return false;
+    const host = std.Io.net.HostName.fromUri(uri, &host_buffer) catch return false;
     const first_label_end = std.mem.indexOfScalar(u8, host.bytes, '.') orelse return false;
     return std.ascii.endsWithIgnoreCase(host.bytes[0..first_label_end], "-secondary");
 }

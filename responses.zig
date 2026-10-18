@@ -358,9 +358,9 @@ fn deinitPayload(comptime T: type, allocator: std.mem.Allocator, value: *T) void
     if (!@hasDecl(T, "deinit")) return;
 
     const function_info = @typeInfo(@TypeOf(T.deinit)).@"fn";
-    if (function_info.params.len == 1) {
+    if (function_info.param_types.len == 1) {
         value.deinit();
-    } else if (function_info.params.len == 2) {
+    } else if (function_info.param_types.len == 2) {
         value.deinit(allocator);
     } else {
         @compileError("TableResult payload deinit must accept self or self and allocator");

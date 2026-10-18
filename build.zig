@@ -52,7 +52,7 @@ pub fn build(b: *std.Build) void {
         "-c",
         \\set -eu
         \\for fixture in entity_codec_compile_fail_*.zig; do
-        \\  if output=$("$0" test --dep serde -Mroot="$fixture" --dep compat -Mserde=zig-pkg/serde-1.0.1-1DszT-e9DABp6u1PoDvGFzeGaST2hRp2KGtGn_CkIl0J/src/root.zig -Mcompat=zig-pkg/serde-1.0.1-1DszT-e9DABp6u1PoDvGFzeGaST2hRp2KGtGn_CkIl0J/src/compat_0_16.zig 2>&1); then
+        \\  if output=$("$0" test --dep serde -Mroot="$fixture" --dep compat -Mserde=zig-pkg/serde-1.0.1-1DszT3vxDABKmINtLJvIUkhktMnhkZUQIGQUslp73pfb/src/root.zig -Mcompat=zig-pkg/serde-1.0.1-1DszT3vxDABKmINtLJvIUkhktMnhkZUQIGQUslp73pfb/src/compat_0_16.zig 2>&1); then
         \\    echo "expected $fixture to fail compilation" >&2
         \\    exit 1
         \\  fi

@@ -6,7 +6,7 @@ fn boundaryEntity(comptime custom_count: usize) type {
     const field_count = 3 + custom_count;
     var names: [field_count][:0]const u8 = undefined;
     var types: [field_count]type = undefined;
-    const attributes: [field_count]std.builtin.Type.StructField.Attributes = @splat(.{});
+    const attributes: [field_count]std.builtin.Type.Struct.FieldAttributes = @splat(.{});
     names[0] = "partition_key";
     types[0] = []const u8;
     names[1] = "row_key";
