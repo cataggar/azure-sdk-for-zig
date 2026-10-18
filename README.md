@@ -5,9 +5,9 @@ playback HTTP transports.
 
 - Source: repository root on the `sdk/testing` package branch
 - Release branch: `sdk/testing`
-- Version: `0.3.1`
-- Internal dependency: `azure_sdk_core` 0.4.1 at
-  `2c95f65be96b5ef48a50671de33e9e0926c624cb`
+- Version: `0.3.2`
+- Internal dependency: `azure_sdk_core` 0.4.2 at
+  `7ddae016914df9ba34f5f0c6705ea83beacd6a43`
 
 Transport descriptors are copied by value while their contexts are borrowed.
 Keep playback/recording transport values, wrapped transport contexts, crypto
