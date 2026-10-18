@@ -1510,7 +1510,7 @@ pub const HubConnection = struct {
 // ─────────────────────── Tests ───────────────────────
 
 test "package version comes from the manifest" {
-    try std.testing.expectEqualStrings("0.7.1", version);
+    try std.testing.expectEqualStrings("0.7.2", version);
 }
 
 // Zig only analyses a file it is told to. Re-exporting a type is not
@@ -2285,7 +2285,7 @@ test "EventDataBatch fills up without exceeding max_bytes" {
     var batch = try EventDataBatch.init(.{ .max_bytes = 512 });
     defer batch.deinit(allocator);
 
-    var event = EventData.init("x" ** 32);
+    var event = EventData.init(&@as([32]u8, @splat('x')));
     defer event.deinit(allocator);
 
     var added: usize = 0;
@@ -2306,7 +2306,7 @@ test "EventDataBatch reports an oversized event distinctly" {
     var batch = try EventDataBatch.init(.{ .max_bytes = 32 });
     defer batch.deinit(allocator);
 
-    var event = EventData.init("y" ** 256);
+    var event = EventData.init(&@as([256]u8, @splat('y')));
     defer event.deinit(allocator);
 
     try std.testing.expectError(BatchError.EventDataTooLarge, batch.tryAdd(allocator, event));
@@ -3233,7 +3233,7 @@ test "EventDataBatch does not leak when an event does not fit" {
     defer small.deinit(allocator);
     try std.testing.expect(try batch.tryAdd(allocator, small));
 
-    var large = EventData.init("z" ** 200);
+    var large = EventData.init(&@as([200]u8, @splat('z')));
     defer large.deinit(allocator);
     try std.testing.expect(!try batch.tryAdd(allocator, large));
     try std.testing.expectEqual(@as(usize, 1), batch.count());
@@ -3371,11 +3371,11 @@ test "the entity path stays on the stack for a real hub and falls back for a lon
         // Longer than Event Hubs accepts, so the inline buffer cannot hold it.
         // It has to keep working rather than become a client-side error, which
         // is the whole reason the fallback exists.
-        const long_name = "n" ** (sending.entity_path_buffer_len + 16);
+        const long_name: [sending.entity_path_buffer_len + 16]u8 = @splat('n');
         var entity_path: ProducerClient.EntityPath = .{};
         defer entity_path.deinit(allocator);
-        const address = try entity_path.resolve(allocator, long_name, "7");
-        try std.testing.expectEqualStrings(long_name ++ "/Partitions/7", address);
+        const address = try entity_path.resolve(allocator, &long_name, "7");
+        try std.testing.expectEqualStrings((&long_name) ++ "/Partitions/7", address);
         // And this one did allocate, so `deinit` has something to release.
         try std.testing.expect(entity_path.owned != null);
     }

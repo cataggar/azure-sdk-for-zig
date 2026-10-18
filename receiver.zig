@@ -387,7 +387,10 @@ pub const PartitionClient = struct {
         ).toFilterExpression(self.allocator);
         errdefer self.allocator.free(advanced);
 
-        const result = try events.toOwnedSlice(allocator);
+        const result = if (events.items.len == events.capacity)
+            events.toOwnedSliceAssert()
+        else
+            try events.toOwnedSlice(allocator);
 
         // Settling tells the peer these will not be asked for again. It is
         // advisory here: an unsettled delivery is redelivered, and a consumer

@@ -616,7 +616,7 @@ test "a rejected event leaves no trace in the encoded transfer" {
     // to fit, so a batch that refused one must still encode exactly as a batch
     // that was never offered it. Byte equality is what proves the refused
     // event left nothing behind in the shared blob.
-    var event = EventData.init("z" ** 48);
+    var event = EventData.init(&@as([48]u8, @splat('z')));
     defer event.deinit(allocator);
 
     var filled = try EventDataBatch.init(.{ .max_bytes = 512 });
@@ -657,7 +657,7 @@ test "an event accepted after a refusal carries only its own bytes" {
     // appended afterwards, so the stray bytes fall outside every section.
     var small = EventData.init("small");
     defer small.deinit(allocator);
-    var big = EventData.init("B" ** 600);
+    var big = EventData.init(&@as([600]u8, @splat('B')));
     defer big.deinit(allocator);
 
     var batch = try EventDataBatch.init(.{ .max_bytes = 512 });
@@ -690,7 +690,7 @@ test "a refused oversized event does not park its encoding on the batch" {
     // `deinit`, which the per-event allocation this replaced never did.
     var small = EventData.init("small");
     defer small.deinit(allocator);
-    var huge = EventData.init("H" ** 200_000);
+    var huge = EventData.init(&@as([200_000]u8, @splat('H')));
     defer huge.deinit(allocator);
 
     var batch = try EventDataBatch.init(.{ .max_bytes = 4096 });
