@@ -74,9 +74,8 @@ core_commit="${core_url##*#}"
 
 (
   cd "$ROOT/codegen/cli"
-  zig build \
+  ZIG_GLOBAL_CACHE_DIR="$SCRATCH/global-cache" zig build \
     --cache-dir "$SCRATCH/codegen-cache" \
-    --global-cache-dir "$SCRATCH/global-cache" \
     -Ddata-tables-output="$SCRATCH/generated-rest" \
     -Dazure-sdk-core-commit="$core_commit" \
     -Dazure-sdk-core-hash="$core_hash" \

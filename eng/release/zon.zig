@@ -496,7 +496,7 @@ test "parse and rewrite dependencies" {
         \\    .name = .azure_sdk_core,
         \\    .version = "0.1.0",
         \\    .fingerprint = 0x0fdf522a4b433c07,
-        \\    .minimum_zig_version = "0.16.0",
+        \\    .minimum_zig_version = "0.17.0",
         \\    .dependencies = .{
         \\        .azure_sdk_core_tracing = .{
         \\            .path = "tracing",
@@ -543,7 +543,7 @@ test "missing fingerprint rejected" {
         \\.{
         \\    .name = .pkg,
         \\    .version = "0.1.0",
-        \\    .minimum_zig_version = "0.16.0",
+        \\    .minimum_zig_version = "0.17.0",
         \\    .dependencies = .{},
         \\    .paths = .{ "build.zig" },
         \\}

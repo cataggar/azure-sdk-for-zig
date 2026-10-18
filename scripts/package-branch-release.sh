@@ -54,8 +54,9 @@ verify_dependency() {
       PATH="$PATH" \
       HOME="$work/home" \
       TMPDIR="$work/tmp" \
+      ZIG_GLOBAL_CACHE_DIR="$work/zig-global-cache" \
       GIT_CONFIG_GLOBAL=/dev/null \
-      zig fetch --global-cache-dir "$work/zig-global-cache" "$url"
+      zig fetch --pkg-dir "$work/zig-global-cache" "$url"
   )"
   [[ "$actual_hash" == "$expected_hash" ]] || {
     echo "$name: dependency hash mismatch" >&2

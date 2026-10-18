@@ -2,7 +2,7 @@
     .name = .azure_sdk_workspace,
     .version = "0.1.0",
     .fingerprint = 0x96c2d79909d9671,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{},
     .paths = .{
         "build.zig",

@@ -51,7 +51,7 @@ fn deterministicRandom(_: *anyopaque, bytes: []u8) !void {
 }
 
 pub fn capture(allocator: std.mem.Allocator, io: std.Io) !Capture {
-    try strings("0.4.1", core.version);
+    try strings("0.4.2", core.version);
     var result: Capture = .{};
     var transport = core.http.MockTransport.init(allocator, 200,
         \\{"key":"fixture-private-key","value":"mock-value-not-telemetry","label":"fixture-private-label"}

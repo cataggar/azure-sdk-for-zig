@@ -272,9 +272,9 @@ fn maybeFormat(
     source: []const u8,
     mode: std.zig.Ast.Mode,
 ) !?[]u8 {
-    const zsource = try allocator.dupeZ(u8, source);
+    const zsource = try allocator.dupeSentinel(u8, source, 0);
     defer allocator.free(zsource);
-    var tree = try std.zig.Ast.parse(allocator, zsource, mode);
+    var tree = try std.zig.Ast.parse(allocator, zsource, .{ .mode = mode });
     defer tree.deinit(allocator);
     if (tree.errors.len != 0) return null;
     return try tree.renderAlloc(allocator);
@@ -1034,7 +1034,7 @@ fn renderUrlBuild(allocator: std.mem.Allocator, w: *std.Io.Writer, m: cm.Method,
         try w.print(
             \\        const endpoint_uri = std.Uri.parse(self.endpoint) catch return error.InvalidUrl;
             \\        var endpoint_host_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
-            \\        const endpoint_host = endpoint_uri.getHost(&endpoint_host_buffer) catch return error.InvalidUrl;
+            \\        const endpoint_host = std.Io.net.HostName.fromUri(endpoint_uri, &endpoint_host_buffer) catch return error.InvalidUrl;
             \\        const base_url = try core.url.resolveAndValidateUrl(
             \\            alloc,
             \\            self.endpoint,
@@ -2756,8 +2756,8 @@ fn renderBuildZigZon(
 
     const serde_entry =
         \\        .serde = .{
-        \\            .url = "git+https://github.com/cataggar/serde.zig#73d872776b0361b6fc92f6cecd7ccf2f05e77cdd",
-        \\            .hash = "serde-1.0.1-1DszT1XhDACnteUU3yWahMMjLjkJqB34hwROPIfhZc7l",
+        \\            .url = "git+https://github.com/cataggar/serde.zig#7ecb2014a30b6b1203a94f377836763a03ab0658",
+        \\            .hash = "serde-1.0.1-1DszT3vxDABKmINtLJvIUkhktMnhkZUQIGQUslp73pfb",
         \\        },
         \\
     ;
@@ -2767,7 +2767,7 @@ fn renderBuildZigZon(
         \\    .name = .{[name_id]s},
         \\    .version = "{[version]s}",
         \\    .fingerprint = 0x{[fp]x},
-        \\    .minimum_zig_version = "0.16.0",
+        \\    .minimum_zig_version = "0.17.0",
         \\    .dependencies = .{{
         \\{[sdk]s}{[serde]s}    }},
         \\    .paths = .{{

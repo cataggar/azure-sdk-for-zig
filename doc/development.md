@@ -1,6 +1,6 @@
 # Development
 
-Use Zig 0.16.0 or later.
+Use Zig 0.17.0 or later.
 
 ## Workspace tooling on `main`
 

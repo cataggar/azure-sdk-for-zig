@@ -325,7 +325,7 @@ const Ctx = struct {
             "    .fingerprint = ",
             fingerprintFor(name),
             ",\n",
-            "    .minimum_zig_version = \"0.16.0\",\n",
+            "    .minimum_zig_version = \"0.17.0\",\n",
             "    .dependencies = .{\n",
             dependency_text.items,
             "    },\n",
@@ -618,7 +618,7 @@ pub fn runSelfTest(gpa: Allocator, io: Io, env: *Environ.Map, repository_root: [
     }
     try self.assertCleanup(&e);
 
-    try self.writeFile(tracing_manifest, try self.replaceOnce(valid_tracing_manifest, ".minimum_zig_version = \"0.16.0\",", ".minimum_zig_version = \"\","));
+    try self.writeFile(tracing_manifest, try self.replaceOnce(valid_tracing_manifest, ".minimum_zig_version = \"0.17.0\",", ".minimum_zig_version = \"\","));
     _ = try self.commitAll("empty minimum Zig version");
     try self.pushMain();
     e = try self.newEngine(false);

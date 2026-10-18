@@ -177,8 +177,8 @@ fn source(package: []const u8, tag: []const u8, commit: []const u8) !void {
 }
 
 fn validate(seal: Seal) !void {
-    inline for (std.meta.fields(Seal)) |field| {
-        const value = @field(seal, field.name);
+    inline for (@typeInfo(Seal).@"struct".field_names) |field_name| {
+        const value = @field(seal, field_name);
         if (value.len == 0 or value.len > 2048) return error.InvalidSealValue;
         for (value) |c| {
             if (c < 0x21 or c > 0x7e) return error.InvalidSealValue;
@@ -199,11 +199,11 @@ fn validate(seal: Seal) !void {
 fn parse(text: []const u8) !Seal {
     var seal: Seal = undefined;
     var lines = std.mem.splitScalar(u8, text, '\n');
-    inline for (std.meta.fields(Seal)) |field| {
+    inline for (@typeInfo(Seal).@"struct".field_names) |field_name| {
         const line = lines.next() orelse return error.MissingSealField;
         var fields = std.mem.splitScalar(u8, line, '\t');
-        if (!std.mem.eql(u8, fields.next().?, field.name)) return error.UnexpectedSealField;
-        @field(seal, field.name) = fields.next() orelse return error.MissingSealValue;
+        if (!std.mem.eql(u8, fields.next().?, field_name)) return error.UnexpectedSealField;
+        @field(seal, field_name) = fields.next() orelse return error.MissingSealValue;
         if (fields.next() != null) return error.ExtraSealValue;
     }
     if (!std.mem.eql(u8, lines.next() orelse return error.MissingFinalNewline, "") or
@@ -214,8 +214,8 @@ fn parse(text: []const u8) !Seal {
 fn render(allocator: std.mem.Allocator, seal: Seal) ![]u8 {
     var output: std.Io.Writer.Allocating = .init(allocator);
     errdefer output.deinit();
-    inline for (std.meta.fields(Seal)) |field| {
-        try output.writer.print("{s}\t{s}\n", .{ field.name, @field(seal, field.name) });
+    inline for (@typeInfo(Seal).@"struct".field_names) |field_name| {
+        try output.writer.print("{s}\t{s}\n", .{ field_name, @field(seal, field_name) });
     }
     return output.toOwnedSlice();
 }
@@ -353,10 +353,10 @@ test "bootstrap requires canonical explicit branch-native metadata" {
 }
 
 test "source requires a known package release and full immutable commit" {
-    try source("azure_sdk_testing", "azure_sdk_testing/v0.1.0", "a" ** 40);
-    try std.testing.expectError(error.UnknownSourcePackage, source("unknown", "unknown/v0.1.0", "a" ** 40));
-    try std.testing.expectError(error.SourceTagMismatch, source("azure_sdk_testing", "azure_sdk_core/v0.1.0", "a" ** 40));
-    try std.testing.expectError(error.InvalidReleaseTag, source("azure_sdk_testing", "azure_sdk_testing/v0.1.0-rc1", "a" ** 40));
+    try source("azure_sdk_testing", "azure_sdk_testing/v0.1.0", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    try std.testing.expectError(error.UnknownSourcePackage, source("unknown", "unknown/v0.1.0", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+    try std.testing.expectError(error.SourceTagMismatch, source("azure_sdk_testing", "azure_sdk_core/v0.1.0", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+    try std.testing.expectError(error.InvalidReleaseTag, source("azure_sdk_testing", "azure_sdk_testing/v0.1.0-rc1", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
     try std.testing.expectError(error.InvalidDigest, source("azure_sdk_testing", "azure_sdk_testing/v0.1.0", "main"));
 }
 
@@ -366,13 +366,13 @@ test "seal is strict ordered data and binds exact destination" {
         .destination = "refs/heads/sdk/core_symcrypt",
         .source_package = "azure_sdk_testing",
         .source_tag = "azure_sdk_testing/v0.1.0",
-        .source_commit = "a" ** 40,
+        .source_commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         .repository = "github.com/cataggar/azure-sdk-for-zig",
         .fetch_url = "https://github.com/cataggar/azure-sdk-for-zig.git",
         .push_url = "git@github.com:cataggar/azure-sdk-for-zig.git",
-        .tooling_commit = "b" ** 40,
-        .metadata_sha256 = "c" ** 64,
-        .archive_sha256 = "d" ** 64,
+        .tooling_commit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        .metadata_sha256 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        .archive_sha256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     };
     try validate(seal);
     const text = try render(std.testing.allocator, seal);

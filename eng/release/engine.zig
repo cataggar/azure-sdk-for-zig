@@ -1305,7 +1305,7 @@ pub const Engine = struct {
         const tag_commit = try remoteTagCommit(self.gpa, self.io, remote_identity.fetch_url, tag, self.root);
         if (!eqOpt(tag_commit, commit.?)) return self.fail("{s}: dependency tag does not match branch tip", .{dependency.name});
         const cache = try self.join(&.{ work, "zig-global-cache" });
-        const fetch_out = try self.runOut(work, &.{ "zig", "fetch", "--global-cache-dir", cache, archive });
+        const fetch_out = try self.runOut(work, &.{ "zig", "fetch", "--pkg-dir", cache, archive });
         const package_hash = trimAscii(fetch_out);
         const prefix = try std.fmt.allocPrint(self.gpa, "{s}-", .{dependency.name});
         if (!std.mem.startsWith(u8, package_hash, prefix)) {
@@ -1314,7 +1314,7 @@ pub const Engine = struct {
         const zig_base = remote_identity.zig_url;
         const url = try std.fmt.allocPrint(self.gpa, "{s}#{s}", .{ zig_base, commit.? });
         if (!std.mem.startsWith(u8, zig_base, "git+file://")) {
-            const url_out = try self.runOut(work, &.{ "zig", "fetch", "--global-cache-dir", cache, url });
+            const url_out = try self.runOut(work, &.{ "zig", "fetch", "--pkg-dir", cache, url });
             const url_hash = trimAscii(url_out);
             if (!std.mem.eql(u8, url_hash, package_hash)) {
                 return self.fail("{s}: remote URL hash differs from fetched archive", .{dependency.name});
@@ -1759,7 +1759,7 @@ pub const Engine = struct {
         try self.extractArchive(worktree, release_commit, archive, null);
         _ = try self.validateTree(archive, pkg, true, true);
         const cache = try self.join(&.{ work, "prospective-cache" });
-        const fetch_out = try self.runOut(work, &.{ "zig", "fetch", "--global-cache-dir", cache, archive });
+        const fetch_out = try self.runOut(work, &.{ "zig", "fetch", "--pkg-dir", cache, archive });
         const release_hash = trimAscii(fetch_out);
         const prefix = try std.fmt.allocPrint(self.gpa, "{s}-", .{pkg.name});
         if (!std.mem.startsWith(u8, release_hash, prefix)) {

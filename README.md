@@ -6,7 +6,7 @@
 > point, with all C/C++ dependencies replaced by pure Zig equivalents.
 > This is not an official Microsoft or Azure SDK.
 
-Idiomatic Azure client libraries for Zig 0.16.0 and later.
+Idiomatic Azure client libraries for Zig 0.17.0 and later.
 
 ## SDK Packages
 

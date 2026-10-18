@@ -247,8 +247,9 @@ write_final_artifacts() {
   printf '%s\n' "$commit" >"$candidate_dir/candidate-commit"
   write_commit_artifacts "$repository" "$commit" "$candidate_dir" final
   cp "$candidate_dir/final-package.tar.gz" "$candidate_dir/package.tar.gz"
-  zig fetch \
-    --global-cache-dir "$candidate_dir/zig-global-cache" \
+  ZIG_GLOBAL_CACHE_DIR="$candidate_dir/zig-global-cache" \
+    zig fetch \
+    --pkg-dir "$candidate_dir/zig-global-cache" \
     "$candidate_dir/package.tar.gz" >"$candidate_dir/package-hash"
   rm -rf "$candidate_dir/zig-global-cache"
 }
@@ -271,8 +272,9 @@ main_owned_pin() {
   mkdir -p "$output/dependency-pins"
   hash_file="$output/dependency-pins/$dependency-$commit.hash"
   if [[ ! -s "$hash_file" ]]; then
-    zig fetch \
-      --global-cache-dir "$output/dependency-zig-cache" \
+    ZIG_GLOBAL_CACHE_DIR="$output/dependency-zig-cache" \
+      zig fetch \
+      --pkg-dir "$output/dependency-zig-cache" \
       "$url" >"$hash_file"
   fi
   hash="$(cat "$hash_file")"
@@ -653,7 +655,7 @@ verify_filtered_candidate() {
   git -C "$repository" archive --format=tar.gz \
     --output="$verify_archive" "$commit"
   cmp -s "$candidate_dir/package.tar.gz" "$verify_archive"
-  actual_hash="$(zig fetch --global-cache-dir "$verify_cache" "$verify_archive")"
+  actual_hash="$(ZIG_GLOBAL_CACHE_DIR="$verify_cache" zig fetch --pkg-dir "$verify_cache" "$verify_archive")"
   [[ "$actual_hash" == "$(cat "$candidate_dir/package-hash")" ]]
   current_root="$(target_current_root "$kind" "$name")"
   local source_tree filtered_tree
@@ -929,7 +931,7 @@ verify_compatibility_candidate() {
   git -C "$repository" archive --format=tar.gz \
     --output="$verify_archive" "$commit"
   cmp -s "$candidate_dir/package.tar.gz" "$verify_archive"
-  actual_hash="$(zig fetch --global-cache-dir "$verify_cache" "$verify_archive")"
+  actual_hash="$(ZIG_GLOBAL_CACHE_DIR="$verify_cache" zig fetch --pkg-dir "$verify_cache" "$verify_archive")"
   [[ "$actual_hash" == "$(cat "$candidate_dir/package-hash")" ]]
 
   local expected_pins expected_baseline actual_baseline

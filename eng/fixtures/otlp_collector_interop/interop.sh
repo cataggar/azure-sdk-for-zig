@@ -5,7 +5,7 @@ umask 077
 FIXTURE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 usage() {
   echo "Usage: bash $0 /absolute/path/to/otelcol [--keep-output]" >&2
-  echo "Opt-in Linux interop; requires the pinned official otelcol archive, Zig 0.16.0 and /proc." >&2
+  echo "Opt-in Linux interop; requires the pinned official otelcol archive, Zig 0.17.0 and /proc." >&2
 }
 [[ $# -ge 1 && $# -le 2 ]] || { usage; exit 2; }
 COLLECTOR="$1"

@@ -56,7 +56,7 @@ cat >"$SOURCE/build.zig.zon" <<'EOF'
     .name = .azure_sdk_testing,
     .version = "0.1.0",
     .fingerprint = 0x12345678,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .azure_sdk_core = .{
             .url = "git+https://example.invalid/core#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
