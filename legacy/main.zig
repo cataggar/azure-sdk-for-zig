@@ -75,6 +75,7 @@ pub const Config = struct {
 pub const Session = struct {
     allocator: std.mem.Allocator,
     transport: core.http.StdHttpTransport,
+    crypto: core.crypto.StdCryptoProvider,
     credential: core.identity.DefaultAzureCredential,
     connection: *common.KustoConnection,
 
@@ -89,19 +90,23 @@ pub const Session = struct {
         self.allocator = allocator;
         self.transport = core.http.StdHttpTransport.init(allocator, io);
         errdefer self.transport.deinit();
+        self.crypto = core.crypto.StdCryptoProvider.init(io);
         self.credential = try core.identity.DefaultAzureCredential.init(
             allocator,
             io,
-            self.transport.asTransport(),
             env,
         );
         errdefer self.credential.deinit();
         var builder = common.KustoConnectionStringBuilder.init(cluster_url);
         _ = builder.withTokenCredential(self.credential.asCredential());
+        const runtime = core.http.HttpRuntime.init(
+            self.transport.asTransport(),
+            self.crypto.asProvider(),
+        );
         self.connection = try common.KustoConnection.init(
             allocator,
             builder.build(),
-            self.transport.asTransport(),
+            runtime,
             .{},
         );
         return self;
@@ -126,7 +131,7 @@ pub fn runDefaultCredentialQuery(
     session: *Session,
     config: Config,
 ) !usize {
-    var client = data.KustoClient.initWithConnection(session.connection, .{});
+    var client = data.KustoClient.init(session.connection, .{});
     var result = try client.executeQueryResult(
         allocator,
         config.database,
@@ -158,7 +163,7 @@ pub fn runTypedQuery(
     try query.literal(", Minimum=");
     try query.parameter(.minimum);
 
-    var client = data.KustoClient.initWithConnection(session.connection, .{});
+    var client = data.KustoClient.init(session.connection, .{});
     var result = try client.executeQueryResult(
         allocator,
         config.database,
@@ -174,7 +179,7 @@ pub fn runManagement(
     session: *Session,
     config: Config,
 ) !usize {
-    var client = data.KustoClient.initWithConnection(session.connection, .{});
+    var client = data.KustoClient.init(session.connection, .{});
     var result = try client.executeMgmtResult(
         allocator,
         config.database,
@@ -190,7 +195,7 @@ pub fn runProgressiveQuery(
     session: *Session,
     config: Config,
 ) !usize {
-    var client = data.KustoClient.initWithConnection(session.connection, .{});
+    var client = data.KustoClient.init(session.connection, .{});
     var opened = try client.executeProgressiveQuery(
         allocator,
         config.database,
@@ -227,7 +232,7 @@ pub fn runStreamingIngestion(
 ) !ingest.IngestionStatus {
     const target = try config.ingestionTarget();
     const mapping = try config.ingestionMapping();
-    var client = ingest.StreamingIngestClient.initWithConnection(session.connection);
+    var client = ingest.StreamingIngestClient.init(session.connection);
     var result = try client.ingestResult(
         allocator,
         target,
@@ -249,7 +254,9 @@ pub fn runQueuedIngestion(
 ) !ingest.QueuedSubmissionOutcome {
     const target = try config.ingestionTarget();
     const mapping = try config.ingestionMapping();
-    var client = ingest.QueuedIngestClient.initWithConnection(session.connection);
+    var client = ingest.QueuedIngestClient.init(session.connection.runtime, .{
+        .connection = session.connection,
+    });
     var result = try client.ingest(
         allocator,
         target,
@@ -267,7 +274,7 @@ pub fn runManagedIngestion(
 ) !ingest.ManagedIngestionRoute {
     const target = try config.ingestionTarget();
     const mapping = try config.ingestionMapping();
-    var client = ingest.ManagedIngestClient.initWithConnection(session.connection);
+    var client = ingest.ManagedIngestClient.init(session.connection, null);
     var result = try client.ingestResult(
         allocator,
         target,
@@ -302,7 +309,9 @@ pub fn runStatusPolling(
 ) !PollSummary {
     const target = try config.ingestionTarget();
     const mapping = try config.ingestionMapping();
-    var client = ingest.QueuedIngestClient.initWithConnection(session.connection);
+    var client = ingest.QueuedIngestClient.init(session.connection.runtime, .{
+        .connection = session.connection,
+    });
     var submission = try client.ingest(
         allocator,
         target,
