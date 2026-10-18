@@ -26,9 +26,9 @@ fn expectAreaPipelines(expected: core.http.HttpPipeline) !void {
     var roots: usize = 0;
     var descendants: usize = 0;
     inline for (comptime std.meta.declarations(root)) |area_decl| {
-        const Area = @field(root, area_decl.name);
+        const Area = @field(root, area_decl);
         inline for (comptime std.meta.declarations(Area)) |client_decl| {
-            const Client = @field(Area, client_decl.name);
+            const Client = @field(Area, client_decl);
             if (@TypeOf(Client) == type and @typeInfo(Client) == .@"struct" and
                 @hasDecl(Client, "InitOptions") and @hasDecl(Client, "init") and
                 @hasField(Client, "pipeline"))
@@ -37,10 +37,10 @@ fn expectAreaPipelines(expected: core.http.HttpPipeline) !void {
                 try std.testing.expectEqualDeep(expected, client.pipeline);
                 roots += 1;
                 inline for (comptime std.meta.declarations(Client)) |decl| {
-                    const accessor = @field(Client, decl.name);
+                    const accessor = @field(Client, decl);
                     const info = @typeInfo(@TypeOf(accessor));
-                    if (info == .@"fn" and info.@"fn".params.len == 1 and
-                        info.@"fn".params[0].type == *Client)
+                    if (info == .@"fn" and info.@"fn".param_types.len == 1 and
+                        info.@"fn".param_types[0] == *Client)
                     {
                         const Result = info.@"fn".return_type.?;
                         if (@typeInfo(Result) == .@"struct" and @hasField(Result, "pipeline")) {
@@ -78,7 +78,7 @@ const TraceProbe = struct {
             "https://devops.example/org/project/_apis/git/repositories/repository?api-version=7.2-preview",
             request.url,
         );
-        try std.testing.expectEqualStrings("azsdk-zig-azure_rest_devops/0.2.1", request.getHeader("User-Agent").?);
+        try std.testing.expectEqualStrings("azsdk-zig-azure_rest_devops/0.2.2", request.getHeader("User-Agent").?);
         try std.testing.expectEqual(self.traced, request.getHeader("traceparent") != null);
         if (self.traced) {
             const parent = core.tracing.TraceContext.parseTraceparent(request.getHeader("traceparent").?).?;
@@ -138,7 +138,7 @@ test "all 44 area roots and 371 descendants retain caller tracing with real Git 
             .{},
         );
         defer provider.deinit() catch unreachable;
-        var telemetry = core.http.TelemetryPolicy.init("azsdk-zig-azure_rest_devops/0.2.1");
+        var telemetry = core.http.TelemetryPolicy.init("azsdk-zig-azure_rest_devops/0.2.2");
         var policies = [_]*core.http.HttpPolicy{telemetry.asPolicy()};
         var pipeline = core.http.HttpPipeline.init(runtime, &policies);
         try std.testing.expect(pipeline.instrumentation == null);
