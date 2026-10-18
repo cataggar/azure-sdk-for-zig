@@ -626,7 +626,7 @@ fn validateHttpsOrigin(endpoint: []const u8) !std.Uri {
 }
 
 fn endpointHost(uri: std.Uri, buffer: *[std.Io.net.HostName.max_len]u8) ![]const u8 {
-    const host = uri.getHost(buffer) catch return error.InvalidKustoEndpoint;
+    const host = std.Io.net.HostName.fromUri(uri, buffer) catch return error.InvalidKustoEndpoint;
     return host.bytes;
 }
 
@@ -643,8 +643,8 @@ fn sameHttpsOrigin(expected_origin: []const u8, candidate_url: []const u8) bool 
     }
     var expected_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
     var candidate_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
-    const expected_host = expected.getHost(&expected_buffer) catch return false;
-    const candidate_host = candidate.getHost(&candidate_buffer) catch return false;
+    const expected_host = std.Io.net.HostName.fromUri(expected, &expected_buffer) catch return false;
+    const candidate_host = std.Io.net.HostName.fromUri(candidate, &candidate_buffer) catch return false;
     return std.ascii.eqlIgnoreCase(expected_host.bytes, candidate_host.bytes) and
         (expected.port orelse 443) == (candidate.port orelse 443);
 }
@@ -1266,19 +1266,19 @@ fn ownedValueFromAny(value: anytype, allocator: std.mem.Allocator) !serde.Value 
         .array => |array| return ownedArray(array.child, value[0..], allocator),
         .@"struct" => |info| {
             if (info.is_tuple) {
-                var values = try allocator.alloc(serde.Value, info.fields.len);
+                var values = try allocator.alloc(serde.Value, info.field_names.len);
                 var initialized: usize = 0;
                 errdefer {
                     for (values[0..initialized]) |item| item.deinit(allocator);
                     allocator.free(values);
                 }
-                inline for (info.fields, 0..) |field, index| {
-                    values[index] = try ownedValueFromAny(@field(value, field.name), allocator);
+                inline for (info.field_names, 0..) |field_name, index| {
+                    values[index] = try ownedValueFromAny(@field(value, field_name), allocator);
                     initialized += 1;
                 }
                 return .{ .array = values };
             }
-            var entries = try allocator.alloc(serde.Entry, info.fields.len);
+            var entries = try allocator.alloc(serde.Entry, info.field_names.len);
             var initialized: usize = 0;
             errdefer {
                 for (entries[0..initialized]) |entry| {
@@ -1287,9 +1287,9 @@ fn ownedValueFromAny(value: anytype, allocator: std.mem.Allocator) !serde.Value 
                 }
                 allocator.free(entries);
             }
-            inline for (info.fields, 0..) |field, index| {
-                entries[index].key = try allocator.dupe(u8, field.name);
-                entries[index].value = ownedValueFromAny(@field(value, field.name), allocator) catch |err| {
+            inline for (info.field_names, 0..) |field_name, index| {
+                entries[index].key = try allocator.dupe(u8, field_name);
+                entries[index].value = ownedValueFromAny(@field(value, field_name), allocator) catch |err| {
                     allocator.free(entries[index].key);
                     return err;
                 };

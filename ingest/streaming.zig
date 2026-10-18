@@ -932,16 +932,16 @@ pub fn JsonRows(comptime Row: type) type {
         /// named mapping with a management command, then use its name through
         /// `IngestOptions.mapping_name`.
         pub fn mapping(allocator: std.mem.Allocator) ![]u8 {
-            const fields = std.meta.fields(Row);
-            var entries: [fields.len]MappingEntry = undefined;
-            var paths: [fields.len][]u8 = undefined;
+            const field_names = @typeInfo(Row).@"struct".field_names;
+            var entries: [field_names.len]MappingEntry = undefined;
+            var paths: [field_names.len][]u8 = undefined;
             var path_count: usize = 0;
             defer for (paths[0..path_count]) |path| allocator.free(path);
-            inline for (fields, 0..) |field, index| {
-                paths[index] = try jsonPath(allocator, field.name);
+            inline for (field_names, 0..) |field_name, index| {
+                paths[index] = try jsonPath(allocator, field_name);
                 path_count += 1;
                 entries[index] = .{
-                    .column = field.name,
+                    .column = field_name,
                     .Properties = .{ .Path = paths[index] },
                 };
             }

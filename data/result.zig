@@ -346,21 +346,23 @@ pub const KustoDynamic = struct {
 /// A schema-validated, allocation-free mapping from Zig fields to table cells.
 pub fn KustoRowDecoder(comptime T: type) type {
     validateRowType(T);
-    const fields = std.meta.fields(T);
+    const struct_info = @typeInfo(T).@"struct";
+    const field_names = struct_info.field_names;
+    const field_types = struct_info.field_types;
 
     return struct {
         const Self = @This();
 
         columns: []const KustoResultColumn,
-        mapping: [fields.len]usize,
+        mapping: [field_names.len]usize,
 
         /// Resolves all requested columns once and rejects ambiguous schemas.
         pub fn init(table: *const KustoResultTable) !Self {
             const missing_column = std.math.maxInt(usize);
-            var mapping: [fields.len]usize = [_]usize{missing_column} ** fields.len;
+            var mapping: [field_names.len]usize = @splat(missing_column);
             for (table.columns, 0..) |column, column_index| {
-                inline for (fields, 0..) |meta_field, field_index| {
-                    if (std.mem.eql(u8, column.name, rowColumnName(T, meta_field.name))) {
+                inline for (field_names, 0..) |field_name, field_index| {
+                    if (std.mem.eql(u8, column.name, rowColumnName(T, field_name))) {
                         if (mapping[field_index] != missing_column)
                             return error.DuplicateKustoColumn;
                         mapping[field_index] = column_index;
@@ -384,19 +386,19 @@ pub fn KustoRowDecoder(comptime T: type) type {
                 return error.KustoRowSchemaMismatch;
 
             var result: T = undefined;
-            var initialized: [fields.len]bool = [_]bool{false} ** fields.len;
+            var initialized: [field_names.len]bool = @splat(false);
             errdefer {
-                inline for (fields, 0..) |meta_field, field_index| {
+                inline for (field_names, field_types, 0..) |field_name, field_type, field_index| {
                     if (initialized[field_index])
-                        deinitDecodedField(meta_field.type, &@field(result, meta_field.name), allocator);
+                        deinitDecodedField(field_type, &@field(result, field_name), allocator);
                 }
             }
 
-            inline for (fields, 0..) |meta_field, field_index| {
+            inline for (field_names, field_types, 0..) |field_name, field_type, field_index| {
                 const column_index = self.mapping[field_index];
                 if (column_index >= row.values.len) return error.MissingKustoCell;
-                @field(result, meta_field.name) = try decodeField(
-                    meta_field.type,
+                @field(result, field_name) = try decodeField(
+                    field_type,
                     allocator,
                     &row.values[column_index],
                 );
@@ -453,14 +455,14 @@ fn validateRowType(comptime T: type) void {
     if (info.is_tuple)
         @compileError("KustoRowDecoder requires a non-tuple struct row type");
     validateKustoColumnMappings(T);
-    inline for (std.meta.fields(T), 0..) |meta_field, field_index| {
-        validateDecodedFieldType(T, meta_field.name, meta_field.type);
-        const requested_name = rowColumnName(T, meta_field.name);
-        inline for (std.meta.fields(T)[field_index + 1 ..]) |other| {
-            if (std.mem.eql(u8, requested_name, rowColumnName(T, other.name))) {
+    inline for (info.field_names, info.field_types, 0..) |field_name, field_type, field_index| {
+        validateDecodedFieldType(T, field_name, field_type);
+        const requested_name = rowColumnName(T, field_name);
+        inline for (info.field_names[field_index + 1 ..]) |other_name| {
+            if (std.mem.eql(u8, requested_name, rowColumnName(T, other_name))) {
                 @compileError(std.fmt.comptimePrint(
                     "Kusto row fields '{s}' and '{s}' both request column '{s}'",
-                    .{ meta_field.name, other.name, requested_name },
+                    .{ field_name, other_name, requested_name },
                 ));
             }
         }
@@ -476,35 +478,35 @@ fn validateKustoColumnMappings(comptime T: type) void {
     };
     if (mapping_info.is_tuple)
         @compileError("kusto_columns must be a non-tuple struct literal");
-    inline for (std.meta.fields(Mapping)) |mapping_field| {
-        if (!hasRowField(T, mapping_field.name)) {
+    inline for (mapping_info.field_names) |mapping_field_name| {
+        if (!hasRowField(T, mapping_field_name)) {
             @compileError(std.fmt.comptimePrint(
                 "kusto_columns contains unknown Zig field '{s}'",
-                .{mapping_field.name},
+                .{mapping_field_name},
             ));
         }
-        const name = comptimeByteString(@field(T.kusto_columns, mapping_field.name));
+        const name = comptimeByteString(@field(T.kusto_columns, mapping_field_name));
         if (name.len == 0) {
             @compileError(std.fmt.comptimePrint(
                 "kusto_columns target for '{s}' must not be empty",
-                .{mapping_field.name},
+                .{mapping_field_name},
             ));
         }
     }
 }
 
 fn hasRowField(comptime T: type, comptime name: []const u8) bool {
-    inline for (std.meta.fields(T)) |meta_field| {
-        if (std.mem.eql(u8, meta_field.name, name)) return true;
+    inline for (@typeInfo(T).@"struct".field_names) |field_name| {
+        if (std.mem.eql(u8, field_name, name)) return true;
     }
     return false;
 }
 
 fn rowColumnName(comptime T: type, comptime field_name: []const u8) []const u8 {
     if (!@hasDecl(T, "kusto_columns")) return field_name;
-    inline for (std.meta.fields(@TypeOf(T.kusto_columns))) |mapping_field| {
-        if (std.mem.eql(u8, mapping_field.name, field_name))
-            return comptimeByteString(@field(T.kusto_columns, mapping_field.name));
+    inline for (@typeInfo(@TypeOf(T.kusto_columns)).@"struct".field_names) |mapping_field_name| {
+        if (std.mem.eql(u8, mapping_field_name, field_name))
+            return comptimeByteString(@field(T.kusto_columns, mapping_field_name));
     }
     return field_name;
 }
@@ -593,9 +595,9 @@ fn validateCustomDecode(comptime T: type) void {
         .@"fn" => |item| item,
         else => @compileError("kustoDecode must be a function"),
     };
-    if (function_info.params.len != 2 or
-        function_info.params[0].type != std.mem.Allocator or
-        function_info.params[1].type != *const KustoValue)
+    if (function_info.param_types.len != 2 or
+        function_info.param_types[0] != std.mem.Allocator or
+        function_info.param_types[1] != *const KustoValue)
     {
         @compileError(std.fmt.comptimePrint(
             "{s}.kustoDecode must have signature fn (std.mem.Allocator, *const KustoValue) !@This()",
@@ -621,9 +623,9 @@ fn validateCustomDeinit(comptime T: type) void {
         .@"fn" => |item| item,
         else => @compileError("deinit must be a function"),
     };
-    if (function_info.params.len != 2 or
-        function_info.params[0].type != *T or
-        function_info.params[1].type != std.mem.Allocator or
+    if (function_info.param_types.len != 2 or
+        function_info.param_types[0] != *T or
+        function_info.param_types[1] != std.mem.Allocator or
         function_info.return_type != void)
     {
         @compileError(std.fmt.comptimePrint(
@@ -698,8 +700,9 @@ fn typedReal(value: KustoValue) ?f64 {
 }
 
 fn deinitDecodedRow(comptime T: type, value: *T, allocator: std.mem.Allocator) void {
-    inline for (std.meta.fields(T)) |meta_field| {
-        deinitDecodedField(meta_field.type, &@field(value.*, meta_field.name), allocator);
+    const struct_info = @typeInfo(T).@"struct";
+    inline for (struct_info.field_names, struct_info.field_types) |field_name, field_type| {
+        deinitDecodedField(field_type, &@field(value.*, field_name), allocator);
     }
 }
 
