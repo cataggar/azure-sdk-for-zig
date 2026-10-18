@@ -1830,9 +1830,10 @@ fn parseExchange(
 
 fn parseRecordedOutcome(value: std.json.Value) !RecordedOutcome {
     const name = try jsonString(value);
-    inline for (std.meta.fields(RecordedOutcome)) |field| {
-        if (std.mem.eql(u8, name, field.name))
-            return @enumFromInt(field.value);
+    const info = @typeInfo(RecordedOutcome).@"enum";
+    inline for (info.field_names, info.field_values) |field_name, field_value| {
+        if (std.mem.eql(u8, name, field_name))
+            return @fromBackingInt(field_value);
     }
     return error.InvalidRecordingOutcome;
 }
@@ -1841,9 +1842,10 @@ fn parseRecordedErrorCategory(
     value: std.json.Value,
 ) !RecordedErrorCategory {
     const name = try jsonString(value);
-    inline for (std.meta.fields(RecordedErrorCategory)) |field| {
-        if (std.mem.eql(u8, name, field.name))
-            return @enumFromInt(field.value);
+    const info = @typeInfo(RecordedErrorCategory).@"enum";
+    inline for (info.field_names, info.field_values) |field_name, field_value| {
+        if (std.mem.eql(u8, name, field_name))
+            return @fromBackingInt(field_value);
     }
     return error.InvalidRecordingErrorCategory;
 }
@@ -2002,8 +2004,9 @@ fn validateUrlRedactionTemplate(
 }
 
 fn parseMethod(value: []const u8) !core.http.Method {
-    inline for (std.meta.fields(core.http.Method)) |field| {
-        if (std.mem.eql(u8, value, field.name)) return @enumFromInt(field.value);
+    const info = @typeInfo(core.http.Method).@"enum";
+    inline for (info.field_names, info.field_values) |field_name, field_value| {
+        if (std.mem.eql(u8, value, field_name)) return @fromBackingInt(field_value);
     }
     return error.InvalidRecordingMethod;
 }
@@ -2247,7 +2250,7 @@ test "Core 0.4 request snapshots own ordinary and trace headers after source tea
 }
 
 test "Core 0.4 request snapshot allocation failures release independently owned headers" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, requestHeaderSnapshotFixture, .{});
+    try checkDeterministicAllocationFailures(std.testing.allocator, requestHeaderSnapshotFixture);
 }
 
 test "Core 0.4 request matching and framing remain case insensitive with trace slots" {
@@ -3209,7 +3212,7 @@ fn parseUrlTarget(
     if (!std.ascii.eqlIgnoreCase(uri.scheme, "https")) return null;
     if (uri.user != null or uri.password != null)
         return error.SensitiveBodyRequiresSanitization;
-    const host_name = uri.getHost(host_buffer) catch
+    const host_name = std.Io.net.HostName.fromUri(uri, host_buffer) catch
         return error.SensitiveBodyRequiresSanitization;
     var host = host_name.bytes;
     if (host.len != 0 and host[host.len - 1] == '.')
@@ -11504,71 +11507,91 @@ fn binaryMetadataParsingAllocationFixture(
     parsed.deinit();
 }
 
+fn checkDeterministicAllocationFailures(
+    backing_allocator: std.mem.Allocator,
+    comptime test_fn: fn (std.mem.Allocator) anyerror!void,
+) !void {
+    const needed_alloc_count = blk: {
+        var baseline = std.testing.FailingAllocator.init(backing_allocator, .{
+            .resize_fail_index = 0,
+        });
+        try test_fn(baseline.allocator());
+        break :blk baseline.alloc_index;
+    };
+
+    for (0..needed_alloc_count) |fail_index| {
+        var failing = std.testing.FailingAllocator.init(backing_allocator, .{
+            .fail_index = fail_index,
+            .resize_fail_index = 0,
+        });
+        if (test_fn(failing.allocator())) |_| {
+            return if (failing.has_induced_failure)
+                error.SwallowedOutOfMemoryError
+            else
+                error.NondeterministicMemoryUsage;
+        } else |err| switch (err) {
+            error.OutOfMemory => {
+                if (failing.allocated_bytes != failing.freed_bytes) {
+                    return error.MemoryLeakDetected;
+                }
+            },
+            else => return err,
+        }
+    }
+}
+
 test "transport allocation failures clean up" {
-    try std.testing.checkAllAllocationFailures(
+    try checkDeterministicAllocationFailures(
         std.testing.allocator,
         playbackAllocationFixture,
-        .{},
     );
-    try std.testing.checkAllAllocationFailures(
+    try checkDeterministicAllocationFailures(
         std.testing.allocator,
         recordingAllocationFixture,
-        .{},
     );
-    try std.testing.checkAllAllocationFailures(
+    try checkDeterministicAllocationFailures(
         std.testing.allocator,
         recordingRedirectAllocationFixture,
-        .{},
     );
-    try std.testing.checkAllAllocationFailures(
+    try checkDeterministicAllocationFailures(
         std.testing.allocator,
         recordingBufferedFallbackAllocationFixture,
-        .{},
     );
-    try std.testing.checkAllAllocationFailures(
+    try checkDeterministicAllocationFailures(
         std.testing.allocator,
         serializationAllocationFixture,
-        .{},
     );
-    try std.testing.checkAllAllocationFailures(
+    try checkDeterministicAllocationFailures(
         std.testing.allocator,
         binaryMetadataSerializationAllocationFixture,
-        .{},
     );
-    try std.testing.checkAllAllocationFailures(
+    try checkDeterministicAllocationFailures(
         std.testing.allocator,
         multipartSerializationAllocationFixture,
-        .{},
     );
-    try std.testing.checkAllAllocationFailures(
+    try checkDeterministicAllocationFailures(
         std.testing.allocator,
         jwtHeaderAllocationFixture,
-        .{},
     );
-    try std.testing.checkAllAllocationFailures(
+    try checkDeterministicAllocationFailures(
         std.testing.allocator,
         endpointSchemaAllocationFixture,
-        .{},
     );
-    try std.testing.checkAllAllocationFailures(
+    try checkDeterministicAllocationFailures(
         std.testing.allocator,
         parsingAllocationFixture,
-        .{},
     );
-    try std.testing.checkAllAllocationFailures(
+    try checkDeterministicAllocationFailures(
         std.testing.allocator,
         failureParsingAllocationFixture,
-        .{},
     );
-    try std.testing.checkAllAllocationFailures(
+    try checkDeterministicAllocationFailures(
         std.testing.allocator,
         redactionTemplateParsingAllocationFixture,
-        .{},
     );
-    try std.testing.checkAllAllocationFailures(
+    try checkDeterministicAllocationFailures(
         std.testing.allocator,
         binaryMetadataParsingAllocationFixture,
-        .{},
     );
 }
 
