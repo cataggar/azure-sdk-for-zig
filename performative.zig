@@ -647,8 +647,8 @@ pub fn encodeAttach(allocator: Allocator, attach: Attach, buf: *encoder.Buffer) 
         .{ .value = .{ .string = attach.name } },
         .{ .value = .{ .uint = attach.handle } },
         .{ .value = .{ .boolean = attach.role.isReceiver() } },
-        .{ .value = .{ .ubyte = @intFromEnum(attach.snd_settle_mode) } },
-        .{ .value = .{ .ubyte = @intFromEnum(attach.rcv_settle_mode) } },
+        .{ .value = .{ .ubyte = @backingInt(attach.snd_settle_mode) } },
+        .{ .value = .{ .ubyte = @backingInt(attach.rcv_settle_mode) } },
         optionalSource(attach.source),
         optionalTarget(attach.target),
         .null, // unsettled
@@ -689,7 +689,7 @@ pub fn encodeTransfer(allocator: Allocator, xfer: Transfer, buf: *encoder.Buffer
         optionalUint(xfer.message_format),
         optionalBool(xfer.settled),
         defaultedBool(xfer.more, false),
-        if (xfer.rcv_settle_mode) |m| Field{ .value = .{ .ubyte = @intFromEnum(m) } } else .null,
+        if (xfer.rcv_settle_mode) |m| Field{ .value = .{ .ubyte = @backingInt(m) } } else .null,
         optionalDeliveryState(xfer.state),
         defaultedBool(xfer.resume_, false),
         defaultedBool(xfer.aborted, false),
@@ -749,7 +749,7 @@ pub fn encodeSaslOutcome(
     buf: *encoder.Buffer,
 ) EncodeError!void {
     const fields = [_]Field{
-        .{ .value = .{ .ubyte = @intFromEnum(outcome.code) } },
+        .{ .value = .{ .ubyte = @backingInt(outcome.code) } },
         optionalBinary(outcome.additional_data),
     };
     try encodeDescribedList(allocator, descriptor.sasl_outcome, &fields, buf);

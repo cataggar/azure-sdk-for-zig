@@ -3198,9 +3198,9 @@ test "caller serialized opens keep independent session diagnostics isolated" {
     try testing.expect(!first.session.ended and !second.session.ended);
 }
 
-const diagnostic_test_payload = "nested diagnostic payload" ** 64;
+const diagnostic_test_payload: [1600]u8 = @splat('x');
 const diagnostic_test_map = [_]uamqp.MapEntry{
-    .{ .key = .{ .symbol = "payload" }, .value = .{ .binary = diagnostic_test_payload } },
+    .{ .key = .{ .symbol = "payload" }, .value = .{ .binary = &diagnostic_test_payload } },
     .{ .key = .{ .string = "reason" }, .value = .{ .symbol = "unavailable" } },
 };
 const diagnostic_test_list = [_]uamqp.AmqpValue{
@@ -3229,7 +3229,7 @@ fn expectNestedDiagnostic(diagnostic: FailedLinkOpen) !void {
     const map = list[1].map;
     try testing.expectEqual(@as(usize, 2), map.len);
     try testing.expectEqualStrings("payload", map[0].key.symbol);
-    try testing.expectEqualStrings(diagnostic_test_payload, map[0].value.binary);
+    try testing.expectEqualStrings(&diagnostic_test_payload, map[0].value.binary);
     try testing.expectEqualStrings("reason", map[1].key.string);
     try testing.expectEqualStrings("unavailable", map[1].value.symbol);
 }
@@ -3837,6 +3837,7 @@ test "a message past max-frame-size is split and reassembles to the original" {
     var saw_final = false;
     var first_delivery_id: ?u32 = null;
     var first_tag: ?[]const u8 = null;
+    defer if (first_tag) |tag| allocator.free(tag);
 
     for (frames.bodies.items) |body| {
         if (perf.peekDescriptor(body) != perf.descriptor.transfer) continue;
@@ -3847,7 +3848,7 @@ test "a message past max-frame-size is split and reassembles to the original" {
 
         if (count == 1) {
             first_delivery_id = t.delivery_id;
-            first_tag = t.delivery_tag;
+            first_tag = try allocator.dupe(u8, t.delivery_tag.?);
             try testing.expectEqual(@as(u32, 0), t.message_format.?);
         } else {
             // Continuation frames must not repeat the delivery id or tag.
@@ -6965,7 +6966,7 @@ test "body-buffer OOM after a frame header invalidates the session and sender" {
 
     // Larger than every handshake body, so receiveFrame consumes this frame's
     // header and then has to grow body_buf before it can read the body.
-    try peer.pushRaw(0, "x" ** 400);
+    try peer.pushRaw(0, &@as([400]u8, @splat('x')));
     switching.failing = true;
     try testing.expectError(error.OutOfMemory, fixture.session.pump(10_000));
     switching.failing = false;
@@ -9153,17 +9154,17 @@ test "a pumped transfer allocates only what it hands the caller" {
     } });
 
     const count = 32;
-    const body = "0123456789" ** 20;
+    const body: [200]u8 = @splat('0');
     var i: u32 = 0;
     while (i < count) : (i += 1) {
         try peer.pushTransfer(0, .{
             .handle = 0,
-            .delivery_id = i,
+            .delivery_id = i + 1,
             .delivery_tag = "tag!",
             .message_format = 0,
             .settled = true,
             .more = false,
-        }, body);
+        }, &body);
     }
 
     var driver = try Driver.init(allocator, mem.transport(), clock.clock(), test_options);
@@ -9235,7 +9236,7 @@ test "what a session keeps from a performative outlives the frames after it" {
     var pad: [4]uamqp.MapEntry = undefined;
     for (&pad) |*entry| entry.* = .{
         .key = .{ .symbol = "com.microsoft:padding" },
-        .value = .{ .string = "y" ** 64 },
+        .value = .{ .string = &@as([64]u8, @splat('y')) },
     };
 
     var i: u32 = 0;
@@ -9312,7 +9313,7 @@ test "a queued single-frame delivery outlives the frames after it" {
     var pad: [4]uamqp.MapEntry = undefined;
     for (&pad) |*entry| entry.* = .{
         .key = .{ .symbol = "com.microsoft:padding" },
-        .value = .{ .string = "y" ** 64 },
+        .value = .{ .string = &@as([64]u8, @splat('y')) },
     };
     var i: u32 = 0;
     while (i < 16) : (i += 1) {
