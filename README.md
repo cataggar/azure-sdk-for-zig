@@ -4,9 +4,9 @@ Optional Microsoft SymCrypt 103.13.0 provider for
 `azure_sdk_core.crypto.CryptoProvider`, with a separately enabled HTTPX TLS
 primitive binding.
 
-- Package version: `0.3.0`
+- Package version: `0.3.1`
 - Release branch: `sdk/core_symcrypt`
-- Core dependency: `azure_sdk_core` `0.4.1`
+- Core dependency: `azure_sdk_core` `0.4.2`
 - Native wrapper dependency: `zig_symcrypt` `0.1.0`
 - Supported targets: `x86_64-linux-gnu`, `aarch64-linux-gnu`,
   `x86_64-windows-msvc`, and `aarch64-windows-msvc`
@@ -15,8 +15,8 @@ This package is optional. Core-only applications do not acquire a SymCrypt or
 other third-party native crypto dependency. Platform features can still link
 operating-system libraries; this is not a blanket no-C-symbol guarantee.
 
-The TLS binding pins released HTTPX 0.2.0 and Core 0.4.1. Native conformance
-additionally uses the released standard SDK HTTPX adapter 0.1.0. Package
+The TLS binding pins released HTTPX 0.2.0 and Core 0.4.2. Native conformance
+additionally uses the released standard SDK HTTPX adapter 0.1.1. Package
 publication requires the reviewed branch tip and the native CI gates below;
 a version field or prerequisite release alone does not establish qualification.
 
@@ -277,9 +277,9 @@ canonical policy. Those platform/composition gates remain separately owned.
 
 ### Qualification boundary
 
-The immutable HTTPX dependency records the released lightweight `v0.2.0` tip
-`2d418ce2ebbd8cbb0d930e80feeac0e45560f0c9`, paired with released Core 0.4.1
-`2c95f65be96b5ef48a50671de33e9e0926c624cb`. Its full URLs/hashes are in the
+The immutable HTTPX dependency records the released `v0.2.0` commit
+`1f7d2690a47734dbf9e99a474f9cb7b92ef7690a`, paired with released Core 0.4.2
+`7ddae016914df9ba34f5f0c6705ea83beacd6a43`. Its full URLs/hashes are in the
 manifest. Complete native SDK qualification requires the native matrix below.
 `httpx_source` is an explicit local development
 override for the HTTPX source root, valid only with `enable_httpx_tls=true`; it is not a
@@ -391,10 +391,10 @@ Arm64 architecture jobs. Its required matrix is:
 
 | Target | Runner | Required execution |
 | --- | --- | --- |
-| `x86_64-linux-gnu` | `ubuntu-24.04` | Dynamic/static, Debug/ReleaseSafe |
-| `aarch64-linux-gnu` | `ubuntu-24.04-arm` | Dynamic/static, Debug/ReleaseSafe |
-| `x86_64-windows-msvc` | `windows-2025` | Dynamic/static, Debug/ReleaseSafe |
-| `aarch64-windows-msvc` | `windows-11-vs2026-arm` | Dynamic/static, Debug/ReleaseSafe |
+| `x86_64-linux-gnu` | `ubuntu-24.04` | Dynamic/static, debug/safe |
+| `aarch64-linux-gnu` | `ubuntu-24.04-arm` | Dynamic/static, debug/safe |
+| `x86_64-windows-msvc` | `windows-2025` | Dynamic/static, debug/safe |
+| `aarch64-windows-msvc` | `windows-11-vs2026-arm` | Dynamic/static, debug/safe |
 | macOS | `macos-latest` | Source/package checks and explicit unsupported-native diagnostic only |
 
 Every native combination runs `test tls-test tls-paired-check tls-interop-check`.
@@ -405,7 +405,7 @@ remain in place. Consumer compilation is not consumer execution. No native
 target is silently downgraded to build-only or omitted when prerequisites fail;
 Windows Arm64 uses checksum-verified x86-64 Zig under emulation on the native
 Arm64 runner. That does not change the native test target or qualify the native
-Arm64 Zig 0.16.0 compiler, whose observed crashes remain a separate limitation.
+Arm64 Zig 0.17.0 compiler, whose observed crashes remain a separate limitation.
 
 Windows Arm64 CI limits the whole job to 90 minutes and its native matrix,
 examples and archive-consumer phase to 60 minutes. That phase uses `-j1` for
@@ -416,10 +416,10 @@ cases or serialize concurrency inside the tests, and it leaves the static Core
 launcher's separate 60-second execution limit unchanged. Exceeding either CI
 budget fails the release gate; there is no retry or build-only fallback.
 
-`SDK_HTTPX_CONFORMANCE_REF` pins the actual reviewed standard SDK 0.1.0 release
-`21b2bd41afa768fc2895041d8176fe06de9ccde6`, tagged with lightweight
-`azure_sdk_core_httpx/v0.1.0`. Its package hash is
-`azure_sdk_core_httpx-0.1.0-NXwWetyMAgCa5-LeLhuKTpXZVUewQK-j3j9_vj375My4`.
+`SDK_HTTPX_CONFORMANCE_REF` pins the actual reviewed standard SDK 0.1.1 release
+`486220a57155759b8c0e2b20719b8ce23824401b`, tagged with lightweight
+`azure_sdk_core_httpx/v0.1.1`. Its package hash is
+`azure_sdk_core_httpx-0.1.1-NXwWesmMAgD9Yx935x658pIdQyArl_xGh1WLq17ik9SV`.
 CI checks the exact clean checkout, a lightweight `azure_sdk_core_httpx/v*`
 release tag, and
 identical immutable Core/HTTPX URLs and hashes in both manifests. This source
@@ -523,7 +523,7 @@ zig build example-run [linkage and fixture options]
 zig build package-consumer-check [linkage and fixture options]
 ```
 
-For **Windows ARM64 static Core tests only**, in both Debug and ReleaseSafe,
+For **Windows ARM64 static Core tests only**, in both debug and safe,
 `zig build test` runs the same compiled test artifact through the published
 `conformance/run_core_tests.py` launcher instead of Zig's test-server protocol.
 It retains the build's seed, cache directory and working directory, and requires

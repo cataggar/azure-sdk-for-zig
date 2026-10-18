@@ -13,9 +13,9 @@ concurrency:
 
 env:
   SYMCRYPT_COMMIT: 286762b7730e2b780678f5ab11fef2b1bad639e0
-  ZIG_SYMCRYPT_COMMIT: 9b3c94a2a4e0d98e055f0d908e11e1d7031b9a4b
-  # Reviewed lightweight azure_sdk_core_httpx/v0.1.0 release tip.
-  SDK_HTTPX_CONFORMANCE_REF: "21b2bd41afa768fc2895041d8176fe06de9ccde6"
+  ZIG_SYMCRYPT_COMMIT: bd3d1ca4b3af8920e8faaad96f78423a557dbd9e
+  # Reviewed lightweight azure_sdk_core_httpx/v0.1.1 release tip.
+  SDK_HTTPX_CONFORMANCE_REF: "486220a57155759b8c0e2b20719b8ce23824401b"
 
 jobs:
   package-test:
@@ -44,9 +44,13 @@ jobs:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           persist-credentials: false
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
+      - name: Install Zig via ghr
+        uses: cataggar/ghr/actions/install@v0.7.0
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          version: 0.16.0
+          tools: |
+            cataggar/zig@v0.17.0 RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
       - name: Check source and package tree
         shell: bash
         run: |
@@ -164,12 +168,12 @@ jobs:
             "-Dtarget=${{ matrix.target }}" "-Dsymcrypt_include_dir=$include" \
             --summary all
           zig build provenance-check "${common[@]}" --summary all
-          for optimize in Debug ReleaseSafe; do
+          for optimize in debug safe; do
             zig build test tls-test tls-paired-check tls-interop-check \
               "-Doptimize=$optimize" "${common[@]}" --summary all
           done
-          zig build example-run -Doptimize=ReleaseSafe "${common[@]}" --summary all
-          zig build package-consumer-check -Doptimize=ReleaseSafe \
+          zig build example-run -Doptimize=safe "${common[@]}" --summary all
+          zig build package-consumer-check -Doptimize=safe \
             "${common[@]}" --summary all
       - name: Validate Linux static adapter
         if: matrix.platform == 'linux'
@@ -191,12 +195,12 @@ jobs:
             "-Dsymcrypt_libraries=$fixture/lib/libsymcrypt_mlkem.a"
           )
           zig build provenance-check "${common[@]}" --summary all
-          for optimize in Debug ReleaseSafe; do
+          for optimize in debug safe; do
             zig build test tls-test tls-paired-check tls-interop-check \
               "-Doptimize=$optimize" "${common[@]}" --summary all
           done
-          zig build example-run -Doptimize=ReleaseSafe "${common[@]}" --summary all
-          zig build package-consumer-check -Doptimize=ReleaseSafe \
+          zig build example-run -Doptimize=safe "${common[@]}" --summary all
+          zig build package-consumer-check -Doptimize=safe \
             "${common[@]}" --summary all
       - name: Build verified Windows fixtures
         if: matrix.platform == 'windows'
@@ -237,13 +241,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "checked header check failed" }
           zig build provenance-check @common --summary all
           if ($LASTEXITCODE -ne 0) { throw "dynamic provenance failed" }
-          foreach ($optimize in @("Debug", "ReleaseSafe")) {
+          foreach ($optimize in @("debug", "safe")) {
             zig build test tls-test tls-paired-check tls-interop-check "-Doptimize=$optimize" @common --summary all
             if ($LASTEXITCODE -ne 0) { throw "dynamic $optimize tests failed" }
           }
-          zig build example-run -Doptimize=ReleaseSafe @common --summary all
+          zig build example-run -Doptimize=safe @common --summary all
           if ($LASTEXITCODE -ne 0) { throw "dynamic example failed" }
-          zig build package-consumer-check -Doptimize=ReleaseSafe @common --summary all
+          zig build package-consumer-check -Doptimize=safe @common --summary all
           if ($LASTEXITCODE -ne 0) { throw "dynamic package consumer failed" }
       - name: Validate Windows static adapter
         if: matrix.platform == 'windows'
@@ -263,13 +267,13 @@ jobs:
           )
           zig build provenance-check @common --summary all
           if ($LASTEXITCODE -ne 0) { throw "static provenance failed" }
-          foreach ($optimize in @("Debug", "ReleaseSafe")) {
+          foreach ($optimize in @("debug", "safe")) {
             zig build test tls-test tls-paired-check tls-interop-check "-Doptimize=$optimize" @common --summary all
             if ($LASTEXITCODE -ne 0) { throw "static $optimize tests failed" }
           }
-          zig build example-run -Doptimize=ReleaseSafe @common --summary all
+          zig build example-run -Doptimize=safe @common --summary all
           if ($LASTEXITCODE -ne 0) { throw "static example failed" }
-          zig build package-consumer-check -Doptimize=ReleaseSafe @common --summary all
+          zig build package-consumer-check -Doptimize=safe @common --summary all
           if ($LASTEXITCODE -ne 0) { throw "static package consumer failed" }
 
   architecture-test:
@@ -306,27 +310,31 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
+      - name: Install Zig via ghr
+        uses: cataggar/ghr/actions/install@v0.7.0
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          version: 0.16.0
+          tools: |
+            cataggar/zig@v0.17.0 RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
       - name: Use verified x86-64 Zig under Windows Arm64 emulation
         if: matrix.platform == 'windows'
         shell: pwsh
         run: |
           $tools = "$env:GITHUB_WORKSPACE/.tools"
-          $archive = "$tools/zig-x86_64-windows-0.16.0.zip"
+          $archive = "$tools/zig-x86_64-windows-0.17.0.zip"
           $directory = "$tools/zig-x86_64"
           New-Item -ItemType Directory -Force -Path $tools | Out-Null
           Invoke-WebRequest `
-            -Uri "https://ziglang.org/download/0.16.0/zig-x86_64-windows-0.16.0.zip" `
+            -Uri "https://github.com/cataggar/zig/releases/download/v0.17.0/zig-x86_64-windows-0.17.0.zip" `
             -OutFile $archive
           $actual = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
-          $expected = "68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e"
+          $expected = "b5663f69581dcf391293fbf16c06cb80d81d806545ce618b4d0bab7f0eb8c428"
           if ($actual -ne $expected) {
             throw "x86-64 Zig archive SHA-256 mismatch: found $actual, expected $expected"
           }
           Expand-Archive -LiteralPath $archive -DestinationPath $directory
-          (Join-Path $directory "zig-x86_64-windows-0.16.0") |
+          (Join-Path $directory "zig-x86_64-windows-0.17.0") |
             Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Require immutable SDK conformance release input
         shell: bash
@@ -408,17 +416,17 @@ jobs:
             "-Dsymcrypt_libraries=$fixture/lib/libsymcrypt_common.a"
             "-Dsymcrypt_libraries=$fixture/lib/libsymcrypt_mlkem.a"
           )
-          for optimize in Debug ReleaseSafe; do
+          for optimize in debug safe; do
             zig build test tls-test tls-paired-check tls-interop-check \
               "-Doptimize=$optimize" "${dynamic[@]}" --summary all
             zig build test tls-test tls-paired-check tls-interop-check \
               "-Doptimize=$optimize" "${static[@]}" --summary all
           done
-          zig build example-run -Doptimize=ReleaseSafe "${dynamic[@]}" --summary all
-          zig build example-run -Doptimize=ReleaseSafe "${static[@]}" --summary all
-          zig build package-consumer-check -Doptimize=ReleaseSafe \
+          zig build example-run -Doptimize=safe "${dynamic[@]}" --summary all
+          zig build example-run -Doptimize=safe "${static[@]}" --summary all
+          zig build package-consumer-check -Doptimize=safe \
             "${dynamic[@]}" --summary all
-          zig build package-consumer-check -Doptimize=ReleaseSafe \
+          zig build package-consumer-check -Doptimize=safe \
             "${static[@]}" --summary all
       - name: Build verified Windows Arm64 fixtures
         if: matrix.platform == 'windows'
@@ -462,7 +470,7 @@ jobs:
             "-Dsymcrypt_libraries=$fixture/lib/symcrypt_plus_NoCIL.lib",
             "-Dsymcrypt_libraries=$fixture/lib/symcrypt_static_NoCIL.lib"
           )
-          foreach ($optimize in @("Debug", "ReleaseSafe")) {
+          foreach ($optimize in @("debug", "safe")) {
             Write-Host "Windows ARM64 dynamic $optimize suite"
             zig build test tls-test tls-paired-check tls-interop-check "-Doptimize=$optimize" @dynamic -j1 --verbose --summary all
             if ($LASTEXITCODE -ne 0) { throw "dynamic Arm64 $optimize tests failed" }
@@ -470,15 +478,15 @@ jobs:
             zig build test tls-test tls-paired-check tls-interop-check "-Doptimize=$optimize" @static -j1 --verbose --summary all
             if ($LASTEXITCODE -ne 0) { throw "static Arm64 $optimize tests failed" }
           }
-          Write-Host "Windows ARM64 dynamic ReleaseSafe example"
-          zig build example-run -Doptimize=ReleaseSafe @dynamic -j1 --verbose --summary all
+          Write-Host "Windows ARM64 dynamic safe example"
+          zig build example-run -Doptimize=safe @dynamic -j1 --verbose --summary all
           if ($LASTEXITCODE -ne 0) { throw "dynamic Arm64 example failed" }
-          Write-Host "Windows ARM64 static ReleaseSafe example"
-          zig build example-run -Doptimize=ReleaseSafe @static -j1 --verbose --summary all
+          Write-Host "Windows ARM64 static safe example"
+          zig build example-run -Doptimize=safe @static -j1 --verbose --summary all
           if ($LASTEXITCODE -ne 0) { throw "static Arm64 example failed" }
-          Write-Host "Windows ARM64 dynamic ReleaseSafe archive consumer"
-          zig build package-consumer-check -Doptimize=ReleaseSafe @dynamic -j1 --verbose --summary all
+          Write-Host "Windows ARM64 dynamic safe archive consumer"
+          zig build package-consumer-check -Doptimize=safe @dynamic -j1 --verbose --summary all
           if ($LASTEXITCODE -ne 0) { throw "dynamic Arm64 package consumer failed" }
-          Write-Host "Windows ARM64 static ReleaseSafe archive consumer"
-          zig build package-consumer-check -Doptimize=ReleaseSafe @static -j1 --verbose --summary all
+          Write-Host "Windows ARM64 static safe archive consumer"
+          zig build package-consumer-check -Doptimize=safe @static -j1 --verbose --summary all
           if ($LASTEXITCODE -ne 0) { throw "static Arm64 package consumer failed" }

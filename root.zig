@@ -502,28 +502,28 @@ test "primitive failures leave caller output unchanged" {
     defer provider.deinit();
     const descriptor = provider.asProvider();
 
-    var random = [_]u8{0x11} ** 8;
+    var random: [8]u8 = @splat(0x11);
     try std.testing.expectError(
         error.ProviderFailure,
         descriptor.vtable.random_bytes(descriptor.context, &random),
     );
-    try std.testing.expectEqualSlices(u8, &([_]u8{0x11} ** 8), &random);
+    try std.testing.expectEqualSlices(u8, &@as([8]u8, @splat(0x11)), &random);
 
-    var md5_output = [_]u8{0x22} ** 16;
+    var md5_output: [16]u8 = @splat(0x22);
     try std.testing.expectError(
         error.ProviderFailure,
         descriptor.vtable.md5(descriptor.context, "data", &md5_output),
     );
-    try std.testing.expectEqualSlices(u8, &([_]u8{0x22} ** 16), &md5_output);
+    try std.testing.expectEqualSlices(u8, &@as([16]u8, @splat(0x22)), &md5_output);
 
-    var sha256_output = [_]u8{0x33} ** 32;
+    var sha256_output: [32]u8 = @splat(0x33);
     try std.testing.expectError(
         error.ProviderFailure,
         descriptor.vtable.sha256(descriptor.context, "data", &sha256_output),
     );
-    try std.testing.expectEqualSlices(u8, &([_]u8{0x33} ** 32), &sha256_output);
+    try std.testing.expectEqualSlices(u8, &@as([32]u8, @splat(0x33)), &sha256_output);
 
-    var hmac_output = [_]u8{0x44} ** 32;
+    var hmac_output: [32]u8 = @splat(0x44);
     try std.testing.expectError(
         error.ProviderFailure,
         descriptor.vtable.hmac_sha256(
@@ -533,7 +533,7 @@ test "primitive failures leave caller output unchanged" {
             &hmac_output,
         ),
     );
-    try std.testing.expectEqualSlices(u8, &([_]u8{0x44} ** 32), &hmac_output);
+    try std.testing.expectEqualSlices(u8, &@as([32]u8, @splat(0x44)), &hmac_output);
 
     try std.testing.expectError(
         error.ProviderFailure,
@@ -554,20 +554,20 @@ test "random allocation failure and primitive failure are all-or-nothing" {
     var provider = try Provider.initWithScratchAllocator(std.testing.failing_allocator);
     defer provider.deinit();
     const descriptor = provider.asProvider();
-    var output = [_]u8{0x7c} ** 32;
+    var output: [32]u8 = @splat(0x7c);
     try std.testing.expectError(error.OutOfMemory, descriptor.randomBytes(&output));
-    try std.testing.expectEqualSlices(u8, &([_]u8{0x7c} ** 32), &output);
+    try std.testing.expectEqualSlices(u8, &@as([32]u8, @splat(0x7c)), &output);
 
     var tracker = WipeCheckingAllocator.init(std.testing.allocator);
     var fault = FaultBackend{};
     var failing_provider = try initWithBackend(tracker.allocator(), fault.backend());
     defer failing_provider.deinit();
-    var failed_output = [_]u8{0x6d} ** 32;
+    var failed_output: [32]u8 = @splat(0x6d);
     try std.testing.expectError(
         error.ProviderFailure,
         failing_provider.asProvider().randomBytes(&failed_output),
     );
-    try std.testing.expectEqualSlices(u8, &([_]u8{0x6d} ** 32), &failed_output);
+    try std.testing.expectEqualSlices(u8, &@as([32]u8, @splat(0x6d)), &failed_output);
     try std.testing.expectEqual(@as(usize, 1), tracker.allocations);
     try std.testing.expectEqual(@as(usize, 1), tracker.frees);
     try std.testing.expect(tracker.all_frees_zero);
@@ -608,12 +608,12 @@ test "incremental provider failure leaves output and lifetime intact" {
     defer provider.deinit();
     var operation = try provider.asProvider().sha256Init(std.testing.allocator);
 
-    var output = [_]u8{0x5c} ** 32;
+    var output: [32]u8 = @splat(0x5c);
     try std.testing.expectError(
         error.ProviderFailure,
         operation.vtable.final(operation.context, &output),
     );
-    try std.testing.expectEqualSlices(u8, &([_]u8{0x5c} ** 32), &output);
+    try std.testing.expectEqualSlices(u8, &@as([32]u8, @splat(0x5c)), &output);
     try operation.update("retry remains permitted after failed final");
     operation.deinit();
     try std.testing.expectEqual(@as(usize, 1), fault.sha_deinits);
@@ -661,7 +661,7 @@ test "Storage content hash and Shared Key vectors" {
     defer wipeAndFree(allocator, key);
     const canonical =
         "GET\n" ++
-        "\n" ** 11 ++
+        "\n\n\n\n\n\n\n\n\n\n\n" ++
         "x-ms-blob-content-md5:2OD7XGeI0jSOrsBn8ZwHTw==\n" ++
         "x-ms-client-request-id:8f978611-738a-4cd4-a318-33b2f31068d9\n" ++
         "x-ms-creation-time:Tue, 25 Oct 2022 16:47:17 GMT\n" ++

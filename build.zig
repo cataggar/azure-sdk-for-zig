@@ -157,6 +157,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "httpx", .module = httpx_mod },
                 .{ .name = "symcrypt", .module = symcrypt_dep.module("symcrypt") },
+                .{ .name = "symcrypt_c_raw", .module = symcrypt_dep.module("symcrypt").import_table.get("symcrypt_c_raw").? },
             },
         });
         tls_mod.addIncludePath(include_dir orelse symcrypt_dep.path("vendor/symcrypt/include"));
@@ -438,7 +439,7 @@ fn addPackageArchive(b: *std.Build) PackageArchive {
     const archive = archive_command.addOutputFileArg(
         "azure_sdk_core_symcrypt-manifest-filtered.tar.gz",
     );
-    archive_command.addArg(b.pathFromRoot("."));
+    archive_command.addDirectoryArg(b.path("."));
     inline for (@import("build.zig.zon").paths) |included_path| {
         archive_command.addArg(included_path);
     }
@@ -572,8 +573,8 @@ fn runCoreTestStep(
     command.addArg("--fixture-tools");
     command.addFileArg(symcrypt_dep.path("tools/fixture_manifest.py"));
     command.addArtifactArg(artifact);
-    command.addPrefixedDirectoryArg("--cache-dir=", .{ .cwd_relative = b.cache_root.path orelse "." });
-    command.addArg(b.fmt("--seed=0x{x}", .{b.graph.random_seed}));
+    command.addPrefixedDirectoryArg("--cache-dir=", .cache_root);
+    command.addArg(b.fmt("--seed=0x{x}", .{std.testing.random_seed}));
     command.has_side_effects = true;
     return &command.step;
 }

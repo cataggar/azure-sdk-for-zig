@@ -24,7 +24,7 @@ class Arm64CiPolicyTests(unittest.TestCase):
 
     def test_all_native_modes_and_post_loops_keep_serial_verbose_builds(self):
         self.assertIn(
-            'foreach ($optimize in @("Debug", "ReleaseSafe")) {', self.windows
+            'foreach ($optimize in @("debug", "safe")) {', self.windows
         )
         commands = [
             line.strip() for line in self.windows.splitlines()
@@ -33,8 +33,8 @@ class Arm64CiPolicyTests(unittest.TestCase):
         expected = []
         for targets, optimize in (
             ("test tls-test tls-paired-check tls-interop-check", '"-Doptimize=$optimize"'),
-            ("example-run", "-Doptimize=ReleaseSafe"),
-            ("package-consumer-check", "-Doptimize=ReleaseSafe"),
+            ("example-run", "-Doptimize=safe"),
+            ("package-consumer-check", "-Doptimize=safe"),
         ):
             for linkage in ("dynamic", "static"):
                 expected.append(
