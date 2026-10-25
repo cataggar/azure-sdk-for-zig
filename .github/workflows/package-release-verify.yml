@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  attestations: read
 
 concurrency:
   group: package-release-verify-${{ inputs.package }}-${{ github.ref }}
@@ -27,7 +28,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install Zig via ghr
-        uses: cataggar/ghr/actions/install@v0.7.0
+        uses: cataggar/ghr/actions/install@v0.9.1
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
